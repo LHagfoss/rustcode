@@ -275,8 +275,8 @@ pub fn command_token(input: &str) -> Option<&str> {
 
 /// Commands matching the token in the composer popup, best match first.
 ///
-/// The tiers are the search rule of `app::fuzzy`: an exact name, then a
-/// prefix, then anything the fuzzy matcher accepts. The fuzzy tier is what
+/// The tiers are the search rule of `app::fuzzy`: an exact name, then
+/// prefixes in alphabetical order, then anything the fuzzy matcher accepts. The fuzzy tier is what
 /// makes `/modle` find `/model` instead of matching nothing (#1588).
 pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
     let Some(token) = command_token(input) else {
@@ -295,6 +295,12 @@ pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
         } else if crate::app::fuzzy::fuzzy_matches(command.name, &token) {
             fuzzy.push(command);
         }
+    }
+    // A typed prefix says nothing about which command is meant, so that tier
+    // reads alphabetically, the order a reader scans a completion list in. A
+    // bare `/` keeps the curated order of the full menu.
+    if token.len() > 1 {
+        prefixes.sort_by_key(|command| command.name);
     }
     exact.into_iter().chain(prefixes).chain(fuzzy).collect()
 }
@@ -544,5 +550,42 @@ mod tests {
             cycle.get_completion_suffix("/MODEL --fast"),
             Some(String::new())
         );
+    }
+
+    #[test]
+    fn typed_prefix_matches_are_alphabetical_and_the_bare_menu_keeps_its_order() {
+        let names = |input: &str| {
+            super::filtered_commands(input)
+                .iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>()
+        };
+        // Prefix matches come first and in order; fuzzy matches follow them.
+        let typed = names("/p");
+        let prefixes = typed
+            .iter()
+            .take_while(|name| name.starts_with("/p"))
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(prefixes.len() > 2, "{typed:?}");
+        let mut sorted = prefixes.clone();
+        sorted.sort_unstable();
+        assert_eq!(prefixes, sorted);
+        assert!(
+            typed[prefixes.len()..]
+                .iter()
+                .all(|name| !name.starts_with("/p")),
+            "{typed:?}"
+        );
+
+        let menu = names("/");
+        let declared = super::COMMANDS
+            .iter()
+            .map(|command| command.name)
+            .collect::<Vec<_>>();
+        assert_eq!(menu, declared);
+
+        // An exact name still leads its longer siblings.
+        assert_eq!(names("/prompt").first(), Some(&"/prompt"));
     }
 }

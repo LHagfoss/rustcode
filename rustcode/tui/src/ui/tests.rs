@@ -13,11 +13,6 @@ fn spawn_background_task_for_test(
 
 pub(crate) static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Width handed to `activity_status_line` by tests that assert hint content
-/// rather than how the line degrades: wide enough that every clause survives
-/// (#1529).
-const ROOMY_ACTIVITY_WIDTH: usize = 200;
-
 fn render_state_to_text(state: &mut RenderState, width: u16, height: u16) -> String {
     let (text, _) = render_state_to_text_with_composer_area(state, width, height);
     text
@@ -1236,9 +1231,6 @@ fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
                 state.cursor_position = state.input_buffer.len();
                 state.active_suggestion_index = Some(0);
             }
-            let activity =
-                super::activity_status_line(&render_snapshot(&state), false, width as usize)
-                    .to_string();
             let rendered = render_state_to_text(&mut state, width, height);
             let row = |text: &str| {
                 rendered
@@ -1255,7 +1247,6 @@ fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
                 // A panel without typed input leaves the composer row blank.
                 assert!(rendered.contains(surface), "{rendered}");
                 assert!(!rendered.contains("Ask RustCode"), "{rendered}");
-                assert!(!rendered.contains(activity.trim()), "{rendered}");
                 continue;
             }
             let composer = rendered
@@ -1269,7 +1260,6 @@ fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
                 row(surface) < composer,
                 "surface must remain above composer: {rendered}"
             );
-            assert!(!rendered.contains(activity.trim()), "{rendered}");
             if !panel {
                 assert!(composer < row("context left"), "{rendered}");
             }
@@ -2087,7 +2077,7 @@ fn welcome_banner_shows_active_model_effort_and_context_window() {
         "rendered: {rendered:?}"
     );
     assert!(
-        rendered.contains("context:     100k tokens"),
+        rendered.contains("context:     128k tokens"),
         "rendered: {rendered:?}"
     );
     assert!(rendered.contains("/context to change"));
@@ -6510,14 +6500,6 @@ fn footer_animation_pulse_center_reaches_both_edges() {
 fn activity_status_labels_idle_and_working_states() {
     let state = RenderState::new();
     assert_eq!(activity_status_label(&render_snapshot(&state)), "Idle");
-    assert_eq!(
-        activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH)
-            .spans
-            .last()
-            .unwrap()
-            .content,
-        " "
-    );
 
     let mut streaming_state = RenderState::new();
     streaming_state.status = AppStatus::Streaming;
@@ -6543,21 +6525,17 @@ fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
     tracker.record_chunk();
     state.stream_tracker = Some(tracker);
 
-    let status =
-        activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH).to_string();
     let rendered = render_state_to_text(&mut state, 100, 12);
     let footer = rendered
         .lines()
         .find(|line| line.contains("context left"))
         .expect("composer footer should be rendered");
 
-    assert!(!status.contains("Tokens/s"), "{status}");
     assert!(footer.contains("Tokens/s: 80.0"), "{footer}");
     assert!(
         footer.find("Tokens/s: 80.0") < footer.find("context left"),
         "Tokens/s should appear immediately before context usage: {footer}"
     );
-    assert!(status.contains("esc interrupt"), "{status}");
 
     let narrow = render_state_to_text(&mut state, 20, 12);
     let narrow_footer = narrow
@@ -6569,31 +6547,6 @@ fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
 
 /// The esc and steer-mode hints follow the same drop-don't-clip rule as the
 /// footer hint: a clause that does not fit is omitted whole (#1529).
-#[test]
-fn activity_hints_are_dropped_rather_than_clipped_at_narrow_widths() {
-    let mut state = RenderState::new();
-    state.status = AppStatus::Streaming;
-    state.generation_start_time = Some(std::time::Instant::now());
-    let snapshot = render_snapshot(&state);
-
-    let roomy = activity_status_line(&snapshot, false, ROOMY_ACTIVITY_WIDTH).to_string();
-    assert!(roomy.contains(" · esc interrupt"), "{roomy}");
-
-    // The label alone already overruns the row, so the hint has no room and is
-    // omitted instead of being cut off mid-word.
-    for width in [1, 4, 10] {
-        let narrow = activity_status_line(&snapshot, false, width).to_string();
-        assert!(
-            !narrow.contains("esc"),
-            "the esc hint must be dropped, not clipped, at width {width}: {narrow:?}"
-        );
-        assert!(
-            !narrow.contains('…'),
-            "no hint may end in a truncated ellipsis: {narrow:?}"
-        );
-    }
-}
-
 /// One row, one rule: the footer and the activity line share the clause-fitting
 /// helper, and the percentage has the lower priority.
 #[test]
@@ -6763,26 +6716,7 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     // `controller::render_state`.
     state.background_tasks = rustcode::controller::background_task_snapshots(&session_id);
     let snapshot = render_snapshot(&state);
-    state.waiting_for_background_terminal = false;
-    let neutral_snapshot = render_snapshot(&state);
     rustcode::controller::stop_background_tasks(&session_id, None);
-
-    let status = super::activity_status_line(&snapshot, false, ROOMY_ACTIVITY_WIDTH).to_string();
-    assert!(status.contains("Background running"), "{status}");
-    assert!(!status.contains("Waiting for background terminal"));
-    assert!(!status.contains("esc to interrupt"));
-    assert!(status.contains("1 task"), "{status}");
-    assert!(
-        !status.contains(long_command),
-        "the command belongs in the live row: {status}"
-    );
-    assert!(status.contains("/ps · /stop"), "{status}");
-    let neutral_status =
-        super::activity_status_line(&neutral_snapshot, false, ROOMY_ACTIVITY_WIDTH).to_string();
-    assert!(neutral_status.contains("Background running"));
-    assert!(neutral_status.contains("1 task"));
-    assert!(!neutral_status.contains("Waiting for background terminal"));
-    assert!(!neutral_status.contains("esc to interrupt"));
 
     let commands = super::background_command_lines(&snapshot);
     assert_eq!(commands.len(), 2);
@@ -6882,31 +6816,6 @@ fn background_terminal_chip_compacts_more_than_three_tasks() {
     assert!(summary.contains("4 tasks"), "{summary}");
     assert!(!summary.contains("1 more"), "{summary}");
     assert!(summary.contains("/ps · /stop"), "{summary}");
-}
-
-#[test]
-fn live_tool_activity_is_rendered_without_protocol_text() {
-    let mut state = RenderState::new();
-    state.status = AppStatus::Streaming;
-    state.generation_start_time = Some(std::time::Instant::now());
-    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
-        rustcode::controller::LiveToolCall::new(
-            "call-1",
-            None,
-            "run_command",
-            "Bash",
-            "cargo test",
-        ),
-    );
-
-    let line = super::activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH)
-        .to_string();
-
-    assert!(line.contains("Running"));
-    assert!(line.contains("esc interrupt"));
-    assert!(!line.contains("tool_calls"));
-    assert!(!line.contains("Bash"));
-    assert!(!line.contains("cargo test"));
 }
 
 #[test]
@@ -8922,76 +8831,6 @@ fn composer_footer_is_hidden_while_a_picker_is_open() {
 }
 
 #[test]
-fn codex_shimmer_moves_a_visible_gradient_across_working() {
-    let early = super::shimmer_spans_at("Working", std::time::Duration::from_millis(850));
-    let later = super::shimmer_spans_at("Working", std::time::Duration::from_millis(1100));
-    let early_colors = early.iter().map(|span| span.style.fg).collect::<Vec<_>>();
-    let later_colors = later.iter().map(|span| span.style.fg).collect::<Vec<_>>();
-
-    assert!(
-        early_colors.iter().any(|color| *color != early_colors[0]),
-        "a visible frame must not paint the whole word one color: {early_colors:?}"
-    );
-    assert!(
-        later_colors.iter().any(|color| *color != later_colors[0]),
-        "a visible frame must not paint the whole word one color: {later_colors:?}"
-    );
-    assert_ne!(
-        early_colors, later_colors,
-        "the gradient must travel over time"
-    );
-}
-
-#[test]
-fn reduced_motion_renders_the_activity_label_without_a_sweep() {
-    let animated = super::shimmer_spans("Working", false, false);
-    let still = super::shimmer_spans("Working", false, true);
-    assert_ne!(animated.len(), 1, "the default label still animates");
-
-    let still_text: String = still.iter().map(|span| span.to_string()).collect();
-    assert_eq!(still_text, "Working");
-    assert!(
-        still.iter().all(|span| span.style.fg == still[0].style.fg),
-        "a reduced-motion label must not encode a gradient: {still:?}"
-    );
-}
-
-#[test]
-fn reduced_motion_is_read_from_the_active_config() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    let mut state = RenderState::new();
-    state.status = rustcode::controller::AppStatus::Streaming;
-    state.running_tools = vec!["run_command".to_owned()];
-    set_current_response(&mut state, "partial");
-
-    // The animated label emits one span per character; the reduced-motion one
-    // is a single flat span. Span shape, not color, is what proves the config
-    // reached the render path (the sweep is time-driven and frozen in tests).
-    let label_spans = |line: &ratatui::text::Line<'static>| {
-        line.spans
-            .iter()
-            .filter(|span| span.content.chars().all(|ch| ch.is_alphabetic()))
-            .map(|span| (span.content.to_string(), span.style.fg))
-            .collect::<Vec<_>>()
-    };
-    let animated = activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH);
-    state.config.reduced_motion = true;
-    let still = activity_status_line(&render_snapshot(&state), false, ROOMY_ACTIVITY_WIDTH);
-
-    assert_eq!(animated.to_string(), still.to_string());
-    assert_eq!(label_spans(&animated).len(), "Running".len());
-    let still_spans = label_spans(&still);
-    assert_eq!(still_spans.len(), 1, "one flat label span: {still_spans:?}");
-    assert_eq!(still_spans[0].0, "Running");
-    assert!(
-        still_spans
-            .iter()
-            .all(|(_, color)| *color == still_spans[0].1),
-        "a reduced-motion label must not encode a gradient: {still_spans:?}"
-    );
-}
-
-#[test]
 fn transcript_cursor_returns_only_uncommitted_final_stream_tail() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
     cursor.commit_stable_stream("stable\n\n");
@@ -10122,7 +9961,7 @@ fn context_modal_labels_used_remaining_and_configured_reserves_at_narrow_widths(
     for (width, height) in [(120, 24), (60, 24), (40, 24), (40, 12)] {
         let rendered = render_context_modal_to_text(&state, width, height);
         assert!(
-            rendered.contains("USED 116.7k/300k · 43%"),
+            rendered.contains("USED 116.7k/272k · 43%"),
             "used percentage must remain visible at {width}x{height}: {rendered:?}"
         );
         assert!(
@@ -12254,9 +12093,9 @@ fn context_window_rounds_to_human_figures() {
         (8_192, "8k"),
         (32_000, "32k"),
         (100_000, "100k"),
-        (128_000, "100k"),
+        (128_000, "128k"),
         (200_000, "200k"),
-        (262_144, "300k"),
+        (262_144, "262k"),
         (1_000_000, "1M"),
         (1_048_576, "1M"),
         (1_500_000, "1.5M"),

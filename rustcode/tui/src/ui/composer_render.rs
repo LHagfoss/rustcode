@@ -498,23 +498,21 @@ pub(super) fn format_token_count(tokens: u32) -> String {
 }
 
 /// Human-sized model context window shared by the welcome banner and the
-/// `/context` panel. Windows are advertised in round figures, so values from
-/// 100k up snap to the nearest 100k (`128_000` → `100k`, `262_144` → `300k`,
-/// `1_000_000` → `1M`) and never carry a spurious `.0` (#1771).
+/// `/context` panel: the nearest thousand below a million (`128_000` →
+/// `128k`, `262_144` → `262k`), tenths of a million above (`1_000_000` → `1M`,
+/// `1_500_000` → `1.5M`), and never a spurious `.0` (#1771).
 pub(in crate::ui) fn format_context_window(tokens: u64) -> String {
     if tokens < 1_000 {
         return tokens.to_string();
     }
-    if tokens < 100_000 {
+    if tokens < 999_500 {
         return format!("{}k", (tokens + 500) / 1_000);
     }
-    let steps = (tokens + 50_000) / 100_000;
-    if steps < 10 {
-        format!("{}k", steps * 100)
-    } else if steps % 10 == 0 {
-        format!("{}M", steps / 10)
+    let tenths = (tokens + 50_000) / 100_000;
+    if tenths % 10 == 0 {
+        format!("{}M", tenths / 10)
     } else {
-        format!("{}.{}M", steps / 10, steps % 10)
+        format!("{}.{}M", tenths / 10, tenths % 10)
     }
 }
 
@@ -946,94 +944,6 @@ pub(super) fn background_command_lines_with_width(
     lines
 }
 
-#[cfg(test)]
-pub(super) fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
-    let f = factor.clamp(0.0, 1.0);
-    let r = (c1.0 as f32 * f + c2.0 as f32 * (1.0 - f)) as u8;
-    let g = (c1.1 as f32 * f + c2.1 as f32 * (1.0 - f)) as u8;
-    let b = (c1.2 as f32 * f + c2.2 as f32 * (1.0 - f)) as u8;
-    (r, g, b)
-}
-
-#[cfg(test)]
-pub(super) fn shimmer_rgb(color: Color, fallback: (u8, u8, u8)) -> (u8, u8, u8) {
-    match color {
-        Color::Rgb(r, g, b) => (r, g, b),
-        _ => fallback,
-    }
-}
-
-#[cfg(test)]
-pub(super) fn shimmer_spans_at(text: &str, elapsed: Duration) -> Vec<Span<'static>> {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.is_empty() {
-        return Vec::new();
-    }
-
-    let padding = 10usize;
-    let period = chars.len() + padding * 2;
-    let sweep_seconds = 2.0f32;
-    let pos = ((elapsed.as_secs_f32() % sweep_seconds) / sweep_seconds * period as f32) as isize;
-    let band_half_width = 5.0f32;
-
-    let base_rgb = shimmer_rgb(COLOR_MUTED(), (128, 128, 128));
-    let highlight_rgb = shimmer_rgb(COLOR_TEXT(), (255, 255, 255));
-
-    chars
-        .iter()
-        .enumerate()
-        .map(|(i, ch)| {
-            let i_pos = i as isize + padding as isize;
-            let dist = (i_pos - pos).abs() as f32;
-            let t = if dist <= band_half_width {
-                0.5 * (1.0 + (std::f32::consts::PI * (dist / band_half_width)).cos())
-            } else {
-                0.0
-            };
-            let (r, g, b) = blend_rgb(highlight_rgb, base_rgb, t * 0.9);
-            Span::styled(
-                ch.to_string(),
-                Style::default()
-                    .fg(Color::Rgb(r, g, b))
-                    .add_modifier(Modifier::BOLD),
-            )
-        })
-        .collect()
-}
-
-/// Plain muted label used when the animated sweep is turned off.
-#[cfg(test)]
-pub(super) fn static_spans(text: &str, show_picker: bool) -> Vec<Span<'static>> {
-    vec![Span::styled(
-        text.to_string(),
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    )]
-}
-
-#[cfg(test)]
-pub(super) fn shimmer_spans(
-    text: &str,
-    show_picker: bool,
-    reduced_motion: bool,
-) -> Vec<Span<'static>> {
-    if reduced_motion {
-        return static_spans(text, show_picker);
-    }
-    #[cfg(test)]
-    let elapsed = Duration::ZERO;
-    #[cfg(not(test))]
-    let elapsed = {
-        // Quantize the sweep to the 120ms spinner cadence so timer-only ticks
-        // within the same bucket render identical rows (#1632). Without this
-        // every 16ms frame produced new RGB values and invalidated cached
-        // frames even with identical chat content. Read the shared timeline so
-        // the sweep and the spinner glyph stay in step.
-        let raw = rustcode::controller::spinner_elapsed();
-        Duration::from_millis(u64::try_from(raw.as_millis() / 120 * 120).unwrap_or(u64::MAX))
-    };
-    shimmer_spans_at(text, elapsed)
-}
-
 pub(super) fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     rustcode_core::status::format_elapsed_compact(elapsed_secs)
 }
@@ -1044,154 +954,6 @@ fn decode_speed_label(state: &RenderSnapshot) -> Option<String> {
     }
     let (tokens_per_second, _) = state.stream_tracker()?.snapshot();
     (tokens_per_second >= 0.05).then(|| format!("Tokens/s: {tokens_per_second:.1}"))
-}
-
-#[cfg(test)]
-pub(super) fn activity_status_line(
-    state: &RenderSnapshot,
-    show_picker: bool,
-    width: usize,
-) -> Line<'static> {
-    let base_activity =
-        rustcode::controller::classify_activity(&state.status(), &state.running_tools());
-    let activity = if base_activity.kind == rustcode::controller::ActivityKind::ActionRequired {
-        base_activity
-    } else {
-        rustcode::controller::classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
-    };
-    let action_detail = state
-        .pending_tool_confirmation()
-        .as_ref()
-        .and_then(|confirmations| confirmations.first())
-        .map(|confirmation| format!("approve {}", confirmation.tool_name))
-        .or_else(|| {
-            state
-                .pending_question()
-                .as_ref()
-                .map(|_| "answer question".to_string())
-        });
-
-    let mut spans = vec![Span::raw(" ")];
-
-    let bullet_symbol = match activity.kind {
-        rustcode::controller::ActivityKind::ActionRequired => "!",
-        rustcode::controller::ActivityKind::Ready => "◦",
-        _ => "•",
-    };
-    let bullet_color = match activity.kind {
-        rustcode::controller::ActivityKind::ActionRequired => Color::Yellow,
-        rustcode::controller::ActivityKind::Ready => COLOR_MUTED(),
-        _ => COLOR_PRIMARY(),
-    };
-    spans.push(Span::styled(
-        bullet_symbol,
-        get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
-    ));
-    spans.push(Span::raw(" "));
-
-    let label_text = activity_status_label(state);
-    if matches!(
-        activity.kind,
-        rustcode::controller::ActivityKind::Working
-            | rustcode::controller::ActivityKind::RunningTool
-    ) {
-        spans.extend(shimmer_spans(
-            &label_text,
-            show_picker,
-            state.config().reduced_motion,
-        ));
-    } else {
-        spans.push(Span::styled(
-            label_text,
-            get_themed_style(
-                if activity.kind == rustcode::controller::ActivityKind::ActionRequired {
-                    Color::Yellow
-                } else if activity.kind == rustcode::controller::ActivityKind::Ready {
-                    COLOR_MUTED()
-                } else {
-                    COLOR_PRIMARY()
-                },
-                COLOR_BG(),
-                Modifier::BOLD,
-                show_picker,
-            ),
-        ));
-    }
-
-    if activity.kind == rustcode::controller::ActivityKind::ActionRequired {
-        if let Some(detail) = action_detail {
-            spans.push(Span::styled(
-                format!(" · {detail}"),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-    }
-
-    if matches!(
-        activity.kind,
-        rustcode::controller::ActivityKind::Working
-            | rustcode::controller::ActivityKind::RunningTool
-    ) && let Some(started) = state.generation_start_time()
-    {
-        spans.push(Span::styled(
-            format!(" ({})", fmt_elapsed_compact(started.elapsed().as_secs())),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-    }
-
-    if !state.background_tasks().is_empty() {
-        spans.push(Span::styled(
-            format!(" · {}", background_terminal_summary(state)),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-    }
-
-    // The esc and steer-mode hints follow the same drop-don't-clip rule as the
-    // footer hint: a clause that does not fit the row is omitted whole, so the
-    // line never ends mid-affordance (#1529).
-    let hint_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
-    let mut used: usize = spans.iter().map(|span| span.content.width()).sum();
-    let mut push_hint = |spans: &mut Vec<Span<'static>>, clauses: &[&'static str]| {
-        if let Some(hint) = fit_hint_clauses(HINT_SEPARATOR, clauses, width.saturating_sub(used)) {
-            used += hint.width();
-            spans.push(Span::styled(hint, hint_style));
-        }
-    };
-
-    if matches!(
-        activity.kind,
-        rustcode::controller::ActivityKind::Working
-            | rustcode::controller::ActivityKind::RunningTool
-    ) {
-        // Esc only interrupts the model stream; background terminals survive
-        // it (issue #1223). Say so when a background job is actually running.
-        let clauses: &[&'static str] =
-            if state.steering_escape_will_interrupt() && !state.pending_steers().is_empty() {
-                &["esc interrupt and apply now"]
-            } else if !state.pending_steers().is_empty() {
-                &[]
-            } else if state.background_tasks().is_empty() {
-                &["esc interrupt"]
-            } else {
-                &["esc interrupts stream only"]
-            };
-        push_hint(&mut spans, clauses);
-    }
-
-    if state.show_steer_mode_hint() {
-        // The mode names what a keystroke will do, so it outlives the key that
-        // flips it.
-        push_hint(
-            &mut spans,
-            match state.draft_submit_mode() {
-                rustcode::controller::DraftSubmitMode::Steer => &["Steer", "Tab switches to Queue"],
-                rustcode::controller::DraftSubmitMode::Queue => &["Queue", "Tab switches to Steer"],
-            },
-        );
-    }
-
-    spans.push(Span::raw(" "));
-    Line::from(spans)
 }
 
 /// Maximum queued user prompts previewed above the composer.
