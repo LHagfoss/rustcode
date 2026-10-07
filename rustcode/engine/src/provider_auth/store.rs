@@ -55,30 +55,187 @@ impl NativeCredentialStore {
     }
 }
 
+/// Secrets this process has already read from the operating system store.
+///
+/// Every request resolved its credential from the store again, several items
+/// at a time, and on macOS each read can raise a password prompt. A secret is
+/// now read once per process. Any process that writes or deletes one rewrites
+/// the generation file, which makes the others read again.
+#[derive(Default)]
+struct SecretCache {
+    generation: Option<String>,
+    secrets: std::collections::HashMap<String, String>,
+}
+
+const GENERATION_FILE: &str = "credential-generation";
+
+impl SecretCache {
+    fn global() -> &'static std::sync::Mutex<Self> {
+        static CACHE: OnceLock<std::sync::Mutex<SecretCache>> = OnceLock::new();
+        CACHE.get_or_init(Default::default)
+    }
+
+    /// Drop what was read under an older generation.
+    fn sync(&mut self, generation_file: &std::path::Path) {
+        let generation = fs::read_to_string(generation_file).ok();
+        if self.generation != generation {
+            self.generation = generation;
+            self.secrets.clear();
+        }
+    }
+}
+
+/// `read` is only called for a secret this generation has not seen.
+fn cached_secret(
+    cache: &std::sync::Mutex<SecretCache>,
+    generation_file: Option<&std::path::Path>,
+    key: &str,
+    read: impl FnOnce() -> Result<String>,
+) -> Result<String> {
+    let Some(generation_file) = generation_file else {
+        return read();
+    };
+    let generation = {
+        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.sync(generation_file);
+        if let Some(secret) = cache.secrets.get(key) {
+            return Ok(secret.clone());
+        }
+        cache.generation.clone()
+    };
+    let secret = read()?;
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    cache.sync(generation_file);
+    if cache.generation == generation {
+        cache.secrets.insert(key.to_owned(), secret.clone());
+    }
+    Ok(secret)
+}
+
+/// Start a new generation after a write or delete, so no process keeps
+/// serving the value it replaced.
+fn advance_generation(cache: &std::sync::Mutex<SecretCache>, generation_file: &std::path::Path) {
+    let generation = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos())
+    );
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    cache.secrets.clear();
+    // Without the file other processes cannot be told; keep nothing cached.
+    cache.generation = fs::write(generation_file, &generation)
+        .ok()
+        .map(|()| generation);
+}
+
+fn generation_file() -> Option<PathBuf> {
+    config_dir()
+        .ok()
+        .map(|directory| directory.join(GENERATION_FILE))
+}
+
 impl CredentialStore for NativeCredentialStore {
     fn get_secret(&self, provider: &str, account: &str, kind: &str) -> Result<String> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, &key(provider, account, kind))
-            .map_err(|_| anyhow!("could not open the operating system credential store"))?;
-        entry.get_password().map_err(|_| {
-            anyhow!("credential is missing or the operating system credential store is unavailable")
-        })
+        let key = key(provider, account, kind);
+        cached_secret(
+            SecretCache::global(),
+            generation_file().as_deref(),
+            &key,
+            || {
+                let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
+                    .map_err(|_| anyhow!("could not open the operating system credential store"))?;
+                entry.get_password().map_err(|_| {
+                    anyhow!(
+                        "credential is missing or the operating system credential store is unavailable"
+                    )
+                })
+            },
+        )
     }
 
     fn set_secret(&self, provider: &str, account: &str, kind: &str, value: &str) -> Result<()> {
         let entry = keyring::Entry::new(KEYRING_SERVICE, &key(provider, account, kind))
             .map_err(|_| anyhow!("could not open the operating system credential store"))?;
-        entry.set_password(value).map_err(|_| anyhow!("could not store credential in the operating system credential store; check that its keychain or Secret Service is unlocked"))
+        let stored = entry.set_password(value).map_err(|_| anyhow!("could not store credential in the operating system credential store; check that its keychain or Secret Service is unlocked"));
+        if let Some(generation_file) = generation_file() {
+            advance_generation(SecretCache::global(), &generation_file);
+        }
+        stored
     }
 
     fn delete_secret(&self, provider: &str, account: &str, kind: &str) -> Result<()> {
         let entry = keyring::Entry::new(KEYRING_SERVICE, &key(provider, account, kind))
             .map_err(|_| anyhow!("could not open the operating system credential store"))?;
-        match entry.delete_credential() {
+        let deleted = entry.delete_credential();
+        if let Some(generation_file) = generation_file() {
+            advance_generation(SecretCache::global(), &generation_file);
+        }
+        match deleted {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(anyhow!(
                 "could not remove credential from the operating system credential store"
             )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod secret_cache_tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_is_read_once_until_any_process_writes_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let generation_file = directory.path().join(GENERATION_FILE);
+        let cache = std::sync::Mutex::new(SecretCache::default());
+        let reads = std::cell::Cell::new(0);
+        let read = |value: &'static str| {
+            cached_secret(&cache, Some(&generation_file), "token", || {
+                reads.set(reads.get() + 1);
+                Ok(value.to_owned())
+            })
+            .unwrap()
+        };
+
+        assert_eq!(read("first"), "first");
+        assert_eq!(read("unused"), "first");
+        assert_eq!(reads.get(), 1);
+
+        // Another process rotated the secret.
+        fs::write(&generation_file, "another-process").unwrap();
+        assert_eq!(read("rotated"), "rotated");
+        assert_eq!(read("unused"), "rotated");
+        assert_eq!(reads.get(), 2);
+
+        // This process wrote one.
+        advance_generation(&cache, &generation_file);
+        assert_eq!(read("written"), "written");
+        assert_eq!(reads.get(), 3);
+    }
+
+    #[test]
+    fn a_failed_read_is_not_cached_and_no_generation_file_means_no_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let generation_file = directory.path().join(GENERATION_FILE);
+        let cache = std::sync::Mutex::new(SecretCache::default());
+
+        assert!(
+            cached_secret(&cache, Some(&generation_file), "token", || Err(anyhow!(
+                "locked"
+            )))
+            .is_err()
+        );
+        let after_failure = cached_secret(&cache, Some(&generation_file), "token", || {
+            Ok("later".to_owned())
+        });
+        assert_eq!(after_failure.unwrap(), "later");
+
+        for value in ["one", "two"] {
+            let uncached = cached_secret(&cache, None, "other", || Ok(value.to_owned()));
+            assert_eq!(uncached.unwrap(), value);
         }
     }
 }
