@@ -54,7 +54,7 @@ pub(in crate::ui) fn render_verbosity_picker_modal(
         (
             "High",
             rustcode::controller::Verbosity::High,
-            "Model text with file edit diffs",
+            "Tool work folded to counts · ctrl+o opens it",
         ),
     ];
 
@@ -65,7 +65,7 @@ pub(in crate::ui) fn render_verbosity_picker_modal(
     let mut list_lines = Vec::new();
     for (idx, (name, verbosity_level, desc)) in choices.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let is_current = *state.verbosity() == *verbosity_level;
+        let is_current = *state.configured_verbosity() == *verbosity_level;
         let active_badge = if is_current { " (active)" } else { "" };
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {

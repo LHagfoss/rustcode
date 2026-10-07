@@ -408,6 +408,7 @@ impl TranscriptState {
         super::theme::active_palette().name.hash(&mut theme_hash);
         // Tool rows also depend on presentation settings outside history.
         state.verbosity().hash(&mut theme_hash);
+        state.tool_detail().hash(&mut theme_hash);
         state.home_path().hash(&mut theme_hash);
         for message in index..end.max(index + 1) {
             state

@@ -1603,7 +1603,144 @@ fn tool_round_spacer(show_picker: bool) -> Line<'static> {
     ))
 }
 
+/// What one folded call adds to its batch's count line.
+fn folded_tool_phrase(entry: &ToolTranscriptEntry) -> (&'static str, &'static str, &'static str) {
+    match (entry.kind, entry.action.as_str()) {
+        (ToolTranscriptKind::Command, _) => ("ran", "shell command", "shell commands"),
+        (ToolTranscriptKind::Explored, "Read") => ("read", "file", "files"),
+        (ToolTranscriptKind::Explored, "Search") => ("searched for", "pattern", "patterns"),
+        (ToolTranscriptKind::Explored, "List") => ("listed", "directory", "directories"),
+        (ToolTranscriptKind::Explored, _) => ("explored", "item", "items"),
+        _ => ("called", "tool", "tools"),
+    }
+}
+
+/// One count line for a run of folded calls: `Read 2 files, ran 5 shell
+/// commands`. The calls and their output stay one expand press away.
+fn folded_tool_summary_line(
+    entries: &[ToolTranscriptEntry],
+    width: u16,
+    show_picker: bool,
+) -> Line<'static> {
+    let mut counts: Vec<((&'static str, &'static str, &'static str), usize)> = Vec::new();
+    for entry in entries {
+        let phrase = folded_tool_phrase(entry);
+        match counts.iter_mut().find(|(known, _)| *known == phrase) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((phrase, 1)),
+        }
+    }
+    let muted = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
+    let strong = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker);
+    let mut spans = vec![Span::styled("  ", muted)];
+    for (index, ((verb, singular, plural), count)) in counts.into_iter().enumerate() {
+        let verb = if index == 0 {
+            let mut chars = verb.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
+                .unwrap_or_default()
+        } else {
+            format!(", {verb}")
+        };
+        spans.push(Span::styled(format!("{verb} "), muted));
+        spans.push(Span::styled(count.to_string(), strong));
+        spans.push(Span::styled(
+            format!(" {}", if count == 1 { singular } else { plural }),
+            muted,
+        ));
+    }
+    let failed = entries.iter().filter(|entry| !entry.success).count();
+    if failed > 0 {
+        spans.push(Span::styled(
+            format!(" · {failed} failed"),
+            get_themed_style(
+                Color::Rgb(229, 123, 123),
+                COLOR_BG(),
+                Modifier::empty(),
+                show_picker,
+            ),
+        ));
+    }
+    let used: usize = spans.iter().map(|span| span.content.width()).sum();
+    if used > usize::from(width) {
+        let text = spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        return Line::from(Span::styled(
+            super::modals::truncate_middle_to_width(&text, usize::from(width)),
+            muted,
+        ));
+    }
+    Line::from(spans)
+}
+
 fn render_tool_result_group_snapshot(
+    state: &RenderSnapshot,
+    message_indices: &[usize],
+    width: u16,
+    show_picker: bool,
+    include_header: bool,
+) -> Vec<Line<'static>> {
+    if !state.tool_batches_folded() {
+        return render_tool_result_group_detailed(
+            state,
+            message_indices,
+            width,
+            show_picker,
+            include_header,
+        );
+    }
+    // Folded: calls collapse into a count, and file edits keep their rows
+    // because the diff is the result the reader is waiting for.
+    let mut lines = Vec::new();
+    let mut run: Vec<ToolTranscriptEntry> = Vec::new();
+    let mut edits: Vec<usize> = Vec::new();
+    let flush_run = |run: &mut Vec<ToolTranscriptEntry>, lines: &mut Vec<Line<'static>>| {
+        if run.is_empty() {
+            return;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(folded_tool_summary_line(run, width, show_picker));
+        run.clear();
+    };
+    let flush_edits = |edits: &mut Vec<usize>, lines: &mut Vec<Line<'static>>| {
+        if edits.is_empty() {
+            return;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.extend(render_tool_result_group_detailed(
+            state,
+            edits,
+            width,
+            show_picker,
+            true,
+        ));
+        edits.clear();
+    };
+    for &message_index in message_indices {
+        let Some(entry) = tool_transcript_entry(state, message_index, width, show_picker) else {
+            continue;
+        };
+        if entry.kind == ToolTranscriptKind::Edit {
+            flush_run(&mut run, &mut lines);
+            edits.push(message_index);
+        } else {
+            flush_edits(&mut edits, &mut lines);
+            run.push(entry);
+        }
+    }
+    flush_run(&mut run, &mut lines);
+    flush_edits(&mut edits, &mut lines);
+    lines
+}
+
+fn render_tool_result_group_detailed(
     state: &RenderSnapshot,
     message_indices: &[usize],
     width: u16,

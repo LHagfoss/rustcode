@@ -107,7 +107,9 @@ fn render_live_tail_mode(
         model_live_text = "";
     }
 
-    if visible_live_tool_calls.is_empty() {
+    // High verbosity keeps running calls out of the transcript: the status
+    // row names them, and the batch lands as one count line when it finishes.
+    if visible_live_tool_calls.is_empty() || live_tools_ride_the_status_row(state) {
         transcript.clear_tools();
     } else {
         transcript.set_tools_with_verbosity(
@@ -188,6 +190,69 @@ fn render_live_tail_mode(
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
+/// Whether running calls are named under the status row instead of in a live
+/// transcript cell. Low verbosity keeps the cell: it streams command output.
+pub(super) fn live_tools_ride_the_status_row(state: &RenderSnapshot) -> bool {
+    matches!(state.verbosity(), rustcode::controller::Verbosity::High)
+}
+
+/// The row under the running indicator that names the call in flight:
+/// `└ $ cargo test (8s) · esc interrupt`.
+pub(super) fn live_tool_status_detail(state: &RenderSnapshot, width: u16) -> Option<Line<'static>> {
+    if !live_tools_ride_the_status_row(state) {
+        return None;
+    }
+    let calls = state
+        .live_tool_calls()
+        .iter()
+        .filter(|call| is_live_tool_call_visible(call))
+        .collect::<Vec<_>>();
+    let call = calls
+        .iter()
+        .find(|call| call.execution_started)
+        .or(calls.first())?;
+    let target = super::tool_transcript::contract_home_path(&call.target, state.home_path());
+    let target = if target == "?" { String::new() } else { target };
+    let mut label = if call.tool_name == "run_command" && !target.is_empty() {
+        format!("$ {target}")
+    } else if target.is_empty() {
+        call.action.clone()
+    } else {
+        format!("{} {target}", call.action)
+    };
+    label = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut suffix = String::new();
+    if call.execution_started {
+        suffix.push_str(&format!(
+            " ({})",
+            super::fmt_elapsed_compact(call.started_at.elapsed().as_secs())
+        ));
+    }
+    if calls.len() > 1 {
+        suffix.push_str(&format!(" · +{} more", calls.len() - 1));
+    }
+    let prefix = "└ ";
+    let width = usize::from(width);
+    let hint = " · esc interrupt";
+    let room = width.saturating_sub(prefix.width() + suffix.width());
+    let hint = if call.execution_started && room >= label.width() + hint.width() {
+        hint
+    } else {
+        ""
+    };
+    let label =
+        super::modals::truncate_middle_to_width(&label, room.saturating_sub(hint.width()).max(1));
+    let muted = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
+    Some(Line::from(vec![
+        Span::styled(prefix, muted),
+        Span::styled(
+            label,
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), false),
+        ),
+        Span::styled(format!("{suffix}{hint}"), muted),
+    ]))
 }
 
 /// Plain running indicator (spinner + model) painted in the reserved row at
