@@ -249,8 +249,38 @@ pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> 
     let _ = std::io::stdout().flush();
 
     replace_binary(&temp_path, &current_exe)?;
+    #[cfg(target_os = "macos")]
+    sign_with_local_identity(&current_exe);
 
     Ok(())
+}
+
+/// Re-sign the updated binary with the local certificate from
+/// `scripts/macos-stable-signature.sh`, when the user has created it.
+///
+/// A release binary is ad-hoc signed, so its identity is the hash of that
+/// build and Keychain asks for the login password again for every stored
+/// credential after each update. The local certificate keeps one identity
+/// across updates. Without the certificate `codesign` fails before touching
+/// the file, and the ad-hoc signature stays.
+#[cfg(target_os = "macos")]
+fn sign_with_local_identity(executable: &std::path::Path) {
+    let signed = std::process::Command::new("/usr/bin/codesign")
+        .args([
+            "--force",
+            "--sign",
+            "RustCode Local Signing",
+            "--identifier",
+            "org.rustcode.cli",
+        ])
+        .arg(executable)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if signed {
+        println!("Signed with the local \"RustCode Local Signing\" certificate.");
+    }
 }
 
 fn verify_checksum_manifest(manifest: &str, asset_name: &str, bytes: &[u8]) -> Result<(), String> {

@@ -259,6 +259,15 @@ if ! run_with_spinner "Installing to ${TARGET_EXE}..." cp "$EXTRACTED_BIN" "$TAR
 fi
 chmod +x "$TARGET_EXE"
 
+# Keep one code-signing identity across updates when the user has set up the
+# local certificate (scripts/macos-stable-signature.sh); otherwise macOS
+# Keychain asks for the login password again after every update.
+if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+    if codesign --force --sign "RustCode Local Signing" --identifier org.rustcode.cli "$TARGET_EXE" >/dev/null 2>&1; then
+        success "Signed with the local \"RustCode Local Signing\" certificate."
+    fi
+fi
+
 success "RustCode ${LATEST_TAG} installed successfully to ${TARGET_EXE}!"
 
 # Check PATH

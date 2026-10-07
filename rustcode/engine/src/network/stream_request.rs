@@ -4808,13 +4808,16 @@ async fn stream_request_with_timeouts(
         let credential = tokio::select! {
             _ = cancel_token.cancelled() => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
             result = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
+                // Long enough to answer an operating system password prompt
+                // for the credential store; 30 seconds failed the turn while
+                // the prompt was still open.
+                std::time::Duration::from_secs(120),
                 crate::provider_auth::resolve_profile_credential(profile),
             ) => match result {
                 Err(_) => return Err(StreamFailure {
                     kind: StreamFailureKind::ProviderError,
                     status: None,
-                    detail: Some("credential resolution timed out before the provider request was sent".to_owned()),
+                    detail: Some("credential resolution timed out before the provider request was sent; if the operating system asked for a password to unlock the credential store, answer it and retry".to_owned()),
                     bytes_received: 0,
                     events_received: 0,
                     partial_event_bytes: 0,

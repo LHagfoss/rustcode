@@ -97,4 +97,12 @@ Then export the key and run `/login my-provider api-key MY_PROVIDER_API_KEY`. Pr
 
 Credentials are stored in the platform's native credential manager (for example, macOS Keychain or a Linux Secret Service keyring). On headless Linux, ensure a Secret Service provider is installed, available to the user session, and unlocked. If the native store cannot be opened, `/login` fails and leaves the key out of RustCode's config; there is no plaintext fallback.
 
+### macOS asks for the login password after every update
+
+Keychain grants access to one signed identity. A release binary, and one built with `cargo install`, is ad-hoc signed: its identity is the hash of that exact build, so each update is a new program to Keychain and it asks again for every stored credential, even after "Always Allow".
+
+Run `scripts/macos-stable-signature.sh` once. It creates a self-signed certificate named "RustCode Local Signing" in your login keychain and signs the installed binary with it. `rustcode update` and `scripts/install.sh` sign with the same certificate afterwards, so the identity no longer changes. The first run after signing asks one last time per credential; choose "Always Allow". After `cargo install`, run the script again, because Cargo replaces the signature.
+
+RustCode also reads each stored credential once per process rather than on every request.
+
 When a credential is attached to a profile, keep that profile's provider endpoint. Do not copy an account credential onto a profile pointing at an unrelated host. Legacy profiles without a credential reference continue using their existing API-key or environment-variable settings.
