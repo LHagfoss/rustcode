@@ -12321,3 +12321,146 @@ fn committed_mcp_row_names_the_kind_of_call() {
         .join("\n");
     assert!(text.contains("└ ✓ MCP teams.list_chats"), "{text}");
 }
+
+#[test]
+fn tool_rounds_chain_under_one_heading_with_a_closed_tree() {
+    use rustcode::controller::{ToolCallRef, ToolResultRecord};
+    // One-tool-per-round orchestration: each round is an empty assistant call
+    // plus its result. Nothing visible sits between the rounds, so they share
+    // one heading and the last child closes the tree.
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new("user", "look around"));
+    for (round, path) in ["src/a.rs", "src/b.rs", "src/c.rs"].into_iter().enumerate() {
+        let id = format!("call-{round}");
+        state.history.push(
+            ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+                id: id.clone(),
+                name: "view_file".into(),
+                arguments: serde_json::json!({ "path": path }).to_string(),
+            }]),
+        );
+        state.history.push(
+            ChatMessage::new("tool", format!("view_file: [File: {path}]\nfn main() {{}}"))
+                .answering(Some(id))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: "view_file".into(),
+                    success: true,
+                    ..Default::default()
+                }),
+        );
+    }
+    let rendered = render_state_to_text(&mut state, 100, 30);
+    let tree = rendered
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| line.starts_with('•') || line.starts_with('├') || line.starts_with('└'))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tree,
+        [
+            "• Explored",
+            "├ ✓ Read src/a.rs",
+            "├ ✓ Read src/b.rs",
+            "└ ✓ Read src/c.rs"
+        ],
+        "{rendered}"
+    );
+}
+
+#[test]
+fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
+    use rustcode::controller::{ToolCallRef, ToolResultRecord};
+    // Chaining only crosses steps that show nothing. Prose or a thought is a
+    // visible boundary, and mixed tool kinds chain under the generic heading.
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let round =
+        |state: &mut RenderState, id: &str, text: &str, tool: &str, args: serde_json::Value| {
+            state
+                .history
+                .push(
+                    ChatMessage::new("assistant", text).with_tool_calls(vec![ToolCallRef {
+                        id: id.to_owned(),
+                        name: tool.to_owned(),
+                        arguments: args.to_string(),
+                    }]),
+                );
+            state.history.push(
+                ChatMessage::new("tool", format!("{tool}: ok"))
+                    .answering(Some(id.to_owned()))
+                    .with_tool_result(ToolResultRecord {
+                        tool_name: tool.to_owned(),
+                        success: true,
+                        exit_code: (tool == "run_command").then_some(0),
+                        command: (tool == "run_command").then(|| "cargo check".to_owned()),
+                        ..Default::default()
+                    }),
+            );
+        };
+    let headings = |state: &mut RenderState| {
+        render_state_to_text(state, 100, 40)
+            .lines()
+            .map(str::trim_end)
+            .filter(|line| {
+                ["• Explored", "• Ran", "├ ", "└ "]
+                    .iter()
+                    .any(|prefix| line.starts_with(prefix))
+            })
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+
+    for boundary in [
+        "Now the second file.",
+        "<think>Check the other file.</think>",
+    ] {
+        let mut state = RenderState::new();
+        state.history.push(ChatMessage::new("user", "look around"));
+        round(
+            &mut state,
+            "a",
+            "",
+            "view_file",
+            serde_json::json!({"path": "src/a.rs"}),
+        );
+        round(
+            &mut state,
+            "b",
+            boundary,
+            "view_file",
+            serde_json::json!({"path": "src/b.rs"}),
+        );
+        assert_eq!(
+            headings(&mut state),
+            [
+                "• Explored",
+                "└ ✓ Read src/a.rs",
+                "• Explored",
+                "└ ✓ Read src/b.rs"
+            ],
+            "{boundary}"
+        );
+    }
+
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new("user", "look around"));
+    round(
+        &mut state,
+        "a",
+        "",
+        "view_file",
+        serde_json::json!({"path": "src/a.rs"}),
+    );
+    round(
+        &mut state,
+        "b",
+        "",
+        "run_command",
+        serde_json::json!({"command": "cargo check"}),
+    );
+    let mixed = headings(&mut state);
+    assert_eq!(mixed.len(), 3, "{mixed:?}");
+    assert_eq!(mixed[0], "• Ran");
+    assert!(mixed[1].starts_with("├ ✓ Read src/a.rs"), "{mixed:?}");
+    assert!(mixed[2].starts_with("└ ✓ Bash cargo check"), "{mixed:?}");
+}
