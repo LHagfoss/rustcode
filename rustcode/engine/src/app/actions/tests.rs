@@ -302,13 +302,13 @@ fn background_terminal_commands_list_and_stop_the_active_session_only() {
     }
 
     let listed = super::background_terminal_list(session_id);
-    assert!(listed.contains("1 background terminal running"));
+    assert!(listed.contains("1 task running"));
     assert!(listed.contains(&task_id));
     assert!(!listed.contains(&other_task_id));
 
     assert_eq!(
         super::stop_background_terminals(session_id),
-        "Stopped 1 background terminal."
+        "Stopped 1 task."
     );
     for _ in 0..100 {
         if crate::tools::background_task_snapshots(session_id).is_empty() {
@@ -333,21 +333,21 @@ fn ephemeral_status_collapses_repeated_background_and_mode_notices() {
 
     super::push_ephemeral_status(
         &mut state,
-        "1 background terminal running:\n  • task_1 · 24s · PID 4600 · sleep 30".to_string(),
+        "1 task running:\n  • task_1 · 24s · PID 4600 · sleep 30".to_string(),
     );
     super::push_ephemeral_status(
         &mut state,
-        "1 background terminal running:\n  • task_1 · 31s · PID 4600 · sleep 30".to_string(),
+        "1 task running:\n  • task_1 · 31s · PID 4600 · sleep 30".to_string(),
     );
     super::push_ephemeral_status(
         &mut state,
-        "1 background terminal running:\n  • task_1 · 34s · PID 4600 · sleep 30".to_string(),
+        "1 task running:\n  • task_1 · 34s · PID 4600 · sleep 30".to_string(),
     );
     // Three /ps polls collapse into one entry showing the latest snapshot.
     let listings: Vec<_> = state
         .history
         .iter()
-        .filter(|m| m.content.contains("background terminal running:"))
+        .filter(|m| m.content.contains("task running:"))
         .collect();
     assert_eq!(listings.len(), 1);
     assert!(listings[0].content.contains("34s"));
@@ -1244,6 +1244,7 @@ async fn informational_commands_open_panels_without_history_even_while_busy() {
         "/tools",
         "/changelog",
         "/ps",
+        "/tasks",
         "/memory",
         "/sandbox",
         "/verbosity invalid",

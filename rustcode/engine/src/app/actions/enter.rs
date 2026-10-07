@@ -362,11 +362,11 @@ async fn handle_enter_inner(
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
-            "/ps" => {
+            "/tasks" | "/ps" => {
                 let text = background_terminal_list(&s.active_session_id);
-                // Polling /ps while a job runs must not append one system
+                // Polling the list while a job runs must not append one system
                 // message per poll (issue #1222): collapse repeats in place.
-                s.show_command_panel("Background terminals", text);
+                s.show_command_panel("Tasks", text);
             }
             "/stop" => {
                 let text = stop_background_terminals(&s.active_session_id);

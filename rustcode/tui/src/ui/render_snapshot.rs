@@ -64,8 +64,6 @@ pub(crate) struct RenderSnapshot {
     stream_tracker: Option<StreamTracker>,
     auto_confirm: bool,
     verbosity: Verbosity,
-    configured_verbosity: Verbosity,
-    tool_detail: rustcode::controller::ToolDetail,
     delegation_active: bool,
     modal_open: bool,
     user_overlay_open: bool,
@@ -251,17 +249,7 @@ impl RenderSnapshot {
             live_tool_calls: Arc::clone(&view.live_tool_calls),
             stream_tracker: view.stream_tracker.clone(),
             auto_confirm: view.auto_confirm,
-            // Opening tool output at high verbosity shows exactly what low
-            // verbosity shows, so the renderers see it as low.
-            verbosity: if matches!(view.verbosity, Verbosity::High)
-                && view.tool_detail == rustcode::controller::ToolDetail::Output
-            {
-                Verbosity::Low
-            } else {
-                view.verbosity.clone()
-            },
-            configured_verbosity: view.verbosity.clone(),
-            tool_detail: view.tool_detail,
+            verbosity: view.verbosity.clone(),
             delegation_active: view.delegation_active,
             modal_open: view.modal_open(),
             user_overlay_open: view.user_overlay_open(),
@@ -590,17 +578,6 @@ impl RenderSnapshot {
     /// that tool output opened at high verbosity renders as low.
     pub(crate) fn verbosity(&self) -> &Verbosity {
         &self.verbosity
-    }
-    pub(crate) fn configured_verbosity(&self) -> &Verbosity {
-        &self.configured_verbosity
-    }
-    pub(crate) fn tool_detail(&self) -> rustcode::controller::ToolDetail {
-        self.tool_detail
-    }
-    /// High verbosity with tool batches still folded into their counts.
-    pub(crate) fn tool_batches_folded(&self) -> bool {
-        matches!(self.configured_verbosity, Verbosity::High)
-            && self.tool_detail == rustcode::controller::ToolDetail::Summary
     }
     pub(crate) fn delegation_active(&self) -> bool {
         self.delegation_active

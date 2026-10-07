@@ -271,11 +271,11 @@ mod tests {
 
         for expected in [
             "Static /test preview",
-            "Ran $ cargo check --workspace",
+            "Bash cargo check --workspace",
             "• Running · esc interrupt",
-            "├ • Bash cargo test --workspace",
-            "└ ◦ mail.Search release notes · queued",
-            "Executing · ",
+            "  Bash cargo test --workspace",
+            "  mail.Search release notes · waiting",
+            "Working · ",
             "Cargo.toml",
             "Finished with 0 errors",
             "warning: dependency graph",

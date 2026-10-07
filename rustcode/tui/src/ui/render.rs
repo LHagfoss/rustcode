@@ -314,8 +314,9 @@ pub(crate) fn render_with_transcript_snapshot(
     // the composer does not jump when the popup opens or closes.
     let footer_height = 1;
     let (top_padding, _) = live_surface_padding(state);
-    let mut activity_lines =
-        super::composer_render::background_command_lines_with_width(state, chat_width);
+    // Background tasks are counted in the footer and listed by `/tasks`; the
+    // rows above the composer stay empty.
+    let mut activity_lines: Vec<Line<'static>> = Vec::new();
     // Reserve a stable row above the composer for return-to-latest. Panels,
     // confirmations, questions, and completions suppress the control there.
     let control_row_suppressed =
@@ -440,9 +441,9 @@ pub(crate) fn render_with_transcript_snapshot(
         flags
             .iter()
             .zip(wrapped_counts.iter())
-            .flat_map(|(&is_tool, &count)| std::iter::repeat_n(is_tool, count.max(1)))
+            .flat_map(|(&block, &count)| std::iter::repeat_n(block, count.max(1)))
             .take(chat_height as usize)
-            .collect::<Vec<bool>>()
+            .collect::<Vec<_>>()
     });
     let soft_wrap_before: Vec<bool> = wrapped_counts
         .iter()
@@ -563,13 +564,17 @@ pub(crate) fn render_with_transcript_snapshot(
         // cleared (#1542). Both gestures pin the painted viewport, so the
         // content-drift clear in `refresh_view` below cannot fire while a
         // selection is live: reading the range here is already its answer.
-        render_composer_footer(
+        let tasks_hovered = transcript.tasks_chip_hovered;
+        transcript.tasks_chip = render_composer_footer(
             f,
             chunks[9],
             state,
             popup_hint,
             transcript.selection.has_selection() || transcript.panel_selection.has_selection(),
+            tasks_hovered,
         );
+    } else {
+        transcript.tasks_chip = None;
     }
 
     if !filtered_cmds.is_empty() {
@@ -683,6 +688,7 @@ pub(crate) fn render_with_transcript_snapshot(
     if let Some(rows) = tool_rows {
         transcript.set_tool_rows(selection_area, rows);
     }
+    transcript.highlight_hovered_tool_block(f.buffer_mut());
     transcript.selection.refresh_view(
         selection_area,
         f.buffer(),

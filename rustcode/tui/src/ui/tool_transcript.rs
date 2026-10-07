@@ -542,7 +542,9 @@ pub(super) fn tool_result_status(
         // it as failed (issue #1221) misleads the user into thinking the
         // command itself failed.
         if record.pending {
-            return (true, "running".to_owned());
+            // The command left the turn and runs as a task; `/tasks` and the
+            // footer follow it from here.
+            return (true, "background".to_owned());
         }
         if record
             .error_kind
@@ -612,7 +614,7 @@ fn spine_body_spans(line: Line<'static>, show_picker: bool) -> (Vec<Span<'static
     spans.extend(spans_iter);
     let continuation = if stderr {
         Span::styled(
-            "│   ",
+            "  │   ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
         )
     } else {
@@ -628,7 +630,7 @@ pub(super) fn indent_tool_result_body(
     width: u16,
     expanded: bool,
 ) -> Vec<Line<'static>> {
-    if matches!(verbosity, rustcode::controller::Verbosity::High) {
+    if matches!(verbosity, rustcode::controller::Verbosity::High) && !expanded {
         return Vec::new();
     }
 
@@ -665,26 +667,6 @@ pub(super) fn indent_tool_result_body(
     } else {
         cap_collapsed_tool_body(indented, false)
     }
-}
-
-/// Wrap a low-verbosity command body once, using the full output to decide
-/// whether the collapsed preview needs an expand hint. A collapsed body is a
-/// head/tail view of those same wrapped rows, so it can reuse the full layout.
-pub(super) fn command_preview_body(
-    lines: Vec<Line<'static>>,
-    tool_name: &str,
-    verbosity: &rustcode::controller::Verbosity,
-    width: u16,
-    expanded: bool,
-) -> (Vec<Line<'static>>, bool) {
-    let full_body = indent_tool_result_body(lines, tool_name, verbosity, width, true);
-    let show_hint = !expanded && full_body.len() > COLLAPSED_TOOL_BODY_MAX_LINES;
-    let body = if expanded {
-        full_body
-    } else {
-        cap_collapsed_tool_body(full_body, false)
-    };
-    (body, show_hint)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -914,11 +896,13 @@ pub(super) fn tool_transcript_entry(
             show_picker,
         )
     } else if kind == ToolTranscriptKind::Command || tool_name == "ask_question" {
+        // The entry always carries its output; whether it is shown is the
+        // group renderer's decision (verbosity default, or opened).
         cached_tool_result(
             &tool_name,
             result,
             width as usize,
-            &state.verbosity(),
+            &rustcode::controller::Verbosity::Low,
             show_picker,
         )
     } else {
@@ -934,7 +918,6 @@ pub(super) fn tool_transcript_entry(
     // keep their truthful single-line status.
     if kind == ToolTranscriptKind::Edit
         && success
-        && matches!(state.verbosity(), rustcode::controller::Verbosity::Low)
         && !edit_result_is_noop(result)
         && !edit_diff_unavailable(result)
         && edit_diff.is_none()
@@ -1106,14 +1089,22 @@ fn tool_status_glyph(entry: &ToolTranscriptEntry) -> char {
 
 pub(super) fn tool_tree_prefix(is_last: bool, show_picker: bool) -> Span<'static> {
     Span::styled(
-        if is_last { "└ " } else { "├ " },
+        {
+            // Rows are indented under their heading; a tree would have to be
+            // redrawn whenever a block gained a row.
+            let _ = is_last;
+            "  "
+        },
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
     )
 }
 
 fn tool_title_continuation(is_last: bool, show_picker: bool) -> Span<'static> {
     Span::styled(
-        if is_last { "    " } else { "│   " },
+        {
+            let _ = is_last;
+            "    "
+        },
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
     )
 }
@@ -1125,7 +1116,7 @@ fn tool_title_continuation(is_last: bool, show_picker: bool) -> Span<'static> {
 /// the same spine instead.
 pub(super) fn tool_body_spine(show_picker: bool) -> Span<'static> {
     Span::styled(
-        "│ ",
+        "  │ ",
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
     )
 }
@@ -1148,19 +1139,7 @@ pub(super) fn tool_child_line(
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ),
     ];
-    if entry.kind == ToolTranscriptKind::Edit {
-        if !entry.target.is_empty() && entry.target != "?" {
-            spans.push(Span::styled(
-                entry.target.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        } else {
-            spans.push(Span::styled(
-                entry.action.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-        }
-    } else {
+    {
         // A dotted `server.tool` name alone reads as a broken row, most of all
         // when the call took no arguments. Name what kind of call it was, the
         // way siblings lead with `Bash`/`Read` (#1770).
@@ -1188,7 +1167,7 @@ pub(super) fn tool_child_line(
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
     }
-    if !entry.success || entry.status == "running" || entry.status == "no changes" {
+    if !entry.success || entry.status == "background" || entry.status == "no changes" {
         spans.push(Span::styled(
             format!(" · {}", entry.status),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
@@ -1303,14 +1282,14 @@ pub(super) fn command_child_lines(
     }
     let mut lines = Vec::with_capacity(commands.len());
     let status_suffix =
-        (!entry.success || entry.status == "running").then(|| format!(" · {}", entry.status));
+        (!entry.success || entry.status == "background").then(|| format!(" · {}", entry.status));
     let max_w = wrap_width(width, show_hint);
     for (command_index, command) in commands.into_iter().enumerate() {
         let mut spans = vec![if command_index == 0 {
             tool_tree_prefix(is_last, show_picker)
         } else {
             Span::styled(
-                if is_last { "  " } else { "│ " },
+                "  ",
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             )
         }];
@@ -1356,58 +1335,6 @@ pub(super) fn command_child_lines(
     lines
 }
 
-pub(super) fn command_summary_lines(
-    entry: &ToolTranscriptEntry,
-    width: u16,
-    show_hint: bool,
-    show_picker: bool,
-) -> Vec<Line<'static>> {
-    let bullet_color = if entry.success {
-        COLOR_GREEN()
-    } else {
-        Color::Rgb(229, 123, 123)
-    };
-    let has_command = !entry.target.is_empty() && entry.target != "?";
-    let prefix = if has_command { "Ran $ " } else { "Ran Bash" };
-    let status_suffix = format!(" · {}", entry.status);
-    let available = wrap_width(width, show_hint).min(width as usize);
-    let preview_width = available.saturating_sub(2 + prefix.width() + status_suffix.width());
-    let preview = collapse_command_preview(&entry.target, preview_width);
-    let mut spans = vec![
-        Span::styled(
-            "• ",
-            get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            prefix,
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ),
-    ];
-    if has_command && preview_width > 0 {
-        for command in highlight_shell_command(&preview, COLOR_BG(), show_picker) {
-            spans.extend(command.spans);
-        }
-    }
-    spans.push(Span::styled(
-        status_suffix,
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    ));
-    let line = Line::from(spans);
-    let line = if line.width() > available {
-        Line::from(Span::styled(
-            collapse_command_preview(&line.to_string(), available),
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ))
-    } else {
-        line
-    };
-    let mut lines = vec![line];
-    if show_hint {
-        append_expand_hint(&mut lines, width, show_picker);
-    }
-    lines
-}
-
 pub(super) fn indent_generic_tool_body(
     lines: Vec<Line<'static>>,
     verbosity: &rustcode::controller::Verbosity,
@@ -1415,7 +1342,7 @@ pub(super) fn indent_generic_tool_body(
     show_picker: bool,
     expanded: bool,
 ) -> Vec<Line<'static>> {
-    if matches!(verbosity, rustcode::controller::Verbosity::High) {
+    if matches!(verbosity, rustcode::controller::Verbosity::High) && !expanded {
         return Vec::new();
     }
     // Expanded Tool bodies render in full; collapsed ones are capped after
@@ -1474,7 +1401,14 @@ fn indent_file_edit_preview_body(
 ) -> Vec<Line<'static>> {
     let mut indented = indent_full_tool_body(lines, width, show_picker)
         .into_iter()
-        .filter(|line| line.to_string().trim_start_matches('│').trim().is_empty() == false)
+        .filter(|line| {
+            !line
+                .to_string()
+                .trim_start()
+                .trim_start_matches('│')
+                .trim()
+                .is_empty()
+        })
         .collect::<Vec<_>>();
     if indented.len() <= COLLAPSED_FILE_DIFF_PREVIEW_LINES {
         return indented;
@@ -1603,79 +1537,6 @@ fn tool_round_spacer(show_picker: bool) -> Line<'static> {
     ))
 }
 
-/// What one folded call adds to its batch's count line.
-fn folded_tool_phrase(entry: &ToolTranscriptEntry) -> (&'static str, &'static str, &'static str) {
-    match (entry.kind, entry.action.as_str()) {
-        (ToolTranscriptKind::Command, _) => ("ran", "shell command", "shell commands"),
-        (ToolTranscriptKind::Explored, "Read") => ("read", "file", "files"),
-        (ToolTranscriptKind::Explored, "Search") => ("searched for", "pattern", "patterns"),
-        (ToolTranscriptKind::Explored, "List") => ("listed", "directory", "directories"),
-        (ToolTranscriptKind::Explored, _) => ("explored", "item", "items"),
-        _ => ("called", "tool", "tools"),
-    }
-}
-
-/// One count line for a run of folded calls: `Read 2 files, ran 5 shell
-/// commands`. The calls and their output stay one expand press away.
-fn folded_tool_summary_line(
-    entries: &[ToolTranscriptEntry],
-    width: u16,
-    show_picker: bool,
-) -> Line<'static> {
-    let mut counts: Vec<((&'static str, &'static str, &'static str), usize)> = Vec::new();
-    for entry in entries {
-        let phrase = folded_tool_phrase(entry);
-        match counts.iter_mut().find(|(known, _)| *known == phrase) {
-            Some((_, count)) => *count += 1,
-            None => counts.push((phrase, 1)),
-        }
-    }
-    let muted = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
-    let strong = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker);
-    let mut spans = vec![Span::styled("  ", muted)];
-    for (index, ((verb, singular, plural), count)) in counts.into_iter().enumerate() {
-        let verb = if index == 0 {
-            let mut chars = verb.chars();
-            chars
-                .next()
-                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
-                .unwrap_or_default()
-        } else {
-            format!(", {verb}")
-        };
-        spans.push(Span::styled(format!("{verb} "), muted));
-        spans.push(Span::styled(count.to_string(), strong));
-        spans.push(Span::styled(
-            format!(" {}", if count == 1 { singular } else { plural }),
-            muted,
-        ));
-    }
-    let failed = entries.iter().filter(|entry| !entry.success).count();
-    if failed > 0 {
-        spans.push(Span::styled(
-            format!(" · {failed} failed"),
-            get_themed_style(
-                Color::Rgb(229, 123, 123),
-                COLOR_BG(),
-                Modifier::empty(),
-                show_picker,
-            ),
-        ));
-    }
-    let used: usize = spans.iter().map(|span| span.content.width()).sum();
-    if used > usize::from(width) {
-        let text = spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        return Line::from(Span::styled(
-            super::modals::truncate_middle_to_width(&text, usize::from(width)),
-            muted,
-        ));
-    }
-    Line::from(spans)
-}
-
 fn render_tool_result_group_snapshot(
     state: &RenderSnapshot,
     message_indices: &[usize],
@@ -1683,61 +1544,7 @@ fn render_tool_result_group_snapshot(
     show_picker: bool,
     include_header: bool,
 ) -> Vec<Line<'static>> {
-    if !state.tool_batches_folded() {
-        return render_tool_result_group_detailed(
-            state,
-            message_indices,
-            width,
-            show_picker,
-            include_header,
-        );
-    }
-    // Folded: calls collapse into a count, and file edits keep their rows
-    // because the diff is the result the reader is waiting for.
-    let mut lines = Vec::new();
-    let mut run: Vec<ToolTranscriptEntry> = Vec::new();
-    let mut edits: Vec<usize> = Vec::new();
-    let flush_run = |run: &mut Vec<ToolTranscriptEntry>, lines: &mut Vec<Line<'static>>| {
-        if run.is_empty() {
-            return;
-        }
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.push(folded_tool_summary_line(run, width, show_picker));
-        run.clear();
-    };
-    let flush_edits = |edits: &mut Vec<usize>, lines: &mut Vec<Line<'static>>| {
-        if edits.is_empty() {
-            return;
-        }
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.extend(render_tool_result_group_detailed(
-            state,
-            edits,
-            width,
-            show_picker,
-            true,
-        ));
-        edits.clear();
-    };
-    for &message_index in message_indices {
-        let Some(entry) = tool_transcript_entry(state, message_index, width, show_picker) else {
-            continue;
-        };
-        if entry.kind == ToolTranscriptKind::Edit {
-            flush_run(&mut run, &mut lines);
-            edits.push(message_index);
-        } else {
-            flush_edits(&mut edits, &mut lines);
-            run.push(entry);
-        }
-    }
-    flush_run(&mut run, &mut lines);
-    flush_edits(&mut edits, &mut lines);
-    lines
+    render_tool_result_group_detailed(state, message_indices, width, show_picker, include_header)
 }
 
 fn render_tool_result_group_detailed(
@@ -1754,13 +1561,10 @@ fn render_tool_result_group_detailed(
     let mut lines = Vec::new();
     let mut index = 0;
     while index < entries.len() {
-        let kind = entries[index].kind;
         // `message_indices` represents one provider batch (and may include
         // tool-only assistant turns joined by the scrollback layer). Keep it
         // as one visual group even when the provider mixed command, read, or
         // edit tools. The child rows retain their kind-specific formatting.
-        let whole_batch = &entries[index..];
-        let homogeneous = whole_batch.iter().all(|entry| entry.kind == kind);
         let group_end = entries.len();
         let group = &entries[index..group_end];
         let success = group.iter().all(|entry| entry.success);
@@ -1768,86 +1572,11 @@ fn render_tool_result_group_detailed(
         if include_header && !lines.is_empty() {
             lines.push(Line::from(""));
         }
-        if include_header && homogeneous && kind == ToolTranscriptKind::Command {
-            if group.len() > 1 || matches!(state.verbosity(), rustcode::controller::Verbosity::High)
-            {
-                lines.push(tool_group_header("Ran", success, show_picker));
-                for (child_index, entry) in group.iter().enumerate() {
-                    if child_index > 0
-                        && tool_round_needs_spacer(state.active_history(), entry.message_index)
-                    {
-                        lines.push(tool_round_spacer(show_picker));
-                    }
-                    let title = command_child_lines(
-                        entry,
-                        child_index + 1 == group.len(),
-                        false,
-                        width,
-                        show_picker,
-                    );
-                    let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
-                    let (body, show_hint) = command_preview_body(
-                        entry.body.clone(),
-                        &entry.tool_name,
-                        &state.verbosity(),
-                        width,
-                        is_expanded,
-                    );
-                    append_tool_preview(
-                        &mut lines,
-                        title,
-                        body,
-                        entry,
-                        show_hint,
-                        width,
-                        show_picker,
-                    );
-                }
-            } else {
-                let entry = &group[0];
-                let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
-                let title = command_summary_lines(entry, width, false, show_picker);
-                let (body, show_hint) = command_preview_body(
-                    entry.body.clone(),
-                    &entry.tool_name,
-                    &state.verbosity(),
-                    width,
-                    is_expanded,
-                );
-                append_tool_preview(
-                    &mut lines,
-                    title,
-                    body,
-                    entry,
-                    show_hint,
-                    width,
-                    show_picker,
-                );
-            }
-        } else {
+        {
             if include_header {
-                let title = if !homogeneous {
-                    "Ran"
-                } else if kind == ToolTranscriptKind::Explored {
-                    "Explored"
-                } else if kind == ToolTranscriptKind::Edit {
-                    if group.iter().all(|entry| entry.action == "Write") {
-                        "Wrote"
-                    } else if group.iter().all(|entry| entry.action == "Delete") {
-                        "Deleted"
-                    } else if group.iter().all(|entry| entry.action == "Copy") {
-                        "Copied"
-                    } else if group.iter().all(|entry| entry.action == "Move") {
-                        "Moved"
-                    } else {
-                        "Edited"
-                    }
-                } else if kind == ToolTranscriptKind::Tool {
-                    "Ran"
-                } else {
-                    "Called"
-                };
-                lines.push(tool_group_header(title, success, show_picker));
+                // Every finished batch is `Ran`: what each call was is on its
+                // own row, and a failure is marked there too.
+                lines.push(tool_group_header("Ran", success, show_picker));
             }
             let mut seen = std::collections::HashSet::new();
             // Pre-filter duplicate exploration rows so the last *rendered*
@@ -1890,10 +1619,11 @@ fn render_tool_result_group_detailed(
                         )
                         .len()
                     };
+                    let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
                     let show_hint = expandable
                         && full_rows > COLLAPSED_TOOL_BODY_MAX_LINES
                         && !is_expanded
-                        && matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
+                        && low;
                     // A continuation batch renders under a heading an earlier
                     // frame already committed, so scrollback can never be
                     // revised: only `include_header` batches know their last
@@ -1905,23 +1635,24 @@ fn render_tool_result_group_detailed(
                     } else {
                         tool_child_line(entry, is_last, false, width, show_picker)
                     };
+                    // Verbosity sets the default: low shows a five-row preview,
+                    // high shows the row alone. An opened entry shows it all.
                     let mut body = Vec::new();
-                    let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
                     if entry.kind == ToolTranscriptKind::Edit && edit_entry_is_expandable(entry) {
-                        if is_expanded || !low {
+                        if is_expanded {
                             body.extend(indent_full_tool_body(
                                 entry.body.clone(),
                                 width,
                                 show_picker,
                             ));
-                        } else {
+                        } else if low {
                             body.extend(indent_file_edit_preview_body(
                                 entry.body.clone(),
                                 width,
                                 show_picker,
                             ));
                         }
-                    } else if expandable && low {
+                    } else if expandable && (low || is_expanded) {
                         if entry.kind == ToolTranscriptKind::Command {
                             body.extend(indent_tool_result_body(
                                 entry.body.clone(),
@@ -1962,7 +1693,6 @@ fn render_tool_result_group_detailed(
 ///
 /// Derived from the same rules the renderer applies, so the hint and the key
 /// can never disagree about what is expandable (#1541, #1563):
-/// - low verbosity only (high verbosity renders bodies inline, never collapsed);
 /// - generic Tool entries with a non-empty body;
 /// - Command entries with a non-empty body, whether their provider batch is
 ///   homogeneous or mixed;
@@ -1972,9 +1702,6 @@ fn render_tool_result_group_detailed(
 /// collapses, so dropping them would make a second press skip past the entry
 /// it expanded.
 pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Vec<usize> {
-    if !matches!(state.verbosity(), rustcode::controller::Verbosity::Low) {
-        return Vec::new();
-    }
     let history = state.active_history();
     // Group consecutive tool messages the way the transcript does, joining
     // across tool-only assistant turns (one-tool-per-round orchestration).
@@ -2526,7 +2253,7 @@ mod tests {
         });
         assert_eq!(
             tool_result_status(&message, "run_command", "Task started in background."),
-            (true, "running".to_owned())
+            (true, "background".to_owned())
         );
     }
 
@@ -2573,74 +2300,6 @@ mod tests {
         let long = collapse_command_preview("curl -sS https://example.com/very/long/path", 20);
         assert!(long.ends_with('…'), "{long:?}");
         assert!(long.width() <= 20, "{long:?}");
-    }
-
-    #[test]
-    fn completed_command_header_stays_on_one_line() {
-        let entry = super::ToolTranscriptEntry {
-            message_index: 0,
-            tool_name: "run_command".to_owned(),
-            action: "Bash".to_owned(),
-            target: format!(
-                "python3 - <<'PY'\n{}\nPY",
-                "日本語 long command ".repeat(30)
-            ),
-            success: true,
-            status: "exit 0".to_owned(),
-            body: vec![],
-            kind: super::ToolTranscriptKind::Command,
-            diff_counts: None,
-        };
-        for width in [18, 24, 48, 80, 180] {
-            let lines = super::command_summary_lines(&entry, width, false, false);
-            assert_eq!(lines.len(), 1, "width {width}: {lines:?}");
-            assert!(lines[0].width() <= width as usize);
-            assert!(lines[0].to_string().starts_with("• Ran $ "));
-            assert!(lines[0].to_string().ends_with("… · exit 0"));
-        }
-    }
-
-    #[test]
-    fn expansion_hint_follows_long_command_output_without_using_preview_rows() {
-        for width in [24, 48, 80] {
-            let entry = super::ToolTranscriptEntry {
-                message_index: 0,
-                tool_name: "run_command".to_owned(),
-                action: "Bash".to_owned(),
-                target: format!("echo {}\necho done", "日本語".repeat(30)),
-                success: true,
-                status: "exit 0".to_owned(),
-                body: (0..10)
-                    .map(|i| ratatui::text::Line::from(format!("output {i}")))
-                    .collect(),
-                kind: super::ToolTranscriptKind::Command,
-                diff_counts: None,
-            };
-            let title = super::command_summary_lines(&entry, width, false, false);
-            let body = super::indent_tool_result_body(
-                entry.body.clone(),
-                &entry.tool_name,
-                &rustcode::controller::Verbosity::Low,
-                width,
-                false,
-            );
-            assert_eq!(body.len(), 5);
-            let title_count = title.len();
-            let mut lines = Vec::new();
-            super::append_tool_preview(&mut lines, title, body, &entry, true, width, false);
-            assert!(
-                lines[..title_count]
-                    .iter()
-                    .all(|line| !line.to_string().contains("ctrl+o"))
-            );
-            assert!(lines.last().unwrap().to_string().contains("ctrl+o"));
-            assert!(lines[lines.len() - 2].to_string().contains("output 9"));
-            assert_eq!(lines.len(), title_count + 6);
-            assert!(
-                lines.iter().all(|line| line.width() <= width as usize),
-                "{lines:?}"
-            );
-        }
     }
 
     #[test]
@@ -2741,7 +2400,10 @@ mod tests {
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>();
-        assert_eq!(capped, ["row 0", "row 1", "│ … +5 lines", "row 7", "row 8"]);
+        assert_eq!(
+            capped,
+            ["row 0", "row 1", "  │ … +5 lines", "row 7", "row 8"]
+        );
 
         let forced_marker = super::tool_preview_window(4, true).expect("byte marker");
         assert_eq!(

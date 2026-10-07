@@ -69,10 +69,21 @@ fn render_live_tail_mode(
 
     let mut has_visible_active_cell = false;
     let mut model_live_text = "";
+    // A `Running` block appears once a call has really been running for a
+    // moment. Calls still being written by the model, and calls that finish at
+    // once, never open one; calls waiting behind a running one are listed.
+    let running_settled = state
+        .live_tool_calls()
+        .iter()
+        .any(|call| call.execution_started && super::history_cell::live_tool_call_is_settled(call));
     let visible_live_tool_calls = state
         .live_tool_calls()
         .iter()
-        .filter(|call| is_live_tool_call_visible(call))
+        .filter(|call| {
+            running_settled
+                && is_live_tool_call_visible(call)
+                && (!call.execution_started || super::history_cell::live_tool_call_is_settled(call))
+        })
         .cloned()
         .collect::<Vec<_>>();
     if !tail.is_empty() {
@@ -163,16 +174,6 @@ fn render_live_tail_mode(
 
     if has_visible_active_cell {
         lines.extend(transcript.display_lines(width));
-    }
-
-    let background_lines =
-        super::composer_render::background_command_lines_with_width(state, width);
-    if !background_lines.is_empty() && !full_viewport {
-        if lines.last().is_some_and(|l| !l.spans.is_empty()) {
-            lines.push(Line::from(""));
-        }
-        lines.extend(background_lines);
-        lines.push(Line::from(""));
     }
 
     if state.recap_loading() {
@@ -407,7 +408,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
             (transcript.committed_block(state, last, width), last)
         };
         rows += block.len();
-        blocks.push((block, is_tool));
+        blocks.push((block, is_tool.then_some((next_index, index))));
         index = next_index;
     }
     // The welcome cell is the first item in the projected transcript, and the
@@ -416,7 +417,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
     if index == state.history_display_start() && rows < target_rows && !welcome_is_live(state) {
         let banner = build_claude_startup_banner_snapshot(state, width as usize, height as usize);
         rows += banner.len();
-        blocks.push((Arc::new(banner), false));
+        blocks.push((Arc::new(banner), None));
     }
     let max_scroll = rows.saturating_sub(capacity);
     let scroll = transcript.clamp_scroll_rows(max_scroll);
@@ -449,11 +450,11 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let end = rows.saturating_sub(scroll);
     let start = end.saturating_sub(capacity);
     let mut lines = Vec::with_capacity(capacity);
-    // Tool rows are click targets (they toggle like ctrl+o); spacer rows of a
-    // tool block are not.
+    // Tool rows are hover and click targets for their block; the spacer rows
+    // of a block are not.
     let mut tool_lines = Vec::with_capacity(capacity);
     let mut offset = 0;
-    for (block, is_tool) in blocks.into_iter().rev() {
+    for (block, tool_block) in blocks.into_iter().rev() {
         let block_end = offset + block.len();
         let from = start.saturating_sub(offset).min(block.len());
         let through = end.saturating_sub(offset).min(block.len());
@@ -462,7 +463,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
             tool_lines.extend(
                 block[from..through]
                     .iter()
-                    .map(|line| is_tool && line.width() > 0),
+                    .map(|line| tool_block.filter(|_| line.width() > 0)),
             );
         }
         offset = block_end;

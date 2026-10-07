@@ -461,36 +461,12 @@ fn scroll_panel_selection(
     true
 }
 
-/// Esc re-enters follow when the transcript is not already showing the newest
-/// row. Routed through [`TranscriptState::jump_to_latest`] so the keyboard and
-/// the "back to bottom" control clear the same state (#1595).
 /// The expand key (ctrl+o, or ctrl+shift+o for one entry at a time), also
 /// reached by clicking a tool row in the transcript.
 fn toggle_tool_expansion(state: &mut AppState, width: u16, step: bool) {
     let snapshot = ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(state));
-    let high_verbosity = matches!(
-        snapshot.configured_verbosity(),
-        rustcode::controller::Verbosity::High
-    );
     let candidates = ui::collapsible_tool_indices(&snapshot, width);
-    // At high verbosity the whole-transcript key walks the
-    // folded batches open: counts, then the calls, then
-    // their output, then back. The single-entry step only
-    // has something to act on once output is showing.
-    let output_shown = snapshot.tool_detail() == rustcode::controller::ToolDetail::Output;
-    if high_verbosity && !(step && output_shown) {
-        state.tool_detail = state.tool_detail.next();
-        if state.tool_detail != rustcode::controller::ToolDetail::Output {
-            state.expanded_thoughts.clear();
-            state.expanded_thought_focus = None;
-        }
-        let notice = match state.tool_detail {
-            rustcode::controller::ToolDetail::Summary => "Tool calls folded",
-            rustcode::controller::ToolDetail::List => "Showing tool calls · ctrl+o for output",
-            rustcode::controller::ToolDetail::Output => "Showing tool output · ctrl+o to fold",
-        };
-        state.set_transient_notice(notice);
-    } else if candidates.is_empty() {
+    if candidates.is_empty() {
         state.set_transient_notice("No collapsed tool output");
     } else if step {
         // The single-entry step keeps the focus-driven walk
@@ -501,6 +477,35 @@ fn toggle_tool_expansion(state: &mut AppState, width: u16, step: bool) {
     }
 }
 
+/// Open or close the output of one tool block: open while any of its calls is
+/// closed, close once all are open.
+fn toggle_tool_block(state: &mut AppState, width: u16, (first, end): ui::ToolBlock) {
+    let snapshot = ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(state));
+    let calls = ui::collapsible_tool_indices(&snapshot, width)
+        .into_iter()
+        .filter(|index| (first..end).contains(index))
+        .collect::<Vec<_>>();
+    if calls.is_empty() {
+        state.set_transient_notice("No output to show");
+        return;
+    }
+    if calls
+        .iter()
+        .all(|index| state.expanded_thoughts.contains(index))
+    {
+        for index in &calls {
+            state.expanded_thoughts.remove(index);
+        }
+    } else {
+        state.expanded_thoughts.extend(calls);
+    }
+    state.expanded_thought_focus = None;
+    state.request_redraw();
+}
+
+/// Esc re-enters follow when the transcript is not already showing the newest
+/// row. Routed through [`TranscriptState::jump_to_latest`] so the keyboard and
+/// the "back to bottom" control clear the same state (#1595).
 fn return_to_latest_for_key(transcript: &mut TranscriptState, key: KeyCode) -> bool {
     if key != KeyCode::Esc || transcript.scroll_rows() == 0 {
         return false;
@@ -2305,6 +2310,25 @@ pub(super) async fn handle_app_event(
                         transcript_state.jump_to_latest();
                         frame_requester.schedule_frame();
                     }
+                    // Pointer motion only moves the hover; a frame is drawn
+                    // when it reaches or leaves a tool block.
+                    event::MouseEventKind::Moved => {
+                        if transcript_state.hover_at(mouse.column, mouse.row) {
+                            frame_requester.schedule_frame();
+                        }
+                        return Ok(InputFlow::ContinueIteration);
+                    }
+                    // The footer's task counter opens the tasks panel.
+                    event::MouseEventKind::Down(event::MouseButton::Left)
+                        if transcript_state.tasks_chip_at(mouse.column, mouse.row) =>
+                    {
+                        let mut state = app_state.lock().await;
+                        if !state.modal_open() {
+                            rustcode::controller::show_tasks_panel(&mut state);
+                        }
+                        *needs_redraw = true;
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     event::MouseEventKind::ScrollUp
                         if transcript_state.panel_selection_area.is_some() =>
                     {
@@ -2453,9 +2477,10 @@ pub(super) async fn handle_app_event(
                         // the gesture into a selection instead.
                         match mouse.kind {
                             event::MouseEventKind::Down(event::MouseButton::Left) => {
-                                transcript_state.tool_click = (mouse.modifiers.is_empty()
-                                    && transcript_state.tool_row_at(mouse.column, mouse.row))
-                                .then_some((mouse.column, mouse.row));
+                                transcript_state.tool_click = transcript_state
+                                    .tool_block_at(mouse.column, mouse.row)
+                                    .filter(|_| mouse.modifiers.is_empty())
+                                    .map(|block| ((mouse.column, mouse.row), block));
                             }
                             event::MouseEventKind::Up(event::MouseButton::Left) => {}
                             _ => transcript_state.tool_click = None,
@@ -2482,13 +2507,14 @@ pub(super) async fn handle_app_event(
                             transcript_state.selection.mouse(mouse)
                         };
                         if mouse.kind == event::MouseEventKind::Up(event::MouseButton::Left)
-                            && transcript_state.tool_click.take() == Some((mouse.column, mouse.row))
+                            && let Some((pressed, block)) = transcript_state.tool_click.take()
+                            && pressed == (mouse.column, mouse.row)
                             && !transcript_state.selection.has_selection()
                         {
                             let mut state = app_state.lock().await;
                             if !state.modal_open() {
                                 let width = terminal_runtime.terminal().area().width;
-                                toggle_tool_expansion(&mut state, width, false);
+                                toggle_tool_block(&mut state, width, block);
                                 *needs_redraw = true;
                             }
                         }
@@ -2599,6 +2625,42 @@ mod tests {
     use rustcode::controller::PendingQuestion;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    #[test]
+    fn clicking_a_tool_block_opens_then_closes_only_that_block() {
+        use rustcode::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+        let mut state = AppState::new();
+        for round in 0..2 {
+            let id = format!("call-{round}");
+            state.history.push(
+                ChatMessage::new("assistant", format!("round {round}")).with_tool_calls(vec![
+                    ToolCallRef {
+                        id: id.clone(),
+                        name: "run_command".to_owned(),
+                        arguments: r#"{"command":"cargo test"}"#.to_owned(),
+                    },
+                ]),
+            );
+            state.history.push(
+                ChatMessage::new("tool", "run_command: exit code: 0\nok")
+                    .answering(Some(id))
+                    .with_tool_result(ToolResultRecord {
+                        tool_name: "run_command".to_owned(),
+                        success: true,
+                        ..Default::default()
+                    }),
+            );
+        }
+
+        // The second block is history index 3.
+        super::toggle_tool_block(&mut state, 80, (3, 4));
+        assert!(state.expanded_thoughts.contains(&3));
+        assert!(!state.expanded_thoughts.contains(&1));
+
+        super::toggle_tool_block(&mut state, 80, (3, 4));
+        assert!(state.expanded_thoughts.is_empty());
+    }
 
     #[test]
     fn ask_question_editor_matches_composer_modified_enter_and_word_navigation() {

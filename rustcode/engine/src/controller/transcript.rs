@@ -25,7 +25,6 @@ pub use crate::app::{
 pub use crate::app::{SubAgentStatus, TokenUsage, Verbosity};
 pub use crate::network::events::{ToolResult, ToolResultMetadata};
 pub use crate::network::ui_adapter::AgentUiEvent;
-pub use rustcode_core::ToolDetail;
 /// Persisted conversation and tool-record shapes the transcript renders.
 pub use rustcode_core::{ChatMessage, History, ToolCallRef, ToolResultRecord};
 
