@@ -139,6 +139,22 @@ fn should_retry_stream_transport(error: &runner::ResponseError, attempts: usize)
         && matches!(stream_output_phase(error), StreamOutputPhase::BeforeOutput)
 }
 
+/// Capacity errors the provider reports in-stream. Its own retries are spent by
+/// then, but nothing was produced, so a short wait and a replay is safe.
+const MAX_OVERLOAD_RETRY_ATTEMPTS: usize = 2;
+
+fn provider_overloaded(message: &str) -> bool {
+    lifecycle::stream_failure_kind_from_message(message)
+        == Some(lifecycle::StreamFailureKind::ProviderError)
+        && message.contains("(server_is_overloaded)")
+}
+
+fn should_retry_provider_overload(error: &runner::ResponseError, attempts: usize) -> bool {
+    attempts < MAX_OVERLOAD_RETRY_ATTEMPTS
+        && provider_overloaded(&error.to_string())
+        && matches!(stream_output_phase(error), StreamOutputPhase::BeforeOutput)
+}
+
 fn add_projected_usage(total: &mut Option<crate::app::TokenUsage>, usage: &crate::app::TokenUsage) {
     let target = total.get_or_insert_with(crate::app::TokenUsage::default);
     target.prompt_tokens = target.prompt_tokens.saturating_add(usage.prompt_tokens);
@@ -633,6 +649,7 @@ pub(super) async fn collect_round(
         max_continuations,
     };
     let mut transport_retry_attempts = 0usize;
+    let mut overload_retry_attempts = 0usize;
     let collected = loop {
         let attempt_client = request_client.clone();
         let attempt_state = Arc::clone(&request_state);
@@ -772,15 +789,30 @@ pub(super) async fn collect_round(
         }
         match attempt {
             Err(error)
-                if should_retry_stream_transport(&error, transport_retry_attempts)
+                if (should_retry_stream_transport(&error, transport_retry_attempts)
+                    || should_retry_provider_overload(&error, overload_retry_attempts))
                     && !request_cancel.is_cancelled() =>
             {
-                transport_retry_attempts += 1;
+                let overloaded = provider_overloaded(&error.to_string());
+                let attempt = if overloaded {
+                    overload_retry_attempts += 1;
+                    overload_retry_attempts
+                } else {
+                    transport_retry_attempts += 1;
+                    transport_retry_attempts
+                };
+                if overloaded {
+                    let backoff = std::time::Duration::from_secs(2 * attempt as u64);
+                    tokio::select! {
+                        _ = request_cancel.cancelled() => break Err(error),
+                        _ = tokio::time::sleep(backoff) => {}
+                    }
+                }
                 crate::logger::operational_event(
                     "turn.stream_retry",
                     serde_json::json!({
                         "session_id": request_session_id,
-                        "attempt": transport_retry_attempts,
+                        "attempt": attempt,
                         "output_phase": stream_output_phase(&error).label(),
                         "reason": lifecycle::stream_failure_kind_from_message(&error.to_string())
                             .map(|kind| kind.to_string()),
@@ -1116,6 +1148,20 @@ mod tests {
         assert!(!recoverable_textual_stream_failure(
             "[TOOL_CALLS]write_to_file[ARGS]{\"path\":\"x\",\"content\":\"complete\"}",
             None
+        ));
+    }
+
+    #[test]
+    fn provider_overload_is_retried_by_its_error_code() {
+        use super::provider_overloaded;
+        assert!(provider_overloaded(
+            "stream_failure:provider_error status=none bytes_received=107697 events_received=3 partial_event_bytes=0 detail=Our servers are currently overloaded. Please try again later. (server_is_overloaded)"
+        ));
+        assert!(!provider_overloaded(
+            "stream_failure:provider_error status=none bytes_received=10 events_received=3 partial_event_bytes=0 detail=Invalid schema (invalid_request_error)"
+        ));
+        assert!(!provider_overloaded(
+            "stream_failure:premature_eof status=none bytes_received=32 events_received=1 partial_event_bytes=0 detail=(server_is_overloaded)"
         ));
     }
 

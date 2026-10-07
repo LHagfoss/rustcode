@@ -1901,21 +1901,35 @@ pub(super) async fn handle_app_event(
                         let snapshot = ui::render_snapshot::render_snapshot(
                             &rustcode::controller::render_state(&state),
                         );
-                        let high_verbosity =
-                            matches!(snapshot.verbosity(), rustcode::controller::Verbosity::High);
+                        let high_verbosity = matches!(
+                            snapshot.configured_verbosity(),
+                            rustcode::controller::Verbosity::High
+                        );
                         let candidates = ui::collapsible_tool_indices(&snapshot, width);
-                        if candidates.is_empty() {
-                            // A press at high verbosity used to be a silent
-                            // no-op: the renderers already show bodies inline,
-                            // so there is nothing to expand. Say so instead of
-                            // reporting the misleading "Nothing to expand"
-                            // (#1594).
-                            let notice = if high_verbosity {
-                                "Tool bodies are already shown at high verbosity"
-                            } else {
-                                "No collapsed tool output"
+                        // At high verbosity the whole-transcript key walks the
+                        // folded batches open: counts, then the calls, then
+                        // their output, then back. The single-entry step only
+                        // has something to act on once output is showing.
+                        let output_shown =
+                            snapshot.tool_detail() == rustcode::controller::ToolDetail::Output;
+                        if high_verbosity && !(step && output_shown) {
+                            state.tool_detail = state.tool_detail.next();
+                            if state.tool_detail != rustcode::controller::ToolDetail::Output {
+                                state.expanded_thoughts.clear();
+                                state.expanded_thought_focus = None;
+                            }
+                            let notice = match state.tool_detail {
+                                rustcode::controller::ToolDetail::Summary => "Tool calls folded",
+                                rustcode::controller::ToolDetail::List => {
+                                    "Showing tool calls · ctrl+o for output"
+                                }
+                                rustcode::controller::ToolDetail::Output => {
+                                    "Showing tool output · ctrl+o to fold"
+                                }
                             };
                             state.set_transient_notice(notice);
+                        } else if candidates.is_empty() {
+                            state.set_transient_notice("No collapsed tool output");
                         } else if step {
                             // The single-entry step keeps the focus-driven walk
                             // that the whole-transcript toggle replaced.

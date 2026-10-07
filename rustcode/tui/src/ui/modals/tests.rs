@@ -634,7 +634,7 @@ fn settings_picker_uses_unified_modal_picker_style() {
 
     assert!(rendered.contains("Output verbosity"));
     assert!(rendered.contains("› High"));
-    assert!(rendered.contains("Model text with file edit diffs"));
+    assert!(rendered.contains("Tool work folded to counts"));
 }
 
 /// Every inline picker and the scrollable command panels measure themselves with

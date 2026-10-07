@@ -649,6 +649,31 @@ pub enum Verbosity {
     High,
 }
 
+/// How much of each tool call the transcript shows at high verbosity.
+///
+/// High verbosity folds tool work into one count per batch. The expand key
+/// steps through these levels, so output is only ever on screen by request.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
+pub enum ToolDetail {
+    /// One line per batch: `Ran 5 shell commands`.
+    #[default]
+    Summary,
+    /// Every call, without its output.
+    List,
+    /// Every call with a bounded preview of its output.
+    Output,
+}
+
+impl ToolDetail {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Summary => Self::List,
+            Self::List => Self::Output,
+            Self::Output => Self::Summary,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
