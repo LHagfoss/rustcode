@@ -124,5 +124,7 @@ use commands::append_codex_rate_limits;
 use commands::{background_terminal_list, stop_background_terminals};
 use session::{history_matches_snapshot, report_stale_compaction, try_merge_compacted_history};
 
+mod prompt_improver;
+pub(crate) use prompt_improver::{improve_prompt, improvement_notice};
 mod recap;
 pub use recap::{RECAP_IDLE_DELAY, generate_conversation_recap};

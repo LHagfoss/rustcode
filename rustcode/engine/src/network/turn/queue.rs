@@ -183,6 +183,27 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             )
         };
 
+        // `/pi`: the active model rewrites the prompt before the turn, and the
+        // transcript keeps the original beside the rewrite.
+        let next_prompt = if is_wakeup || is_promoted_steer {
+            next_prompt
+        } else if let Some(improved) =
+            crate::app::actions::improve_prompt(&state, &client, &cancel_token, &next_prompt).await
+        {
+            let mut s = state.lock().await;
+            if s.active_session_id == turn_session_id {
+                let notice =
+                    crate::app::actions::improvement_notice(&s.model_name, &next_prompt, &improved);
+                s.history
+                    .push(crate::app::ChatMessage::new("system", notice));
+                improved
+            } else {
+                next_prompt
+            }
+        } else {
+            next_prompt
+        };
+
         let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
         if !record_prompt_to_history(&state, is_wakeup, &next_prompt, &turn_session_id).await {
             let mut s = state.lock().await;
