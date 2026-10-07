@@ -771,6 +771,142 @@ pub(super) struct ToolTranscriptEntry {
     pub(super) body: Vec<Line<'static>>,
     pub(super) kind: ToolTranscriptKind,
     pub(super) diff_counts: Option<(usize, usize)>,
+    /// Task completions folded into this row by [`fold_task_completions`],
+    /// and how many of those did not succeed.
+    pub(super) earlier: usize,
+    pub(super) earlier_failed: usize,
+}
+
+/// Tool name of the result a finished background task adds to history.
+const TASK_COMPLETION_TOOL: &str = "background_task";
+
+/// The task id a background launch receipt names (`… Task ID: <id>. Status: …`).
+fn launched_task_id(result: &str) -> Option<&str> {
+    let rest = result.split_once("Task ID: ")?.1;
+    let id = rest
+        .split(char::is_whitespace)
+        .next()?
+        .trim_end_matches('.');
+    (!id.is_empty()).then_some(id)
+}
+
+fn message_tool_name(message: &ChatMessage) -> Option<String> {
+    resolve_tool_result_name(
+        None,
+        message
+            .tool_result
+            .as_ref()
+            .map(|result| result.tool_name.as_str()),
+        &message.content,
+    )
+}
+
+fn message_tool_payload(message: &ChatMessage) -> &str {
+    message
+        .content
+        .split_once(": ")
+        .map(|(_, result)| result)
+        .unwrap_or(&message.content)
+}
+
+/// Outcome named by a `manage_task` `wait` result for `task_id`. A result the
+/// model read through `wait` never becomes a `background_task` message.
+fn waited_task_outcome(result: &str, task_id: &str) -> Option<(bool, String)> {
+    let rest = result.strip_prefix(&format!("Task '{task_id}' "))?;
+    if rest.starts_with("exited successfully") {
+        Some((true, "completed".to_owned()))
+    } else if rest.starts_with("cancelled") {
+        Some((false, "cancelled".to_owned()))
+    } else if let Some(code) = rest.strip_prefix("failed (exit code ") {
+        let code = code.split(')').next().unwrap_or_default();
+        Some(match code.parse::<i32>() {
+            Ok(code) => (false, format!("exit {code}")),
+            Err(_) => (false, "failed".to_owned()),
+        })
+    } else if rest.starts_with("terminated by")
+        || rest.starts_with("spawn failed")
+        || rest.starts_with("failed")
+    {
+        Some((false, "failed".to_owned()))
+    } else {
+        None
+    }
+}
+
+/// How the task started by the launch receipt at `message_index` ended, read
+/// from the later result for the same task id. `None` while history holds no
+/// such result, which is what a still-running task looks like.
+///
+/// Deriving this per render keeps history append-only: the receipt the model
+/// saw is never rewritten.
+fn background_launch_outcome(
+    history: &[ChatMessage],
+    message_index: usize,
+    launch_result: &str,
+) -> Option<(bool, String)> {
+    let task_id = launched_task_id(launch_result)?;
+    let completed = format!("Task {task_id} completed.");
+    history[message_index + 1..]
+        .iter()
+        .filter(|message| message.role == "tool")
+        .find_map(|message| {
+            let payload = message_tool_payload(message);
+            match message_tool_name(message)?.as_str() {
+                TASK_COMPLETION_TOOL if payload.starts_with(&completed) => {
+                    Some(tool_result_status(message, TASK_COMPLETION_TOOL, payload))
+                }
+                "manage_task" => waited_task_outcome(payload, task_id),
+                _ => None,
+            }
+        })
+}
+
+/// Command and output of a task completion (`Task <id> completed. Command:
+/// <cmd>. Output:\n<output>`).
+fn task_completion_parts(result: &str) -> (Option<&str>, &str) {
+    let Some((head, output)) = result.split_once(" Output:\n") else {
+        return (None, result);
+    };
+    let command = head
+        .split_once(" Command: ")
+        .map(|(_, command)| command.strip_suffix('.').unwrap_or(command));
+    (command, output)
+}
+
+/// Draw each run of consecutive task completions as its latest one.
+///
+/// Tasks that finish during a turn join history together at its end, so ten
+/// tasks used to add ten rows. The kept entry counts what it stands for; the
+/// expand key and a click act on it alone, so they open the latest output.
+pub(super) fn fold_task_completions(entries: Vec<ToolTranscriptEntry>) -> Vec<ToolTranscriptEntry> {
+    let mut folded: Vec<ToolTranscriptEntry> = Vec::with_capacity(entries.len());
+    for mut entry in entries {
+        if entry.tool_name == TASK_COMPLETION_TOOL
+            && let Some(previous) = folded
+                .last()
+                .filter(|previous| previous.tool_name == TASK_COMPLETION_TOOL)
+        {
+            entry.earlier = previous.earlier + 1;
+            entry.earlier_failed = previous.earlier_failed + usize::from(!previous.success);
+            folded.pop();
+        }
+        folded.push(entry);
+    }
+    folded
+}
+
+/// ` · +2 earlier` behind a folded task completion row.
+fn earlier_completions_suffix(entry: &ToolTranscriptEntry) -> Option<String> {
+    (entry.earlier > 0).then(|| {
+        if entry.earlier_failed > 0 {
+            format!(
+                " · +{} earlier ({} failed)",
+                entry.earlier, entry.earlier_failed
+            )
+        } else {
+            format!(" · +{} earlier", entry.earlier)
+        }
+    })
 }
 
 pub(super) fn tool_call_arguments(
@@ -868,13 +1004,35 @@ pub(super) fn tool_transcript_entry(
         .map(|(_, result)| result)
         .unwrap_or(&message.content);
     let kind = tool_transcript_kind(&tool_name);
-    let (action, target) = if kind == ToolTranscriptKind::Explored {
+    let is_task_completion = tool_name == TASK_COMPLETION_TOOL;
+    let (task_command, task_output) = if is_task_completion {
+        task_completion_parts(result)
+    } else {
+        (None, result)
+    };
+    let (action, mut target) = if kind == ToolTranscriptKind::Explored {
         let args = tool_call_arguments(state, message_index, &tool_name);
         format_exploration_action(&tool_name, &args, state.home_path())
     } else {
         tool_result_action(state, message_index, &tool_name)
     };
-    let (success, mut status) = tool_result_status(message, &tool_name, result);
+    if is_task_completion && target.is_empty() {
+        // No call precedes a completion, so name the task by its command.
+        let command = message
+            .tool_result
+            .as_ref()
+            .and_then(|record| record.command.as_deref())
+            .or(task_command)
+            .unwrap_or_default();
+        target = collapse_command_preview(command, usize::from(width).saturating_sub(34).max(20));
+    }
+    let (mut success, mut status) = tool_result_status(message, &tool_name, result);
+    if status == "background"
+        && let Some(outcome) =
+            background_launch_outcome(state.active_history(), message_index, result)
+    {
+        (success, status) = outcome;
+    }
     let edit_diff = if kind == ToolTranscriptKind::Edit && success && !edit_result_is_noop(result) {
         message
             .diff
@@ -895,12 +1053,19 @@ pub(super) fn tool_transcript_entry(
             usize::from(width).saturating_sub(2),
             show_picker,
         )
-    } else if kind == ToolTranscriptKind::Command || tool_name == "ask_question" {
+    } else if kind == ToolTranscriptKind::Command
+        || tool_name == "ask_question"
+        || is_task_completion
+    {
         // The entry always carries its output; whether it is shown is the
         // group renderer's decision (verbosity default, or opened).
         cached_tool_result(
-            &tool_name,
-            result,
+            if is_task_completion {
+                "run_command"
+            } else {
+                &tool_name
+            },
+            task_output,
             width as usize,
             &rustcode::controller::Verbosity::Low,
             show_picker,
@@ -952,6 +1117,8 @@ pub(super) fn tool_transcript_entry(
         body,
         kind,
         diff_counts,
+        earlier: 0,
+        earlier_failed: 0,
     })
 }
 
@@ -1171,6 +1338,12 @@ pub(super) fn tool_child_line(
         spans.push(Span::styled(
             format!(" · {}", entry.status),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+    if let Some(earlier) = earlier_completions_suffix(entry) {
+        spans.push(Span::styled(
+            earlier,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
         ));
     }
     let mut lines = Vec::new();
@@ -1554,10 +1727,12 @@ fn render_tool_result_group_detailed(
     show_picker: bool,
     include_header: bool,
 ) -> Vec<Line<'static>> {
-    let entries = message_indices
-        .iter()
-        .filter_map(|&index| tool_transcript_entry(state, index, width, show_picker))
-        .collect::<Vec<_>>();
+    let entries = fold_task_completions(
+        message_indices
+            .iter()
+            .filter_map(|&index| tool_transcript_entry(state, index, width, show_picker))
+            .collect(),
+    );
     let mut lines = Vec::new();
     let mut index = 0;
     while index < entries.len() {
@@ -1567,7 +1742,10 @@ fn render_tool_result_group_detailed(
         // edit tools. The child rows retain their kind-specific formatting.
         let group_end = entries.len();
         let group = &entries[index..group_end];
-        let success = group.iter().all(|entry| entry.success);
+        // A folded-away completion that failed still colours the heading.
+        let success = group
+            .iter()
+            .all(|entry| entry.success && entry.earlier_failed == 0);
 
         if include_header && !lines.is_empty() {
             lines.push(Line::from(""));
@@ -1620,8 +1798,12 @@ fn render_tool_result_group_detailed(
                         .len()
                     };
                     let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
+                    // A task completion stays one row until opened, so any
+                    // output at all is worth the hint.
+                    let closed_until_opened = entry.tool_name == TASK_COMPLETION_TOOL;
                     let show_hint = expandable
-                        && full_rows > COLLAPSED_TOOL_BODY_MAX_LINES
+                        && (full_rows > COLLAPSED_TOOL_BODY_MAX_LINES
+                            || (closed_until_opened && full_rows > 0))
                         && !is_expanded
                         && low;
                     // A continuation batch renders under a heading an earlier
@@ -1652,7 +1834,7 @@ fn render_tool_result_group_detailed(
                                 show_picker,
                             ));
                         }
-                    } else if expandable && (low || is_expanded) {
+                    } else if expandable && (is_expanded || (low && !closed_until_opened)) {
                         if entry.kind == ToolTranscriptKind::Command {
                             body.extend(indent_tool_result_body(
                                 entry.body.clone(),
@@ -1743,10 +1925,16 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
     for batch in batches {
         let mut seen_explorations: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        for &i in &batch {
-            let Some(entry) = tool_transcript_entry(state, i, width, false) else {
-                continue;
-            };
+        // Fold task completions exactly as the renderer does, so a row the
+        // transcript does not draw is never a candidate.
+        let entries = fold_task_completions(
+            batch
+                .iter()
+                .filter_map(|&i| tool_transcript_entry(state, i, width, false))
+                .collect(),
+        );
+        for entry in entries {
+            let i = entry.message_index;
             // The renderer folds repeated identical `Explored` rows into a
             // single child, so the walk must not offer a candidate for a row
             // the transcript does not draw: a press would report expanding
@@ -2066,6 +2254,8 @@ mod tests {
             body: Vec::new(),
             kind: super::ToolTranscriptKind::Command,
             diff_counts: None,
+            earlier: 0,
+            earlier_failed: 0,
         };
         assert_eq!(super::tool_status_glyph(&entry), '•');
 
@@ -2316,6 +2506,8 @@ mod tests {
                 .collect(),
             kind: super::ToolTranscriptKind::Tool,
             diff_counts: None,
+            earlier: 0,
+            earlier_failed: 0,
         };
         let title = super::tool_child_line(&entry, true, false, 80, false);
         let body = super::indent_generic_tool_body(
@@ -2361,6 +2553,8 @@ mod tests {
             body: Vec::new(),
             kind: super::ToolTranscriptKind::Command,
             diff_counts: None,
+            earlier: 0,
+            earlier_failed: 0,
         };
         let width = 24;
         let lines = super::command_child_lines(&entry, true, true, width, false);
