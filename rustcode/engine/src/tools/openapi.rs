@@ -10,11 +10,11 @@ fn openapi_call_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "spec_url": { "type": "string", "description": "https URL of the OpenAPI 3.x JSON spec" },
-            "method": { "type": "string", "description": "HTTP method (GET, POST, PUT, PATCH, DELETE)" },
-            "path": { "type": "string", "description": "API path from the spec (must start with /)" },
-            "query": { "type": "string", "description": "Optional raw query string without leading ?" },
-            "body": { "type": "object", "description": "Optional JSON body for POST/PUT/PATCH" }
+            "spec_url": { "type": "string", "description": "https URL of the spec" },
+            "method": { "type": "string", "description": "GET, POST, PUT, PATCH or DELETE" },
+            "path": { "type": "string", "description": "Spec path, starting with /" },
+            "query": { "type": "string", "description": "Raw query string, no leading ?" },
+            "body": { "type": "object" }
         },
         "required": ["spec_url", "method", "path"]
     })
@@ -22,7 +22,7 @@ fn openapi_call_schema() -> Value {
 
 pub const OPENAPI_CALL: Tool = Tool {
     name: "openapi_call",
-    description: "Call an HTTP endpoint described by an OpenAPI 3.x JSON spec: validates method+path against the spec, then performs the request. Any API becomes one tool.",
+    description: "Call an HTTP endpoint described by an OpenAPI 3.x JSON spec; method and path are validated against the spec first.",
     arguments: r#"{"spec_url": "https://api.example.com/openapi.json", "method": "GET", "path": "/v1/things", "query": "limit=10", "body": {}}"#,
     handler: openapi_call,
     requires_confirmation: true,

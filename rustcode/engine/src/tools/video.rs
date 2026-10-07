@@ -22,7 +22,7 @@ const MAX_VIDEO_DURATION_SECONDS: f64 = 3_600.0;
 fn inspect_schema() -> Value {
     serde_json::json!({
         "type":"object","additionalProperties":false,
-        "properties":{"path":{"type":"string","minLength":1,"description":"Project-relative media path"}},
+        "properties":{"path":{"type":"string","minLength":1}},
         "required":["path"]
     })
 }
@@ -30,14 +30,14 @@ fn inspect_schema() -> Value {
 fn project_schema() -> Value {
     serde_json::json!({
         "type":"object","additionalProperties":false,
-        "properties":{"project_path":{"type":"string","minLength":1,"description":"Project-relative JSON video composition path"}},
+        "properties":{"project_path":{"type":"string","minLength":1}},
         "required":["project_path"]
     })
 }
 
 pub const INSPECT_MEDIA: Tool = Tool {
     name: "inspect_media",
-    description: "Inspect a project-relative video or audio file with ffprobe and return concise typed stream metadata.",
+    description: "Return ffprobe stream metadata for a project-relative video or audio file.",
     arguments: r#"{"path":"media/clip.mp4"}"#,
     handler: inspect_media_handler,
     requires_confirmation: false,
@@ -48,7 +48,7 @@ pub const INSPECT_MEDIA: Tool = Tool {
 
 pub const VALIDATE_VIDEO_PROJECT: Tool = Tool {
     name: "validate_video_project",
-    description: "Validate a declarative project-relative JSON video composition without rendering it. Returns timeline details, errors, and warnings.",
+    description: "Validate a project-relative JSON video composition without rendering; returns timeline details, errors and warnings.",
     arguments: r#"{"project_path":"video-project.json"}"#,
     handler: validate_handler,
     requires_confirmation: false,
@@ -59,7 +59,7 @@ pub const VALIDATE_VIDEO_PROJECT: Tool = Tool {
 
 pub const RENDER_VIDEO: Tool = Tool {
     name: "render_video",
-    description: "Validate and render a declarative project-relative JSON video composition with FFmpeg. Supports ordered clips, trims, normalization, transitions, clip audio, and background music.",
+    description: "Validate and render a project-relative JSON video composition with FFmpeg: ordered clips, trims, normalization, transitions, clip audio and background music.",
     arguments: r#"{"project_path":"video-project.json"}"#,
     handler: render_handler,
     requires_confirmation: true,

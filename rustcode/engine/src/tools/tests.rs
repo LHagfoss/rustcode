@@ -2438,7 +2438,12 @@ fn the_prompt_matches_what_the_executor_actually_does() {
     );
 
     assert!(prompt.contains("Batch independent reads"), "got: {prompt}");
-    assert!(prompt.contains("wait for"), "got: {prompt}");
+    // The workflow rule itself, not a tool description that happens to say
+    // "wait for" (which is all the lower-case match used to find).
+    assert!(
+        prompt.contains("Wait for results before the next calls"),
+        "got: {prompt}"
+    );
     assert!(
         prompt.contains("one mutation per response"),
         "mutations stay ordered: {prompt}"
@@ -2669,28 +2674,34 @@ fn the_view_file_spec_describes_the_hard_read_window() {
         spec.arguments
     );
 
+    // Which parameters belong to which mode is stated once, in the tool
+    // description, instead of being repeated on every parameter (#1826).
+    for mode_rule in [
+        "outline=true instead returns a bounded Markdown heading outline",
+        "paged by outline_offset/outline_limit",
+        "start_line, end_line and content_offset are then ignored",
+        "never counts as a complete read",
+    ] {
+        assert!(
+            spec.description.contains(mode_rule),
+            "missing {mode_rule:?}: {}",
+            spec.description
+        );
+    }
     let schema = schema_for_tool("view_file");
-    assert_eq!(
-        schema["properties"]["end_line"]["description"],
-        "Ordinary-read range parameter; inclusive and capped at 800 lines. Request targeted follow-up ranges for more content. Ignored when outline=true."
-    );
-    for field in ["start_line", "end_line", "content_offset"] {
-        assert!(
-            schema["properties"][field]["description"]
-                .as_str()
-                .unwrap()
-                .to_ascii_lowercase()
-                .contains("ignored when outline=true")
-        );
+    assert_eq!(schema["properties"]["end_line"]["description"], "Inclusive");
+    for (field, minimum) in [
+        ("start_line", 1),
+        ("end_line", 1),
+        ("content_offset", 0),
+        ("outline_offset", 0),
+        ("outline_limit", 1),
+    ] {
+        assert_eq!(schema["properties"][field]["type"], "integer", "{field}");
+        assert_eq!(schema["properties"][field]["minimum"], minimum, "{field}");
     }
-    for field in ["outline_offset", "outline_limit"] {
-        assert!(
-            schema["properties"][field]["description"]
-                .as_str()
-                .unwrap()
-                .contains("used only when outline=true, otherwise ignored")
-        );
-    }
+    assert_eq!(schema["properties"]["outline"]["type"], "boolean");
+    assert_eq!(schema["properties"]["outline_limit"]["maximum"], 100);
 }
 
 #[test]

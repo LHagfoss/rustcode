@@ -26,7 +26,7 @@ fn grep_schema() -> Value {
 
 pub const GREP: Tool = Tool {
     name: "grep",
-    description: "Bounded ripgrep-style regex search over repository files. Respects .gitignore, skips hidden files, and returns structured matches. Use this first to locate exact definitions and references; use `rg` via run_command only when advanced ripgrep flags, counts, or file-list modes are needed.",
+    description: "Regex search over repository files; respects .gitignore, skips hidden files, returns bounded structured matches.",
     arguments: r#"{"pattern": "regex pattern", "path": "optional directory or file (default current dir)", "include": "optional file glob filter e.g. '*.rs'", "ignore_case": optional bool (default false)}"#,
     handler: grep,
     requires_confirmation: false,
@@ -45,7 +45,7 @@ fn glob_schema() -> Value {
 
 pub const GLOB: Tool = Tool {
     name: "glob",
-    description: "Find files by glob pattern (e.g. '**/*.rs', 'src/**/*.ts').                       Respects .gitignore and skips hidden files. Returns matching                       paths, sorted. Use this to discover files by name",
+    description: "Find files by glob pattern (e.g. '**/*.rs'); respects .gitignore, skips hidden files, returns sorted paths.",
     arguments: r#"{"pattern": "glob pattern", "path": "optional root directory (default current dir)"}"#,
     handler: glob,
     requires_confirmation: false,
@@ -139,7 +139,7 @@ fn find_symbol_schema() -> Value {
 
 pub const FIND_SYMBOL: Tool = Tool {
     name: "find_symbol",
-    description: "Queries the codebase symbol index for matching structures, functions, enums, impls, traits, or modules. Returns definition location and signature.",
+    description: "Query the symbol index for functions, types, traits, impls or modules; returns definition location and signature.",
     arguments: r#"{"query": "search query string (fuzzy matching on symbol name)"}"#,
     handler: find_symbol_tool,
     requires_confirmation: false,
@@ -159,7 +159,7 @@ fn get_project_map_schema() -> Value {
 
 pub const GET_PROJECT_MAP: Tool = Tool {
     name: "get_project_map",
-    description: "Returns a bounded page of indexed code symbols. Expand with the returned offset and limit to inspect later symbols.",
+    description: "Return a bounded page of indexed code symbols; page with the returned offset and limit.",
     arguments: r#"{"offset": "optional zero-based symbol offset for progressive expansion", "limit": "optional page size, 1 to 80 (default 80)"}"#,
     handler: get_project_map_tool,
     requires_confirmation: false,
