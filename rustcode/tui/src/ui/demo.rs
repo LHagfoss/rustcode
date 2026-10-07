@@ -134,6 +134,7 @@ pub(crate) fn demo_state(mut view: RenderState) -> DemoState {
     view.show_subagent_picker = false;
     view.settings_picker = None;
     view.command_panel = None;
+    view.tasks_panel = None;
     view.show_context_modal = false;
     view.show_status_modal = false;
     view.show_stats_modal = false;

@@ -1292,7 +1292,7 @@ fn task_wait_hint(task_id: &str, notify_on_complete: bool, has_log: bool) -> Str
     format!("{policy}{log}")
 }
 
-fn read_task_log(
+pub(crate) fn read_task_log(
     path: &std::path::Path,
     full: bool,
     tail_bytes: usize,

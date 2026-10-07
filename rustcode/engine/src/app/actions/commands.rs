@@ -35,59 +35,6 @@ pub fn push_ephemeral_status(state: &mut AppState, text: String) {
     state.set_notice(text);
 }
 
-/// The tasks panel: what is running first, then what finished this session.
-pub(crate) fn background_terminal_list(session_id: &str) -> String {
-    const MAX_LISTED_TASKS: usize = 20;
-    const MAX_LISTED_FINISHED: usize = 10;
-    let tasks = crate::tools::background_task_snapshots(session_id);
-    let finished = crate::tools::recent_background_task_completions(session_id);
-    if tasks.is_empty() && finished.is_empty() {
-        return "No tasks are running.".to_string();
-    }
-
-    let mut text = if tasks.is_empty() {
-        "No tasks are running.".to_string()
-    } else {
-        format!(
-            "{} task{} running:",
-            tasks.len(),
-            if tasks.len() == 1 { "" } else { "s" }
-        )
-    };
-    let omitted = tasks.len().saturating_sub(MAX_LISTED_TASKS);
-    for task in tasks.into_iter().take(MAX_LISTED_TASKS) {
-        text.push_str(&format!(
-            "\n  • {} · {} · {}",
-            crate::tools::background_command_label(&task.command, 80),
-            rustcode_core::status::format_elapsed_compact(task.start_time.elapsed().as_secs()),
-            task.id,
-        ));
-    }
-    if omitted > 0 {
-        text.push_str(&format!("\n  … {omitted} more tasks"));
-    }
-    if !finished.is_empty() {
-        text.push_str("\n\nFinished:");
-        for completion in finished.iter().rev().take(MAX_LISTED_FINISHED) {
-            use rustcode_tasks::TaskTerminalReason;
-            let (marker, outcome) = match &completion.reason {
-                TaskTerminalReason::Exited { success: true, .. } => ("✓", "done".to_owned()),
-                TaskTerminalReason::Exited {
-                    code: Some(code), ..
-                } => ("✗", format!("exit {code}")),
-                TaskTerminalReason::Cancelled => ("⊘", "stopped".to_owned()),
-                _ => ("✗", "failed".to_owned()),
-            };
-            text.push_str(&format!(
-                "\n  {marker} {} · {outcome} · {}",
-                crate::tools::background_command_label(&completion.command, 80),
-                completion.id,
-            ));
-        }
-    }
-    text
-}
-
 pub(super) fn stop_background_terminals(session_id: &str) -> String {
     let result = crate::tools::stop_background_tasks(session_id);
     match (result.stopped, result.requested, result.failed) {

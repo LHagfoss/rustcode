@@ -199,6 +199,9 @@ pub struct RenderState {
     pub subagent_picker_index: usize,
     pub settings_picker: Option<crate::app::SettingsPicker>,
     pub command_panel: Option<crate::app::CommandPanel>,
+    /// The interactive tasks panel, rebuilt from the task manager on every
+    /// projection so its elapsed times and states are current.
+    pub tasks_panel: Option<super::TasksPanelView>,
     pub show_context_modal: bool,
     pub show_status_modal: bool,
     pub show_stats_modal: bool,
@@ -232,6 +235,7 @@ impl RenderState {
     pub fn user_overlay_open(&self) -> bool {
         self.settings_picker.is_some()
             || self.command_panel.is_some()
+            || self.tasks_panel.is_some()
             || self.show_model_picker
             || self.show_theme_picker
             || self.show_command_picker
@@ -439,6 +443,7 @@ pub fn render_state(state: &AppState) -> RenderState {
         subagent_picker_index: state.subagent_picker_index,
         settings_picker: state.settings_picker,
         command_panel: state.command_panel.clone(),
+        tasks_panel: super::tasks_panel::tasks_panel_view(state),
         show_context_modal: state.show_context_modal,
         show_status_modal: state.show_status_modal,
         show_stats_modal: state.show_stats_modal,

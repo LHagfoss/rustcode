@@ -159,6 +159,21 @@ fn picker_selection_for_key(selected: usize, len: usize, key: KeyCode) -> Option
     }
 }
 
+/// Keys the tasks panel owns while it is open. Everything else is swallowed
+/// so typing cannot leak into the composer behind it.
+fn tasks_panel_input_for_key(key: KeyCode) -> Option<rustcode::controller::TasksPanelInput> {
+    use rustcode::controller::TasksPanelInput;
+    match key {
+        KeyCode::Up | KeyCode::Char('k') => Some(TasksPanelInput::Up),
+        KeyCode::Down | KeyCode::Char('j') => Some(TasksPanelInput::Down),
+        KeyCode::Enter | KeyCode::Right => Some(TasksPanelInput::Open),
+        KeyCode::Esc | KeyCode::Left => Some(TasksPanelInput::Back),
+        KeyCode::Char('x') | KeyCode::Char('X') => Some(TasksPanelInput::Stop),
+        KeyCode::Char('q') | KeyCode::Char('Q') => Some(TasksPanelInput::Close),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SubagentPickerAction {
     Close,
@@ -1335,6 +1350,12 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
 
+                if s.tasks_panel.is_some() {
+                    if let Some(input) = tasks_panel_input_for_key(key.code) {
+                        rustcode::controller::tasks_panel_input(&mut s, input);
+                    }
+                    return Ok(InputFlow::ContinueIteration);
+                }
                 if s.command_panel.is_some() {
                     match key.code {
                         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
@@ -2329,6 +2350,20 @@ pub(super) async fn handle_app_event(
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
+                    // The wheel moves the tasks panel's selection, or scrolls
+                    // its log, instead of the transcript behind it.
+                    event::MouseEventKind::ScrollUp | event::MouseEventKind::ScrollDown
+                        if app_state.lock().await.tasks_panel.is_some() =>
+                    {
+                        let input = if mouse.kind == event::MouseEventKind::ScrollUp {
+                            rustcode::controller::TasksPanelInput::Up
+                        } else {
+                            rustcode::controller::TasksPanelInput::Down
+                        };
+                        let mut state = app_state.lock().await;
+                        rustcode::controller::tasks_panel_input(&mut state, input);
+                        *needs_redraw = true;
+                    }
                     event::MouseEventKind::ScrollUp
                         if transcript_state.panel_selection_area.is_some() =>
                     {
@@ -2804,6 +2839,23 @@ mod tests {
             subagent_picker_action(KeyCode::Enter),
             Some(SubagentPickerAction::Select)
         );
+    }
+
+    #[test]
+    fn tasks_panel_owns_navigation_log_stop_and_close_keys() {
+        use rustcode::controller::TasksPanelInput;
+        for (key, expected) in [
+            (KeyCode::Up, Some(TasksPanelInput::Up)),
+            (KeyCode::Down, Some(TasksPanelInput::Down)),
+            (KeyCode::Enter, Some(TasksPanelInput::Open)),
+            (KeyCode::Esc, Some(TasksPanelInput::Back)),
+            (KeyCode::Char('x'), Some(TasksPanelInput::Stop)),
+            (KeyCode::Char('q'), Some(TasksPanelInput::Close)),
+            (KeyCode::Char('a'), None),
+            (KeyCode::Backspace, None),
+        ] {
+            assert_eq!(super::tasks_panel_input_for_key(key), expected, "{key:?}");
+        }
     }
 
     #[test]

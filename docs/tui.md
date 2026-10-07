@@ -32,8 +32,21 @@ never names a tool. Approvals and questions have separate waiting states.
 
 Background tasks are counted in the footer (`2 tasks · 1 done`), where `done`
 is a result the model has not read yet. Clicking the counter, or `/tasks`
-(`/ps`), opens the tasks panel: what is running first, then what finished this
-session. `/stop` stops every running task.
+(`/ps`), opens the tasks panel. It lists what is running first (command and
+elapsed time), then what finished this session, dimmed, with its outcome
+(`done`, `exit 1`, `failed`, `stopped`) and how long it ran; with nothing
+running it says so. The list is rebuilt on every frame, so times and states stay
+current while it is open.
+
+| Key | Tasks panel |
+|-----|-------------|
+| `↑`/`↓` (`k`/`j`), mouse wheel | Move the selection; in the log, scroll. |
+| `enter` (`→`) | Show the tail of the selected task's log (last 16 KiB). An open log of a running task follows its output. |
+| `x` | Stop the selected task, or the one whose log is shown, if it is still running. |
+| `esc` (`←`) | Leave the log for the list; from the list, close the panel. |
+| `q` | Close the panel. |
+
+`/stop` stops every running task.
 
 ## Performance and agent threads
 

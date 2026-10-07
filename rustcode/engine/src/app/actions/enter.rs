@@ -363,10 +363,9 @@ async fn handle_enter_inner(
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
             "/tasks" | "/ps" => {
-                let text = background_terminal_list(&s.active_session_id);
-                // Polling the list while a job runs must not append one system
-                // message per poll (issue #1222): collapse repeats in place.
-                s.show_command_panel("Tasks", text);
+                // The panel is live state, not a message: opening it again
+                // never adds to history (issue #1222).
+                crate::controller::show_tasks_panel(&mut s);
             }
             "/stop" => {
                 let text = stop_background_terminals(&s.active_session_id);

@@ -30,6 +30,7 @@ mod navigation;
 mod panel;
 mod question;
 mod settings;
+mod tasks;
 
 #[cfg(test)]
 mod tests;
@@ -60,6 +61,7 @@ pub(in crate::ui) use panel::{
 };
 pub(in crate::ui) use question::render_question_modal;
 pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};
+pub(in crate::ui) use tasks::render_tasks_panel_modal;
 
 pub(crate) fn approval_event_for_key(
     key: KeyEvent,
@@ -386,6 +388,7 @@ pub(super) const MODEL_PICKER_HEIGHT: u16 = 14;
 pub(super) const HISTORY_PICKER_HEIGHT: u16 = 14;
 pub(super) const HISTORY_CONFIRM_HEIGHT: u16 = 10;
 pub(super) const SUBAGENT_PICKER_HEIGHT: u16 = 18;
+pub(super) const TASKS_PANEL_HEIGHT: u16 = 18;
 pub(super) const MCP_CONFIG_HEIGHT: u16 = 14;
 pub(super) const COMMAND_PICKER_HEIGHT: u16 = 14;
 pub(super) const THEME_PICKER_HEIGHT: u16 = 12;
@@ -492,6 +495,8 @@ pub(super) fn open_modal_max_height(state: &RenderSnapshot) -> u16 {
         }
     } else if state.show_subagent_picker() {
         SUBAGENT_PICKER_HEIGHT
+    } else if state.tasks_panel().is_some() {
+        TASKS_PANEL_HEIGHT
     } else if state.command_panel().is_some() {
         18
     } else if state.show_context_modal() {

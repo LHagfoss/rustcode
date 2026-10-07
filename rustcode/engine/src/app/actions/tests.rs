@@ -301,10 +301,10 @@ fn background_terminal_commands_list_and_stop_the_active_session_only() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let listed = super::background_terminal_list(session_id);
-    assert!(listed.contains("1 task running"));
-    assert!(listed.contains(&task_id));
-    assert!(!listed.contains(&other_task_id));
+    let listed = crate::controller::tasks_panel_rows(session_id);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, task_id);
+    assert!(listed[0].is_running());
 
     assert_eq!(
         super::stop_background_terminals(session_id),
@@ -1272,6 +1272,25 @@ async fn informational_commands_open_panels_without_history_even_while_busy() {
         assert_eq!(s.history.len(), 1, "{command} must not enter model history");
         assert!(s.modal_open(), "{command} must open a panel");
         assert_eq!(s.status, crate::app::AppStatus::Streaming);
+    }
+}
+
+#[tokio::test]
+async fn tasks_commands_open_the_interactive_panel_not_a_text_panel() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    let client = reqwest::Client::new();
+    let mut cancel = tokio_util::sync::CancellationToken::new();
+    for command in ["/tasks", "/ps"] {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        state.lock().await.input_buffer = command.to_owned();
+        super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await;
+        let mut s = state.lock().await;
+        assert!(s.tasks_panel.is_some(), "{command}");
+        assert!(s.command_panel.is_none(), "{command}");
+        assert!(crate::controller::render_state(&s).tasks_panel.is_some());
+        crate::app::overlays::OverlayState::new(&mut s).close_all();
+        assert!(s.tasks_panel.is_none() && !s.modal_open(), "{command}");
     }
 }
 

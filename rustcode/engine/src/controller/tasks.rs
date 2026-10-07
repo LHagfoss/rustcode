@@ -107,12 +107,6 @@ pub fn recent_background_results(session_id: &str) -> Vec<BackgroundResultDispla
         .collect()
 }
 
-/// Open the tasks panel: what is running, then what finished this session.
-pub fn show_tasks_panel(state: &mut crate::app::AppState) {
-    let text = crate::app::actions::task_list(&state.active_session_id);
-    state.show_command_panel("Tasks", text);
-}
-
 /// Spawn a background task for `session_id` through the controller contract.
 ///
 /// Production-visible so out-of-tree frontends (notably `rustcode-tui` render

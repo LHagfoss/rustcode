@@ -55,7 +55,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/prompt` | Loads a Markdown template into the composer for editing; it is not submitted until the next Enter. |
 | `/prompts` | Scrollable Prompt commands panel listing templates and their source paths. |
 | `/protocol` | Existing protocol chooser; direct arguments apply immediately with panel result/help. |
-| `/ps` | Scrollable Background terminals panel; repeated polls do not enter history. |
+| `/ps` | Alias of /tasks. |
 | `/quit` | Alias of /exit; immediate exit. |
 | `/quota` | Scrollable Model quota panel; asynchronous data refresh preserves navigation and respects dismissal. |
 | `/resume` | Immediate latest-session restoration. |
@@ -75,6 +75,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/yolo` | Existing on/off chooser; direct arguments apply immediately with transient confirmation; invalid arguments use a panel. |
 | `/sandbox` | Scrollable supported-mode panel, retaining mode descriptions and user-level configuration guidance; direct arguments apply immediately with panel result/help. |
 | `/effort` | Existing effort chooser; direct arguments apply immediately with panel result/help. |
+| `/tasks` | Interactive tasks panel: running tasks, then finished ones; select, read a task's log, stop one task. Never enters history. See [TUI notes](tui.md). |
 | `/theme` | Existing theme picker; direct arguments apply immediately with panel result/help. |
 | `/pi` | Toggles the prompt improver; `on`/`off` set it directly. When on, the active model rewrites each prompt that starts a turn and the transcript shows the original and the rewrite. |
 | `/thinking` | Existing thinking chooser; direct arguments apply immediately with panel result/help. |

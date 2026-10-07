@@ -254,6 +254,8 @@ impl AppRuntime {
                 let mut s = app_state.lock().await;
                 let background_active = rustcode::tools::has_background_tasks(&s.active_session_id);
                 s.clear_expired_transient_notice();
+                // An open task log follows the task's output.
+                rustcode::controller::refresh_tasks_panel(&mut s);
                 (
                     s.status_state().is_active() || s.orchestrator_running || background_active,
                     s.take_redraw_request(),

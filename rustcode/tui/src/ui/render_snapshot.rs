@@ -124,6 +124,7 @@ struct OverlaySnapshot {
     subagent_picker_index: usize,
     settings_picker: Option<rustcode::controller::SettingsPicker>,
     command_panel: Option<rustcode::controller::CommandPanel>,
+    tasks_panel: Option<rustcode::controller::TasksPanelView>,
     show_context_modal: bool,
     show_status_modal: bool,
     show_stats_modal: bool,
@@ -163,6 +164,7 @@ impl OverlaySnapshot {
             subagent_picker_index: view.subagent_picker_index,
             settings_picker: view.settings_picker,
             command_panel: view.command_panel.clone(),
+            tasks_panel: view.tasks_panel.clone(),
             show_context_modal: view.show_context_modal,
             show_status_modal: view.show_status_modal,
             show_stats_modal: view.show_stats_modal,
@@ -522,6 +524,9 @@ impl RenderSnapshot {
         self.overlay.settings_picker
     }
 
+    pub(crate) fn tasks_panel(&self) -> Option<&rustcode::controller::TasksPanelView> {
+        self.overlay.tasks_panel.as_ref()
+    }
     pub(crate) fn command_panel(&self) -> Option<&rustcode::controller::CommandPanel> {
         self.overlay.command_panel.as_ref()
     }

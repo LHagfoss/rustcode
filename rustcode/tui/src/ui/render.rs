@@ -620,6 +620,10 @@ pub(crate) fn render_with_transcript_snapshot(
             render_subagent_picker_modal(f, state, input_box_area);
         }
 
+        if state.tasks_panel().is_some() {
+            render_tasks_panel_modal(f, state, input_box_area);
+        }
+
         if state.command_panel().is_some() {
             render_command_panel(f, state, input_box_area);
         }

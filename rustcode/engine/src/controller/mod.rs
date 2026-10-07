@@ -10,6 +10,7 @@ mod native_commands;
 mod render_state;
 mod snapshot;
 mod tasks;
+mod tasks_panel;
 mod transcript;
 mod worker;
 
@@ -66,7 +67,11 @@ pub use snapshot::{
 pub use tasks::{
     BackgroundResultDisplay, SubagentController, TaskDisplay, TurnContext,
     background_command_label, background_task_snapshots, has_background_tasks,
-    recent_background_results, show_tasks_panel, spawn_background_task, stop_background_tasks,
+    recent_background_results, spawn_background_task, stop_background_tasks,
+};
+pub use tasks_panel::{
+    TaskLogView, TaskOutcome, TaskPanelRow, TaskRowState, TasksPanelInput, TasksPanelState,
+    TasksPanelView, refresh_tasks_panel, show_tasks_panel, tasks_panel_input, tasks_panel_rows,
 };
 pub use transcript::{
     AgentUiEvent, AppStatus, ChatMessage, CommandPanel, ExpandOutcome, History, LiveToolCall,

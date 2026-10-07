@@ -216,6 +216,8 @@ pub struct AppState {
     pub pending_delete_session_idx: Option<usize>,
     pub show_subagent_picker: bool,
     pub subagent_picker_index: usize,
+    /// The interactive tasks panel, while it is open.
+    pub tasks_panel: Option<crate::controller::TasksPanelState>,
     pub settings_picker: Option<crate::app::SettingsPicker>,
     pub command_panel: Option<crate::app::CommandPanel>,
     command_panel_generation: u64,
@@ -1220,6 +1222,7 @@ impl AppState {
             pending_delete_session_idx: None,
             show_subagent_picker: false,
             subagent_picker_index: 0,
+            tasks_panel: None,
             settings_picker: None,
             command_panel: None,
             command_panel_generation: 0,
@@ -1381,6 +1384,7 @@ impl AppState {
     pub fn user_overlay_open(&self) -> bool {
         self.settings_picker.is_some()
             || self.command_panel.is_some()
+            || self.tasks_panel.is_some()
             || self.show_model_picker
             || self.show_theme_picker
             || self.show_command_picker
