@@ -691,6 +691,7 @@ fn every_inline_picker_shares_the_measurement_rules() {
         ),
         ("mcp", render_mcp_config_modal, MCP_CONFIG_HEIGHT),
         ("command-panel", render_command_panel, COMMAND_PANEL_HEIGHT),
+        ("tasks", render_tasks_panel_modal, TASKS_PANEL_HEIGHT),
     ];
 
     for (case, composer_width) in [("wide", 100u16), ("narrow", 40u16)] {
@@ -775,6 +776,7 @@ fn picker_state() -> RenderState {
         title: "Memory",
         content: "Keys\n  short  one\n  a-much-longer-label  two\n  mid  a description long enough that it has to wrap somewhere in a narrow frame\n".to_owned(),
     });
+    state.tasks_panel = Some(tasks_panel_view(None));
     state.history_picker_sessions = vec![rustcode::controller::SessionMeta {
         path: std::path::PathBuf::from("/tmp/picker-sizing.json"),
         title: "A deliberately long session title that will not fit a narrow frame".to_owned(),
@@ -1215,4 +1217,214 @@ fn highlight_match_spans_marks_only_the_matched_characters() {
     let clipped_text: String = clipped.iter().map(|span| span.content.as_ref()).collect();
     assert_eq!(clipped_text, "Show …");
     crate::ui::theme::set_active_theme("default");
+}
+
+/// Two running tasks and three finished ones, with the selection on the
+/// second running task; `log` swaps the list for that task's output.
+fn tasks_panel_view(
+    log: Option<rustcode::controller::TaskLogView>,
+) -> rustcode::controller::TasksPanelView {
+    use rustcode::controller::{TaskOutcome, TaskPanelRow, TaskRowState};
+    use std::time::{Duration, Instant};
+    let running = |id: &str, command: &str, seconds: u64| TaskPanelRow {
+        id: id.to_owned(),
+        command: command.to_owned(),
+        state: TaskRowState::Running {
+            started_at: Instant::now()
+                .checked_sub(Duration::from_secs(seconds))
+                .expect("monotonic clock is past the test offset"),
+        },
+    };
+    let finished = |id: &str, command: &str, outcome: TaskOutcome| TaskPanelRow {
+        id: id.to_owned(),
+        command: command.to_owned(),
+        state: TaskRowState::Finished {
+            outcome,
+            ran_for: Duration::from_secs(12),
+        },
+    };
+    rustcode::controller::TasksPanelView {
+        rows: vec![
+            running(
+                "t1",
+                "cargo build --release --workspace --all-features --locked",
+                125,
+            ),
+            running("t2", "npm run dev", 5),
+            finished("t3", "cargo test", TaskOutcome::Done),
+            finished("t4", "make lint", TaskOutcome::Exit(2)),
+            finished("t5", "sleep 600", TaskOutcome::Stopped),
+        ],
+        selected: 1,
+        log,
+    }
+}
+
+fn tasks_panel_text(view: Option<rustcode::controller::TasksPanelView>, width: u16) -> Vec<String> {
+    let mut state = RenderState::new();
+    state.tasks_panel = view;
+    let snapshot = render_snapshot(&state);
+    let mut terminal = Terminal::new(TestBackend::new(width, 22)).unwrap();
+    terminal
+        .draw(|frame| render_tasks_panel_modal(frame, &snapshot, Rect::new(0, 20, width, 2)))
+        .unwrap();
+    (0..22)
+        .map(|y| {
+            (0..width)
+                .map(|column| terminal.backend().buffer()[(column, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn tasks_panel_lists_running_then_finished_with_key_hints() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let rows = tasks_panel_text(Some(tasks_panel_view(None)), 80);
+    let text = rows.join("\n");
+    let row_of = |needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} is not painted:\n{text}"))
+    };
+
+    assert!(text.contains("Tasks · 2 running"), "{text}");
+    for hint in ["↑/↓ select", "enter log", "x stop", "esc close"] {
+        assert!(text.contains(hint), "missing hint {hint:?}:\n{text}");
+    }
+    // Running rows carry elapsed time and come before the finished group.
+    let build = row_of("cargo build");
+    let dev = row_of("npm run dev");
+    let heading = row_of("Finished");
+    assert!(
+        rows[build].contains("• cargo build") && rows[build].contains("2m 05s"),
+        "{text}"
+    );
+    assert!(build < dev && dev < heading, "{text}");
+    assert!(
+        rows[dev].starts_with("  › • npm run dev"),
+        "selection marker: {text}"
+    );
+    assert!(
+        rows[row_of("cargo test")].contains("✓ cargo test · done · 12s"),
+        "{text}"
+    );
+    assert!(
+        rows[row_of("make lint")].contains("× make lint · exit 2"),
+        "{text}"
+    );
+    assert!(
+        rows[row_of("sleep 600")].contains("− sleep 600 · stopped"),
+        "{text}"
+    );
+    assert!(heading < row_of("cargo test"), "{text}");
+    assert!(!text.contains("No tasks are running."), "{text}");
+
+    // Finished rows are dimmed; running rows are not.
+    let mut state = RenderState::new();
+    state.tasks_panel = Some(tasks_panel_view(None));
+    let snapshot = render_snapshot(&state);
+    let mut terminal = Terminal::new(TestBackend::new(80, 22)).unwrap();
+    terminal
+        .draw(|frame| render_tasks_panel_modal(frame, &snapshot, Rect::new(0, 20, 80, 2)))
+        .unwrap();
+    let dim = |y: usize| {
+        terminal.backend().buffer()[(6, y as u16)]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    };
+    assert!(dim(row_of("cargo test")) && !dim(build), "{text}");
+}
+
+#[test]
+fn tasks_panel_empty_and_finished_only_states_say_nothing_is_running() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let empty = rustcode::controller::TasksPanelView {
+        rows: Vec::new(),
+        selected: 0,
+        log: None,
+    };
+    let text = tasks_panel_text(Some(empty), 60).join("\n");
+    assert!(text.contains("No tasks are running."), "{text}");
+    assert!(text.contains("esc close"), "{text}");
+    assert!(!text.contains("Finished"), "{text}");
+
+    let mut finished_only = tasks_panel_view(None);
+    finished_only.rows.drain(..2);
+    finished_only.selected = 0;
+    let text = tasks_panel_text(Some(finished_only), 60).join("\n");
+    assert!(text.contains("No tasks are running."), "{text}");
+    assert!(text.contains("Finished"), "{text}");
+    assert!(text.contains("› ✓ cargo test"), "{text}");
+
+    // Closed: nothing is painted.
+    assert!(tasks_panel_text(None, 60).iter().all(String::is_empty));
+}
+
+#[test]
+fn tasks_panel_keeps_the_selection_in_view_and_inside_a_narrow_frame() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use rustcode::controller::{TaskOutcome, TaskPanelRow, TaskRowState};
+    let mut view = tasks_panel_view(None);
+    view.rows.extend((0..30).map(|index| TaskPanelRow {
+        id: format!("old-{index}"),
+        command: format!("job number {index}"),
+        state: TaskRowState::Finished {
+            outcome: TaskOutcome::Done,
+            ran_for: std::time::Duration::from_secs(1),
+        },
+    }));
+    view.selected = view.rows.len() - 1;
+    let rows = tasks_panel_text(Some(view), 32);
+    let text = rows.join("\n");
+    // The last row is the selected one and it is on screen, label shortened
+    // to make room for its outcome.
+    let last = rows.iter().rfind(|row| !row.is_empty()).expect("rows");
+    assert!(last.starts_with("  › ✓ job number"), "{text}");
+    assert!(last.ends_with("· done · 1s"), "{text}");
+    assert!(
+        rows.iter()
+            .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 32),
+        "{text}"
+    );
+}
+
+#[test]
+fn tasks_panel_log_view_shows_the_newest_output_and_how_to_go_back() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let log = |scroll: usize| rustcode::controller::TaskLogView {
+        task_id: "t2".to_owned(),
+        command: "npm run dev".to_owned(),
+        text: (1..=40)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        earlier_omitted: true,
+        scroll,
+    };
+    let text = tasks_panel_text(Some(tasks_panel_view(Some(log(0)))), 80).join("\n");
+    assert!(text.contains("Task log · npm run dev"), "{text}");
+    for hint in ["↑/↓ scroll", "esc back", "x stop"] {
+        assert!(text.contains(hint), "missing hint {hint:?}:\n{text}");
+    }
+    assert!(text.contains("line 40"), "{text}");
+    assert!(!text.contains("line 1\n"), "{text}");
+    assert!(
+        !text.contains("cargo build"),
+        "the list is replaced: {text}"
+    );
+
+    // Scrolling up reveals older output and lets go of the newest line.
+    let scrolled = tasks_panel_text(Some(tasks_panel_view(Some(log(5)))), 80).join("\n");
+    assert!(
+        scrolled.contains("line 35") && !scrolled.contains("line 40"),
+        "{scrolled}"
+    );
+
+    // Scrolled past the top, the omission marker leads the oldest kept line.
+    let top = tasks_panel_text(Some(tasks_panel_view(Some(log(1000)))), 80).join("\n");
+    assert!(top.contains("… earlier output omitted"), "{top}");
+    assert!(top.contains("line 1\n"), "{top}");
 }

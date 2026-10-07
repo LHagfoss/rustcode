@@ -8,6 +8,7 @@ pub struct OverlayState<'a> {
     status: &'a mut AppStatus,
     settings_picker: &'a mut Option<crate::app::SettingsPicker>,
     command_panel: &'a mut Option<crate::app::CommandPanel>,
+    tasks_panel: &'a mut Option<crate::controller::TasksPanelState>,
     show_model_picker: &'a mut bool,
     show_theme_picker: &'a mut bool,
     show_command_picker: &'a mut bool,
@@ -37,6 +38,7 @@ impl<'a> OverlayState<'a> {
             status: &mut state.status,
             settings_picker: &mut state.settings_picker,
             command_panel: &mut state.command_panel,
+            tasks_panel: &mut state.tasks_panel,
             show_model_picker: &mut state.show_model_picker,
             show_theme_picker: &mut state.show_theme_picker,
             show_command_picker: &mut state.show_command_picker,
@@ -62,6 +64,7 @@ impl<'a> OverlayState<'a> {
     pub(crate) fn any_open(&self) -> bool {
         self.settings_picker.is_some()
             || self.command_panel.is_some()
+            || self.tasks_panel.is_some()
             || *self.show_model_picker
             || *self.show_theme_picker
             || *self.show_command_picker
@@ -89,6 +92,7 @@ impl<'a> OverlayState<'a> {
     pub fn close_all(&mut self) {
         *self.settings_picker = None;
         *self.command_panel = None;
+        *self.tasks_panel = None;
         *self.show_model_picker = false;
         *self.show_theme_picker = false;
         *self.show_command_picker = false;

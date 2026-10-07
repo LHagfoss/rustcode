@@ -6765,6 +6765,9 @@ fn footer_counts_tasks_and_reports_where_the_counter_is() {
     use rustcode::controller::TaskDisplay;
 
     let mut state = RenderState::new();
+    // The footer names the checkout's branch; pin it so a branch called
+    // `…tasks…` cannot be mistaken for the counter.
+    state.cwd_and_branch = "~/code/project:main".to_owned();
     let draw = |state: &RenderState| {
         let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
         let snapshot = render_snapshot(state);

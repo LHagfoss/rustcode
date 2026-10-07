@@ -311,6 +311,7 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.show_command_picker = false;
     s.show_subagent_picker = false;
     s.subagent_picker_index = 0;
+    s.tasks_panel = None;
     s.delegation_armed = false;
     s.delegation_sticky = s.config.delegation_enabled;
     s.delegation_active = false;
