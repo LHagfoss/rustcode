@@ -35,12 +35,65 @@ const PASTE_THRESHOLD: usize = 300;
 /// hand raw text, which may carry `\r\n`; normalizing here keeps the composer
 /// buffer identical whichever path delivered it.
 fn frame_pasted_text(text: &str) -> String {
+    if let Some(marker) = pasted_image_path_marker(text) {
+        return marker;
+    }
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     if normalized.chars().count() >= PASTE_THRESHOLD {
         format!("<!--PASTE:{}:{}-->", normalized.chars().count(), normalized)
     } else {
         normalized
     }
+}
+
+/// A paste that is nothing but the path of an existing image file becomes an
+/// `![image](file://…)` marker, so it renders as [Image #N] like a pasted
+/// screenshot. Clipboard managers and Finder drops deliver an image this way,
+/// shell-escaped (`Application\ Support`), quoted, or as a `file://` URL.
+fn pasted_image_path_marker(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') {
+        return None;
+    }
+    let unquoted = trimmed
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+        .or_else(|| {
+            trimmed
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+        });
+    let path = match unquoted {
+        Some(inner) => inner.to_owned(),
+        None => {
+            let mut unescaped = String::with_capacity(trimmed.len());
+            let mut chars = trimmed.chars();
+            while let Some(character) = chars.next() {
+                match character {
+                    '\\' => unescaped.push(chars.next()?),
+                    // An unescaped space means prose or several paths.
+                    ' ' => return None,
+                    _ => unescaped.push(character),
+                }
+            }
+            unescaped
+        }
+    };
+    let path = match path.strip_prefix("file://") {
+        Some(rest) => rest.replace("%20", " "),
+        None => path,
+    };
+    let extension = std::path::Path::new(&path).extension()?.to_str()?;
+    let is_image = ["png", "jpg", "jpeg", "gif", "webp"]
+        .iter()
+        .any(|known| extension.eq_ignore_ascii_case(known));
+    // The marker ends at the first `)`, so such a path cannot be framed.
+    if !is_image || !path.starts_with('/') || path.contains(')') {
+        return None;
+    }
+    std::path::Path::new(&path)
+        .is_file()
+        .then(|| format!("![image](file://{path})"))
 }
 
 impl Composer {
@@ -289,9 +342,42 @@ impl Composer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Composer, ComposerAction};
+    use super::{Composer, ComposerAction, pasted_image_path_marker};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rustcode::app::AppState;
+
+    #[test]
+    fn pasted_image_path_becomes_an_image_marker() {
+        let directory =
+            std::env::temp_dir().join(format!("rustcode paste test {}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let image = directory.join("shot.PNG");
+        std::fs::write(&image, b"png").unwrap();
+        let plain = image.to_str().unwrap().to_owned();
+        let marker = format!("![image](file://{plain})");
+
+        let escaped = plain.replace(' ', "\\ ");
+        assert_eq!(pasted_image_path_marker(&escaped), Some(marker.clone()));
+        assert_eq!(
+            pasted_image_path_marker(&format!("'{plain}'\n")),
+            Some(marker.clone())
+        );
+        assert_eq!(
+            pasted_image_path_marker(&format!("file://{}", plain.replace(' ', "%20"))),
+            Some(marker)
+        );
+        // Unescaped spaces, prose, non-images and missing files stay text.
+        assert_eq!(pasted_image_path_marker(&plain), None);
+        assert_eq!(pasted_image_path_marker("look at /tmp/a.png"), None);
+        assert_eq!(pasted_image_path_marker("/tmp/missing-rustcode.png"), None);
+        let text = directory.join("notes.txt");
+        std::fs::write(&text, b"x").unwrap();
+        assert_eq!(
+            pasted_image_path_marker(&text.to_str().unwrap().replace(' ', "\\ ")),
+            None
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 
     #[test]
     fn unicode_and_multiline_editing_stay_on_character_boundaries() {
