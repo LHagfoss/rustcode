@@ -1022,7 +1022,12 @@ fn semantically_equivalent_failures_become_no_progress_despite_new_commands() {
         failed.failure_fingerprint = Some(stable_hash("semantic_failure:authentication"));
         failed.success = false;
         let assessment = ledger.observe(&failed);
-        assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
+        let expected = if index == 0 {
+            ProgressReason::Failure
+        } else {
+            ProgressReason::RepeatedFailure
+        };
+        assert_eq!(assessment.reason, expected);
         assert!(!assessment.meaningful);
     }
     assert_eq!(ledger.no_progress_streak(), ProgressLedger::RECOVERY_STREAK);
@@ -1041,7 +1046,7 @@ fn uncorrelated_failures_across_tools_reset_no_progress_streak() {
         failed.action = action.to_string();
         failed.success = false;
         let assessment = ledger.observe(&failed);
-        assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
+        assert_eq!(assessment.reason, ProgressReason::Failure);
         assert!(!assessment.meaningful);
         assert_eq!(assessment.streak, 1, "tool change must restart the streak");
     }
@@ -1057,7 +1062,12 @@ fn repeated_same_tool_failures_accumulate_no_progress_streak() {
         failed.action = "run_command:stable".to_string();
         failed.success = false;
         let assessment = ledger.observe(&failed);
-        assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
+        let expected = if index == 0 {
+            ProgressReason::Failure
+        } else {
+            ProgressReason::RepeatedFailure
+        };
+        assert_eq!(assessment.reason, expected);
         assert_eq!(assessment.streak, index + 1);
     }
     assert_eq!(ledger.no_progress_streak(), ProgressLedger::RECOVERY_STREAK);
@@ -1087,7 +1097,12 @@ fn the_session_1513_search_still_arms_recovery_when_repeated_verbatim() {
         failed.failure_fingerprint = Some(failure);
         failed.success = false;
         let assessment = ledger.observe(&failed);
-        assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
+        let expected = if index == 0 {
+            ProgressReason::Failure
+        } else {
+            ProgressReason::RepeatedFailure
+        };
+        assert_eq!(assessment.reason, expected);
         assert_eq!(
             assessment.streak,
             index + 1,
@@ -1213,7 +1228,7 @@ fn failed_reads_and_searches_do_not_count_novel_errors_as_progress() {
     failed_read.fresh_read = true;
     failed_read.success = false;
     let read_assessment = ledger.observe(&failed_read);
-    assert_eq!(read_assessment.reason, ProgressReason::RepeatedFailure);
+    assert_eq!(read_assessment.reason, ProgressReason::Failure);
     assert!(!read_assessment.meaningful);
 
     let mut failed_search = observation("different search error", None, None);
@@ -1667,5 +1682,101 @@ fn semantic_paragraph_similarity_in_stream() {
     assert_eq!(
         detector.feed_chunk(p2),
         ReasoningLoopStatus::LoopDetected(DIAG_REPEATED_BLOCK)
+    );
+}
+
+fn range_read(path: &str, start: usize, end: usize) -> (ProgressObservation, String, usize, usize) {
+    let mut read = observation(
+        &format!("read:{path}#{}", start / 200),
+        None,
+        Some(&format!("{path}:{start}:{end}")),
+    );
+    read.read_only = true;
+    read.fresh_read = true;
+    (read, path.to_owned(), start, end)
+}
+
+#[test]
+fn unseen_ranges_in_a_seen_bucket_are_fresh_reads() {
+    // Session 01a112f50818 (#1781): each final read shares a 200-line bucket
+    // with an earlier range but returns mostly unseen lines.
+    let sequences: [(&str, &[(usize, usize)]); 4] = [
+        (
+            "tool_transcript.rs",
+            &[(1580, 1710), (37, 120), (870, 960), (120, 256), (996, 1060)],
+        ),
+        (
+            "tool_transcript.rs",
+            &[(1580, 1710), (37, 120), (870, 960), (120, 256)],
+        ),
+        (
+            "conversation_render.rs",
+            &[(220, 300), (40, 130), (125, 220)],
+        ),
+        ("assistant_render.rs", &[(380, 480), (300, 383)]),
+    ];
+    for (path, ranges) in sequences {
+        let mut ledger = ProgressLedger::default();
+        for &(start, end) in ranges {
+            let (read, path, start, end) = range_read(path, start, end);
+            let assessment = ledger.observe_with_read_range(&read, Some((&path, start, end)));
+            assert_eq!(
+                assessment.reason,
+                ProgressReason::FreshRead,
+                "{path} {start}-{end}"
+            );
+            assert!(assessment.meaningful);
+        }
+    }
+}
+
+#[test]
+fn covered_ranges_report_no_new_information_until_the_workspace_changes() {
+    let mut ledger = ProgressLedger::default();
+    for (start, end) in [(1, 100), (101, 200)] {
+        let (read, path, start, end) = range_read("lib.rs", start, end);
+        ledger.observe_with_read_range(&read, Some((&path, start, end)));
+    }
+    // Fully covered by two adjacent earlier ranges, and a few-line nudge.
+    for (start, end) in [(50, 150), (150, 205)] {
+        let (read, path, start, end) = range_read("lib.rs", start, end);
+        let assessment = ledger.observe_with_read_range(&read, Some((&path, start, end)));
+        assert_eq!(assessment.reason, ProgressReason::NoNewInformation);
+        assert!(!assessment.meaningful);
+    }
+    let mut edit = observation("edit:lib.rs", Some("state"), Some("edited"));
+    edit.changed_workspace = true;
+    ledger.observe(&edit);
+    let (read, path, start, end) = range_read("lib.rs", 50, 150);
+    assert_eq!(
+        ledger
+            .observe_with_read_range(&read, Some((&path, start, end)))
+            .reason,
+        ProgressReason::FreshRead
+    );
+}
+
+#[test]
+fn only_a_recurring_failure_is_labelled_repeated() {
+    let mut ledger = ProgressLedger::default();
+    let mut failed = observation("run_command:cat missing", None, Some("exit 1"));
+    failed.success = false;
+    failed.failure_fingerprint = Some(stable_hash("exit 1"));
+    let first = ledger.observe(&failed);
+    assert_eq!((first.reason, first.streak), (ProgressReason::Failure, 1));
+    let second = ledger.observe(&failed);
+    assert_eq!(
+        (second.reason, second.streak),
+        (ProgressReason::RepeatedFailure, 2)
+    );
+    // An unrelated failure restarts the streak and is a first failure again.
+    let mut other = observation("run_command:gh issue create", None, Some("exit 2"));
+    other.action = "run_command:gh".to_string();
+    other.success = false;
+    other.failure_fingerprint = Some(stable_hash("exit 2"));
+    let unrelated = ledger.observe(&other);
+    assert_eq!(
+        (unrelated.reason, unrelated.streak),
+        (ProgressReason::Failure, 1)
     );
 }

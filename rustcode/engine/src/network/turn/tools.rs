@@ -1622,10 +1622,23 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             ))
                         })
                     });
-                let assessment = ctx
-                    .progress
-                    .ledger
-                    .observe(&loop_detect::ProgressObservation {
+                let read_range = call
+                    .filter(|_| metadata.success)
+                    .and_then(|call| loop_detect::read_target(&call.name, &call.arguments))
+                    .and_then(|(path, start_line, end_line)| {
+                        let returned = metadata
+                            .inspection
+                            .as_ref()
+                            .and_then(|inspection| inspection.returned_range.as_ref());
+                        let line =
+                            |line: Option<_>| line.and_then(|line| usize::try_from(line).ok());
+                        let start =
+                            line(returned.and_then(|range| range.start)).unwrap_or(start_line);
+                        let end = line(returned.and_then(|range| range.end)).or(end_line)?;
+                        Some((path, start, end))
+                    });
+                let assessment = ctx.progress.ledger.observe_with_read_range(
+                    &loop_detect::ProgressObservation {
                         action,
                         output_fingerprint,
                         state_fingerprint,
@@ -1638,7 +1651,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         read_only: call_is_read_only,
                         replayed: metadata.replayed,
                         success: metadata.success && semantic_failure.is_none(),
-                    });
+                    },
+                    read_range
+                        .as_ref()
+                        .map(|(path, start, end)| (path.as_str(), *start, *end)),
+                );
                 let target_file = call.and_then(|c| {
                     c.arguments
                         .get("path")
