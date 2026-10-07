@@ -731,6 +731,8 @@ pub enum ProgressReason {
     FreshRead,
     Verification,
     RepeatedVerification,
+    /// A failure with no earlier failure in the current streak.
+    Failure,
     RepeatedFailure,
     NoNewInformation,
     Churn,
@@ -744,6 +746,7 @@ impl ProgressReason {
             Self::FreshRead => "fresh_read",
             Self::Verification => "verification",
             Self::RepeatedVerification => "repeated_verification",
+            Self::Failure => "failure",
             Self::RepeatedFailure => "repeated_failure",
             Self::NoNewInformation => "no_new_information",
             Self::Churn => "edit_test_revert_churn",
@@ -772,6 +775,9 @@ pub struct ProgressAssessment {
 pub struct ProgressLedger {
     seen_outputs: HashSet<u64>,
     seen_reads: HashSet<u64>,
+    /// Merged line ranges already read per file. The read action key buckets
+    /// 200 lines, which is too coarse to tell an unseen range from a repeat.
+    read_ranges: HashMap<String, Vec<(usize, usize)>>,
     seen_verifications: HashSet<u64>,
     recent_states: VecDeque<u64>,
     no_progress_streak: usize,
@@ -781,6 +787,9 @@ pub struct ProgressLedger {
     /// instead of pooling into a spurious recovery injection.
     streak_action: Option<String>,
     streak_failure: Option<u64>,
+    /// Whether the current streak already contains a failure, so only a
+    /// recurrence is reported as `repeated_failure`.
+    streak_failed: bool,
     recovery_streak: usize,
 }
 
@@ -789,11 +798,13 @@ impl Default for ProgressLedger {
         Self {
             seen_outputs: HashSet::new(),
             seen_reads: HashSet::new(),
+            read_ranges: HashMap::new(),
             seen_verifications: HashSet::new(),
             recent_states: VecDeque::with_capacity(4),
             no_progress_streak: 0,
             streak_action: None,
             streak_failure: None,
+            streak_failed: false,
             recovery_streak: Self::RECOVERY_STREAK,
         }
     }
@@ -804,6 +815,17 @@ impl ProgressLedger {
     pub const RECOVERY_STREAK: usize = 3;
 
     pub fn observe(&mut self, observation: &ProgressObservation) -> ProgressAssessment {
+        self.observe_with_read_range(observation, None)
+    }
+
+    /// Like [`Self::observe`], with the file and inclusive line range a
+    /// successful read returned. A known range decides read novelty by how
+    /// much of it is unseen instead of by the coarse action bucket.
+    pub fn observe_with_read_range(
+        &mut self,
+        observation: &ProgressObservation,
+        read_range: Option<(&str, usize, usize)>,
+    ) -> ProgressAssessment {
         // Include the normalized action in the novelty key. Two different
         // successful commands often produce the same empty/stdout text, and
         // treating that as a replay would misclassify legitimate progress.
@@ -817,9 +839,18 @@ impl ProgressLedger {
         if observation.changed_workspace {
             self.seen_verifications.clear();
             self.seen_reads.clear();
+            self.read_ranges.clear();
         }
-        let new_read = observation.read_only
+        let new_read_action = observation.read_only
             && remember(&mut self.seen_reads, stable_hash(&observation.action));
+        let new_read = match read_range {
+            Some((path, start, end))
+                if observation.read_only && observation.success && !observation.replayed =>
+            {
+                self.remember_read_range(path, start, end)
+            }
+            _ => new_read_action,
+        };
         let stable_verification = observation.verification && observation.success;
         // Verification novelty is keyed to the normalized action, not its
         // stdout. Test runners commonly vary elapsed-time text between runs;
@@ -878,6 +909,7 @@ impl ProgressLedger {
             self.no_progress_streak = 0;
             self.streak_action = None;
             self.streak_failure = None;
+            self.streak_failed = false;
         } else if !fresh_verification {
             // Corroboration gate: the streak only grows when the same action
             // repeats or the same failure fingerprint recurs. A different
@@ -894,8 +926,19 @@ impl ProgressLedger {
                 self.no_progress_streak = 1;
                 self.streak_action = Some(observation.action.clone());
                 self.streak_failure = observation.failure_fingerprint;
+                self.streak_failed = false;
             }
         }
+        let reason = if reason == ProgressReason::RepeatedFailure {
+            let repeated = std::mem::replace(&mut self.streak_failed, true);
+            if repeated {
+                reason
+            } else {
+                ProgressReason::Failure
+            }
+        } else {
+            reason
+        };
 
         ProgressAssessment {
             meaningful,
@@ -907,6 +950,36 @@ impl ProgressLedger {
             // the turn re-proving an already established result.
             suppress_stagnation: fresh_verification,
         }
+    }
+
+    /// Record an inclusive line range and report whether at least a quarter of
+    /// it was unseen. A range that only re-reads known lines, or nudges an
+    /// earlier range by a few lines, adds no information.
+    fn remember_read_range(&mut self, path: &str, start: usize, end: usize) -> bool {
+        if self.read_ranges.len() >= Self::MAX_FINGERPRINTS && !self.read_ranges.contains_key(path)
+        {
+            self.read_ranges.clear();
+        }
+        let end = end.max(start);
+        let ranges = self.read_ranges.entry(path.to_owned()).or_default();
+        let covered: usize = ranges
+            .iter()
+            .filter(|(seen_start, seen_end)| *seen_start <= end && *seen_end >= start)
+            .map(|(seen_start, seen_end)| (*seen_end).min(end) - (*seen_start).max(start) + 1)
+            .sum();
+        let length = end - start + 1;
+        let (mut merged_start, mut merged_end) = (start, end);
+        ranges.retain(|(seen_start, seen_end)| {
+            let touches =
+                *seen_start <= end.saturating_add(1) && seen_end.saturating_add(1) >= start;
+            if touches {
+                merged_start = merged_start.min(*seen_start);
+                merged_end = merged_end.max(*seen_end);
+            }
+            !touches
+        });
+        ranges.push((merged_start, merged_end));
+        (length - covered) * 4 >= length
     }
 
     pub fn no_progress_streak(&self) -> usize {
