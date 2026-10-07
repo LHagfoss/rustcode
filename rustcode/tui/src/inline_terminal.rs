@@ -15,7 +15,7 @@
 use ratatui::backend::{Backend, ClearType};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
-use ratatui::widgets::{StatefulWidget, Widget};
+use ratatui::widgets::Widget;
 
 pub struct Frame<'a> {
     cursor_position: Option<Position>,
@@ -50,14 +50,6 @@ impl Frame<'_> {
 
     pub fn render_widget<W: Widget>(&mut self, widget: W, area: Rect) {
         widget.render(area, self.buffer);
-    }
-
-    #[allow(dead_code)]
-    pub fn render_stateful_widget<W>(&mut self, widget: W, area: Rect, state: &mut W::State)
-    where
-        W: StatefulWidget,
-    {
-        widget.render(area, self.buffer, state);
     }
 
     pub fn set_cursor_position<P: Into<Position>>(&mut self, position: P) {

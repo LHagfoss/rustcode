@@ -170,7 +170,6 @@ pub struct AppState {
     /// Successful image analyses keyed by the image bytes' stable hash.
     pub image_analysis_cache: std::collections::HashMap<String, String>,
     pub config: crate::config::AppConfig,
-    #[allow(dead_code)]
     pub cwd_and_branch: String,
     /// Cached workspace path and Git branch used by the composer footer.
     pub(crate) workspace_location: crate::app::workspace::WorkspaceLocationCache,
@@ -315,7 +314,6 @@ pub struct AppState {
     /// uses this to keep the composer close to short conversations.
     pub conversation_content_height: u16,
     pub viewport_height: u16,
-    #[allow(dead_code)]
     pub mouse_capture_enabled: bool,
     pub agent_mode: crate::config::AgentMode,
     pub chat_area: Option<UiRect>,
@@ -324,9 +322,7 @@ pub struct AppState {
     pub input_text_area: Option<UiRect>,
     pub scroll_to_bottom_btn: Option<UiRect>,
     /// Clickable element the pointer is over, refreshed on every mouse move.
-    #[allow(dead_code)]
     pub hover: HoverTarget,
-    #[allow(dead_code)]
     pub selected_text: Option<String>,
     pub sel_start: Option<(u16, u16)>,
     pub sel_end: Option<(u16, u16)>,
@@ -340,7 +336,6 @@ pub struct AppState {
     pub code_copy_rows: Vec<(u16, String)>,
 
     /// Timestamp of the last escape key press (for double-esc detection)
-    #[allow(dead_code)]
     pub last_escape_time: Option<std::time::Instant>,
 
     pub raw_cli_mode: bool,
@@ -385,15 +380,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    #[allow(dead_code)]
-    pub(crate) fn active_history_display_start(&self) -> usize {
-        if self.selected_subagent_id.is_some() {
-            0
-        } else {
-            self.history_display_start
-        }
-    }
-
     /// Return the cached custom title for the active session without touching
     /// the filesystem. `Some(None)` means the cache contains a miss.
     pub fn cached_session_title(&self) -> Option<Option<String>> {
@@ -1094,7 +1080,6 @@ impl AppState {
         std::mem::take(&mut self.redraw_requested)
     }
 
-    #[allow(dead_code)]
     pub fn scroll_to_bottom(&mut self) {
         self.scroll_row = self.last_max_scroll;
     }
@@ -2046,14 +2031,12 @@ impl AppState {
         self.request_redraw();
     }
 
-    #[allow(dead_code)]
     pub fn scroll_up(&mut self, amount: u16) {
         self.clear_selection();
         self.is_scroll_locked_to_bottom = false;
         self.scroll_row = self.scroll_row.saturating_sub(amount);
     }
 
-    #[allow(dead_code)]
     pub fn scroll_down(&mut self, amount: u16) {
         self.clear_selection();
         let max = self.last_max_scroll;
@@ -2065,7 +2048,6 @@ impl AppState {
     }
 
     /// One page = the visible conversation height, minus a line of overlap for context.
-    #[allow(dead_code)]
     pub fn page_rows(&self) -> u16 {
         self.viewport_height.saturating_sub(1).max(1)
     }

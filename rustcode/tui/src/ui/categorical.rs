@@ -150,6 +150,7 @@ fn seed_colors(palette: &crate::ui::theme::ThemePalette) -> [Color; CATEGORY_COU
 
 /// Oklab distance between two colors. Exposed so tests and callers can assert
 /// the ramp's separation invariant without duplicating the conversion.
+#[cfg(test)]
 pub fn separation(a: Color, b: Color) -> f64 {
     let (x, y) = (to_oklab(rgb_of(a)), to_oklab(rgb_of(b)));
     ((x[0] - y[0]).powi(2) + (x[1] - y[1]).powi(2) + (x[2] - y[2]).powi(2)).sqrt()

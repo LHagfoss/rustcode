@@ -226,8 +226,6 @@ const PROJECT_GITIGNORE_ENTRY: &str = ".rustcode/config.toml";
 const HISTORY_FILE: &str = "history.json";
 #[cfg(test)]
 const SESSIONS_DIR: &str = "sessions";
-#[allow(dead_code)]
-const MAX_SESSIONS: usize = 30;
 
 /// Opt-in Mapika decider routing via a raw OpenAI completions endpoint.
 /// Presence enables immediate routing; omission preserves normal generation.
@@ -1479,7 +1477,6 @@ fn default_theme() -> String {
     "default".to_string()
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct UserSettings {
     #[serde(default)]

@@ -306,9 +306,6 @@ pub(super) struct ChatCache {
 }
 
 #[allow(dead_code)]
-type RenderedConversation = (Vec<Line<'static>>, Vec<(u16, String)>, Vec<u16>, u16);
-
-#[allow(dead_code)]
 #[derive(PartialEq, Clone)]
 pub(super) struct ChatKey {
     hist_len: usize,
@@ -324,24 +321,6 @@ pub(super) struct ChatKey {
 thread_local! {
     static CHAT_CACHE: std::cell::RefCell<Option<ChatCache>> =
         const { std::cell::RefCell::new(None) };
-}
-
-#[allow(dead_code)]
-pub(super) fn chat_cache_key(state: &RenderSnapshot, width: u16, show_picker: bool) -> ChatKey {
-    let history = state.active_history();
-    ChatKey {
-        hist_len: history.len(),
-        total_len: history.iter().map(|m| m.content.len()).sum(),
-        last_len: history.last().map_or(0, |m| m.content.len()),
-        history_display_start: state.active_history_display_start(),
-        width,
-        show_picker,
-        copied_recently: state
-            .last_copy_text()
-            .as_ref()
-            .map(|(t_text, t)| (t_text.clone(), t.elapsed().as_secs() < 2)),
-        theme: state.config().theme.clone(),
-    }
 }
 
 /// Deep-copy a borrowed `Line` into an owned `'static` one so it can outlive the

@@ -446,6 +446,7 @@ pub fn fuzzy_filter_symbols(symbols: &[SymbolInfo], query: &str, limit: usize) -
     scored.into_iter().map(|(sym, _)| sym.clone()).collect()
 }
 
+#[cfg(test)]
 pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
     get_project_map_page(root_dir, 0, DEFAULT_PROJECT_MAP_PAGE_SIZE).map(|page| page.content)
 }

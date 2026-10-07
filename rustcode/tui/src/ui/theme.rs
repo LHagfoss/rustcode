@@ -407,21 +407,18 @@ pub fn color_secondary() -> Color {
 pub fn color_green() -> Color {
     active_palette().green
 }
-#[allow(dead_code)]
 pub fn color_selection() -> Color {
     active_palette().selection
 }
 pub fn color_tip() -> Color {
     active_palette().tip
 }
-#[allow(dead_code)]
 pub fn color_status_border() -> Color {
     active_palette().status_border
 }
 pub fn color_turn_separator() -> Color {
     active_palette().turn_separator
 }
-#[allow(dead_code)]
 pub fn color_hover_bg() -> Color {
     active_palette().hover_bg
 }
@@ -435,7 +432,6 @@ pub fn is_light_mode() -> bool {
     }
 }
 
-#[allow(dead_code)]
 pub fn color_diff_add_bg() -> Color {
     if is_light_mode() {
         Color::Rgb(225, 245, 225)
@@ -452,7 +448,6 @@ pub fn color_diff_add_fg() -> Color {
     }
 }
 
-#[allow(dead_code)]
 pub fn color_diff_remove_bg() -> Color {
     if is_light_mode() {
         Color::Rgb(252, 230, 230)
@@ -469,7 +464,6 @@ pub fn color_diff_remove_fg() -> Color {
     }
 }
 
-#[allow(dead_code)]
 pub fn color_diff_absent_bg() -> Color {
     if is_light_mode() {
         Color::Rgb(235, 240, 245)

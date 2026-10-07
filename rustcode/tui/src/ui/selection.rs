@@ -296,6 +296,7 @@ impl TranscriptSelection {
         self.area
     }
 
+    #[cfg(test)]
     pub(crate) fn refresh(&mut self, area: Rect, buffer: &Buffer, soft_wrap_before: &[bool]) {
         self.refresh_view(area, buffer, soft_wrap_before, 0);
     }

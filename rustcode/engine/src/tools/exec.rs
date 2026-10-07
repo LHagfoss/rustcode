@@ -489,26 +489,6 @@ pub(crate) fn run_command_output_with_progress(
     run_command_output_inner(args, Some(progress), None, None, None)
 }
 
-#[allow(dead_code)] // Legacy callers use thread-local workspace context.
-pub(crate) fn run_command_output_with_progress_cancellable_for_call(
-    args: &Value,
-    progress: CommandProgressCallback,
-    cancel_token: Option<tokio_util::sync::CancellationToken>,
-    call_id: Option<&str>,
-) -> Result<super::ToolExecutionOutput, String> {
-    match run_command_output_inner(args, Some(progress), cancel_token, call_id, None) {
-        Ok(output) => Ok(output),
-        Err(error) if error == "command cancelled by user" => {
-            Ok(super::ToolExecutionOutput::failure_with_kind(
-                "error: tool execution cancelled by user".to_string(),
-                super::ToolErrorKind::Cancelled,
-                true,
-            ))
-        }
-        Err(error) => Err(error),
-    }
-}
-
 pub(crate) fn run_command_output_with_progress_cancellable_for_call_and_workspace(
     args: &Value,
     progress: CommandProgressCallback,

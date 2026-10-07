@@ -314,14 +314,6 @@ pub fn load_global() -> Result<ProjectMemory, String> {
     Ok(memory)
 }
 
-#[allow(dead_code)]
-pub fn save_global(memory: &ProjectMemory) -> Result<(), String> {
-    let _guard = memory_write_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    save_global_unlocked(memory)
-}
-
 fn save_global_unlocked(memory: &ProjectMemory) -> Result<(), String> {
     let path = global_location();
     if memory.version != MEMORY_VERSION || memory.identity != "global" {

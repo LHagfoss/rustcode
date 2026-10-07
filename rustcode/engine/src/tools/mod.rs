@@ -1430,7 +1430,6 @@ pub fn is_agent_tool(name: &str) -> bool {
 /// default and must not be parallelized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSafety {
-    #[allow(dead_code)]
     ControlPlane,
     ReadOnly,
     WorkspaceMutation,

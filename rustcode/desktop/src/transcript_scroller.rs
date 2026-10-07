@@ -68,6 +68,7 @@ impl TranscriptScrollerState {
         cx.notify();
     }
 
+    #[cfg(test)]
     pub fn splice(
         &mut self,
         old_range: Range<usize>,
@@ -89,15 +90,18 @@ impl TranscriptScrollerState {
         true
     }
 
+    #[cfg(test)]
     pub fn append(&mut self, count: usize, cx: &mut Context<Self>) -> bool {
         let item_count = self.list_state.item_count();
         self.splice(item_count..item_count, count, cx)
     }
 
+    #[cfg(test)]
     pub fn prepend(&mut self, count: usize, cx: &mut Context<Self>) -> bool {
         self.splice(0..0, count, cx)
     }
 
+    #[cfg(test)]
     pub fn remeasure(&mut self, cx: &mut Context<Self>) {
         self.list_state.remeasure();
         cx.notify();

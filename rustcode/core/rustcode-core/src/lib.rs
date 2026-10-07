@@ -167,7 +167,6 @@ impl ToolErrorKind {
         })
     }
 
-    #[allow(dead_code)]
     pub fn from_message(msg: &str) -> Self {
         let lower = msg.to_ascii_lowercase();
         if lower.contains("missing") || lower.contains("invalid argument") {

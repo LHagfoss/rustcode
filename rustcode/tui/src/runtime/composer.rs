@@ -182,12 +182,6 @@ impl Composer {
         state.reset_suggestion_cycle();
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn submit(&self, state: &AppState) -> Option<String> {
-        let prompt = state.input_buffer.trim().to_owned();
-        (!prompt.is_empty()).then_some(prompt)
-    }
-
     pub(crate) fn recall_previous(&self, state: &mut AppState) {
         let completion_len =
             rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position);

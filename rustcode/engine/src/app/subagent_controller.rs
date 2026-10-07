@@ -635,25 +635,6 @@ impl SubagentController {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn interrupt(
-        &self,
-        state: &mut AppState,
-        id: SubagentId,
-    ) -> Result<(), SubagentError> {
-        let Some(agent) = state
-            .subagents
-            .iter_mut()
-            .find(|agent| agent.id == id.raw())
-        else {
-            return Err(SubagentError::MissingId(id));
-        };
-        agent.status = SubAgentStatus::Cancelled;
-        agent.active_turn = false;
-        state.request_redraw();
-        Ok(())
-    }
-
     pub(crate) fn set_status(
         &self,
         state: &mut AppState,

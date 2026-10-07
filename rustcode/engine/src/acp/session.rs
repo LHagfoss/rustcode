@@ -77,7 +77,7 @@ impl SessionTurnState {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) async fn begin(&self) -> SessionTurnGuard {
         self.schedule().begin().await
     }

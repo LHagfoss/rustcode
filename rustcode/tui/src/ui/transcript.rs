@@ -1,6 +1,5 @@
 #[cfg(test)]
 use crate::ui::scrollback::TranscriptCursor;
-use ratatui::text::Line;
 use rustcode::controller::{ChatMessage, TokenUsage};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +56,7 @@ pub(crate) enum TranscriptEvent {
     Resize,
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 pub(crate) struct TranscriptModel {
     committed: Vec<HistoryCell>,
@@ -183,21 +183,6 @@ impl TranscriptModel {
     pub(crate) fn reset_for_resize(&mut self) {
         self.cursor.reset();
         self.replay_revision = self.replay_revision.saturating_add(1);
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn replay_revision(&self) -> u64 {
-        self.replay_revision
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn render(&self, _width: u16, height: u16) -> Vec<Line<'static>> {
-        self.committed
-            .iter()
-            .chain(self.live.iter())
-            .flat_map(|cell| cell.text().lines().map(|line| Line::from(line.to_owned())))
-            .take(usize::from(height))
-            .collect()
     }
 }
 

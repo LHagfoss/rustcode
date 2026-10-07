@@ -289,7 +289,6 @@ pub struct ControllerSnapshot {
 }
 
 impl ControllerSnapshot {
-    #[allow(dead_code)]
     pub(crate) fn from_state(generation: u64, state: &AppState) -> Self {
         let pending_approval_batch = state
             .pending_tool_confirmation

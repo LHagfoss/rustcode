@@ -1286,6 +1286,7 @@ enum Admitted {
     Relevant,
 }
 
+#[cfg(test)]
 pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
     tools: &[(String, String, Value)],
     owners: &[String],

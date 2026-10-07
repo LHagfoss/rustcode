@@ -345,6 +345,7 @@ pub(super) fn assistant_fence_transition(
     )
 }
 
+#[cfg(test)]
 pub(super) fn render_assistant_message<'a>(
     content: &'a str,
     lines: &mut Vec<Line<'a>>,

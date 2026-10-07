@@ -1,5 +1,4 @@
 use super::*;
-#[allow(dead_code)]
 pub async fn handle_enter(
     state: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
