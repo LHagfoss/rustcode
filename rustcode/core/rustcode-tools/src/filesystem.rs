@@ -32,12 +32,12 @@ pub fn copy_file_schema() -> Value {
 pub fn view_file_schema() -> Value {
     serde_json::json!({
         "type": "object", "additionalProperties": false, "properties": {
-            "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1, "description": "Ordinary-read range parameter; ignored when outline=true." },
-            "end_line": { "type": "integer", "minimum": 1, "description": "Ordinary-read range parameter; inclusive and capped at 800 lines. Request targeted follow-up ranges for more content. Ignored when outline=true." },
-            "content_offset": { "type": "integer", "minimum": 0, "description": "Ordinary-read byte offset; ignored when outline=true." },
-            "outline": { "type": "boolean", "description": "Explicitly request a bounded Markdown heading outline; expand sections with the returned start_line and end_line." },
-            "outline_offset": { "type": "integer", "minimum": 0, "description": "Heading offset for the next outline page; used only when outline=true, otherwise ignored." },
-            "outline_limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum headings in this outline page (default 50); used only when outline=true, otherwise ignored." }
+            "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
+            "end_line": { "type": "integer", "minimum": 1, "description": "Inclusive" },
+            "content_offset": { "type": "integer", "minimum": 0, "description": "UTF-8 byte offset" },
+            "outline": { "type": "boolean" },
+            "outline_offset": { "type": "integer", "minimum": 0 },
+            "outline_limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Default 50" }
         }, "required": ["path"]
     })
 }
@@ -45,17 +45,17 @@ pub fn view_file_schema() -> Value {
 pub fn replace_file_content_schema() -> Value {
     serde_json::json!({
         "type": "object", "additionalProperties": false, "properties": {
-            "path": { "type": "string", "description": "Absolute or relative path to file" },
-            "target_content": { "type": "string", "description": "Canonical exact block to replace; never empty" },
-            "replacement_content": { "type": "string", "description": "Required with target_content: complete replacement text; use an empty string only to delete the target" },
-            "old_string": { "type": "string", "description": "Compatibility alias for target_content" },
-            "new_string": { "type": "string", "description": "Compatibility alias for replacement_content" },
+            "path": { "type": "string" },
+            "target_content": { "type": "string" },
+            "replacement_content": { "type": "string" },
+            "old_string": { "type": "string" },
+            "new_string": { "type": "string" },
             "target": { "type": "string" }, "replacement": { "type": "string" },
             "old_text": { "type": "string" }, "new_text": { "type": "string" },
             "oldString": { "type": "string" }, "newString": { "type": "string" },
             "oldText": { "type": "string" }, "newText": { "type": "string" },
-            "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-indexed start line to anchor the edit" },
-            "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-indexed end line to anchor the edit" },
+            "start_line": { "type": "integer", "minimum": 1, "description": "1-indexed line anchoring the edit" },
+            "end_line": { "type": "integer", "minimum": 1 },
             "edits": { "type": "array", "items": { "type": "object", "properties": {
                 "target_content": { "type": "string" }, "replacement_content": { "type": "string" },
                 "old_string": { "type": "string" }, "new_string": { "type": "string" },
@@ -92,12 +92,12 @@ pub fn write_to_file_schema() -> Value {
 pub fn write_file_chunk_schema() -> Value {
     serde_json::json!({
         "type": "object", "additionalProperties": false, "properties": {
-            "path": { "type": "string", "description": "Absolute or relative path to file" },
-            "content": { "type": "string", "description": "UTF-8 chunk; each call is capped at 16384 bytes" },
-            "offset": { "type": "integer", "minimum": 0, "description": "Byte offset where this chunk starts; use the returned next_offset to resume" },
-            "truncate": { "type": "boolean", "default": false, "description": "Truncate an existing file before writing the first chunk at offset 0" },
-            "expected_size": { "type": "integer", "minimum": 0, "description": "Optional size guard for the current file" },
-            "expected_sha256": { "type": "string", "description": "Optional SHA-256 guard for the current file" }
+            "path": { "type": "string" },
+            "content": { "type": "string" },
+            "offset": { "type": "integer", "minimum": 0, "description": "Resume from the returned next_offset" },
+            "truncate": { "type": "boolean", "default": false, "description": "Truncate the file first; only with offset 0" },
+            "expected_size": { "type": "integer", "minimum": 0, "description": "Guard: current file size" },
+            "expected_sha256": { "type": "string", "description": "Guard: current file SHA-256" }
         }, "required": ["path", "content"]
     })
 }

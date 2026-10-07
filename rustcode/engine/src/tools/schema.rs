@@ -2199,3 +2199,100 @@ mod response_limit_tests {
         assert!(!prompt.contains("exactly one [TOOL_CALLS] marker"));
     }
 }
+
+#[cfg(test)]
+mod schema_budget_tests {
+    use super::*;
+
+    /// Ceiling for the built-in half of the native `tools` block under the
+    /// root coding policy with agent tools, the widest menu a request carries.
+    ///
+    /// The block was 31,659 bytes before its descriptions were trimmed to
+    /// 23,583 (#1826); this is 25% below the old size, which leaves about
+    /// 160 bytes of room. It is sent on every request, so a description
+    /// that needs more than that should earn it by shortening another. Run
+    /// with `-- --nocapture` for the per-tool table.
+    const BUILTIN_SCHEMA_BYTE_BUDGET: usize = 23_744;
+
+    /// Serialized bytes of every built-in tool's native schema entry, largest
+    /// first, measured the way the request builder serializes it. Covers the
+    /// whole registry and the agent-control tools, advertised or not.
+    fn builtin_schema_sizes() -> Vec<(&'static str, usize)> {
+        let entry = |name: &str, description: &str, parameters: Value| {
+            // One array element, without the array's own brackets.
+            serialized_schema_bytes(&[serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": provider_compatible_schema(parameters),
+                }
+            })]) - 2
+        };
+        let mut sizes = TOOLS
+            .iter()
+            .map(|tool| {
+                (
+                    tool.name,
+                    entry(tool.name, tool.description, schema_for_tool(tool.name)),
+                )
+            })
+            .chain(AGENT_TOOL_SPECS.iter().map(|(name, description, _)| {
+                (*name, entry(name, description, schema_for_agent_tool(name)))
+            }))
+            .collect::<Vec<_>>();
+        sizes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        sizes
+    }
+
+    #[test]
+    fn builtin_schema_bytes_stay_within_budget() {
+        let sizes = builtin_schema_sizes();
+        for (name, bytes) in &sizes {
+            println!("{bytes:>6}  {name}");
+        }
+        println!(
+            "{:>6}  all {} built-in and agent tools",
+            sizes.iter().map(|(_, bytes)| bytes).sum::<usize>(),
+            sizes.len()
+        );
+
+        let (tools, withheld) = build_builtin_native_tools_schema(ToolSchemaPolicy::root(true));
+        let bytes = serialized_schema_bytes(&tools);
+        println!(
+            "{bytes:>6}  advertised built-in block, {} tools (budget {BUILTIN_SCHEMA_BYTE_BUDGET})",
+            tools.len()
+        );
+        assert!(
+            withheld.is_empty(),
+            "the byte cap withheld built-in tools: {withheld:?}"
+        );
+        assert!(
+            bytes <= BUILTIN_SCHEMA_BYTE_BUDGET,
+            "built-in tool schemas grew to {bytes} bytes, over the {BUILTIN_SCHEMA_BYTE_BUDGET} budget; \
+             shorten a description (largest first: {:?})",
+            &sizes[..5]
+        );
+        // The budget only means something while it sits under the hard cap
+        // that starts withholding tools.
+        assert!(BUILTIN_SCHEMA_BYTE_BUDGET < MAX_BUILTIN_NATIVE_SCHEMA_BYTES);
+    }
+
+    /// Trimming must never leave a tool undescribed, and a description pays
+    /// for every byte, including stray runs of spaces.
+    #[test]
+    fn every_builtin_tool_keeps_a_description() {
+        for tool in TOOLS {
+            assert!(
+                tool.description.trim().len() >= 20,
+                "{} lost its description",
+                tool.name
+            );
+            assert!(
+                !tool.description.contains("  "),
+                "{} has a run of spaces in its description",
+                tool.name
+            );
+        }
+    }
+}

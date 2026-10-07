@@ -66,7 +66,7 @@ fn git_status_schema() -> Value {
 
 pub const GIT_STATUS: Tool = Tool {
     name: "git_status",
-    description: "Show `git status --short --branch` for the active workspace. Read-only inspection.",
+    description: "Show `git status --short --branch` for the workspace. Read-only.",
     arguments: r#"{}"#,
     handler: git_status,
     requires_confirmation: false,
@@ -86,8 +86,8 @@ fn git_diff_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "staged": { "type": "boolean", "description": "Show staged (--cached) diff instead of working tree", "default": false },
-            "path": { "type": "string", "description": "Optional path to limit the diff to" }
+            "staged": { "type": "boolean", "default": false },
+            "path": { "type": "string" }
         },
         "additionalProperties": false
     })
@@ -95,7 +95,7 @@ fn git_diff_schema() -> Value {
 
 pub const GIT_DIFF: Tool = Tool {
     name: "git_diff",
-    description: "Show `git diff` for the active workspace, optionally staged or limited to a path. Read-only inspection.",
+    description: "Show `git diff` for the workspace. Read-only.",
     arguments: r#"{"staged": "optional bool (default false)", "path": "optional path"}"#,
     handler: git_diff,
     requires_confirmation: false,
@@ -134,7 +134,7 @@ fn git_add_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "paths": { "type": "array", "items": { "type": "string" }, "description": "Explicit file paths to stage (never '.' or '-A')" }
+            "paths": { "type": "array", "items": { "type": "string" } }
         },
         "required": ["paths"]
     })
@@ -142,7 +142,7 @@ fn git_add_schema() -> Value {
 
 pub const GIT_ADD: Tool = Tool {
     name: "git_add",
-    description: "Stage explicit file paths with `git add -- <paths>`. Broad staging ('.', '-A', '--all') is refused.",
+    description: "Stage explicit file paths with `git add -- <paths>`; broad staging is refused.",
     arguments: r#"{"paths": ["src/network.rs"]}"#,
     handler: git_add,
     requires_confirmation: true,
@@ -187,7 +187,7 @@ fn git_commit_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "message": { "type": "string", "description": "Commit message (single logical change, no -a/--all)" }
+            "message": { "type": "string" }
         },
         "required": ["message"]
     })
@@ -195,7 +195,7 @@ fn git_commit_schema() -> Value {
 
 pub const GIT_COMMIT: Tool = Tool {
     name: "git_commit",
-    description: "Create a commit with `git commit -m <message>`. Never stages everything; stage explicit paths with git_add first.",
+    description: "Commit staged changes with `git commit -m <message>`. Stages nothing: use git_add first.",
     arguments: r#"{"message": "concise commit message"}"#,
     handler: git_commit,
     requires_confirmation: true,

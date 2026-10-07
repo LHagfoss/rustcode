@@ -10,8 +10,8 @@ fn delegate_task_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "task": { "type": "string", "description": "Self-contained task for the external agent" },
-            "agent": { "type": "string", "description": "External CLI: claude, gemini, codex, opencode, rustcode (default: claude)" }
+            "task": { "type": "string" },
+            "agent": { "type": "string", "description": "claude (default), gemini, codex, opencode or rustcode" }
         },
         "required": ["task"]
     })
@@ -19,7 +19,7 @@ fn delegate_task_schema() -> Value {
 
 pub const DELEGATE_TASK: Tool = Tool {
     name: "delegate_task",
-    description: "Delegate a self-contained task to an external coding CLI (claude/gemini/codex/opencode/rustcode). Writes the task to .tasks/ and invokes the CLI when installed; otherwise returns the task file for a manual handoff.",
+    description: "Delegate a self-contained task to an external coding CLI. Writes the task to .tasks/ and runs the CLI when installed; otherwise returns the task file for a manual handoff.",
     arguments: r#"{"task": "self-contained task text", "agent": "optional claude|gemini|codex|opencode|rustcode"}"#,
     handler: delegate_task,
     requires_confirmation: true,

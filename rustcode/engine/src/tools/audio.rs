@@ -24,7 +24,7 @@ fn generation_schema(max_duration: u32) -> Value {
         "properties": {
             "prompt": { "type": "string", "minLength": 1 },
             "duration_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": max_duration },
-            "output_path": { "type": "string", "minLength": 1, "description": "Project-relative output path, usually under assets/audio/" }
+            "output_path": { "type": "string", "minLength": 1, "description": "Project-relative, usually under assets/audio/" }
         },
         "required": ["prompt", "duration_seconds", "output_path"]
     })
@@ -44,7 +44,7 @@ fn inspect_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-            "path": { "type": "string", "minLength": 1, "description": "Project-relative audio path" }
+            "path": { "type": "string", "minLength": 1 }
         },
         "required": ["path"]
     })
@@ -52,7 +52,7 @@ fn inspect_schema() -> Value {
 
 pub const GENERATE_SOUND_EFFECT: Tool = Tool {
     name: "generate_sound_effect",
-    description: "Generate a short local sound-effect asset for the project (for example a coin pickup, click, hit, or jump), then return the real project-relative path and audio metadata. Use this when audio materially improves a game or interactive app; do not invent an asset reference.",
+    description: "Generate a short sound effect in the project and return its real path and audio metadata. Use only when audio materially improves a game or interactive app; never invent an asset reference.",
     arguments: r#"{"prompt":"short sound description","duration_seconds":1.2,"output_path":"assets/audio/effect.wav"}"#,
     handler: generate_sound_effect,
     requires_confirmation: true,
@@ -63,7 +63,7 @@ pub const GENERATE_SOUND_EFFECT: Tool = Tool {
 
 pub const GENERATE_MUSIC: Tool = Tool {
     name: "generate_music",
-    description: "Generate an instrumental local background-music asset for the project and return the real project-relative path and audio metadata. Use this when music materially improves a game or interactive app; do not fabricate a file reference.",
+    description: "Generate instrumental background music in the project and return its real path and audio metadata. Use only when music materially improves a game or interactive app; never invent a file reference.",
     arguments: r#"{"prompt":"playful instrumental soundtrack","duration_seconds":30,"output_path":"assets/audio/theme.wav"}"#,
     handler: generate_music,
     requires_confirmation: true,
@@ -74,7 +74,7 @@ pub const GENERATE_MUSIC: Tool = Tool {
 
 pub const INSPECT_AUDIO: Tool = Tool {
     name: "inspect_audio",
-    description: "Inspect a project-relative audio file and return concise metadata including format, duration, channels, sample rate, and file size.",
+    description: "Return format, duration, channels, sample rate and size of a project-relative audio file.",
     arguments: r#"{"path":"assets/audio/theme.wav"}"#,
     handler: inspect_audio,
     requires_confirmation: false,

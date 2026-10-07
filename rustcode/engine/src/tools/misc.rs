@@ -51,7 +51,7 @@ fn manage_scheduled_jobs_schema() -> Value {
 #[cfg(unix)]
 pub const MANAGE_SCHEDULED_JOBS: Tool = Tool {
     name: "manage_scheduled_jobs",
-    description: "Create and manage durable scheduled jobs through the RustCode daemon. Supports create, list, pause, resume, run, history, and delete. The daemon must already be running.",
+    description: "Create and manage durable scheduled jobs in the RustCode daemon, which must already be running.",
     arguments: r#"{"operation":"create|list|pause|resume|run|history|delete", "job_id":"required for job operations", "id":"required for create", "name":"required for create", "workspace":"required for create", "schedule":{"kind":"daily|monthly|cron|once",...}, "action":{"type":"mcp_call|prompt|shell_command|poll",...}, "limit":50}"#,
     handler: manage_scheduled_jobs,
     requires_confirmation: true,
@@ -207,19 +207,18 @@ fn ask_question_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "question": { "type": "string", "description": "Question to ask the user (single-question shape)" },
-            "options": { "type": "array", "items": { "type": "string" }, "description": "Choices shown to the user (single-question shape)" },
+            "question": { "type": "string", "description": "Single-question shape" },
+            "options": { "type": "array", "items": { "type": "string" }, "description": "Single-question shape" },
             "is_multi_select": { "type": "boolean", "default": false },
             "questions": {
                 "type": "array",
-                "description": "Chained shape: ask several questions in one call; the user answers each in turn (arrow keys move, space ticks, tab switches question, enter submits all)",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "header": { "type": "string", "description": "Short label shown above the question (max ~30 chars)" },
+                        "header": { "type": "string", "description": "Short label (~30 chars)" },
                         "question": { "type": "string" },
-                        "options": { "type": "array", "items": { "type": ["string", "object"] }, "description": "Choices; objects take {label, description}" },
-                        "multiple": { "type": "boolean", "default": false, "description": "Allow ticking several options" }
+                        "options": { "type": "array", "items": { "type": ["string", "object"] }, "description": "Strings or {label, description}" },
+                        "multiple": { "type": "boolean", "default": false }
                     },
                     "required": ["question", "options"]
                 }
@@ -230,7 +229,7 @@ fn ask_question_schema() -> Value {
 
 pub const ASK_QUESTION: Tool = Tool {
     name: "ask_question",
-    description: "Ask the user multiple-choice questions to clarify underspecified requirements, solicit design choices, or select options. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands. Prefer the chained 'questions' array (each with a short header, question, options with label/description, and multiple flag) when several decisions are needed: the user answers each in turn with arrow keys, ticks with space for multi-select, moves with tab, and submits all with enter. The UI automatically appends a 'write your own answer' slot for free-form text, so never add your own 'Other' option and never pass an empty options list.",
+    description: "Ask the user multiple-choice questions. Prefer the questions array for several decisions. Never pass empty options or an 'Other' option: the UI adds a free-text slot.",
     arguments: r#"{"questions": [{"header": "Data source", "question": "Where should the version data come from?", "options": [{"label": "CHANGELOG.md", "description": "Curated release notes"}, {"label": "Releases API", "description": "Live GitHub data"}], "multiple": false}]} (chained; or legacy {"question": "...", "options": ["A", "B"], "is_multi_select": false})"#,
     handler: ask_question,
     requires_confirmation: false,
@@ -315,9 +314,9 @@ fn list_mcp_tools_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "server": {"type":"string", "minLength":1, "description":"Show tools from this exact registered server"},
-            "query": {"type":"string", "minLength":1, "description":"Find tools by name or description"},
-            "limit": {"type":"integer", "minimum":1, "maximum":50, "default":20, "description":"Maximum matching tools to return"}
+            "server": {"type":"string", "minLength":1, "description":"Exact registered server name"},
+            "query": {"type":"string", "minLength":1},
+            "limit": {"type":"integer", "minimum":1, "maximum":50, "default":20}
         },
         "additionalProperties": false
     })
@@ -325,7 +324,7 @@ fn list_mcp_tools_schema() -> Value {
 
 pub const LIST_MCP_TOOLS: Tool = Tool {
     name: "list_mcp_tools",
-    description: "Discover MCP tools from the in-process registry. The default call gives compact server summaries; pass server for that server's tools, or query to search tool names and descriptions. Results include callable_name for invoking discovered tools even when their schema is not in the current request. Never read source files or secrets for discovery.",
+    description: "Discover MCP tools: no arguments lists servers, server lists one server's tools, query searches names and descriptions. A result's callable_name works even without its schema in this request. Never read source files or secrets for discovery.",
     arguments: r#"{"server":"exact server name", "query":"name or description text", "limit":20}"#,
     handler: list_mcp_tools,
     requires_confirmation: false,
@@ -343,7 +342,7 @@ fn subagent_id_schema() -> Value {
                     {"type": "integer", "minimum": 1},
                     {"type": "string", "pattern": "^[0-9]*[1-9][0-9]*$"}
                 ],
-                "description": "Decimal subagent id returned by spawn_agent; pass an integer or numeric string"
+                "description": "Id from spawn_agent"
             }
         },
         "required": ["id"],
@@ -364,7 +363,7 @@ fn wait_agent_schema() -> Value {
 
 pub const WAIT_AGENT: Tool = Tool {
     name: "wait_agent",
-    description: "Wait for a subagent to reach one terminal state and return its bounded completion result. This waits for lifecycle activity instead of polling.",
+    description: "Block until a subagent reaches a terminal state and return its bounded result; never poll.",
     arguments: r#"{"id": "subagent id"}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
@@ -389,9 +388,9 @@ fn agent_message_schema(minimum_id: u32) -> Value {
             {"type":"string", "pattern":string_id_pattern}
         ],
         "description": if minimum_id == 0 {
-            "Decimal agent id; child agents may use 0 to send a message to main"
+            "Agent id; a child may use 0 for main"
         } else {
-            "Decimal subagent id returned by spawn_agent"
+            "Id from spawn_agent"
         }
     });
     schema["properties"]["message"] =
@@ -406,7 +405,7 @@ fn list_agents_schema() -> Value {
 
 pub const SEND_MESSAGE: Tool = Tool {
     name: "send_message",
-    description: "Queue a bounded message for an agent. Delivery occurs at a safe request boundary; an idle agent remains idle until a follow-up.",
+    description: "Queue a message for an agent, delivered at its next safe request boundary; an idle agent stays idle until a follow-up.",
     arguments: r#"{"id":"subagent id","message":"new evidence"}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
@@ -419,7 +418,7 @@ pub const SEND_MESSAGE: Tool = Tool {
 };
 pub const FOLLOWUP_TASK: Tool = Tool {
     name: "followup_task",
-    description: "Start a follow-up on an idle/completed/interrupted child, or queue instructions for an active child.",
+    description: "Start a follow-up on an idle, completed or interrupted child, or queue instructions for an active one.",
     arguments: r#"{"id":"subagent id","message":"next task"}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
@@ -432,7 +431,7 @@ pub const FOLLOWUP_TASK: Tool = Tool {
 };
 pub const LIST_AGENTS: Tool = Tool {
     name: "list_agents",
-    description: "List stable session agent IDs, parent relationships, status, model, context strategy and elapsed time without reading transcripts.",
+    description: "List session agents: id, parent, status, model, context strategy and elapsed time. Reads no transcripts.",
     arguments: "{}",
     handler: async_agent_tool,
     requires_confirmation: false,
@@ -445,7 +444,7 @@ pub const LIST_AGENTS: Tool = Tool {
 };
 pub const INSPECT_AGENT: Tool = Tool {
     name: "inspect_agent",
-    description: "Inspect an agent and a bounded tail of its separate transcript. Full transcript remains available in the agent TUI.",
+    description: "Inspect an agent and a bounded tail of its transcript.",
     arguments: r#"{"id":"subagent id"}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
@@ -481,7 +480,7 @@ fn search_web_schema() -> Value {
 
 pub const SEARCH_WEB: Tool = Tool {
     name: "search_web",
-    description: "Performs a web search to look up documentation, API details, or code patterns.",
+    description: "Search the web for documentation, API details or code patterns.",
     arguments: r#"{"query": "search query terms", "domain": "optional domain filter e.g. 'docs.rs'"}"#,
     handler: search_web,
     requires_confirmation: false,
@@ -498,7 +497,7 @@ fn complete_task_schema() -> Value {
 
 pub const COMPLETE_TASK: Tool = Tool {
     name: "complete_task",
-    description: "Mark the continuous goal/task as successfully complete.",
+    description: "Mark the active goal as successfully complete.",
     arguments: r#"{"result": "summary of what was achieved and final results"}"#,
     handler: complete_task_tool,
     requires_confirmation: false,
@@ -511,10 +510,10 @@ fn remember_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "key": { "type": "string", "description": "Unique key for the fact (e.g. 'package_manager', 'db_port', 'test_runner')" },
-            "value": { "type": "string", "description": "The concise fact or rule to remember (max 512 characters)" },
-            "category": { "type": "string", "description": "Optional category tag (e.g. 'build', 'architecture', 'convention', 'preference')", "default": "general" },
-            "scope": { "type": "string", "enum": ["project", "global"], "description": "Scope of the memory. 'project' (default) is scoped to the current repository; 'global' applies across all projects.", "default": "project" }
+            "key": { "type": "string", "description": "Unique key, e.g. 'test_runner'" },
+            "value": { "type": "string", "description": "Max 512 characters" },
+            "category": { "type": "string", "description": "Tag, e.g. 'build', 'convention'", "default": "general" },
+            "scope": { "type": "string", "enum": ["project", "global"], "description": "'project' is this repository; 'global' is every project", "default": "project" }
         },
         "required": ["key", "value"]
     })
@@ -522,7 +521,7 @@ fn remember_schema() -> Value {
 
 pub const REMEMBER: Tool = Tool {
     name: "remember",
-    description: "Store a concise, high-value fact, user preference, architecture detail, or convention into persistent memory. Use this when explicitly asked by the user to remember something, or when a durable project convention is established. Do not store secrets, tokens, or entire files.",
+    description: "Store one concise durable fact, preference or project convention in persistent memory, when the user asks or a lasting convention is established. Never store secrets, tokens or whole files.",
     arguments: r#"{"key": "package_manager", "value": "Use pnpm for all install and build commands", "category": "build", "scope": "project"}"#,
     handler: remember,
     requires_confirmation: false,
@@ -535,8 +534,8 @@ fn recall_memory_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "query": { "type": "string", "description": "Search query terms to match against stored memory keys, categories, and values" },
-            "scope": { "type": "string", "enum": ["all", "project", "global"], "description": "Scope to search. Defaults to 'all'.", "default": "all" }
+            "query": { "type": "string" },
+            "scope": { "type": "string", "enum": ["all", "project", "global"], "default": "all" }
         },
         "required": ["query"]
     })
@@ -544,7 +543,7 @@ fn recall_memory_schema() -> Value {
 
 pub const RECALL_MEMORY: Tool = Tool {
     name: "recall_memory",
-    description: "Search persistent project and global memory for remembered facts, user preferences, architecture decisions, or build instructions matching a query.",
+    description: "Search persistent project and global memory for facts, preferences, decisions or build instructions.",
     arguments: r#"{"query": "database port", "scope": "all"}"#,
     handler: recall_memory,
     requires_confirmation: false,
@@ -557,8 +556,8 @@ fn forget_memory_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "key": { "type": "string", "description": "The exact key or category of the fact to remove" },
-            "scope": { "type": "string", "enum": ["project", "global", "all"], "description": "Scope to remove from. Defaults to 'project'.", "default": "project" }
+            "key": { "type": "string", "description": "Exact key or category" },
+            "scope": { "type": "string", "enum": ["project", "global", "all"], "default": "project" }
         },
         "required": ["key"]
     })
@@ -566,7 +565,7 @@ fn forget_memory_schema() -> Value {
 
 pub const FORGET_MEMORY: Tool = Tool {
     name: "forget_memory",
-    description: "Remove a fact from persistent memory by key or category. Use when a remembered fact is obsolete, contradicted, or when asked by the user to forget something.",
+    description: "Remove a fact from persistent memory when it is obsolete or contradicted, or the user asks.",
     arguments: r#"{"key": "package_manager", "scope": "project"}"#,
     handler: forget_memory,
     requires_confirmation: false,
@@ -591,7 +590,7 @@ fn list_skills_schema() -> Value {
 
 pub const LIST_SKILLS: Tool = Tool {
     name: "list_skills",
-    description: "Discover available skills and their short descriptions without loading their instruction bodies.",
+    description: "List available skills with short descriptions; loads no instructions.",
     arguments: r#"{}"#,
     handler: list_skills,
     requires_confirmation: false,
@@ -602,7 +601,7 @@ pub const LIST_SKILLS: Tool = Tool {
 
 pub const USE_SKILL: Tool = Tool {
     name: "use_skill",
-    description: "Load a skill by name to get its instructions and available files. This control-plane call must be emitted alone so the loaded instructions apply before the next action.",
+    description: "Load a skill's instructions and files by name. Emit this call alone so the instructions apply before the next action.",
     arguments: r#"{"name": "skill name"}"#,
     handler: use_skill,
     requires_confirmation: false,

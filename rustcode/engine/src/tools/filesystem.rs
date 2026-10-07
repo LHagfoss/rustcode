@@ -88,7 +88,7 @@ fn view_file_schema() -> Value {
 
 pub const VIEW_FILE: Tool = Tool {
     name: "view_file",
-    description: "Return exact numbered file text for a requested inclusive 1-indexed range (or list a directory); ordinary output is never silently summarized. Ordinary reads have an 800-line hard cap; use targeted follow-up ranges to retrieve more content. When outline=true, range parameters are ignored and outline_offset/outline_limit select the heading page. Otherwise outline pagination parameters are ignored and ordinary range parameters apply. For Markdown, explicitly request outline=true to get bounded headings with exact section ranges; expand a section with start_line and end_line. An outline is partial and never counts as a complete file read. Supports a UTF-8 byte offset for ordinary reads.",
+    description: "Return exact numbered file text for an inclusive 1-indexed line range, or list a directory; output is never summarized. Reads have an 800-line hard cap; request targeted follow-up ranges for more. outline=true instead returns a bounded Markdown heading outline with section ranges to expand, paged by outline_offset/outline_limit; start_line, end_line and content_offset are then ignored. An outline is partial and never counts as a complete read.",
     arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional ordinary-read start line, 1-indexed (default 1); ignored when outline=true", "end_line": "optional ordinary-read end line, 1-indexed (each call is capped at 800 lines; request targeted follow-up ranges for more content); ignored when outline=true", "content_offset": "optional ordinary-read byte offset; ignored when outline=true", "outline": "optional true to return a bounded Markdown heading outline only", "outline_offset": "optional zero-based offset for the next heading page; used only when outline=true", "outline_limit": "optional number of headings per page, 1 to 100 (default 50); used only when outline=true"}"#,
     handler: view_file_tool,
     requires_confirmation: false,
@@ -103,7 +103,7 @@ fn replace_file_content_schema() -> Value {
 
 pub const REPLACE_FILE_CONTENT: Tool = Tool {
     name: "replace_file_content",
-    description: "Edit an existing file by replacing one precise target_content block with replacement_content. replacement_content is required (use an empty string only to delete the target). The legacy old_string/new_string names and the edits array remain accepted for compatibility. To insert, anchor on an adjacent line and repeat that line in the replacement; an empty target is rejected.",
+    description: "Replace one exact target_content block in an existing file with replacement_content (required; an empty string deletes the target). To insert, anchor on an adjacent line and repeat that line in the replacement; an empty target is rejected. The other target/replacement names are aliases; an edits array is accepted.",
     arguments: r#"{"path": "file path", "target_content": "canonical exact block to replace (legacy old_string is accepted)", "replacement_content": "REQUIRED complete replacement text (legacy new_string is accepted; use an empty string only to delete)", "edits": "optional array of edit objects for multiple replacements"}"#,
     handler: replace_file_content_tool,
     requires_confirmation: true,
@@ -118,7 +118,7 @@ fn multi_replace_file_content_schema() -> Value {
 
 pub const MULTI_REPLACE_FILE_CONTENT: Tool = Tool {
     name: "multi_replace_file_content",
-    description: "Apply multiple non-contiguous edits to one file. Each replacement must include its line range, target_content, and replacement_content.",
+    description: "Apply several non-contiguous edits to one file.",
     arguments: r#"{"path": "absolute or relative path to file", "replacements": "array of objects, each containing: {start_line, end_line, target_content, replacement_content}"}"#,
     handler: multi_replace_file_content_tool,
     requires_confirmation: true,
@@ -137,7 +137,7 @@ fn write_file_chunk_schema() -> Value {
 
 pub const WRITE_TO_FILE: Tool = Tool {
     name: "write_to_file",
-    description: "Create or overwrite a small file with complete content. Start chunked with write_file_chunk past ~4 KiB: a large single write risks a provider output cutoff that loses the whole call, and content larger than 16 KiB must use write_file_chunk repeatedly so an interrupted response cannot lose the whole write. Parent directories are created automatically.",
+    description: "Create or overwrite a small file with its complete content (parent directories are created). Use write_file_chunk past ~4 KiB, required over 16 KiB: a cut-off response loses a whole single write.",
     arguments: r#"{"path": "new or existing file path", "content": "complete contents (keep at or below 16384 bytes; past ~4 KiB prefer write_file_chunk from the start; use write_file_chunk for larger files)", "overwrite": "optional boolean, defaults to true to allow overwriting an existing file"}"#,
     handler: write_to_file_tool,
     requires_confirmation: true,
@@ -148,7 +148,7 @@ pub const WRITE_TO_FILE: Tool = Tool {
 
 pub const WRITE_FILE_CHUNK: Tool = Tool {
     name: "write_file_chunk",
-    description: "Write one bounded file chunk at a byte offset. Calls are capped at 16 KiB and return offset, next_offset, bytes, size, and SHA-256 metadata so interrupted writes can resume without duplicating content.",
+    description: "Write one chunk of at most 16 KiB at a byte offset. Returns offset, next_offset, bytes, size and SHA-256 so an interrupted write resumes without duplicating content.",
     arguments: r#"{"path": "file path", "content": "chunk (maximum 16384 bytes)", "offset": "optional byte offset, defaults to 0", "truncate": "optional boolean for the first chunk at offset 0", "expected_size": "optional current file size guard", "expected_sha256": "optional current file SHA-256 guard"}"#,
     handler: write_file_chunk_tool,
     requires_confirmation: true,
