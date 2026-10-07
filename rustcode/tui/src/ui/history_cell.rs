@@ -784,37 +784,6 @@ impl HistoryCell for AssistantMarkdownCell {
     }
 }
 
-/// Keep the tail of an over-long target so the informative part (the file name
-/// and its parents) survives on a single row instead of the head, which says
-/// little about *which* item is queued or running.
-pub(super) fn tail_to_width(text: &str, max_width: usize) -> String {
-    if text.width() <= max_width {
-        return text.to_owned();
-    }
-    if max_width == 0 {
-        return String::new();
-    }
-    let suffix = '…';
-    let budget = max_width.saturating_sub(1);
-    // Walk backwards so the kept graphemes stay one contiguous tail; skipping
-    // over-wide graphemes instead would splice unrelated characters together.
-    let mut kept: Vec<&str> = Vec::new();
-    let mut used = 0;
-    for (index, grapheme) in text.grapheme_indices(true).rev() {
-        let grapheme_width = grapheme.width();
-        if used + grapheme_width > budget {
-            break;
-        }
-        used += grapheme_width;
-        kept.push(&text[index..index + grapheme.len()]);
-    }
-    let mut tail = String::from(suffix);
-    for grapheme in kept.into_iter().rev() {
-        tail.push_str(grapheme);
-    }
-    tail
-}
-
 /// Cancel affordance for a running live cell, sized to the space the heading
 /// has already used. The full hint needs 16 display columns and the short form
 /// 6, so narrow terminals keep a compact `esc` instead of losing the
@@ -991,28 +960,33 @@ pub(super) fn render_live_tool_cell_at(
         } else {
             suffix.push_str(" · waiting");
         }
-        let fixed = 2 + call.action.width() + usize::from(!target.is_empty()) + suffix.width();
-        let mut spans = vec![
-            Span::styled("  ", detail_style),
-            Span::styled(call.action.clone(), action_style),
-        ];
-        if !target.is_empty() {
-            let target_width = usize::from(width).saturating_sub(fixed);
-            if target_width > 0 {
-                spans.push(Span::raw(" "));
-                // A command is recognised by how it starts, a path by how it ends.
-                let shown = if call.tool_name == "run_command" {
-                    truncate_to_width(&target, target_width)
-                } else {
-                    tail_to_width(&target, target_width)
-                };
-                spans.push(Span::styled(shown, target_style));
-            }
-        }
-        if !suffix.is_empty() {
-            spans.push(Span::styled(suffix, detail_style));
-        }
-        lines.push(fit_live_row(Line::from(spans), usize::from(width)));
+        // The same one-line layout as a finished row: the state keeps its
+        // place and the target takes what is left.
+        let state = if suffix.is_empty() {
+            Vec::new()
+        } else {
+            vec![super::tool_transcript::RowState::required(Span::styled(
+                suffix,
+                detail_style,
+            ))]
+        };
+        lines.push(super::tool_transcript::fit_tool_row(
+            vec![Span::styled("  ", detail_style)],
+            vec![Span::styled(call.action.clone(), action_style)],
+            if target.is_empty() {
+                Vec::new()
+            } else {
+                vec![Span::styled(target, target_style)]
+            },
+            // A command is recognised by how it starts, a path by how it ends.
+            if call.tool_name == "run_command" {
+                super::tool_transcript::TargetKeep::Head
+            } else {
+                super::tool_transcript::TargetKeep::Tail
+            },
+            state,
+            usize::from(width),
+        ));
         if lone_command && let Some(cwd) = &call.cwd {
             push_wrapped_with_continuation(
                 &mut lines,

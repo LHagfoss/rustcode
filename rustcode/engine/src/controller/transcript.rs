@@ -93,6 +93,12 @@ pub fn toggle_expanded_bodies(
     crate::app::toggle_expanded_bodies(expanded, focus, candidates)
 }
 
+/// The hash a tool result's record stores for the arguments of the call it
+/// answers. A result without a call id is matched to its call through it.
+pub fn tool_arguments_hash(arguments: &serde_json::Value) -> String {
+    crate::network::tool_exec::stable_arguments_hash(arguments)
+}
+
 /// PascalCase display name for an MCP tool, if it follows the prefix convention.
 pub fn mcp_tool_display_name(name: &str) -> Option<String> {
     crate::tools::mcp_tool_display_name(name)

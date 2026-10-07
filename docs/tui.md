@@ -13,13 +13,24 @@ state behind it: elapsed time while it runs, `waiting` until it starts, and
 with `✓`, `×` or `−`. A call that finishes within 200 ms is never drawn as
 running. `Esc` interrupts foreground work.
 
+A row is one terminal line and its state is always on it. The state's width is
+set aside first and the command or path takes what is left: a command or query
+is cut at its end, a path at its start, and a command that spans lines is
+joined into one. A terminal too narrow for that drops the row's extras
+(`+N earlier`, diff counts), then the target, then the end of the label. Only a
+question and its answer (`Asked …`) wrap, since they are shown whole. A command
+row whose command history no longer holds reads `(command not recorded)`, or
+`(task <id>)` for a background launch.
+
 A command started in the background keeps its row: it reads `· background`
 while the task runs and takes the finished state (`✓`, `× … · exit 1`,
-`× … · failed`, `− … · cancelled`) once the task has ended. Finished tasks
-report as `TaskDone <command>`; several finishing together draw one row for the
-latest with `+N earlier` behind it, and opening that row shows the latest
-task's output. With `preserve_transcript_scrollback` the copy already written
-to the terminal's own scrollback is not revised.
+`× … · failed`, `− … · cancelled`) once the task has ended. The launch row has
+no output under it; the task's output comes with the task. Finished tasks
+report as `Task <command>` (the task id when no command was recorded); several
+finishing together draw one row for the latest with `+N earlier` behind it, and
+opening that row shows the latest task's output. With
+`preserve_transcript_scrollback` the copy already written to the terminal's own
+scrollback is not revised.
 
 Output hangs under its row on a `│` spine. Verbosity only sets whether it starts
 open: `high` shows the rows alone, `low` shows a five-row preview. Hovering a
