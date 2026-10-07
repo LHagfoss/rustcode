@@ -2230,11 +2230,10 @@ fn active_tool_and_background_command_rows_keep_a_fixed_footprint() {
         );
         assert_eq!(
             background_rows.len(),
-            2,
+            1,
             "background width {width}: {background_rows:?}"
         );
-        assert_eq!(background_rows[0].to_string(), "LIVE");
-        assert!(background_rows[1].to_string().starts_with("• Running"));
+        assert!(background_rows[0].to_string().starts_with("• "));
         assert!(
             background_rows
                 .iter()
@@ -6719,7 +6718,8 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     rustcode::controller::stop_background_tasks(&session_id, None);
 
     let commands = super::background_command_lines(&snapshot);
-    assert_eq!(commands.len(), 2);
+    assert_eq!(commands.len(), 1);
+    assert!(!commands[0].to_string().contains("LIVE"));
     assert!(
         commands
             .iter()
@@ -6813,7 +6813,7 @@ fn background_terminal_chip_compacts_more_than_three_tasks() {
     let summary = super::background_terminal_summary(&snapshot);
     rustcode::controller::stop_background_tasks(&session_id, None);
 
-    assert!(summary.contains("4 tasks"), "{summary}");
+    assert!(summary.starts_with("4 tasks"), "{summary}");
     assert!(!summary.contains("1 more"), "{summary}");
     assert!(summary.contains("/ps · /stop"), "{summary}");
 }
@@ -11145,8 +11145,11 @@ fn explicit_active_work_states_override_model_and_clear_on_completion() {
     assert!(
         lines
             .iter()
-            .any(|line| { line.to_string().contains("Completed cargo build") })
+            .any(|line| { line.to_string() == "✓ cargo build · done" })
     );
+    // A delivered result leaves the row: the transcript owns it from then on.
+    state.pending_background_results[0].unread = false;
+    assert!(super::background_command_lines(&render_snapshot(&state)).is_empty());
     state.pending_background_results.clear();
     assert_eq!(
         super::activity_status_label(&render_snapshot(&state)),
@@ -11308,12 +11311,13 @@ fn background_status_lists_wrap_unicode_and_keep_terminal_results_explicit() {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        for token in ["Running", "✗ Failed", "⊘ Cancelled"] {
+        for token in ["• ", "✗ ", "⊘ ", "failed", "cancelled"] {
             assert!(text.contains(token), "{text}");
         }
+        assert!(!text.contains("LIVE") && !text.contains("RECENT"), "{text}");
         if width == 80 {
-            assert!(text.contains("Failed mcp child"), "{text}");
-            assert!(text.contains("Cancelled child command"), "{text}");
+            assert!(text.contains("✗ mcp child · failed"), "{text}");
+            assert!(text.contains("⊘ child command · cancelled"), "{text}");
         }
         assert!(!text.contains("pid") && !text.contains("4321"), "{text}");
         assert!(!text.contains('│'), "{text}");
@@ -11760,14 +11764,13 @@ fn compact_command_rows_preserve_distinguishing_tails() {
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
-    assert_eq!(background[0], "LIVE");
-    assert!(background[1].contains("…lpha"), "{:?}", background[1]);
-    assert!(background[2].contains("…beta"), "{:?}", background[2]);
-    assert_ne!(background[1], background[2]);
+    assert_eq!(background.len(), 2);
+    assert!(background[0].contains("alpha"), "{:?}", background[0]);
+    assert!(background[1].contains("beta"), "{:?}", background[1]);
+    assert_ne!(background[0], background[1]);
     assert!(
         background
             .iter()
-            .skip(1)
             .all(|row| { row.contains("0s") && line_width(row) <= 28 })
     );
 }
@@ -12018,7 +12021,7 @@ fn background_list_keeps_terminal_results_when_running_rows_hit_the_cap() {
             command: "mcp child".into(),
             success: true,
             cancelled: false,
-            unread: false,
+            unread: true,
             ended_at: std::time::Instant::now(),
         });
     let snapshot = render_snapshot(&state);
@@ -12029,11 +12032,11 @@ fn background_list_keeps_terminal_results_when_running_rows_hit_the_cap() {
         .join("\n");
     for step in 0..3 {
         assert!(
-            text.contains(&format!("Running cargo build step {step}")),
+            text.contains(&format!("• cargo build step {step}")),
             "{text}"
         );
     }
-    assert!(text.contains("Completed mcp child"), "{text}");
+    assert!(text.contains("✓ mcp child · done"), "{text}");
     assert!(!text.contains('└') && !text.contains('├'), "{text}");
 }
 

@@ -1480,7 +1480,7 @@ fn default_subagent_concurrency_limit() -> usize {
 }
 
 fn default_theme() -> String {
-    "default".to_string()
+    "catppuccin-mocha".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
