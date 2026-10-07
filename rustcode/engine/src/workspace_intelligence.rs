@@ -94,6 +94,18 @@ pub(crate) fn invalidate_path(root: &Path, path: &Path) {
     state.path_mutations.insert(path, state.generation);
 }
 
+/// The generation last recorded for `root`, without inspecting the
+/// filesystem: it moves with RustCode's own writes and with whatever the last
+/// [`snapshot`] found, and is zero for a workspace never inspected.
+pub(crate) fn known_generation(root: &Path) -> u64 {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    WORKSPACES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&root)
+        .map_or(0, |state| state.generation)
+}
+
 pub(crate) fn snapshot(root: &Path) -> Result<Snapshot, String> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
     let mut workspaces = WORKSPACES.lock().unwrap_or_else(|e| e.into_inner());

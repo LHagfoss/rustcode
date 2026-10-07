@@ -31,7 +31,8 @@ fn split_command_segments(cmd: &str) -> Vec<String> {
     let mut current = String::new();
     let mut quote = None;
     let mut escaped = false;
-    for ch in cmd.chars() {
+    let mut chars = cmd.chars().peekable();
+    while let Some(ch) = chars.next() {
         if escaped {
             current.push(ch);
             escaped = false;
@@ -54,6 +55,12 @@ fn split_command_segments(cmd: &str) -> Vec<String> {
             '\\' => {
                 current.push(ch);
                 escaped = true;
+            }
+            // `{}` is a literal word (the `find -exec` placeholder), not a
+            // command group.
+            '{' if chars.peek() == Some(&'}') => {
+                chars.next();
+                current.push_str("{}");
             }
             ';' | '\n' | '|' | '&' | '`' | '(' | ')' | '{' | '}' => {
                 segments.push(std::mem::take(&mut current));
@@ -405,7 +412,9 @@ fn is_read_only_gh_api(tokens: &[&str]) -> bool {
 
 /// Split one shell segment into words while honoring simple single and double
 /// quotes. Only the quoted `$HOME` expansion is accepted for ordinary
-/// inspection commands; other expansions and escapes stay unclassified.
+/// inspection commands, and only an escaped space or `;` outside quotes
+/// (`Application\ Support`, `find -exec … \;`); other expansions and escapes
+/// stay unclassified.
 fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool)> {
     let mut words = Vec::new();
     let mut word = String::new();
@@ -454,7 +463,19 @@ fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool)> {
                     started = false;
                 }
             }
-            '$' | '`' | '\\' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | '{' | '}' => {
+            '\\' => match chars.next() {
+                Some(escaped @ (' ' | ';')) => {
+                    word.push(escaped);
+                    started = true;
+                }
+                _ => return None,
+            },
+            '{' if chars.peek() == Some(&'}') => {
+                chars.next();
+                word.push_str("{}");
+                started = true;
+            }
+            '$' | '`' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | '{' | '}' => {
                 return None;
             }
             _ => {
@@ -471,6 +492,50 @@ fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool)> {
         words.push(word);
     }
     Some((words, has_environment_expansion))
+}
+
+/// `find` only inspects unless an action writes or runs something. `-exec`
+/// and `-execdir` are accepted when what they run is itself a plain inspection
+/// command (`-exec du -sh {} +`).
+fn is_read_only_find(arguments: &[&str]) -> bool {
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index] {
+            "-delete" | "-ok" | "-okdir" | "-fprint" | "-fprint0" | "-fprintf" | "-fls" => {
+                return false;
+            }
+            "-exec" | "-execdir" => {
+                let rest = &arguments[index + 1..];
+                let Some(end) = rest.iter().position(|word| matches!(*word, ";" | "+")) else {
+                    return false;
+                };
+                if !matches!(
+                    rest[..end].first(),
+                    Some(
+                        &("basename"
+                            | "cat"
+                            | "dirname"
+                            | "du"
+                            | "echo"
+                            | "file"
+                            | "grep"
+                            | "head"
+                            | "ls"
+                            | "readlink"
+                            | "realpath"
+                            | "stat"
+                            | "tail"
+                            | "wc")
+                    )
+                ) {
+                    return false;
+                }
+                index += end + 2;
+            }
+            _ => index += 1,
+        }
+    }
+    true
 }
 
 fn is_read_only_segment(segment: &str) -> bool {
@@ -498,19 +563,7 @@ fn is_read_only_segment(segment: &str) -> bool {
         Some("git") => is_read_only_git(&tokens),
         Some("gh") => is_read_only_gh(&tokens),
         Some("command") => tokens.get(1) == Some(&"-v"),
-        Some("find") => !tokens[1..].iter().any(|argument| {
-            matches!(
-                *argument,
-                "-delete"
-                    | "-exec"
-                    | "-execdir"
-                    | "-ok"
-                    | "-okdir"
-                    | "-fprint"
-                    | "-fprintf"
-                    | "-fls"
-            )
-        }),
+        Some("find") => is_read_only_find(&tokens[1..]),
         Some(
             "arch" | "basename" | "blkid" | "cat" | "column" | "cut" | "date" | "df" | "dirname"
             | "du" | "echo" | "false" | "file" | "free" | "getent" | "grep" | "groups" | "head"
@@ -2375,6 +2428,39 @@ mod command_prefix_tests {
                 Some("cargo test".to_owned()),
                 "deny option should remain available for {args}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod disk_scan_tests {
+    use super::command_confirmation_scope;
+
+    #[test]
+    fn escaped_spaces_and_find_exec_of_an_inspection_command_stay_read_only() {
+        for command in [
+            "du -sh ~/Library/Application\\ Support/* 2>/dev/null | sort -rh | head -15",
+            "find /Users/me/code -maxdepth 4 -type d -name target -prune -exec du -sh {} + 2>/dev/null | sort -rh | head -25",
+            "find . -name '*.log' -exec ls -l {} \\;",
+            "find . -type f -execdir wc -l {} ';'",
+        ] {
+            assert_eq!(command_confirmation_scope(command), None, "{command}");
+        }
+    }
+
+    #[test]
+    fn find_exec_of_anything_else_and_other_escapes_still_need_confirmation() {
+        for command in [
+            "find . -name '*.log' -exec rm {} +",
+            "find . -exec sh -c 'rm -rf x' \\;",
+            "find . -exec du -sh {}",
+            "find . -exec du -sh {} + -delete",
+            "find . -fprint0 out.txt",
+            "du -sh \\$HOME",
+            "ls \\`id\\`",
+            "echo hi; { rm -rf x; }",
+        ] {
+            assert!(command_confirmation_scope(command).is_some(), "{command}");
         }
     }
 }
