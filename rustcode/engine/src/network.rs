@@ -42,6 +42,7 @@ pub mod compaction;
 
 #[path = "network/anthropic_messages.rs"]
 pub(crate) mod anthropic_messages;
+pub(crate) mod claude_cli;
 
 #[path = "network/retry.rs"]
 pub(crate) mod retry;
@@ -975,6 +976,14 @@ pub async fn probe_function_calling(
     };
     if ambiguous_profile {
         return false;
+    }
+    if profile
+        .as_ref()
+        .and_then(|profile| profile.credential.as_ref())
+        .is_some_and(crate::provider_auth::CredentialRef::is_claude_cli)
+    {
+        // Tools reach the CLI over its own channel; there is no endpoint to probe.
+        return true;
     }
     let chatgpt_plan = profile
         .as_ref()

@@ -26,7 +26,7 @@
 `rustcode` is a lightweight Terminal User Interface (TUI) agent harness.
 Originally made for testing Apple's on-device Foundation Models. Turned into a way deeper project.
 Now supports ollama or openai compatible APIs.
-Provider accounts can be managed with `/login`, `/accounts`, `/account` and `/logout`; see the authentication guide for ChatGPT plan sign-in and API-key provider setup. GitHub Copilot connects with `/login github-copilot` (GitHub CLI credential or your own `RUSTCODE_COPILOT_CLIENT_ID` app); see the [Copilot setup guide](docs/github-copilot.md).
+Provider accounts can be managed with `/login`, `/accounts`, `/account` and `/logout`; see the authentication guide for ChatGPT plan sign-in and API-key provider setup. GitHub Copilot connects with `/login github-copilot` (GitHub CLI credential or your own `RUSTCODE_COPILOT_CLIENT_ID` app); see the [Copilot setup guide](docs/github-copilot.md). A Claude subscription connects with `/login claude` through the locally installed Claude Code CLI; see the [authentication guide](docs/provider-auth.md#claude-claude-code-cli).
 
 ## Documentation
 
