@@ -142,20 +142,12 @@ pub(super) struct ReadingAnchor {
     pub(super) live_rows: usize,
 }
 
-/// Rows the mouse wheel moves per tick.
+/// Rows the mouse wheel moves per event.
 ///
-/// A discrete wheel notch arrives as a single scroll event, and the scrollback
-/// a user is used to moves three lines per notch (Ghostty's
-/// `mouse-scroll-multiplier` defaults to 3 for discrete devices), so one line
-/// per tick is three times slower than the terminal's own scrolling. It is
-/// also the expensive choice: a frame's cost is flat in the rows it moves —
-/// `bench_wheel_step_cost` measures the same ~0.8 ms at 1, 3 and 6 rows in
-/// release — so three rows per tick buys three times the travel for the price
-/// of one frame.
-///
+/// Each wheel event advances one row for precise transcript navigation.
 /// Selected wheel scrolling applies the same delta in the next frame.
-/// Keyboard and edge-drag scrolling still advance one row at a time.
-pub(crate) const WHEEL_SCROLL_LINES: usize = 3;
+/// Keyboard and edge-drag scrolling also advance one row at a time.
+pub(crate) const WHEEL_SCROLL_LINES: usize = 1;
 
 /// Upper bound on the reading offset between two frames. Each projection
 /// clamps the offset to the real transcript height, so this only stops a
