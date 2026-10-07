@@ -7806,16 +7806,14 @@ fn one_wheel_step_moves_a_wrapped_transcript_by_one_painted_row() {
 }
 
 #[test]
-fn a_wheel_tick_moves_three_painted_rows() {
+fn a_wheel_tick_moves_one_painted_row() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
     assert_eq!(
-        WHEEL_SCROLL_LINES, 3,
-        "the wheel step matches the three lines per notch a terminal scrolls its own \
-         scrollback, and a frame costs the same at 1 or 6 rows, so 3 is ~3x cheaper \
-         per line scrolled than 1"
+        WHEEL_SCROLL_LINES, 1,
+        "each wheel event should advance exactly one transcript row"
     );
 
     let mut state = RenderState::new();
