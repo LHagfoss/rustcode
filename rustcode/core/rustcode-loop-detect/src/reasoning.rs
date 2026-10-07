@@ -101,7 +101,6 @@ pub struct ReasoningLoopDetector {
 }
 
 impl ReasoningLoopDetector {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -158,7 +157,6 @@ impl ReasoningLoopDetector {
     }
 
     /// Evaluate complete reasoning text directly.
-    #[allow(dead_code)]
     pub fn check_text(&mut self, text: &str) -> ReasoningLoopStatus {
         for p in text.split("\n\n") {
             let status = self.observe_paragraph(p);

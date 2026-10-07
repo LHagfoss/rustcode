@@ -26,7 +26,6 @@ pub(crate) use crate::runtime::{Composer, ComposerAction};
 pub(crate) use composer_render::composer_cursor_from_mouse;
 pub(crate) use composer_render::render_input;
 pub(crate) use events::{TuiEvent, TuiEventStream};
-pub(crate) use follow_control::FollowControl;
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
 use history_cell::{HistoryCell, is_live_tool_call_visible};
 pub(crate) use history_cell::{TranscriptState, WHEEL_SCROLL_LINES};
@@ -83,8 +82,11 @@ use ratatui::{
     widgets::{Clear, Paragraph, Wrap},
 };
 use render_snapshot::RenderSnapshot;
-use rustcode::controller::{AppStatus, ChatMessage, RenderState};
+#[cfg(test)]
+use rustcode::controller::RenderState;
+use rustcode::controller::{AppStatus, ChatMessage};
 use std::hash::{Hash, Hasher};
+#[cfg(test)]
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 

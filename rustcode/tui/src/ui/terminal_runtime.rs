@@ -1,5 +1,4 @@
 use crate::inline_terminal::InlineTerminal;
-use crate::ui::TuiEventStream;
 use crossterm::{
     cursor::SetCursorStyle,
     event::{
@@ -10,7 +9,6 @@ use crossterm::{
     execute, terminal,
 };
 use ratatui::backend::CrosstermBackend;
-use std::future::Future;
 use std::io::{self, Write};
 use std::sync::{
     Once, OnceLock,
@@ -156,7 +154,6 @@ impl Lifecycle {
         !self.restored
     }
 
-    #[allow(dead_code)]
     fn mark_active(&mut self) {
         self.restored = false;
     }
@@ -350,7 +347,6 @@ impl TerminalRuntime {
         self.fullscreen
     }
 
-    #[allow(dead_code)]
     async fn activate(&mut self) -> io::Result<()> {
         if self.lifecycle.is_active() {
             return Ok(());
@@ -387,36 +383,6 @@ impl TerminalRuntime {
         // A restored fullscreen session remains opted in for editor handoff
         // and job control. Inline sessions never switch screens on resume.
         self.fullscreen
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn with_restored<F, Fut, T>(
-        &mut self,
-        events: &mut TuiEventStream,
-        f: F,
-    ) -> io::Result<T>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = T>,
-    {
-        struct ResumeEvents<'a>(&'a mut TuiEventStream);
-        impl Drop for ResumeEvents<'_> {
-            fn drop(&mut self) {
-                self.0.resume();
-            }
-        }
-
-        events.pause();
-        let _resume_events = ResumeEvents(events);
-        let was_active = self.lifecycle.is_active();
-        if was_active {
-            self.restore()?;
-        }
-        let result = f().await;
-        if was_active {
-            self.activate().await?;
-        }
-        Ok(result)
     }
 }
 

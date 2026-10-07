@@ -70,6 +70,7 @@ pub fn move_selection(current: usize, count: usize, down: bool) -> usize {
     }
 }
 
+#[cfg(test)]
 pub fn complete_selection(input: &str, selected: usize) -> Option<String> {
     suggestions(input)
         .get(selected)

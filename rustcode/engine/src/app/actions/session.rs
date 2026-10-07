@@ -489,7 +489,6 @@ pub fn build_session_list(s: &AppState) -> Vec<crate::config::SessionMeta> {
 }
 
 /// Returns whether the session list was truncated at MAX_SESSIONS.
-#[allow(dead_code)]
 pub fn is_session_list_truncated(total_sessions: usize) -> bool {
     total_sessions > 50
 }

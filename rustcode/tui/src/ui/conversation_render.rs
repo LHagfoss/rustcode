@@ -4,6 +4,7 @@ use crate::ui::render_snapshot::render_snapshot;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+#[cfg(test)]
 pub(super) fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
     if available_height == 0 {
         return 0;
@@ -34,6 +35,7 @@ pub(crate) fn render_live_tail(view: &RenderState, width: u16, height: u16) -> V
 /// snapshot/unit callers simple; the interactive TUI passes the same state
 /// across frames so deltas replace one active cell instead of constructing a
 /// new terminal block on every redraw.
+#[cfg(test)]
 pub(crate) fn render_live_tail_with_transcript(
     state: &RenderSnapshot,
     width: u16,

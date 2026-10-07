@@ -238,8 +238,3 @@ pub fn write_file_chunk_tool(args: &Value) -> Result<String, String> {
         rustcode_tools::filesystem::write_file_chunk_with_context,
     )
 }
-
-#[allow(dead_code)]
-pub(crate) fn normalise_unicode_punctuation(s: &str) -> String {
-    rustcode_tools::filesystem::normalise_unicode_punctuation(s)
-}

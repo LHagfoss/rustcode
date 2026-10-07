@@ -1,11 +1,14 @@
 pub const MAX_MARKERS: usize = 14;
 pub const MARKER_HIT_TARGET_WIDTH: f32 = 30.;
+#[cfg(test)]
 pub const MARKER_HIT_TARGET_HEIGHT: f32 = 16.;
 pub const MIN_MARKER_HIT_TARGET_HEIGHT: f32 = 12.;
 pub const MARKER_GAP: f32 = 4.;
+#[cfg(test)]
 pub const RAIL_SCROLLBAR_INSET: f32 = 20.;
 pub const RAIL_VERTICAL_INSET: f32 = 8.;
 
+#[cfg(test)]
 pub fn marker_slot_height(viewport_height: f32, markers: usize) -> f32 {
     if markers == 0 {
         return 0.;
@@ -14,6 +17,7 @@ pub fn marker_slot_height(viewport_height: f32, markers: usize) -> f32 {
         .min(MARKER_HIT_TARGET_HEIGHT)
 }
 
+#[cfg(test)]
 pub fn marker_count(row_count: usize) -> usize {
     if row_count < 2 {
         0
@@ -34,6 +38,7 @@ pub fn marker_count_for_height(row_count: usize, viewport_height: f32) -> usize 
     row_count.min(MAX_MARKERS).min(height_capacity)
 }
 
+#[cfg(test)]
 pub fn marker_slot_height_for_count(viewport_height: f32, markers: usize) -> f32 {
     if markers == 0 {
         return 0.;
@@ -42,6 +47,7 @@ pub fn marker_slot_height_for_count(viewport_height: f32, markers: usize) -> f32
         .min(MARKER_HIT_TARGET_HEIGHT)
 }
 
+#[cfg(test)]
 pub fn row_to_marker(row: usize, row_count: usize) -> Option<usize> {
     let count = marker_count(row_count);
     if count == 0 || row >= row_count {
@@ -53,6 +59,7 @@ pub fn row_to_marker(row: usize, row_count: usize) -> Option<usize> {
     Some(scale_index(row, row_count, count))
 }
 
+#[cfg(test)]
 pub fn marker_to_row(marker: usize, row_count: usize) -> Option<usize> {
     let count = marker_count(row_count);
     if count == 0 || marker >= count {
@@ -64,6 +71,7 @@ pub fn marker_to_row(marker: usize, row_count: usize) -> Option<usize> {
     Some(scale_index(marker, count, row_count))
 }
 
+#[cfg(test)]
 pub fn active_marker(logical_top_row: usize, row_count: usize) -> Option<usize> {
     row_to_marker(logical_top_row.min(row_count.saturating_sub(1)), row_count)
 }

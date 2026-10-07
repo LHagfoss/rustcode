@@ -42,21 +42,6 @@ impl<'a> StatusState<'a> {
     pub fn is_active(&self) -> bool {
         *self.status != AppStatus::Idle
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn status(&self) -> &AppStatus {
-        self.status
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn set_idle(&mut self) {
-        *self.status = AppStatus::Idle;
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn active_tool_count(&self) -> usize {
-        self.running_tools.len().max(self.live_tool_calls.len())
-    }
 }
 
 impl AppState {

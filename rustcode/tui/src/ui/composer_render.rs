@@ -590,6 +590,7 @@ fn active_work_state(state: &RenderSnapshot) -> ActiveWorkState {
     ActiveWorkState::Idle
 }
 
+#[cfg(test)]
 pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
     active_work_state(state).label().to_owned()
 }
@@ -831,6 +832,7 @@ fn background_terminal_summary_for_width(state: &RenderSnapshot, width: usize) -
     }
 }
 
+#[cfg(test)]
 pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'static>> {
     background_command_lines_with_width(state, u16::MAX)
 }
@@ -944,6 +946,7 @@ pub(super) fn background_command_lines_with_width(
     lines
 }
 
+#[cfg(test)]
 pub(super) fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
     let f = factor.clamp(0.0, 1.0);
     let r = (c1.0 as f32 * f + c2.0 as f32 * (1.0 - f)) as u8;
@@ -952,6 +955,7 @@ pub(super) fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8,
     (r, g, b)
 }
 
+#[cfg(test)]
 pub(super) fn shimmer_rgb(color: Color, fallback: (u8, u8, u8)) -> (u8, u8, u8) {
     match color {
         Color::Rgb(r, g, b) => (r, g, b),
@@ -959,6 +963,7 @@ pub(super) fn shimmer_rgb(color: Color, fallback: (u8, u8, u8)) -> (u8, u8, u8) 
     }
 }
 
+#[cfg(test)]
 pub(super) fn shimmer_spans_at(text: &str, elapsed: Duration) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
@@ -997,6 +1002,7 @@ pub(super) fn shimmer_spans_at(text: &str, elapsed: Duration) -> Vec<Span<'stati
 }
 
 /// Plain muted label used when the animated sweep is turned off.
+#[cfg(test)]
 pub(super) fn static_spans(text: &str, show_picker: bool) -> Vec<Span<'static>> {
     vec![Span::styled(
         text.to_string(),
@@ -1004,6 +1010,7 @@ pub(super) fn static_spans(text: &str, show_picker: bool) -> Vec<Span<'static>> 
     )]
 }
 
+#[cfg(test)]
 pub(super) fn shimmer_spans(
     text: &str,
     show_picker: bool,
@@ -1039,6 +1046,7 @@ fn decode_speed_label(state: &RenderSnapshot) -> Option<String> {
     (tokens_per_second >= 0.05).then(|| format!("Tokens/s: {tokens_per_second:.1}"))
 }
 
+#[cfg(test)]
 pub(super) fn activity_status_line(
     state: &RenderSnapshot,
     show_picker: bool,

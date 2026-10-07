@@ -946,7 +946,7 @@ fn write_exit_summary(out: &mut dyn Write, summary: &ExitSummary, color: bool, w
 /// (#1544), matching Codex's compact usage and resume handoff. The session id
 /// is the recovery path for the erased conversation.
 fn print_exit_summary(summary: &ExitSummary) {
-    use std::io::{IsTerminal, Write};
+    use std::io::IsTerminal;
 
     let mut out = std::io::stdout();
     let color = out.is_terminal() && std::env::var_os("NO_COLOR").is_none();

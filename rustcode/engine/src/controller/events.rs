@@ -194,7 +194,6 @@ pub fn accepts_generation(current: u64, event: &ControllerEvent) -> bool {
 }
 
 /// Convert an internal streaming event into owned records safe for any frontend.
-#[allow(dead_code)]
 pub(crate) fn from_agent_ui_event(
     generation: u64,
     event: crate::network::ui_adapter::AgentUiEvent,

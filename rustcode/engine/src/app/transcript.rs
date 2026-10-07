@@ -50,23 +50,6 @@ impl<'a> TranscriptState<'a> {
         *self.redraw_requested = true;
         *self.render_revision = self.render_revision.wrapping_add(1);
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn clear_live_response(&mut self) {
-        Arc::make_mut(self.current_response).clear();
-        *self.current_token_usage = None;
-        *self.redraw_requested = true;
-        *self.render_revision = self.render_revision.wrapping_add(1);
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn scroll_position(&self) -> (u16, u16, bool) {
-        (
-            *self.scroll_row,
-            *self.last_max_scroll,
-            *self.is_scroll_locked_to_bottom,
-        )
-    }
 }
 
 #[cfg(test)]

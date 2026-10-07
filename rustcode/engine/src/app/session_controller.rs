@@ -49,11 +49,6 @@ impl std::error::Error for SessionError {}
 pub struct SessionController;
 
 impl SessionController {
-    #[allow(dead_code)]
-    pub(crate) fn active_session(&self, state: &AppState) -> String {
-        state.active_session_id.clone()
-    }
-
     pub fn start_fresh(&self, state: &mut AppState) -> Result<SessionTransition, SessionError> {
         crate::app::actions::start_new_session(state);
         Ok(SessionTransition::Started {
