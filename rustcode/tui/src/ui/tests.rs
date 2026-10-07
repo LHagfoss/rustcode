@@ -3256,6 +3256,72 @@ fn incremental_tool_round_continuation_has_no_second_group_heading() {
 }
 
 #[test]
+fn multi_call_tool_rounds_are_separated_by_a_spine_row() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let call = |id: &str, file: &str| ToolCallRef {
+        id: id.to_owned(),
+        name: "view_file".to_owned(),
+        arguments: format!(r#"{{"TargetFile":"{file}"}}"#),
+    };
+    let result = |id: &str| {
+        ChatMessage::new("tool", "view_file: read")
+            .answering(Some(id.to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "view_file".to_owned(),
+                success: true,
+                ..Default::default()
+            })
+    };
+    let mut state = RenderState::new();
+    state.history.extend([
+        ChatMessage::new("assistant", "").with_tool_calls(vec![call("1", "a.rs")]),
+        result("1"),
+        // Single-call rounds back to back stay compact.
+        ChatMessage::new("assistant", "").with_tool_calls(vec![call("2", "b.rs")]),
+        result("2"),
+        ChatMessage::new("assistant", "")
+            .with_tool_calls(vec![call("3", "c.rs"), call("4", "d.rs")]),
+        result("3"),
+        result("4"),
+    ]);
+    let snapshot = render_snapshot(&state);
+    let text = |lines: Vec<ratatui::text::Line<'static>>| {
+        lines
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let joined = text(super::render_committed_tool_result_group_snapshot(
+        &snapshot,
+        &[1, 3, 5, 6],
+        80,
+        false,
+    ));
+    let spacers = joined.iter().filter(|line| line.as_str() == "│").count();
+    assert_eq!(spacers, 1, "{joined:?}");
+    let spacer_at = joined.iter().position(|line| line == "│").unwrap();
+    assert!(joined[spacer_at - 1].contains("b.rs"), "{joined:?}");
+    assert!(joined[spacer_at + 1].contains("c.rs"), "{joined:?}");
+
+    let continuation = text(super::render_committed_tool_result_continuation_snapshot(
+        &snapshot,
+        &[5, 6],
+        80,
+        false,
+    ));
+    assert_eq!(continuation[0], "│", "{continuation:?}");
+    let compact = text(super::render_committed_tool_result_continuation_snapshot(
+        &snapshot,
+        &[3],
+        80,
+        false,
+    ));
+    assert!(!compact.iter().any(|line| line == "│"), "{compact:?}");
+}
+
+#[test]
 fn high_verbosity_keeps_tool_call_summaries_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
