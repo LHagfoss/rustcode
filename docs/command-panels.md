@@ -76,6 +76,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/sandbox` | Scrollable supported-mode panel, retaining mode descriptions and user-level configuration guidance; direct arguments apply immediately with panel result/help. |
 | `/effort` | Existing effort chooser; direct arguments apply immediately with panel result/help. |
 | `/theme` | Existing theme picker; direct arguments apply immediately with panel result/help. |
+| `/pi` | Toggles the prompt improver; `on`/`off` set it directly. When on, the active model rewrites each prompt that starts a turn and the transcript shows the original and the rewrite. |
 | `/thinking` | Existing thinking chooser; direct arguments apply immediately with panel result/help. |
 
 `/upgrade` is a dispatched alias of `/update` outside the completion registry.

@@ -1255,6 +1255,10 @@ pub struct AppConfig {
     /// work. Manual `/recap` remains available.
     #[serde(default = "default_true")]
     pub auto_recap: bool,
+    /// Rewrite each prompt that starts a turn with the active model before
+    /// running it. Off by default; `/pi` toggles it.
+    #[serde(default)]
+    pub prompt_improver: bool,
     /// Opaque legacy values retained through config rewrites, but never read
     /// by runtime behavior or written to the JSON compatibility config.
     #[doc(hidden)]
@@ -1435,6 +1439,8 @@ struct TomlConfig {
     reduced_motion: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_recap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_improver: Option<bool>,
     /// Raw, ignored legacy configuration retained so routine rewrites do not
     /// delete user data left by the removed Laya sidecar.
     #[serde(default, rename = "laya", skip_serializing_if = "Option::is_none")]
@@ -1593,6 +1599,7 @@ impl Default for AppConfig {
             preserve_transcript_scrollback: false,
             reduced_motion: false,
             auto_recap: true,
+            prompt_improver: false,
             legacy_laya: None,
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -1977,6 +1984,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         preserve_transcript_scrollback: Some(config.preserve_transcript_scrollback),
         reduced_motion: Some(config.reduced_motion),
         auto_recap: Some(config.auto_recap),
+        prompt_improver: Some(config.prompt_improver),
         legacy_laya: config.legacy_laya.clone(),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
@@ -2096,6 +2104,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(auto_recap) = file.auto_recap {
         config.auto_recap = auto_recap;
+    }
+    if let Some(prompt_improver) = file.prompt_improver {
+        config.prompt_improver = prompt_improver;
     }
     if file.legacy_laya.is_some() {
         config.legacy_laya = file.legacy_laya;
@@ -2276,6 +2287,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         preserve_transcript_scrollback: None,
         reduced_motion: None,
         auto_recap: None,
+        prompt_improver: None,
         legacy_laya: None,
         agent_mode: None,
         verbosity: None,
