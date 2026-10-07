@@ -1,9 +1,6 @@
 use super::*;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-
-/// Maximum wrapped visual lines for a committed shell command preview,
-/// mirroring Codex `command_continuation_max_lines = 2`. Longer commands
-/// collapse with an ellipsis instead of flooding the transcript.
 
 /// snake_case / kebab-case → PascalCase, e.g. `use_skill` → `UseSkill`. Used so
 /// custom and MCP tools render like the built-ins (no underscores, capitalized)
@@ -62,7 +59,7 @@ pub(super) fn format_pi_tool_action(
         "search_web" | "searchweb" | "codebase_search" | "codebasesearch" => "Search".to_string(),
         "get_project_map" | "getprojectmap" => "ProjectMap".to_string(),
         "manage_task" | "managetask" => "ManageTask".to_string(),
-        "background_task" | "backgroundtask" => "TaskDone".to_string(),
+        "background_task" | "backgroundtask" => "Task".to_string(),
         "ask_question" | "askquestion" => "Asked".to_string(),
         "remember" => "Remember".to_string(),
         "recall_memory" | "recallmemory" => "Recall".to_string(),
@@ -775,6 +772,40 @@ pub(super) struct ToolTranscriptEntry {
     /// and how many of those did not succeed.
     pub(super) earlier: usize,
     pub(super) earlier_failed: usize,
+    /// The target stands in for a command history no longer holds, so it is
+    /// drawn as a note instead of as the command.
+    pub(super) target_is_note: bool,
+}
+
+/// What a command or task row says when its command cannot be recovered.
+const UNKNOWN_COMMAND_NOTE: &str = "(command not recorded)";
+
+fn target_is_missing(target: &str) -> bool {
+    target.is_empty() || target == "?"
+}
+
+/// The command a background launch receipt quotes
+/// (`… Command: <cmd>. Completion notification: …`).
+fn launched_command(result: &str) -> Option<&str> {
+    let rest = result.split_once(" Command: ")?.1;
+    let command = rest
+        .rsplit_once(". Completion notification: ")
+        .map_or(rest, |(command, _)| command);
+    (!command.trim().is_empty()).then_some(command)
+}
+
+/// Whether a command result is the receipt for a task that was started, not
+/// the output of a command that ran.
+fn is_launch_receipt(result: &str) -> bool {
+    (result.starts_with("Task started in background.")
+        || result.starts_with("Detached task started."))
+        && launched_task_id(result).is_some()
+}
+
+/// The task id a completion names (`Task <id> completed.`).
+fn completed_task_id(result: &str) -> Option<&str> {
+    let id = result.strip_prefix("Task ")?.split_once(" completed.")?.0;
+    (!id.is_empty() && !id.contains(char::is_whitespace)).then_some(id)
 }
 
 /// Tool name of the result a finished background task adds to history.
@@ -929,6 +960,41 @@ pub(super) fn tool_call_arguments(
 
     let candidates = state.tool_call_candidate_indices();
     let before_result = candidates.partition_point(|index| *index < message_index);
+
+    // A call the scheduler held runs in a later round, and its result joins
+    // that round without a call id. Counting results after the nearest
+    // assistant message then points past that message's calls, at nothing or
+    // at an unrelated earlier call. The hash the record keeps of its
+    // arguments names the call itself. Held calls are released when the user
+    // speaks, so the call is always within the current turn.
+    if let Some(hash) = message
+        .tool_result
+        .as_ref()
+        .map(|record| record.arguments_hash.as_str())
+        .filter(|hash| !hash.is_empty())
+    {
+        let turn_start = history[..message_index]
+            .iter()
+            .rposition(|message| message.role == "user")
+            .unwrap_or(0);
+        for &assistant_index in candidates[..before_result]
+            .iter()
+            .rev()
+            .take_while(|index| **index >= turn_start)
+        {
+            let calls = rustcode_tool_protocol::resolve_tool_calls(
+                &history[assistant_index],
+                state.active_tool_protocol(),
+            );
+            if let Some(call) = calls.into_iter().find(|call| {
+                call.name == tool_name
+                    && rustcode::controller::tool_arguments_hash(&call.arguments) == hash
+            }) {
+                return call.arguments;
+            }
+        }
+    }
+
     for &assistant_index in candidates[..before_result].iter().rev() {
         let assistant = &history[assistant_index];
         let calls =
@@ -1016,15 +1082,36 @@ pub(super) fn tool_transcript_entry(
     } else {
         tool_result_action(state, message_index, &tool_name)
     };
-    if is_task_completion && target.is_empty() {
-        // No call precedes a completion, so name the task by its command.
-        let command = message
-            .tool_result
-            .as_ref()
-            .and_then(|record| record.command.as_deref())
-            .or(task_command)
-            .unwrap_or_default();
-        target = collapse_command_preview(command, usize::from(width).saturating_sub(34).max(20));
+    let recorded_command = message
+        .tool_result
+        .as_ref()
+        .and_then(|record| record.command.as_deref())
+        .filter(|command| !command.trim().is_empty());
+    let mut target_is_note = false;
+    if is_task_completion && target_is_missing(&target) {
+        // No call precedes a completion, so name the task by its command, or
+        // by its id when the result kept no command. The row fits it.
+        target = recorded_command
+            .or(task_command.filter(|command| !command.trim().is_empty()))
+            .or_else(|| completed_task_id(result))
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                target_is_note = true;
+                UNKNOWN_COMMAND_NOTE.to_owned()
+            });
+    } else if kind == ToolTranscriptKind::Command && target_is_missing(&target) {
+        // The call could not be found (history trimmed, or a session written
+        // before results were matched by hash): the result still records what
+        // ran, and a launch receipt quotes it.
+        match recorded_command.or_else(|| launched_command(result)) {
+            Some(command) => target = command.to_owned(),
+            None => {
+                target_is_note = true;
+                target = launched_task_id(result)
+                    .map(|id| format!("(task {id})"))
+                    .unwrap_or_else(|| UNKNOWN_COMMAND_NOTE.to_owned());
+            }
+        }
     }
     let (mut success, mut status) = tool_result_status(message, &tool_name, result);
     if status == "background"
@@ -1053,6 +1140,11 @@ pub(super) fn tool_transcript_entry(
             usize::from(width).saturating_sub(2),
             show_picker,
         )
+    } else if is_launch_receipt(result) {
+        // The receipt repeats the command and tells the model how to wait for
+        // the task. The row already says both; the output comes with the
+        // task's own row.
+        Vec::new()
     } else if kind == ToolTranscriptKind::Command
         || tool_name == "ask_question"
         || is_task_completion
@@ -1119,6 +1211,7 @@ pub(super) fn tool_transcript_entry(
         diff_counts,
         earlier: 0,
         earlier_failed: 0,
+        target_is_note,
     })
 }
 
@@ -1213,9 +1306,6 @@ fn cap_collapsed_tool_body(mut lines: Vec<Line<'static>>, show_picker: bool) -> 
     preview
 }
 
-/// Display width the expand hint occupies once appended to a row.
-pub(super) const EXPAND_HINT_WIDTH: u16 = EXPAND_HINT.len() as u16;
-
 fn expand_hint_span(width: u16, show_picker: bool) -> Span<'static> {
     let hint = if width >= 29 {
         EXPAND_HINT
@@ -1228,17 +1318,6 @@ fn expand_hint_span(width: u16, show_picker: bool) -> Span<'static> {
         hint,
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
     )
-}
-
-/// Append the expand hint to the first row of an entry's own block.
-///
-/// The hint must never be appended to the last wrapped line: that line is
-/// followed by the next tool row, so the hint reads as annotating *that* row
-/// and splits the `Ran` group (#1541).
-fn append_expand_hint(lines: &mut [Line<'static>], width: u16, show_picker: bool) {
-    if let Some(first) = lines.first_mut() {
-        first.spans.push(expand_hint_span(width, show_picker));
-    }
 }
 
 /// Every sibling owns a status marker; wrapped body rows use hanging spaces.
@@ -1292,6 +1371,239 @@ fn tool_status_marker(entry: &ToolTranscriptEntry) -> String {
     format!("{} ", tool_status_glyph(entry))
 }
 
+/// Which end of a target survives when it is too long for its row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum TargetKeep {
+    /// A command or a query is recognised by how it starts.
+    Head,
+    /// A path is recognised by how it ends.
+    Tail,
+}
+
+/// One piece of the state behind a row, and whether the row may drop it when
+/// the terminal is too narrow to hold everything.
+pub(super) struct RowState {
+    pub(super) span: Span<'static>,
+    pub(super) required: bool,
+}
+
+impl RowState {
+    pub(super) fn required(span: Span<'static>) -> Self {
+        Self {
+            span,
+            required: true,
+        }
+    }
+
+    pub(super) fn optional(span: Span<'static>) -> Self {
+        Self {
+            span,
+            required: false,
+        }
+    }
+}
+
+fn spans_width(spans: &[Span<'static>]) -> usize {
+    spans.iter().map(|span| span.content.width()).sum()
+}
+
+/// Shorten styled spans to `max_width` columns, marking the cut with `…`.
+pub(super) fn clip_spans(
+    spans: Vec<Span<'static>>,
+    max_width: usize,
+    keep: TargetKeep,
+) -> Vec<Span<'static>> {
+    if spans_width(&spans) <= max_width {
+        return spans;
+    }
+    if max_width == 0 {
+        return Vec::new();
+    }
+    let mut remaining = max_width - 1;
+    let mut kept: Vec<Span<'static>> = Vec::new();
+    let mut cut_style = spans.first().map(|span| span.style).unwrap_or_default();
+    match keep {
+        TargetKeep::Head => {
+            'spans: for span in spans {
+                cut_style = span.style;
+                let mut text = String::new();
+                for grapheme in span.content.graphemes(true) {
+                    let grapheme_width = grapheme.width();
+                    if grapheme_width > remaining {
+                        if !text.is_empty() {
+                            kept.push(Span::styled(text, span.style));
+                        }
+                        break 'spans;
+                    }
+                    remaining -= grapheme_width;
+                    text.push_str(grapheme);
+                }
+                if !text.is_empty() {
+                    kept.push(Span::styled(text, span.style));
+                }
+            }
+            // The cut never follows a space: `cargo …` reads as a word lost.
+            while let Some(last) = kept.last_mut() {
+                let trimmed = last.content.trim_end().to_owned();
+                if trimmed.is_empty() {
+                    kept.pop();
+                } else {
+                    last.content = trimmed.into();
+                    break;
+                }
+            }
+            kept.push(Span::styled("…", cut_style));
+        }
+        TargetKeep::Tail => {
+            'spans: for span in spans.into_iter().rev() {
+                cut_style = span.style;
+                let mut graphemes: Vec<&str> = Vec::new();
+                let mut complete = true;
+                for grapheme in span.content.graphemes(true).rev() {
+                    let grapheme_width = grapheme.width();
+                    if grapheme_width > remaining {
+                        complete = false;
+                        break;
+                    }
+                    remaining -= grapheme_width;
+                    graphemes.push(grapheme);
+                }
+                if !graphemes.is_empty() {
+                    let text = graphemes.into_iter().rev().collect::<String>();
+                    kept.push(Span::styled(text, span.style));
+                }
+                if !complete {
+                    break 'spans;
+                }
+            }
+            kept.push(Span::styled("…", cut_style));
+            kept.reverse();
+        }
+    }
+    kept
+}
+
+/// The fewest columns a shortened target may take; below this it says nothing
+/// and the row drops it.
+const MIN_TARGET_WIDTH: usize = 4;
+
+/// The fewest columns a shortened label may take.
+const MIN_LABEL_WIDTH: usize = 3;
+
+/// Lay a row out on exactly one terminal line: `lead label target state`.
+///
+/// The state is what the reader scans the block for, so its width is taken
+/// out of the row first and the target gets what is left. On a terminal too
+/// narrow for that the row gives up, in order, its optional state (from the
+/// end), its target, and then the end of its label. The required state is only
+/// cut, at the right edge, when no stub of the label would fit beside it.
+///
+/// The row used to be wrapped after the target had been cut to a guessed
+/// width, which sent the state, or half of it, to a line of its own (#1828).
+pub(super) fn fit_tool_row(
+    lead: Vec<Span<'static>>,
+    label: Vec<Span<'static>>,
+    target: Vec<Span<'static>>,
+    keep: TargetKeep,
+    mut state: Vec<RowState>,
+    width: usize,
+) -> Line<'static> {
+    let lead_width = spans_width(&lead);
+    let label_width = spans_width(&label);
+    let state_width =
+        |state: &[RowState]| -> usize { state.iter().map(|part| part.span.content.width()).sum() };
+    while lead_width + label_width + state_width(&state) > width {
+        let Some(droppable) = state.iter().rposition(|part| !part.required) else {
+            break;
+        };
+        state.remove(droppable);
+    }
+    let fixed = lead_width + state_width(&state);
+    let mut spans = lead;
+    if fixed + MIN_LABEL_WIDTH > width {
+        // Not even a stub of the label fits beside the state: a row that
+        // names nothing is worse than a state cut short at the edge.
+        spans.extend(label);
+    } else if fixed + label_width > width {
+        spans.extend(clip_spans(label, width - fixed, TargetKeep::Head));
+    } else {
+        spans.extend(label);
+        let room = width - fixed - label_width;
+        if !target.is_empty() && room > MIN_TARGET_WIDTH {
+            let gap_style = target[0].style;
+            spans.push(Span::styled(" ", gap_style));
+            spans.extend(clip_spans(target, room - 1, keep));
+        }
+    }
+    spans.extend(state.into_iter().map(|part| part.span));
+    Line::from(clip_spans(spans, width, TargetKeep::Head))
+}
+
+/// Whether a row's target is a path, which keeps its end when shortened.
+fn target_keep(entry: &ToolTranscriptEntry) -> TargetKeep {
+    if entry.kind == ToolTranscriptKind::Edit
+        || matches!(
+            entry.action.as_str(),
+            "Read" | "Edit" | "Write" | "Delete" | "List" | "ListDir"
+        )
+    {
+        TargetKeep::Tail
+    } else {
+        TargetKeep::Head
+    }
+}
+
+/// The state a finished row carries behind it, most important first.
+fn entry_row_state(
+    entry: &ToolTranscriptEntry,
+    show_hint: bool,
+    width: u16,
+    show_picker: bool,
+) -> Vec<RowState> {
+    let muted = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
+    let mut state = Vec::new();
+    if let Some((added, removed)) = entry.diff_counts {
+        state.push(RowState::optional(Span::styled(
+            format!(" (+{added} -{removed})"),
+            muted,
+        )));
+    }
+    if !entry.success || entry.status == "background" || entry.status == "no changes" {
+        state.push(RowState::required(Span::styled(
+            format!(" · {}", entry.status),
+            muted,
+        )));
+    }
+    if let Some(earlier) = earlier_completions_suffix(entry) {
+        state.push(RowState::optional(Span::styled(
+            earlier,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+        )));
+    }
+    if show_hint {
+        state.push(RowState::optional(expand_hint_span(width, show_picker)));
+    }
+    state
+}
+
+fn entry_row_lead(
+    entry: &ToolTranscriptEntry,
+    is_last: bool,
+    show_picker: bool,
+) -> Vec<Span<'static>> {
+    vec![
+        tool_tree_prefix(is_last, show_picker),
+        Span::styled(
+            tool_status_marker(entry),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+    ]
+}
+
+fn note_style(show_picker: bool) -> Style {
+    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker)
+}
+
 pub(super) fn tool_child_line(
     entry: &ToolTranscriptEntry,
     is_last: bool,
@@ -1299,84 +1611,72 @@ pub(super) fn tool_child_line(
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let mut spans = vec![
-        tool_tree_prefix(is_last, show_picker),
-        Span::styled(
-            tool_status_marker(entry),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-    ];
-    {
-        // A dotted `server.tool` name alone reads as a broken row, most of all
-        // when the call took no arguments. Name what kind of call it was, the
-        // way siblings lead with `Bash`/`Read` (#1770).
-        if entry.kind == ToolTranscriptKind::Tool && entry.action.contains('.') {
-            spans.push(Span::styled(
-                "MCP ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-        spans.push(Span::styled(
-            entry.action.clone(),
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ));
-        if !entry.target.is_empty() && entry.target != "?" {
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                entry.target.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-    }
-    if let Some((added, removed)) = entry.diff_counts {
-        spans.push(Span::styled(
-            format!(" (+{added} -{removed})"),
+    let lead = entry_row_lead(entry, is_last, show_picker);
+    let mut label = Vec::new();
+    // A dotted `server.tool` name alone reads as a broken row, most of all
+    // when the call took no arguments. Name what kind of call it was, the
+    // way siblings lead with `Bash`/`Read` (#1770).
+    if entry.kind == ToolTranscriptKind::Tool && entry.action.contains('.') {
+        label.push(Span::styled(
+            "MCP ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
     }
-    if !entry.success || entry.status == "background" || entry.status == "no changes" {
-        spans.push(Span::styled(
-            format!(" · {}", entry.status),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-    }
-    if let Some(earlier) = earlier_completions_suffix(entry) {
-        spans.push(Span::styled(
-            earlier,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
-        ));
-    }
-    let mut lines = Vec::new();
-    let continuation = tool_title_continuation(is_last, show_picker);
-    push_wrapped_with_continuation(
-        &mut lines,
-        spans,
-        wrap_width(width, show_hint),
-        Some(continuation),
-    );
-    if show_hint {
-        append_expand_hint(&mut lines, width, show_picker);
-    }
-    lines
-}
-
-/// Wrap width for a row that carries the expand hint, leaving room for the
-/// hint so the row it annotates is the row the hint lands on.
-fn wrap_width(width: u16, show_hint: bool) -> usize {
-    let hint_width = if width >= 29 {
-        EXPAND_HINT_WIDTH
-    } else if width >= 19 {
-        COMPACT_EXPAND_HINT.width() as u16
+    label.push(Span::styled(
+        entry.action.clone(),
+        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+    ));
+    let target_style = if entry.target_is_note {
+        note_style(show_picker)
     } else {
-        SHORT_EXPAND_HINT.width() as u16
+        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)
     };
-    let reserved = if show_hint { hint_width } else { 0 };
-    (width.saturating_sub(reserved) as usize).max(10)
-}
+    let state = entry_row_state(entry, show_hint, width, show_picker);
 
-/// Maximum wrapped visual lines for a committed shell command preview,
-/// mirroring Codex `command_continuation_max_lines = 2`.
-pub(super) const COMMAND_DISPLAY_MAX_LINES: usize = 2;
+    // A question and its answer are part of the conversation, so they are
+    // shown whole. They wrap in the width the state leaves, and the state
+    // joins the first line.
+    if entry.tool_name == "ask_question" && !target_is_missing(&entry.target) {
+        let state_width: usize = state.iter().map(|part| part.span.content.width()).sum();
+        let mut spans = lead;
+        spans.extend(label);
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(entry.target.clone(), target_style));
+        let mut lines = Vec::new();
+        push_wrapped_with_continuation(
+            &mut lines,
+            spans,
+            usize::from(width).saturating_sub(state_width).max(10),
+            Some(tool_title_continuation(is_last, show_picker)),
+        );
+        if let Some(first) = lines.first_mut() {
+            first.spans.extend(state.into_iter().map(|part| part.span));
+        }
+        return lines;
+    }
+
+    let target = if target_is_missing(&entry.target) {
+        Vec::new()
+    } else {
+        // One row is one line: a target that spans lines is joined.
+        vec![Span::styled(
+            entry
+                .target
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            target_style,
+        )]
+    };
+    vec![fit_tool_row(
+        lead,
+        label,
+        target,
+        target_keep(entry),
+        state,
+        usize::from(width),
+    )]
+}
 
 /// Collapse a shell command to a single-line preview: newlines become spaces
 /// and the result is width-truncated with an ellipsis. Width is display
@@ -1393,7 +1693,7 @@ pub(super) fn collapse_command_preview(target: &str, max_width: usize) -> String
     let budget = max_width.saturating_sub(1);
     let mut output = String::new();
     let mut used = 0;
-    for grapheme in single.split("").filter(|s| !s.is_empty()) {
+    for grapheme in single.graphemes(true) {
         let w = grapheme.width();
         if used + w > budget {
             break;
@@ -1405,28 +1705,6 @@ pub(super) fn collapse_command_preview(target: &str, max_width: usize) -> String
     output
 }
 
-/// Cap already-wrapped visual lines, appending an ellipsis to the last kept
-/// line when content was dropped. Keeps long `echo ...; pacman ...` chains to
-/// `COMMAND_DISPLAY_MAX_LINES` rows instead of flooding scrollback.
-fn truncate_wrapped_lines(mut lines: Vec<Line<'static>>, max_lines: usize) -> Vec<Line<'static>> {
-    if lines.len() <= max_lines || max_lines == 0 {
-        return lines;
-    }
-    lines.truncate(max_lines);
-    if let Some(last) = lines.last_mut() {
-        last.spans.push(Span::styled(
-            " …",
-            get_themed_style(
-                COLOR_MUTED(),
-                COLOR_BG(),
-                Modifier::DIM | Modifier::ITALIC,
-                false,
-            ),
-        ));
-    }
-    lines
-}
-
 pub(super) fn command_child_lines(
     entry: &ToolTranscriptEntry,
     is_last: bool,
@@ -1434,78 +1712,42 @@ pub(super) fn command_child_lines(
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    // Collapse multi-line / chained commands to a single-line preview before
-    // highlighting, so `echo a; echo b; ...` renders as one dimmable row
-    // instead of N source lines each wrapping again.
-    let preview = collapse_command_preview(
-        &entry.target,
-        (width as usize)
-            .saturating_sub(
-                12 + if show_hint {
-                    EXPAND_HINT_WIDTH as usize
-                } else {
-                    0
-                },
-            )
-            .max(20),
-    );
-    let mut commands = highlight_shell_command(&preview, COLOR_BG(), show_picker);
-    if commands.is_empty() {
-        commands.push(Line::default());
+    let lead = entry_row_lead(entry, is_last, show_picker);
+    let label = vec![Span::styled(
+        entry.action.clone(),
+        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+    )];
+    let target = if target_is_missing(&entry.target) {
+        Vec::new()
+    } else if entry.target_is_note {
+        vec![Span::styled(entry.target.clone(), note_style(show_picker))]
+    } else {
+        // Join a multi-line or chained command into one line before
+        // highlighting, and never highlight more of it than a row can hold.
+        let preview = collapse_command_preview(&entry.target, usize::from(width));
+        highlight_shell_command(&preview, COLOR_BG(), show_picker)
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .collect()
+    };
+    let mut state = Vec::new();
+    if !entry.success || entry.status == "background" {
+        state.push(RowState::required(Span::styled(
+            format!(" · {}", entry.status),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        )));
     }
-    let mut lines = Vec::with_capacity(commands.len());
-    let status_suffix =
-        (!entry.success || entry.status == "background").then(|| format!(" · {}", entry.status));
-    let max_w = wrap_width(width, show_hint);
-    for (command_index, command) in commands.into_iter().enumerate() {
-        let mut spans = vec![if command_index == 0 {
-            tool_tree_prefix(is_last, show_picker)
-        } else {
-            Span::styled(
-                "  ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            )
-        }];
-        if command_index == 0 {
-            spans.push(Span::styled(
-                tool_status_marker(entry),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        } else {
-            spans.push(Span::styled(
-                "  ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-        if command_index == 0 {
-            spans.push(Span::styled(
-                entry.action.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-            if !entry.target.is_empty() && entry.target != "?" {
-                spans.push(Span::styled(
-                    " ",
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ));
-            }
-        }
-        if entry.target != "?" {
-            spans.extend(command.spans);
-        }
-        if let Some(suffix) = &status_suffix {
-            spans.push(Span::styled(
-                suffix.clone(),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-        let continuation = tool_title_continuation(is_last, show_picker);
-        push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
-    }
-    let mut lines = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
     if show_hint {
-        append_expand_hint(&mut lines, width, show_picker);
+        state.push(RowState::optional(expand_hint_span(width, show_picker)));
     }
-    lines
+    vec![fit_tool_row(
+        lead,
+        label,
+        target,
+        TargetKeep::Head,
+        state,
+        usize::from(width),
+    )]
 }
 
 pub(super) fn indent_generic_tool_body(
@@ -1640,6 +1882,9 @@ fn append_tool_preview(
     if show_hint && !inline {
         let mut hint_lines = Vec::new();
         let spine = tool_body_spine(show_picker);
+        // The spine already sets the hint off; its own leading space would
+        // indent it past the output above it.
+        let hint = Span::styled(hint.content.trim_start().to_owned(), hint.style);
         push_wrapped_with_continuation(
             &mut hint_lines,
             vec![spine.clone(), hint],
@@ -1812,11 +2057,23 @@ fn render_tool_result_group_detailed(
                     // child is final. Continuations keep the downward connector
                     // instead of every sibling claiming `└` (#1725).
                     let is_last = include_header && child_index + 1 == visible.len();
+                    // A row that stays closed has nothing under it for the hint
+                    // to follow, so the hint is part of the row and the target
+                    // makes room for it. It is the first thing a narrow row
+                    // gives up, and then it goes below after all.
+                    let hint_in_row = show_hint && closed_until_opened;
                     let title = if entry.kind == ToolTranscriptKind::Command {
-                        command_child_lines(entry, is_last, false, width, show_picker)
+                        command_child_lines(entry, is_last, hint_in_row, width, show_picker)
                     } else {
-                        tool_child_line(entry, is_last, false, width, show_picker)
+                        tool_child_line(entry, is_last, hint_in_row, width, show_picker)
                     };
+                    let hint = expand_hint_span(width, show_picker);
+                    let hint_drawn = hint_in_row
+                        && title.first().is_some_and(|line| {
+                            line.spans
+                                .last()
+                                .is_some_and(|span| span.content == hint.content)
+                        });
                     // Verbosity sets the default: low shows a five-row preview,
                     // high shows the row alone. An opened entry shows it all.
                     let mut body = Vec::new();
@@ -1858,7 +2115,7 @@ fn render_tool_result_group_detailed(
                         title,
                         body,
                         entry,
-                        show_hint,
+                        show_hint && !hint_drawn,
                         width,
                         show_picker,
                     );
@@ -2256,6 +2513,7 @@ mod tests {
             diff_counts: None,
             earlier: 0,
             earlier_failed: 0,
+            target_is_note: false,
         };
         assert_eq!(super::tool_status_glyph(&entry), '•');
 
@@ -2319,10 +2577,7 @@ mod tests {
         super::TOOL_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), 5));
     }
 
-    use super::{
-        COMMAND_DISPLAY_MAX_LINES, collapse_command_preview, is_hidden_system_notice,
-        tool_result_status, truncate_wrapped_lines,
-    };
+    use super::{collapse_command_preview, is_hidden_system_notice, tool_result_status};
     use rustcode::controller::RenderState;
 
     #[test]
@@ -2508,6 +2763,7 @@ mod tests {
             diff_counts: None,
             earlier: 0,
             earlier_failed: 0,
+            target_is_note: false,
         };
         let title = super::tool_child_line(&entry, true, false, 80, false);
         let body = super::indent_generic_tool_body(
@@ -2522,17 +2778,6 @@ mod tests {
         assert!(lines[0].to_string().contains("GetTime (ctrl+o all"));
         assert_eq!(lines.len(), 6);
         assert!(lines.last().unwrap().to_string().contains("output 9"));
-    }
-
-    #[test]
-    fn wrapped_command_lines_cap_at_preview_limit() {
-        use ratatui::text::Line;
-        let lines = (0..10)
-            .map(|i| Line::from(format!("line {i}")))
-            .collect::<Vec<_>>();
-        let capped = truncate_wrapped_lines(lines, COMMAND_DISPLAY_MAX_LINES);
-        assert_eq!(capped.len(), COMMAND_DISPLAY_MAX_LINES);
-        assert!(capped.last().unwrap().to_string().contains('…'));
     }
 
     #[test]
@@ -2555,6 +2800,7 @@ mod tests {
             diff_counts: None,
             earlier: 0,
             earlier_failed: 0,
+            target_is_note: false,
         };
         let width = 24;
         let lines = super::command_child_lines(&entry, true, true, width, false);

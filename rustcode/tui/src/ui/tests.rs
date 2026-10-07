@@ -4680,9 +4680,9 @@ fn low_verbosity_edit_diff_wraps_at_narrow_width() {
     let width = 24u16;
     let rendered = super::render_committed_tool_result_group(&state, &[1], width, false);
     for line in &rendered {
-        let w = line.to_string().chars().count();
+        let w = line.width();
         assert!(
-            w <= width as usize + super::EXPAND_HINT_WIDTH as usize,
+            w <= width as usize,
             "narrow preview stays within width {width}: {line:?}"
         );
     }
@@ -6325,7 +6325,7 @@ fn tool_action_formats_generic_args_and_omits_empty() {
         &serde_json::json!({"TaskId": "task-456"}),
         None,
     );
-    assert_eq!(action_bg, "TaskDone");
+    assert_eq!(action_bg, "Task");
     assert_eq!(arg_bg, "task-456");
 
     let (action2, arg2) = format_pi_tool_action("get_date", &serde_json::json!({}), None);
@@ -10851,7 +10851,7 @@ fn tail_truncation_keeps_one_contiguous_tail_and_respects_its_budget() {
         ("/Users/lagos/code/src/main.rs", 12),
         ("plain", 5),
     ] {
-        let tail = super::history_cell::tail_to_width(text, budget);
+        let tail = tail_clip(text, budget);
         assert!(tail.width() <= budget, "{text:?} -> {tail:?}");
         assert!(tail.starts_with('…') || text.width() <= budget, "{tail:?}");
         let suffix = tail.trim_start_matches('…');
@@ -10860,8 +10860,17 @@ fn tail_truncation_keeps_one_contiguous_tail_and_respects_its_budget() {
             "{text:?} -> {tail:?} must keep the real tail"
         );
     }
-    assert_eq!(super::history_cell::tail_to_width("abc", 0), "");
-    assert_eq!(super::history_cell::tail_to_width("abc", 1), "…");
+    assert_eq!(tail_clip("abc", 0), "");
+    assert_eq!(tail_clip("abc", 1), "…");
+}
+
+fn tail_clip(text: &str, budget: usize) -> String {
+    Line::from(super::tool_transcript::clip_spans(
+        vec![Span::raw(text.to_owned())],
+        budget,
+        super::tool_transcript::TargetKeep::Tail,
+    ))
+    .to_string()
 }
 
 #[test]
@@ -11271,10 +11280,10 @@ fn consecutive_task_completions_fold_into_the_latest_row() {
     let text = tool_group_text(&state, &[0, 1, 2]);
     let rows = text
         .lines()
-        .filter(|line| line.contains("TaskDone"))
+        .filter(|line| line.contains(" Task "))
         .collect::<Vec<_>>();
     assert_eq!(rows.len(), 1, "{text}");
-    assert!(rows[0].contains("✓ TaskDone make step2"), "{text}");
+    assert!(rows[0].contains("✓ Task make step2"), "{text}");
     assert!(rows[0].contains("+2 earlier (1 failed)"), "{text}");
     assert!(!text.contains("step0") && !text.contains("step1"), "{text}");
     // Closed until opened: one row, no preview.
@@ -11298,7 +11307,7 @@ fn consecutive_task_completions_fold_into_the_latest_row() {
         "exit code: 0",
     ));
     let text = tool_group_text(&single, &[0]);
-    assert!(text.contains("✓ TaskDone make all"), "{text}");
+    assert!(text.contains("✓ Task make all"), "{text}");
     assert!(!text.contains("earlier"), "{text}");
 }
 
@@ -11328,6 +11337,406 @@ fn task_completions_split_by_another_tool_do_not_fold() {
         "exit code: 0",
     ));
     let text = tool_group_text(&state, &[0, 1, 2]);
-    assert_eq!(text.matches("TaskDone").count(), 2, "{text}");
+    assert_eq!(text.matches(" Task make ").count(), 2, "{text}");
     assert!(!text.contains("earlier"), "{text}");
+}
+
+const LONG_BACKGROUND_COMMAND: &str = r#"for d in "$HOME/Library/Group Containers" "$HOME/Library/Application Support" "$HOME/Library/Containers" "$HOME/code"; do du -sh "$d" 2>/dev/null; done"#;
+const MULTI_LINE_COMMAND: &str = "set -euo pipefail\ncargo build --release --workspace --all-features\ncargo test --workspace -- --nocapture\n";
+const LONG_PATH: &str =
+    "/Users/lagos/code/rustcode/rustcode/tui/src/ui/some/deeply/nested/module/tool_transcript.rs";
+
+fn run_command_call(id: &str, command: &str) -> rustcode::controller::ToolCallRef {
+    rustcode::controller::ToolCallRef {
+        id: id.to_owned(),
+        name: "run_command".to_owned(),
+        arguments: serde_json::json!({"command": command, "background": true}).to_string(),
+    }
+}
+
+/// A block holding every kind of row with a state behind it, each with a
+/// target far wider than a terminal. Returns the state and its tool indices.
+fn long_row_block() -> (RenderState, Vec<usize>) {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new("user", "go"));
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            run_command_call("call-bg", LONG_BACKGROUND_COMMAND),
+            ToolCallRef {
+                id: "call-fail".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: serde_json::json!({"command": MULTI_LINE_COMMAND}).to_string(),
+            },
+            ToolCallRef {
+                id: "call-read".to_owned(),
+                name: "view_file".to_owned(),
+                arguments: serde_json::json!({"path": LONG_PATH}).to_string(),
+            },
+            ToolCallRef {
+                id: "call-edit".to_owned(),
+                name: "replace_file_content".to_owned(),
+                arguments: serde_json::json!({"path": LONG_PATH}).to_string(),
+            },
+            ToolCallRef {
+                id: "call-mcp".to_owned(),
+                name: "mcp__github__create_pull_request".to_owned(),
+                arguments: serde_json::json!({
+                    "title": "a pull request title that goes on for a while",
+                    "repository": "LHagfoss/rustcode",
+                    "base": "main",
+                })
+                .to_string(),
+            },
+        ]));
+    state.history.push(
+        background_launch_message("task-1", LONG_BACKGROUND_COMMAND)
+            .answering(Some("call-bg".to_owned())),
+    );
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            format!(
+                "run_command: exit code: 1\nstdout:\n{}",
+                (0..12)
+                    .map(|row| format!("output row {row} {}", "x".repeat(60)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        )
+        .answering(Some("call-fail".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: false,
+            exit_code: Some(1),
+            command: Some(MULTI_LINE_COMMAND.into()),
+            ..Default::default()
+        }),
+    );
+    for (id, name) in [
+        ("call-read", "view_file"),
+        ("call-edit", "replace_file_content"),
+        ("call-mcp", "mcp__github__create_pull_request"),
+    ] {
+        state.history.push(
+            ChatMessage::new("tool", format!("{name}: error: it did not work"))
+                .answering(Some(id.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: name.into(),
+                    success: false,
+                    ..Default::default()
+                }),
+        );
+    }
+    for index in 0..3 {
+        state.history.push(task_completion_message(
+            &format!("task-{}", index + 10),
+            &format!("{LONG_BACKGROUND_COMMAND} # {index}"),
+            Some(if index == 1 { 2 } else { 0 }),
+            None,
+            "exit code: 0\nstdout:\ndone",
+        ));
+    }
+    let indices = (2..state.history.len()).collect();
+    (state, indices)
+}
+
+fn is_row_line(line: &str) -> bool {
+    ["  ✓ ", "  × ", "  − "]
+        .iter()
+        .any(|lead| line.starts_with(lead))
+}
+
+#[test]
+fn tool_rows_keep_their_state_on_the_row_at_every_width() {
+    use rustcode::controller::Verbosity;
+    let (mut state, indices) = long_row_block();
+    for verbosity in [Verbosity::High, Verbosity::Low] {
+        let low = matches!(verbosity, Verbosity::Low);
+        state.verbosity = verbosity;
+        for width in [20u16, 40, 80, 120, 200] {
+            let lines = super::render_committed_tool_result_group(&state, &indices, width, false);
+            let text = lines
+                .iter()
+                .map(Line::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            for line in &lines {
+                assert!(
+                    line.width() <= usize::from(width),
+                    "width {width}: {line} is {} wide\n{text}",
+                    line.width()
+                );
+            }
+            // Every line is the heading, a row, or output on the spine: a
+            // state that wrapped would be none of them.
+            let mut rows = Vec::new();
+            for (index, line) in text.lines().enumerate() {
+                if is_row_line(line) {
+                    rows.push(line);
+                } else {
+                    assert!(
+                        (index == 0 && line == "• Ran") || line.starts_with("  │"),
+                        "width {width}: stray line {line:?}\n{text}"
+                    );
+                }
+            }
+            let expected = [
+                ("  ✓ Ba", " · background"),
+                ("  × Bash", " · exit 1"),
+                ("  × Read", " · failed"),
+                ("  × Edit", " · failed"),
+                ("  × MCP ", " · failed"),
+                ("  ✓ Task", ""),
+            ];
+            assert_eq!(rows.len(), expected.len(), "width {width}\n{text}");
+            for (row, (label, state_text)) in rows.iter().zip(expected) {
+                assert!(row.starts_with(label), "width {width}: {row:?}\n{text}");
+                assert!(row.ends_with(state_text), "width {width}: {row:?}\n{text}");
+            }
+            if width >= 40 {
+                assert!(rows[0].starts_with("  ✓ Bash for d in"), "{text}");
+                assert!(rows[1].starts_with("  × Bash set -euo"), "{text}");
+                assert!(rows[2].contains("tool_transcript.rs · failed"), "{text}");
+                assert!(rows[5].contains(" · +2 earlier (1 failed)"), "{text}");
+            }
+            // The launch receipt is for the model; the row says what it says.
+            assert!(!text.contains("Task started in background"), "{text}");
+            // A closed row carries its own hint where it fits.
+            if low && width >= 80 {
+                assert!(
+                    rows[5].ends_with("(1 failed) (ctrl+o all · shift+o one)"),
+                    "{text}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn live_rows_keep_their_state_on_the_row_at_every_width() {
+    use rustcode::controller::{LiveToolCall, Verbosity};
+    let mut bash = LiveToolCall::new(
+        "local:1",
+        None,
+        "run_command",
+        "Bash",
+        LONG_BACKGROUND_COMMAND,
+    );
+    bash.execution_started = true;
+    let mut multi_line =
+        LiveToolCall::new("local:2", None, "run_command", "Bash", MULTI_LINE_COMMAND);
+    multi_line.execution_started = false;
+    let mut read = LiveToolCall::new("local:3", None, "view_file", "Read", LONG_PATH);
+    read.execution_started = false;
+    let now = bash.started_at + std::time::Duration::from_secs(75);
+    let calls = [bash, multi_line, read];
+    for width in [10u16, 20, 40, 80, 120, 200] {
+        let lines = super::history_cell::render_live_tool_cell_at(
+            &calls,
+            width,
+            &Verbosity::High,
+            false,
+            now,
+            None,
+        );
+        let text = lines.iter().map(Line::to_string).collect::<Vec<_>>();
+        assert_eq!(text.len(), 4, "width {width}: {text:#?}");
+        for line in &lines {
+            assert!(
+                line.width() <= usize::from(width),
+                "width {width}: {text:#?}"
+            );
+        }
+        if width >= 20 {
+            assert!(text[1].starts_with("  Bash"), "{text:#?}");
+            assert!(text[1].ends_with(" · 1m 15s"), "{text:#?}");
+            assert!(text[2].ends_with(" · waiting"), "{text:#?}");
+            assert!(text[3].starts_with("  Read"), "{text:#?}");
+            assert!(text[3].ends_with(" · waiting"), "{text:#?}");
+        }
+        if width >= 40 {
+            assert!(text[1].starts_with("  Bash for d in"), "{text:#?}");
+            assert!(
+                text[2].starts_with("  Bash set -euo pipefail "),
+                "{text:#?}"
+            );
+            assert!(
+                text[3].contains("tool_transcript.rs · waiting"),
+                "{text:#?}"
+            );
+        }
+    }
+}
+
+/// History of a turn in which the scheduler held the second of two background
+/// commands and ran it in the next round, beside that round's own command.
+fn held_call_history(held_record: rustcode::controller::ToolResultRecord) -> RenderState {
+    use rustcode::controller::{ChatMessage, ToolResultRecord};
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new("user", "go"));
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            run_command_call("call-a", "sleep 100"),
+            run_command_call("call-b", "make held"),
+        ]));
+    state.history.push(
+        background_launch_message("task-1", "sleep 100").answering(Some("call-a".to_owned())),
+    );
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            "run_command: error: held by the harness and queued for automatic execution in a later round; do not reissue it",
+        )
+        .answering(Some("call-b".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: false,
+            error_kind: Some("Deferred".into()),
+            ..Default::default()
+        }),
+    );
+    state.history.push(ChatMessage::new(
+        "system",
+        "[The model emitted 2 tool calls. 1 were executed this round.]",
+    ));
+    state.history.push(
+        ChatMessage::new("assistant", "")
+            .with_tool_calls(vec![run_command_call("call-c", "sleep 300")]),
+    );
+    state.history.push(
+        background_launch_message("task-2", "sleep 300").answering(Some("call-c".to_owned())),
+    );
+    // The held call's result: appended to the later round, with no call id.
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            "run_command: Task started in background. Task ID: task-3. Status: Pending.",
+        )
+        .with_tool_result(held_record),
+    );
+    state
+}
+
+#[test]
+fn held_call_result_shows_the_command_of_the_call_that_announced_it() {
+    use rustcode::controller::ToolResultRecord;
+    // The record names its call by the hash of the arguments, nothing else.
+    let state = held_call_history(ToolResultRecord {
+        tool_name: "run_command".into(),
+        success: true,
+        pending: true,
+        arguments_hash: rustcode::controller::tool_arguments_hash(
+            &serde_json::json!({"command": "make held", "background": true}),
+        ),
+        ..Default::default()
+    });
+    let text = tool_group_text(&state, &[2, 3, 6, 7]);
+    let rows = text
+        .lines()
+        .filter(|line| is_row_line(line))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "  ✓ Bash sleep 100 · background",
+            "  ✓ Bash sleep 300 · background",
+            "  ✓ Bash make held · background",
+        ],
+        "{text}"
+    );
+}
+
+#[test]
+fn command_row_without_a_findable_call_still_says_what_ran() {
+    use rustcode::controller::{ChatMessage, ToolResultRecord};
+    // No hash to match on: the result records the command itself.
+    let state = held_call_history(ToolResultRecord {
+        tool_name: "run_command".into(),
+        success: true,
+        pending: true,
+        command: Some("make held".into()),
+        ..Default::default()
+    });
+    let text = tool_group_text(&state, &[2, 3, 6, 7]);
+    assert!(text.contains("  ✓ Bash make held · background"), "{text}");
+
+    // Nothing recorded: a launch receipt quotes its command.
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new(
+        "tool",
+        "run_command: Task started in background. Task ID: task-4. Status: Pending. Command: make quoted. Completion notification: enabled. Use manage_task action 'wait'.",
+    ));
+    // No command anywhere: the task is still named.
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            "run_command: Task started in background. Task ID: task-5. Status: Pending.",
+        )
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: true,
+            pending: true,
+            ..Default::default()
+        }),
+    );
+    // A finished command nothing is known about.
+    state
+        .history
+        .push(ChatMessage::new("tool", "run_command: exit code: 3"));
+    let text = tool_group_text(&state, &[0, 1, 2]);
+    let rows = text
+        .lines()
+        .filter(|line| is_row_line(line))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "  ✓ Bash make quoted",
+            "  ✓ Bash (task task-5) · background",
+            "  × Bash (command not recorded) · exit 3",
+        ],
+        "{text}"
+    );
+}
+
+#[test]
+fn task_row_is_never_a_bare_label() {
+    use rustcode::controller::{ChatMessage, ToolResultRecord};
+    let completion = |content: &str| {
+        ChatMessage::new("tool", content).with_tool_result(ToolResultRecord {
+            tool_name: "background_task".into(),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        })
+    };
+    let mut state = RenderState::new();
+    // No command in the record or the text: the task id names the row.
+    state.history.push(completion(
+        "background_task: Task task-7 completed. Output:\nexit code: 0",
+    ));
+    state.history.push(ChatMessage::new("assistant", "Noted."));
+    // The command only in the text.
+    state.history.push(completion(
+        "background_task: Task task-8 completed. Command: make docs. Output:\nexit code: 0",
+    ));
+    state.history.push(ChatMessage::new("assistant", "Noted."));
+    // Nothing to go on at all.
+    state.history.push(completion("background_task: finished"));
+    for (index, expected) in [
+        (0, "  ✓ Task task-7"),
+        (2, "  ✓ Task make docs"),
+        (4, "  ✓ Task (command not recorded)"),
+    ] {
+        let text = tool_group_text(&state, &[index]);
+        let row = text
+            .lines()
+            .find(|line| is_row_line(line))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(row.starts_with(expected), "{row:?}\n{text}");
+        assert!(!text.contains("TaskDone"), "{text}");
+    }
 }

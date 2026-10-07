@@ -79,7 +79,7 @@ pub use transcript::{
     TokenUsage, ToolCallRef, ToolResult, ToolResultMetadata, ToolResultRecord, Verbosity,
     is_compaction_summary, mcp_tool_display_name, sanitize_recap_content,
     toggle_all_expanded_bodies, toggle_all_expanded_thoughts, toggle_expanded_bodies,
-    toggle_expanded_thought,
+    toggle_expanded_thought, tool_arguments_hash,
 };
 
 pub use worker::InteractiveController;
