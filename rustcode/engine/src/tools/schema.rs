@@ -925,11 +925,20 @@ pub(super) fn provider_compatible_schema(mut schema: Value) -> Value {
 }
 
 fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
+    // Function words say nothing about which tool is wanted, and nearly every
+    // tool description contains a few of them: "and", "of" and "can" alone
+    // cleared the relevance threshold and filled the menu for any prompt.
     const STOP_WORDS: &[&str] = &[
-        "about", "after", "again", "also", "been", "before", "being", "could", "from", "have",
-        "into", "just", "like", "more", "most", "only", "please", "should", "that", "their",
-        "there", "these", "this", "through", "using", "want", "what", "when", "where", "which",
-        "with", "would", "your",
+        "about", "after", "again", "all", "alot", "also", "am", "an", "and", "any", "are", "as",
+        "at", "be", "been", "before", "being", "but", "by", "can", "cannot", "could", "did", "do",
+        "does", "doing", "done", "for", "from", "had", "has", "have", "he", "her", "here", "him",
+        "his", "how", "idk", "if", "in", "into", "is", "it", "its", "just", "let", "lets", "like",
+        "lot", "many", "may", "me", "might", "more", "most", "much", "must", "my", "no", "not",
+        "of", "off", "on", "only", "or", "our", "out", "over", "please", "she", "should", "so",
+        "some", "than", "thanks", "that", "the", "their", "them", "then", "there", "these", "they",
+        "this", "through", "to", "too", "under", "up", "us", "using", "very", "want", "was", "we",
+        "were", "what", "when", "where", "which", "who", "why", "will", "with", "would", "you",
+        "your",
     ];
     let mut terms = std::collections::HashSet::new();
     for message in messages {
@@ -1248,11 +1257,14 @@ fn mcp_tool_relevance(
     ];
     let mut score = 0;
     for term in terms {
-        if name_terms
+        if let Some(candidate) = name_terms
             .iter()
-            .any(|candidate| token_matches(candidate, term))
+            .find(|candidate| token_matches(candidate, term))
         {
-            score += if GENERIC_NAME_TERMS.contains(&term.as_str()) {
+            // The prompt may carry the verb inflected ("takes" for `take_…`).
+            score += if GENERIC_NAME_TERMS.contains(&term.as_str())
+                || GENERIC_NAME_TERMS.contains(&candidate.as_str())
+            {
                 3
             } else {
                 8
