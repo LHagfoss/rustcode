@@ -2625,7 +2625,7 @@ mod tests {
         for _ in 0..6 {
             transcript.selection.queue_scroll(1, WHEEL_SCROLL_LINES);
         }
-        assert_eq!(transcript.selection.pending_scroll, 6);
+        assert_eq!(transcript.selection.pending_scroll, 2);
         let mut frames = 0;
         while transcript.step_selection_scroll() {
             let _ = rendered_transcript(&state, &mut transcript);
@@ -2634,8 +2634,8 @@ mod tests {
         assert_eq!(frames, 1);
         assert_eq!(
             transcript.scroll_rows(),
-            start + 8 * WHEEL_SCROLL_LINES - 6,
-            "the reversed run should scroll back 6 rows, not run away"
+            start + 8 * WHEEL_SCROLL_LINES - 2,
+            "the reversed run should scroll back 2 rows, not run away"
         );
     }
 
@@ -2717,9 +2717,10 @@ mod tests {
             super::super::render_snapshot::render_snapshot(&state),
             transcript.scroll_rows(),
         );
-        // A hard flick: ten ticks, four times the height of the viewport, all
+        // A hard flick covering four times the height of the viewport, all
         // landing before the loop paints a frame.
-        for _ in 0..10 {
+        let ticks = (4 * usize::from(area.height)).div_ceil(WHEEL_SCROLL_LINES);
+        for _ in 0..ticks {
             transcript.selection.queue_scroll(-1, WHEEL_SCROLL_LINES);
         }
         let mut frames = 0;
