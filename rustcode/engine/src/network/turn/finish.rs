@@ -411,7 +411,7 @@ fn can_complete_interactive_plain_response(
     matches!(finish_reason, FinishReason::Stop)
         && !cancel_token.is_cancelled()
         && !ctx.recovery.force_final
-        && !ctx.progress.made_edits
+        && !ctx.progress.has_lasting_edits()
         && ctx.progress.failed_mutations == 0
         && ctx.verification.ledger.last_failure().is_none()
         && ctx.lifecycle.stop_reason.is_none()
@@ -809,6 +809,46 @@ mod tests {
             finished_notification_status(&ctx, false),
             crate::notifications::FinishedStatus::Incomplete
         );
+    }
+
+    #[test]
+    fn a_scratch_file_written_and_deleted_is_not_an_unverified_edit() {
+        // #1774: the turn wrote a scratch file, deleted it and answered.
+        let temp = tempfile::tempdir().expect("temporary workspace");
+        let scratch = temp.path().join("issue-indicator.md");
+        std::fs::write(&scratch, "notes").expect("scratch file");
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        let mut ctx = TurnContext::new();
+        ctx.progress.made_edits = true;
+        ctx.progress
+            .changed_paths
+            .insert("issue-indicator.md".to_owned());
+        ctx.progress
+            .created_paths
+            .insert("issue-indicator.md".to_owned(), scratch.clone());
+        ctx.response.final_content = "Logged the four issues.".to_owned();
+        let completes = |ctx: &TurnContext| {
+            can_complete_interactive_plain_response(ctx, &cancel, &FinishReason::Stop, false)
+        };
+
+        // While the file exists it is a real, unverified edit.
+        assert!(ctx.progress.has_lasting_edits());
+        assert!(!completes(&ctx));
+
+        std::fs::remove_file(&scratch).expect("delete scratch file");
+        assert!(!ctx.progress.has_lasting_edits());
+        assert!(completes(&ctx));
+
+        // Deleting a file that existed before the turn stays an edit.
+        ctx.progress.changed_paths.insert("src/lib.rs".to_owned());
+        assert!(ctx.progress.has_lasting_edits());
+        ctx.progress.changed_paths.remove("src/lib.rs");
+
+        // So does a mutation the changed paths do not describe.
+        ctx.progress.untracked_edits = true;
+        assert!(ctx.progress.has_lasting_edits());
+        assert!(!completes(&ctx));
     }
 
     #[test]

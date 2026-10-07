@@ -88,6 +88,13 @@ pub struct ProgressState {
     pub evidence_recovery_enabled: bool,
     pub last_reason: Option<loop_detect::ProgressReason>,
     pub changed_paths: BTreeSet<String>,
+    /// Files a write tool created during this turn, keyed as in
+    /// `changed_paths` with the resolved location. A created file that is
+    /// gone again by the end of the turn is scratch work, not an edit (#1774).
+    pub created_paths: BTreeMap<String, std::path::PathBuf>,
+    /// A successful mutation that `changed_paths` does not fully describe
+    /// (agents, moves, copies), so the turn's edits cannot be proven scratch.
+    pub untracked_edits: bool,
     pub phase_checkpoint: Option<String>,
     /// Monotonic count of meaningful tool results. Segment boundaries use a
     /// checkpoint of this value so progress from an earlier segment cannot
@@ -96,6 +103,22 @@ pub struct ProgressState {
 }
 
 impl ProgressState {
+    /// Whether the turn leaves an edit behind. A turn whose only edits were
+    /// files it created and then removed has nothing left to verify.
+    pub fn has_lasting_edits(&self) -> bool {
+        if !self.made_edits {
+            return false;
+        }
+        if self.untracked_edits || self.changed_paths.is_empty() {
+            return true;
+        }
+        !self.changed_paths.iter().all(|path| {
+            self.created_paths
+                .get(path)
+                .is_some_and(|resolved| !resolved.exists())
+        })
+    }
+
     pub fn record_inspection_result(&mut self, fingerprint: &str, complete: bool) {
         if fingerprint.is_empty() {
             return;
@@ -286,6 +309,8 @@ impl TurnContext {
                 evidence_recovery_enabled: true,
                 last_reason: None,
                 changed_paths: BTreeSet::new(),
+                created_paths: BTreeMap::new(),
+                untracked_edits: false,
                 phase_checkpoint: None,
                 meaningful_events: 0,
             },
