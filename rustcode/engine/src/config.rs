@@ -1326,6 +1326,13 @@ fn default_provider_definitions() -> Vec<ProviderDefinition> {
             base_url: Some("https://api.githubcopilot.com".into()),
         },
         ProviderDefinition {
+            id: crate::provider_auth::claude_cli::PROVIDER.into(),
+            display_name: "Claude (Claude Code CLI)".into(),
+            api_key_env: None,
+            auth_methods: vec![crate::provider_auth::AuthMethod::ClaudeCli],
+            base_url: None,
+        },
+        ProviderDefinition {
             id: "generic".to_string(),
             display_name: "Generic OpenAI-compatible provider".to_string(),
             api_key_env: None,

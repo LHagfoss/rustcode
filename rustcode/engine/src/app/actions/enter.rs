@@ -148,11 +148,12 @@ async fn handle_enter_inner(
                 }
                 let api_base_url = s.api_base_url.clone();
                 let model_name = s.model_name.clone();
+                // Subscription-backed profiles have no plain summarizer endpoint.
                 let chatgpt_plan_profile = s.active_model_profile().is_some_and(|profile| {
                     profile
                         .credential
                         .as_ref()
-                        .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+                        .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli())
                 });
                 let active_session_id = s.active_session_id.clone();
                 let original_history = s.history.clone();
