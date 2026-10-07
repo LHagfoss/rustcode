@@ -101,8 +101,14 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
     ) {
         return execute_video_with_progress(name, args, cancel_token, None);
     }
-    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
-        let mut clients = reg.values().cloned().collect::<Vec<_>>();
+    // Snapshot the clients and release the registry before the call: the UI
+    // locks the same registry to label tool rows, so holding it across a slow
+    // `tools/call` freezes rendering and serializes calls to other servers.
+    let mcp_clients = crate::mcp::get_mcp_registry()
+        .lock()
+        .map(|reg| reg.values().cloned().collect::<Vec<_>>())
+        .ok();
+    if let Some(mut clients) = mcp_clients {
         clients.sort_by(|a, b| a.name.cmp(&b.name));
         for client in &clients {
             if let Ok(tools) = client.get_tools()
