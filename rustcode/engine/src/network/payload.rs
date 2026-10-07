@@ -10,7 +10,7 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
             profile
                 .credential
                 .as_ref()
-                .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+                .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli())
         });
         let key = s
             .config
@@ -21,8 +21,8 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
         (active_url, s.model_name.clone(), key, chatgpt_plan)
     };
 
-    // The ChatGPT plan HTTP flow has no account quota endpoint; quota windows
-    // arrive with its responses instead. Show the last reported short window
+    // Subscription flows (ChatGPT plan, Claude Code CLI) have no account quota
+    // endpoint; quota windows arrive with their responses instead. Show the last reported short window
     // and never probe a proxy route.
     if chatgpt_plan {
         let mut state = state.lock().await;

@@ -4185,6 +4185,11 @@ async fn stream_request_with_timeouts(
         .and_then(|profile| profile.credential.as_ref())
         .is_some_and(crate::provider_auth::CredentialRef::is_copilot);
     let chatgpt_plan = is_chatgpt_credential(profile.as_ref());
+    // Served by a local `claude` child instead of an HTTP endpoint.
+    let claude_cli = profile
+        .as_ref()
+        .and_then(|profile| profile.credential.as_ref())
+        .is_some_and(crate::provider_auth::CredentialRef::is_claude_cli);
     if chatgpt_plan && !profile.as_ref().is_some_and(chatgpt_endpoint_is_supported) {
         return Err(StreamFailure {
             kind: StreamFailureKind::ProviderError,
@@ -4289,10 +4294,13 @@ async fn stream_request_with_timeouts(
     }
     // Recovery is action-oriented and therefore deliberately has no reasoning
     // budget. Normal configured thinking remains unchanged.
-    let thinking_budget = if matches!(
-        thinking_mode,
-        ThinkingMode::BoundedRecovery | ThinkingMode::Disabled
-    ) {
+    // The CLI runs its own reasoning; cutting its stream short would only
+    // desynchronize the child from this history.
+    let thinking_budget = if claude_cli
+        || matches!(
+            thinking_mode,
+            ThinkingMode::BoundedRecovery | ThinkingMode::Disabled
+        ) {
         None
     } else {
         profile
@@ -4401,6 +4409,7 @@ async fn stream_request_with_timeouts(
         } else {
             0
         };
+    let claude_cli_messages = claude_cli.then(|| aligned_messages.clone());
     let mut payload = if chatgpt_plan {
         chatgpt_stream_payload(
             model,
@@ -4755,7 +4764,7 @@ async fn stream_request_with_timeouts(
                 Ok(Ok(key)) => key,
             }
         };
-        if profile.credential.is_some() && credential.is_none() {
+        if profile.credential.is_some() && credential.is_none() && !claude_cli {
             return Err(StreamFailure {
                 kind: StreamFailureKind::ProviderError,
                 status: None,
@@ -4811,10 +4820,48 @@ async fn stream_request_with_timeouts(
         assistant_turn,
     );
 
+    let mut claude_cli_stream = match claude_cli_messages {
+        Some(messages) => {
+            let round = crate::network::claude_cli::RoundRequest {
+                session_id: &request_session_id,
+                model,
+                effort: profile
+                    .as_ref()
+                    .and_then(crate::provider_auth::claude_cli::effort_arg),
+                messages: &messages,
+                tool_schemas: &native_tool_schemas,
+                allow_tools,
+            };
+            let started = retry::race_cancellable(
+                crate::network::claude_cli::start_round(round),
+                &cancel_token,
+            )
+            .await;
+            match started {
+                None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
+                Some(Err(detail)) => {
+                    return Err(StreamFailure {
+                        kind: StreamFailureKind::ProviderError,
+                        status: None,
+                        detail: Some(detail),
+                        bytes_received: 0,
+                        events_received: 0,
+                        partial_event_bytes: 0,
+                    });
+                }
+                Some(Ok(stream)) => Some(stream),
+            }
+        }
+        None => None,
+    };
+
     let mut request_payload_bytes = payload_bytes;
     let mut parallel_tool_calls_fallback_attempted = false;
     let mut attempt = 0usize;
-    let response = loop {
+    let stream: crate::network::claude_cli::ByteStream = loop {
+        if let Some(stream) = claude_cli_stream.take() {
+            break stream;
+        }
         if cancel_token.is_cancelled() {
             return Err(StreamFailure::new(StreamFailureKind::Cancelled));
         }
@@ -4894,7 +4941,10 @@ async fn stream_request_with_timeouts(
                 {
                     record_provider_rate_limits(&state, limits).await;
                 }
-                break resp;
+                break resp
+                    .bytes_stream()
+                    .map(|r| r.map_err(std::io::Error::other))
+                    .boxed();
             }
             Ok(resp) => {
                 let status = resp.status();
@@ -5010,9 +5060,6 @@ async fn stream_request_with_timeouts(
         }
     };
 
-    let stream = response
-        .bytes_stream()
-        .map(|r| r.map_err(std::io::Error::other));
     let wrapped = StreamReader::new(stream);
     let mut reader = BufReader::with_capacity(4096, wrapped);
     let mut line_buf = String::with_capacity(4096);
@@ -5179,7 +5226,7 @@ async fn stream_request_with_timeouts(
                                 {
                                     responses_completed = true;
                                 }
-                                if chatgpt_plan
+                                if (chatgpt_plan || claude_cli)
                                     && let Some(limits) = value
                                         .get("rate_limits")
                                         .or_else(|| value.pointer("/response/rate_limits"))

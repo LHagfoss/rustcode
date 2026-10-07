@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-fn content_blocks(content: Option<&Value>) -> Result<Vec<Value>> {
+pub(crate) fn content_blocks(content: Option<&Value>) -> Result<Vec<Value>> {
     match content {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::String(text)) => Ok(if text.is_empty() { Vec::new() } else { vec![json!({"type":"text","text":text})] }),

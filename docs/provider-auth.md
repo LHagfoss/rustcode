@@ -6,6 +6,7 @@ RustCode separates a model profile from its authentication. Profiles describe a 
 
 - `/login` lists configured providers and the authentication methods each supports.
 - `/login <provider>` starts that provider's default sign-in method when configured. `/login openai` refreshes the selected or sole saved ChatGPT model catalog without opening a browser; if no account is saved, it starts ChatGPT sign-in. If multiple accounts exist and none is selected, choose one from `/auth status`; `/login openai <account-id>` reconnects that account, and `/login openai new` adds another account.
+- `/login claude` connects the account signed in to the local Claude Code CLI and installs its models; see [Claude (Claude Code CLI)](#claude-claude-code-cli).
 - `/login <provider> api-key <ENV_VAR>` reads the named environment variable and stores the API key in the operating system credential store. Pass the variable name, never the key itself. RustCode fails if the native credential store is unavailable; it does not write a plaintext fallback.
 - `/auth status` lists saved provider accounts, methods, state, and account IDs. Use the account ID to target one of several accounts.
 - `/accounts` lists saved provider accounts. `/account` shows the active model profile and its provider account status.
@@ -49,6 +50,35 @@ See [OpenAI's Sign in with ChatGPT overview](https://developers.openai.com/siwc/
 ## GitHub Copilot
 
 `/login github-copilot` connects with the installed GitHub CLI credential or, when `RUSTCODE_COPILOT_CLIENT_ID` names your own OAuth app, that app's device flow. It installs `copilot/<id>` profiles from the authenticated model catalog; `/refresh github-copilot` re-fetches them. See [GitHub Copilot setup](github-copilot.md) for prerequisites, commands, model rules, and limitations.
+
+## Claude (Claude Code CLI)
+
+`/login claude` connects RustCode to the account signed in to the locally installed Claude Code CLI (`claude`). It installs one `claude/<model>` profile per model the CLI offers; pick one with `/model`. `/refresh claude` re-reads the list.
+
+Prerequisites: install the CLI and sign in with `claude auth login`. If the binary is not on `PATH`, set `RUSTCODE_CLAUDE_CLI` to its location.
+
+How it works:
+
+- RustCode never reads, copies, or stores the CLI's credential. A profile's `url` is the marker `claude-cli://local`; requests go to a headless `claude` child process, not to an HTTP endpoint, and use that CLI's sign-in and plan limits. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from the child's environment so it cannot silently bill an API key instead.
+- The child runs with none of its own tools, settings, hooks, MCP servers, slash commands, or saved sessions. RustCode's tools are offered to it over an in-process channel, so every tool call is executed and authorized by RustCode exactly as with other providers, and RustCode's system prompt replaces the CLI's.
+- The child keeps the conversation's context while it lives. When RustCode's history changes in a way the child has not seen (rewind, `/compact`, resuming a saved session, switching model or reasoning effort, newly available tools, a cancelled response, or 30 idle minutes), RustCode starts a new child and restores the earlier turns as a text transcript. That restore is lossy: earlier tool calls become prose.
+- `/usage` shows the five-hour and seven-day plan windows once the CLI reports them with a response. `/compact` uses RustCode's deterministic local compaction for these profiles.
+- `/logout claude` disconnects RustCode and stops its child processes; the CLI itself stays signed in until you run `claude auth logout`.
+
+Limitations: the reasoning budget and output-token settings of a profile are not applied (the CLI manages them; `reasoning_effort` is passed when it is one of `low`, `medium`, `high`, `xhigh`, `max`), a system prompt change takes effect only when a new child starts, and model reasoning is shown only when the CLI streams it. Check Anthropic's current terms for using a Claude subscription through the CLI from other software before relying on this for anything beyond your own use.
+
+```toml
+[[models]]
+name = "claude/sonnet"
+url = "claude-cli://local"
+model = "sonnet"
+api_protocol = "anthropic_messages"
+
+[models.credential]
+provider = "claude"
+account = "ACCOUNT_ID_FROM_AUTH_STATUS"
+method = "claude_cli"
+```
 
 ## Add an API-key provider
 
