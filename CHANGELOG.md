@@ -1,3 +1,13 @@
+## [v0.58.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.58.0) - 2026-10-07
+
+### Features
+- Show tool calls as one block: headed `Running` while a batch is in flight and `Ran` once it finishes, with a row per call that names it (`Bash cargo test`, `Read src/main.rs`, `Edit src/lib.rs (+12 -3)`) and puts its state behind it (#1820).
+- Remove the `Explored`, `Edited`, `Wrote` and `Called` headings, the `$` prefix, the tree connectors and the folded count line (#1820).
+- Never draw a call that finishes within 200 ms as running (#1820).
+- Make verbosity the default for tool output only: `high` shows the calls alone, `low` a five-row preview; `ctrl+o` opens and closes output at either setting (#1820).
+- Light a tool block under the pointer and open or close its output on click (#1820).
+- Keep the row under the transcript to the state of the turn (`Generating`, `Thinking`, `Working`, `Queued`); it no longer names a tool (#1820).
+- Call background commands tasks: count them in the footer (`2 tasks · 1 done`), open the tasks panel by clicking the counter or with `/tasks`, and remove the block above the composer. `/ps` remains as an alias (#1820).
 ## [v0.57.16](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.16) - 2026-10-07
 
 ### Fixes
