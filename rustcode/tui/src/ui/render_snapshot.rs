@@ -397,17 +397,6 @@ impl RenderSnapshot {
     pub(crate) fn steering_interruptible(&self) -> bool {
         self.steering_interruptible
     }
-    #[cfg(test)]
-    pub(crate) fn steering_escape_will_interrupt(&self) -> bool {
-        self.steering_escape_will_interrupt
-    }
-    #[cfg(test)]
-    pub(crate) fn show_steer_mode_hint(&self) -> bool {
-        self.steering_interruptible
-            && !self.input_buffer.trim().is_empty()
-            && rustcode::controller::get_completion_len(&self.input_buffer, self.cursor_position)
-                == 0
-    }
     pub(crate) fn status(&self) -> &AppStatus {
         &self.status
     }
