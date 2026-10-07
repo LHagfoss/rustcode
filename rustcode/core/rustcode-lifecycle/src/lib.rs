@@ -159,6 +159,9 @@ pub enum StopReason {
     BackgroundPending,
     Cancelled,
     RecoveryFailed,
+    /// The model stopped on its own final answer and no recovery was
+    /// attempted, but completion could not be verified (#1774).
+    Unverified,
     LoopEscalation,
     ProviderError(Option<u16>),
     UnavailableTool,
@@ -175,6 +178,7 @@ impl fmt::Display for StopReason {
             Self::BackgroundPending => f.write_str("background_pending"),
             Self::Cancelled => f.write_str("cancelled"),
             Self::RecoveryFailed => f.write_str("recovery_failed"),
+            Self::Unverified => f.write_str("unverified"),
             Self::LoopEscalation => f.write_str("loop_escalation"),
             Self::ProviderError(Some(status)) => write!(f, "provider_error:{status}"),
             Self::ProviderError(None) => f.write_str("provider_error"),
@@ -324,6 +328,7 @@ mod tests {
         );
         assert_eq!(StopReason::Cancelled.to_string(), "cancelled");
         assert_eq!(StopReason::RecoveryFailed.to_string(), "recovery_failed");
+        assert_eq!(StopReason::Unverified.to_string(), "unverified");
         assert_eq!(StopReason::LoopEscalation.to_string(), "loop_escalation");
         assert_eq!(
             StopReason::ProviderError(Some(429)).to_string(),

@@ -996,21 +996,25 @@ mod tests {
                 |_| async {},
             )
             .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while !pid_file.exists() {
+        // The shell creates the file before it writes the pid, so wait for a
+        // parsable pid rather than for the file: reading in between panicked
+        // on an empty string under a loaded test run.
+        let pid: i32 = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if let Some(pid) = std::fs::read_to_string(&pid_file)
+                    .ok()
+                    .and_then(|text| text.trim().parse().ok())
+                {
+                    break pid;
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(2)).await;
             }
         })
         .await
         .unwrap();
-        let pid: i32 = std::fs::read_to_string(&pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
         supervisor.cancel(id).unwrap();
         let completion =
-            tokio::time::timeout(std::time::Duration::from_secs(2), supervisor.wait(id))
+            tokio::time::timeout(std::time::Duration::from_secs(20), supervisor.wait(id))
                 .await
                 .unwrap()
                 .unwrap();

@@ -1832,6 +1832,24 @@ impl AppState {
     }
 
     pub fn get_command_suggestion(&self) -> Option<String> {
+        // The ghost text previews the row selected in the popup, so it is
+        // there as soon as a command is typed and follows the arrow keys.
+        // It used to appear only once Tab had started the legacy cycle.
+        if let Some(index) = self.active_suggestion_index
+            && let Some(token) = crate::app::suggestion::command_token(&self.input_buffer)
+            && token.len() == self.input_buffer.len()
+        {
+            let commands = crate::app::suggestion::filtered_commands(&self.input_buffer);
+            let selected = commands.get(index.min(commands.len().saturating_sub(1)))?;
+            // A fuzzy hit does not extend what was typed, so it has no suffix
+            // to preview; the popup row is its only hint.
+            return selected
+                .name
+                .get(..token.len())
+                .filter(|head| head.eq_ignore_ascii_case(token))
+                .map(|_| selected.name[token.len()..].to_owned())
+                .filter(|suffix| !suffix.is_empty());
+        }
         self.suggestion_cycle
             .get_completion_suffix(&self.input_buffer)
     }

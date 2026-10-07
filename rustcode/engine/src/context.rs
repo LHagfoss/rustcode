@@ -323,6 +323,11 @@ fn render_environment_context(
     out.push_str(&format!(
         "- Workspace root (security boundary): {workspace}\n"
     ));
+    // A project directory often contains a folder of the same name, and a
+    // leading `cd <name>` then silently moves one level too deep.
+    out.push_str(
+        "- Shell commands already start in the task working directory; run them without a leading `cd`.\n",
+    );
 
     out.push_str(&format!(
         "- Platform: {} {}\n",
