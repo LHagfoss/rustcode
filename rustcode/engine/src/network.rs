@@ -1189,6 +1189,9 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     checkpoint: ContextCheckpoint,
     mut prefix_cache: Option<&mut RequestPrefixCache>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    // Phase clock for `context.prepare_phases`: the total alone could not say
+    // which step made request preparation slow (#1775).
+    let prepare_started = std::time::Instant::now();
     let request_session_id = state.lock().await.active_session_id.clone();
     // Try AI-driven compaction if history is long enough.
     //
@@ -1303,6 +1306,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         drop(s);
     }
 
+    let compaction_us = crate::benchmark::elapsed_us(prepare_started);
     // Everything the request needs from AppState is read in one guarded block so
     // the lock is taken a couple of times instead of once per field. The
     // environment snapshot is captured first because it touches the filesystem.
@@ -1319,6 +1323,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         }
         _ => crate::context::ContextSnapshot::capture(),
     };
+    let snapshot_us = crate::benchmark::elapsed_us(prepare_started);
     let (
         mut history_snapshot,
         budget_token_limit,
@@ -1493,6 +1498,16 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             preprocessing?;
         }
     }
+
+    let images_us = crate::benchmark::elapsed_us(prepare_started);
+    crate::logger::operational_event(
+        "context.prepare_phases",
+        serde_json::json!({
+            "compaction_us": compaction_us,
+            "environment_snapshot_us": snapshot_us.saturating_sub(compaction_us),
+            "state_and_image_fallback_us": images_us.saturating_sub(snapshot_us),
+        }),
+    );
 
     history_snapshot.retain(|m| {
         (matches!(m.role.as_str(), "user" | "assistant" | "tool") && !m.content.starts_with('/'))

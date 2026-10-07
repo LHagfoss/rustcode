@@ -2143,3 +2143,42 @@ async fn discord_command_toggles_and_reports_saved_presence_setting() {
     let saved = std::fs::read_to_string(&config_path).expect("enabled setting should be saved");
     assert!(saved.contains("discord_rpc_enabled = true"));
 }
+
+#[test]
+fn ghost_completion_previews_the_selected_popup_row_without_a_tab() {
+    // The preview used to exist only inside the Tab cycle: a user had to press
+    // Tab twice and delete letters before any completion text appeared.
+    use crate::app::AppState;
+    let mut state = AppState::new();
+    state.input_buffer = "/p".to_owned();
+    state.cursor_position = 2;
+    state.reset_suggestion_index();
+    let commands = crate::app::suggestion::filtered_commands("/p");
+    assert!(commands.len() > 2);
+
+    assert_eq!(
+        state.get_command_suggestion().as_deref(),
+        Some(&commands[0].name[2..]),
+        "the first row is previewed as soon as the command is typed"
+    );
+    state.active_suggestion_index = Some(2);
+    assert_eq!(
+        state.get_command_suggestion().as_deref(),
+        Some(&commands[2].name[2..]),
+        "the preview follows the selection"
+    );
+
+    // Tab completes exactly what was previewed.
+    let previewed = commands[2].name;
+    crate::app::apply_autocomplete(&mut state);
+    assert_eq!(state.input_buffer, previewed);
+
+    // A fuzzy hit cannot extend the typed text, and arguments end the preview.
+    for input in ["/modle", "/model fast"] {
+        let mut state = AppState::new();
+        state.input_buffer = input.to_owned();
+        state.cursor_position = input.len();
+        state.reset_suggestion_index();
+        assert_eq!(state.get_command_suggestion(), None, "{input}");
+    }
+}

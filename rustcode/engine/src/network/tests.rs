@@ -3226,12 +3226,18 @@ fn test_parse_multimodal_content_with_image_nonexistent() {
 
 #[tokio::test]
 async fn test_confirm_and_execute_bypassed() {
-    let state = Arc::new(Mutex::new(AppState::new()));
+    // Write into a throwaway workspace: the repository checkout must not
+    // gain (or lose) files because the suite ran.
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let state = Arc::new(Mutex::new(AppState::new_with_workspace_session(
+        workspace.path(),
+        Some("confirm-bypass-test"),
+    )));
     state.lock().await.agent_mode = crate::config::AgentMode::Build;
     let cancel_token = tokio_util::sync::CancellationToken::new();
     let client = reqwest::Client::new();
     let args = serde_json::json!({
-        "path": "sandbox/test_bypass.txt",
+        "path": "test_bypass.txt",
         "content": "bypassed content",
         "overwrite": true
     });
@@ -3256,7 +3262,14 @@ async fn test_confirm_and_execute_bypassed() {
         result.content
     );
 
-    let _ = std::fs::remove_file("sandbox/test_bypass.txt");
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("test_bypass.txt"))
+            .ok()
+            .as_deref(),
+        Some("bypassed content"),
+        "the write lands in the session workspace"
+    );
+    assert!(!std::path::Path::new("sandbox/test_bypass.txt").exists());
 }
 
 #[tokio::test]
