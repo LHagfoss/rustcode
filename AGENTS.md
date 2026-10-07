@@ -71,7 +71,9 @@ imperative ("add", not "added"), under ~72 characters. Do not prefix with
 ## Session-driven fix loop
 
 - Diagnose from evidence:
-  `~/.config/rustcode/sessions/<id>/{history.json,logs/debug.log}` plus
+  `~/.config/rustcode/sessions/<yyyy>/<mm>/<dd>/<id>/{history.json,logs/debug.log,performance.json}`
+  (sessions are filed by start date; `rg --files ~/.config/rustcode/sessions | rg <id>`
+  finds one from its id) plus
   `operational_event` kinds (`turn.summary`, `tools.batch.finish`,
   `turn.stream_checkpoint`, budget/recovery events).
 - Log a GitHub issue first (`gh issue create`) with problem, session evidence,
@@ -87,7 +89,7 @@ imperative ("add", not "added"), under ~72 characters. Do not prefix with
   `end_line` are passed. Prefer unique multi-line `target_content`. If an edit
   reports "target_content not found", re-read the current lines — don't retry
   the same string.
-- Sessions/history: `~/.config/rustcode/sessions/<id>/history.json`.
+- Sessions/history: `~/.config/rustcode/sessions/<yyyy>/<mm>/<dd>/<id>/history.json`.
 - Adding a built-in tool: add one `pub const …: Tool` in
   `rustcode/engine/src/tools/{search,filesystem,exec,misc}.rs`, then add it
   to `TOOLS` in `rustcode/engine/src/tools/mod.rs`. No other tables need
