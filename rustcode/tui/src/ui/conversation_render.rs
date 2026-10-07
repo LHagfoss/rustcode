@@ -393,12 +393,8 @@ pub(crate) fn render_visible_conversation_with_transcript(
     while index > state.history_display_start() && rows < target_rows {
         let last = index - 1;
         let (block, next_index) = if state.history()[last].role == "tool" {
-            let mut first = last;
-            while first > state.history_display_start() && state.history()[first - 1].role == "tool"
-            {
-                first -= 1;
-            }
-            let indices = (first..index).collect::<Vec<_>>();
+            let first = tool_chain_start(state, last, state.history_display_start());
+            let indices = tool_chain_indices(state, first, index);
             let mut block =
                 render_committed_tool_result_group_snapshot(state, &indices, width, false);
             if !block.is_empty() {
@@ -520,11 +516,8 @@ fn render_selected_history_projection(
         let next = if next_index > projection_start {
             let last = next_index - 1;
             if history[last].role == "tool" {
-                let mut first = last;
-                while first > projection_start && history[first - 1].role == "tool" {
-                    first -= 1;
-                }
-                let indices = (first..next_index).collect::<Vec<_>>();
+                let first = tool_chain_start(state, last, projection_start);
+                let indices = tool_chain_indices(state, first, next_index);
                 let mut block =
                     render_committed_tool_result_group_snapshot(state, &indices, width, false);
                 if !block.is_empty() {
@@ -630,12 +623,78 @@ fn committed_tail_start(state: &RenderSnapshot, display_start: usize) -> usize {
     if start > display_start {
         start -= 1;
         if history[start].role == "tool" {
-            while start > display_start && history[start - 1].role == "tool" {
-                start -= 1;
-            }
+            start = tool_chain_start(state, start, display_start);
         }
     }
     start
+}
+
+/// An assistant message that shows nothing in the transcript: it only carries
+/// the tool calls of a one-tool-per-round step. Thoughts and prose are visible,
+/// so they end a chain.
+fn is_invisible_tool_step(state: &RenderSnapshot, index: usize) -> bool {
+    let Some(message) = state.history().get(index) else {
+        return false;
+    };
+    message.role == "assistant"
+        && !message.conversation_recap
+        && (!message.tool_calls.is_empty()
+            || !rustcode_tool_protocol::resolve_tool_calls(message, state.active_tool_protocol())
+                .is_empty())
+        // The renderer is the authority on what shows. Whether a block is
+        // empty does not depend on the width, and an empty message skips it.
+        && (message.content.trim().is_empty()
+            || render_committed_history_block_snapshot(state, index, 80).is_empty())
+}
+
+/// First index of the tool-result chain ending at `last`, never below `floor`.
+///
+/// Rounds with nothing visible between them belong to one group, so the chain
+/// crosses invisible tool steps and the group renders under a single heading
+/// with one closed tree, however many rounds produced it.
+fn tool_chain_start(state: &RenderSnapshot, last: usize, floor: usize) -> usize {
+    let history = state.history();
+    let mut first = last;
+    loop {
+        while first > floor && history[first - 1].role == "tool" {
+            first -= 1;
+        }
+        if first >= floor + 2
+            && is_invisible_tool_step(state, first - 1)
+            && history[first - 2].role == "tool"
+        {
+            first -= 2;
+        } else {
+            return first;
+        }
+    }
+}
+
+/// Exclusive end of the tool-result chain starting at `first`.
+fn tool_chain_end(state: &RenderSnapshot, first: usize) -> usize {
+    let history = state.history();
+    let mut end = first;
+    loop {
+        while end < history.len() && history[end].role == "tool" {
+            end += 1;
+        }
+        if end + 1 < history.len()
+            && is_invisible_tool_step(state, end)
+            && history[end + 1].role == "tool"
+        {
+            end += 1;
+        } else {
+            return end;
+        }
+    }
+}
+
+/// The tool results inside a chain, leaving out the invisible steps between.
+fn tool_chain_indices(state: &RenderSnapshot, first: usize, end: usize) -> Vec<usize> {
+    let history = state.history();
+    (first..end)
+        .filter(|&index| history[index].role == "tool")
+        .collect()
 }
 
 fn committed_suffix_rows(
@@ -650,10 +709,8 @@ fn committed_suffix_rows(
     while index < history.len() {
         if history[index].role == "tool" {
             let first = index;
-            while index < history.len() && history[index].role == "tool" {
-                index += 1;
-            }
-            let indices = (first..index).collect::<Vec<_>>();
+            index = tool_chain_end(state, first);
+            let indices = tool_chain_indices(state, first, index);
             let block = render_committed_tool_result_group_snapshot(state, &indices, width, false);
             rows += block.len() + usize::from(!block.is_empty());
         } else {
