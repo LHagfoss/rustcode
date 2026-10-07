@@ -841,8 +841,11 @@ pub(super) const LIVE_TOOL_CALL_GRACE: std::time::Duration = std::time::Duration
 
 /// Whether a visible call has been in flight long enough to draw.
 pub(super) fn live_tool_call_is_settled(call: &LiveToolCall) -> bool {
-    // Rendering tests build calls and draw them in the same instant.
-    cfg!(test) || call.started_at.elapsed() >= LIVE_TOOL_CALL_GRACE
+    // Rendering tests build calls and draw them in the same instant, and the
+    // frozen `/test` preview pins its calls to a start time in the future.
+    cfg!(test)
+        || call.started_at > std::time::Instant::now()
+        || call.started_at.elapsed() >= LIVE_TOOL_CALL_GRACE
 }
 
 /// Width-aware truncation shared with the indicator row so wide glyphs never
