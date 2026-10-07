@@ -1564,6 +1564,45 @@ pub(crate) fn render_committed_tool_result_continuation_snapshot(
     render_tool_result_group_snapshot(state, message_indices, width, show_picker, false)
 }
 
+/// Whether the tool result at `message_index` opens a provider round that
+/// should be set apart from the round before it in the same chain.
+///
+/// A model that emits no prose between rounds produces one unbroken column of
+/// rows. A spine-only row between rounds restores the batches as visual
+/// groups; runs of single-call rounds stay compact.
+fn tool_round_needs_spacer(history: &[ChatMessage], message_index: usize) -> bool {
+    let is_tool = |index: usize| {
+        history
+            .get(index)
+            .is_some_and(|message| message.role == "tool")
+    };
+    if message_index == 0 || is_tool(message_index - 1) {
+        return false;
+    }
+    let round_len = (message_index..)
+        .take_while(|&index| is_tool(index))
+        .count();
+    let mut previous_end = message_index - 1;
+    while !is_tool(previous_end) {
+        if previous_end == 0 || history[previous_end].role == "user" {
+            return false;
+        }
+        previous_end -= 1;
+    }
+    let previous_len = (0..=previous_end)
+        .rev()
+        .take_while(|&index| is_tool(index))
+        .count();
+    round_len > 1 || previous_len > 1
+}
+
+fn tool_round_spacer(show_picker: bool) -> Line<'static> {
+    Line::from(Span::styled(
+        "│",
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::DIM, show_picker),
+    ))
+}
+
 fn render_tool_result_group_snapshot(
     state: &RenderSnapshot,
     message_indices: &[usize],
@@ -1597,6 +1636,11 @@ fn render_tool_result_group_snapshot(
             {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
+                    if child_index > 0
+                        && tool_round_needs_spacer(state.active_history(), entry.message_index)
+                    {
+                        lines.push(tool_round_spacer(show_picker));
+                    }
                     let title = command_child_lines(
                         entry,
                         child_index + 1 == group.len(),
@@ -1679,6 +1723,11 @@ fn render_tool_result_group_snapshot(
                 })
                 .collect();
             for (child_index, entry) in visible.iter().enumerate() {
+                if (child_index > 0 || !include_header)
+                    && tool_round_needs_spacer(state.active_history(), entry.message_index)
+                {
+                    lines.push(tool_round_spacer(show_picker));
+                }
                 {
                     let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
                     // Command, generic Tool, and Edit-with-diff entries collapse

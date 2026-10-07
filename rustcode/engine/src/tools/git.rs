@@ -109,17 +109,21 @@ pub fn git_diff(args: &Value) -> Result<String, String> {
         .get("staged")
         .and_then(super::parse_json_bool)
         .unwrap_or(false);
-    let path = args.get("path").and_then(Value::as_str).map(str::trim);
-    if let Some(path) = path
-        && (path.is_empty() || path.contains('\0'))
-    {
+    // Models often send `"path": ""` for the optional argument; that means no
+    // path filter, not an invalid one.
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty());
+    if path.is_some_and(|path| path.contains('\0')) {
         return Err("invalid 'path'".to_string());
     }
     let mut cmd: Vec<&str> = vec!["diff", "--no-color"];
     if staged {
         cmd.push("--cached");
     }
-    if let Some(path) = path.filter(|p| !p.is_empty()) {
+    if let Some(path) = path {
         cmd.push("--");
         cmd.push(path);
     }
@@ -230,6 +234,18 @@ mod tests {
             let args = serde_json::json!({"paths": [bad]});
             assert!(git_add(&args).is_err(), "should reject {bad}");
         }
+    }
+
+    #[test]
+    fn empty_diff_path_means_no_path_filter() {
+        for path in ["", "  "] {
+            let result = git_diff(&serde_json::json!({"staged": false, "path": path}));
+            assert_ne!(result, Err("invalid 'path'".to_string()));
+        }
+        assert_eq!(
+            git_diff(&serde_json::json!({"path": "a\0b"})),
+            Err("invalid 'path'".to_string())
+        );
     }
 
     #[test]
