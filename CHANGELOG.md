@@ -1,3 +1,13 @@
+## [v0.57.14](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.14) - 2026-10-07
+
+### Features
+- Add a `claude` provider that serves requests through the locally installed Claude Code CLI; connect with `/login claude` (#1802).
+- Scroll the transcript one line per mouse wheel event (#1801).
+- Complete a turn whose only edit was a scratch file it created and then deleted, instead of reporting it as unverified (#1803).
+- Stop treating "reply with ..." in a prompt as an unfinished external action (#1803).
+- Keep the MCP tool menu pinned across the rounds of a turn after a lazily started server registers, and keep the ChatGPT-plan tool declaration in one position (#1803).
+- Report the provider's own cache numbers in `provider_cache_status` for non-OpenRouter providers (#1803).
+- Shorten the README and move its reference sections into `docs/` (#1804).
 ## [v0.57.13](https://github.com/LHagfoss/rustcode/releases/tag/v0.57.13) - 2026-10-07
 
 ### Fixes
