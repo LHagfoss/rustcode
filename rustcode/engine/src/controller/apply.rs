@@ -138,6 +138,12 @@ fn record_active_background_task(
     if state.background_wakeup_ids.contains(task_id) {
         return false;
     }
+    if crate::tools::background_result_delivered_by_wait(&state.active_session_id, task_id) {
+        // `manage_task` `wait` already returned this result to the model.
+        state.background_wakeup_ids.insert(task_id.to_owned());
+        state.request_redraw();
+        return false;
+    }
     if state.orchestrator_running {
         // A turn is in flight: withhold the output so it joins history at
         // the next turn boundary instead of derailing the current turn's
@@ -426,6 +432,55 @@ mod tests {
         assert!(state.history[0].content.contains("done"));
         assert!(state.pending_background_outputs.is_empty());
         assert_eq!(crate::flush_pending_background_outputs(&mut state), 0);
+    }
+
+    #[test]
+    fn result_read_through_wait_is_not_delivered_again() {
+        let mut state = AppState::new();
+        state.active_session_id = "wait-read-session".to_owned();
+        state.orchestrator_running = true;
+        let output = ToolExecutionOutput::success("done".to_owned());
+
+        // Parked before `wait` returned it, then parked for a task the model
+        // never waited on.
+        assert!(record_active_background_task(
+            &mut state,
+            "task-read",
+            output.clone(),
+            true
+        ));
+        assert!(record_active_background_task(
+            &mut state,
+            "task-unread",
+            output.clone(),
+            true
+        ));
+        crate::tools::exec::note_wait_delivered("wait-read-session", "task-read");
+
+        // The next request keeps only the wakeup whose result is still withheld.
+        assert_eq!(state.consume_answered_background_wakeups(), 0);
+        assert_eq!(
+            state.pending_queue,
+            vec!["__task_wakeup__:task-unread".to_owned()]
+        );
+        assert_eq!(state.pending_background_outputs.len(), 1);
+        assert_eq!(state.pending_background_outputs[0].task_id, "task-unread");
+
+        // A completion that arrives after `wait` returned it is not parked.
+        crate::tools::exec::note_wait_delivered("wait-read-session", "task-late");
+        assert!(!record_active_background_task(
+            &mut state,
+            "task-late",
+            output,
+            true
+        ));
+        assert_eq!(state.pending_background_outputs.len(), 1);
+
+        assert_eq!(crate::flush_pending_background_outputs(&mut state), 1);
+        assert!(state.pending_background_outputs.is_empty());
+        assert_eq!(state.history.len(), 1);
+        assert_eq!(state.consume_answered_background_wakeups(), 1);
+        assert!(state.pending_queue.is_empty());
     }
 
     #[test]

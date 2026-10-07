@@ -464,6 +464,43 @@ fn scroll_panel_selection(
 /// Esc re-enters follow when the transcript is not already showing the newest
 /// row. Routed through [`TranscriptState::jump_to_latest`] so the keyboard and
 /// the "back to bottom" control clear the same state (#1595).
+/// The expand key (ctrl+o, or ctrl+shift+o for one entry at a time), also
+/// reached by clicking a tool row in the transcript.
+fn toggle_tool_expansion(state: &mut AppState, width: u16, step: bool) {
+    let snapshot = ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(state));
+    let high_verbosity = matches!(
+        snapshot.configured_verbosity(),
+        rustcode::controller::Verbosity::High
+    );
+    let candidates = ui::collapsible_tool_indices(&snapshot, width);
+    // At high verbosity the whole-transcript key walks the
+    // folded batches open: counts, then the calls, then
+    // their output, then back. The single-entry step only
+    // has something to act on once output is showing.
+    let output_shown = snapshot.tool_detail() == rustcode::controller::ToolDetail::Output;
+    if high_verbosity && !(step && output_shown) {
+        state.tool_detail = state.tool_detail.next();
+        if state.tool_detail != rustcode::controller::ToolDetail::Output {
+            state.expanded_thoughts.clear();
+            state.expanded_thought_focus = None;
+        }
+        let notice = match state.tool_detail {
+            rustcode::controller::ToolDetail::Summary => "Tool calls folded",
+            rustcode::controller::ToolDetail::List => "Showing tool calls · ctrl+o for output",
+            rustcode::controller::ToolDetail::Output => "Showing tool output · ctrl+o to fold",
+        };
+        state.set_transient_notice(notice);
+    } else if candidates.is_empty() {
+        state.set_transient_notice("No collapsed tool output");
+    } else if step {
+        // The single-entry step keeps the focus-driven walk
+        // that the whole-transcript toggle replaced.
+        rustcode::controller::toggle_expanded_thought(state, &candidates);
+    } else {
+        rustcode::controller::toggle_all_expanded_thoughts(state, &candidates);
+    }
+}
+
 fn return_to_latest_for_key(transcript: &mut TranscriptState, key: KeyCode) -> bool {
     if key != KeyCode::Esc || transcript.scroll_rows() == 0 {
         return false;
@@ -1898,48 +1935,7 @@ pub(super) async fn handle_app_event(
                         let step = matches!(action, ui::ComposerAction::ToggleExpandStep);
                         let mut state = app_state.lock().await;
                         let width = terminal_runtime.terminal().area().width;
-                        let snapshot = ui::render_snapshot::render_snapshot(
-                            &rustcode::controller::render_state(&state),
-                        );
-                        let high_verbosity = matches!(
-                            snapshot.configured_verbosity(),
-                            rustcode::controller::Verbosity::High
-                        );
-                        let candidates = ui::collapsible_tool_indices(&snapshot, width);
-                        // At high verbosity the whole-transcript key walks the
-                        // folded batches open: counts, then the calls, then
-                        // their output, then back. The single-entry step only
-                        // has something to act on once output is showing.
-                        let output_shown =
-                            snapshot.tool_detail() == rustcode::controller::ToolDetail::Output;
-                        if high_verbosity && !(step && output_shown) {
-                            state.tool_detail = state.tool_detail.next();
-                            if state.tool_detail != rustcode::controller::ToolDetail::Output {
-                                state.expanded_thoughts.clear();
-                                state.expanded_thought_focus = None;
-                            }
-                            let notice = match state.tool_detail {
-                                rustcode::controller::ToolDetail::Summary => "Tool calls folded",
-                                rustcode::controller::ToolDetail::List => {
-                                    "Showing tool calls · ctrl+o for output"
-                                }
-                                rustcode::controller::ToolDetail::Output => {
-                                    "Showing tool output · ctrl+o to fold"
-                                }
-                            };
-                            state.set_transient_notice(notice);
-                        } else if candidates.is_empty() {
-                            state.set_transient_notice("No collapsed tool output");
-                        } else if step {
-                            // The single-entry step keeps the focus-driven walk
-                            // that the whole-transcript toggle replaced.
-                            rustcode::controller::toggle_expanded_thought(&mut state, &candidates);
-                        } else {
-                            rustcode::controller::toggle_all_expanded_thoughts(
-                                &mut state,
-                                &candidates,
-                            );
-                        }
+                        toggle_tool_expansion(&mut state, width, step);
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
@@ -2453,6 +2449,17 @@ pub(super) async fn handle_app_event(
                             frame_requester.schedule_frame();
                             return Ok(InputFlow::ContinueIteration);
                         }
+                        // A press on a tool row arms a toggle; a drag turns
+                        // the gesture into a selection instead.
+                        match mouse.kind {
+                            event::MouseEventKind::Down(event::MouseButton::Left) => {
+                                transcript_state.tool_click = (mouse.modifiers.is_empty()
+                                    && transcript_state.tool_row_at(mouse.column, mouse.row))
+                                .then_some((mouse.column, mouse.row));
+                            }
+                            event::MouseEventKind::Up(event::MouseButton::Left) => {}
+                            _ => transcript_state.tool_click = None,
+                        }
                         let selected = if mouse.kind
                             == event::MouseEventKind::Down(event::MouseButton::Left)
                             && !(mouse.modifiers.contains(KeyModifiers::SHIFT)
@@ -2474,6 +2481,17 @@ pub(super) async fn handle_app_event(
                         } else {
                             transcript_state.selection.mouse(mouse)
                         };
+                        if mouse.kind == event::MouseEventKind::Up(event::MouseButton::Left)
+                            && transcript_state.tool_click.take() == Some((mouse.column, mouse.row))
+                            && !transcript_state.selection.has_selection()
+                        {
+                            let mut state = app_state.lock().await;
+                            if !state.modal_open() {
+                                let width = terminal_runtime.terminal().area().width;
+                                toggle_tool_expansion(&mut state, width, false);
+                                *needs_redraw = true;
+                            }
+                        }
                         // `mouse()` returns `Some` only for the explicit
                         // right-click copy action; left-button release keeps
                         // the highlight and copies via Ctrl+C (#1492, #1566).

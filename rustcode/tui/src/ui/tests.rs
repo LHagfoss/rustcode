@@ -7054,7 +7054,62 @@ fn high_verbosity_folds_a_tool_batch_until_the_expand_key_opens_it() {
 }
 
 #[test]
-fn high_verbosity_names_the_running_call_under_the_status_row() {
+fn folded_tool_rows_are_click_targets_and_prose_is_not() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = RenderState::new();
+    state
+        .history
+        .push(ChatMessage::new("user", "check the tree"));
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"git status --short"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "run_command: exit code: 0\nsome output")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+    state
+        .history
+        .push(ChatMessage::new("assistant", "The tree is clean."));
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    let row_text = |row: u16| {
+        (0..80)
+            .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+            .collect::<String>()
+    };
+    let row_of = |needle: &str| {
+        (0..24)
+            .find(|&row| row_text(row).contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} is not painted"))
+    };
+
+    let tool_row = row_of("Ran 1 shell command");
+    assert!(transcript.tool_row_at(4, tool_row));
+    assert!(!transcript.tool_row_at(4, row_of("The tree is clean.")));
+    assert!(!transcript.tool_row_at(4, row_of("check the tree")));
+    // The spacer under the count line belongs to the block but not the target.
+    assert!(!transcript.tool_row_at(4, tool_row + 1));
+}
+
+#[test]
+fn high_verbosity_names_the_running_call_in_the_transcript() {
     let mut state = RenderState::new();
     let mut call = rustcode::controller::LiveToolCall::new(
         "local:1",
@@ -7065,32 +7120,18 @@ fn high_verbosity_names_the_running_call_under_the_status_row() {
     );
     call.execution_started = true;
     std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
-    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(
-        rustcode::controller::LiveToolCall::new("local:2", None, "view_file", "Read", "a.rs"),
-    );
 
-    // The transcript keeps no live cell; the batch lands as a count line.
+    // The call is named in the chat; the status row by the composer only
+    // carries the state of the turn.
     let tail = super::render_live_tail(&state, 80, 24)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!tail.contains("Running"), "rendered: {tail:?}");
-
-    let snapshot = render_snapshot(&state);
-    let detail = super::conversation_render::live_tool_status_detail(&snapshot, 80)
-        .expect("a running call is named")
-        .to_string();
     assert!(
-        detail.starts_with("└ $ cargo test --workspace (0s) · +1 more"),
-        "{detail}"
+        tail.contains("cargo test --workspace"),
+        "rendered: {tail:?}"
     );
-    assert!(detail.ends_with("esc interrupt"), "{detail}");
-
-    // Low verbosity keeps the live cell, which streams the command output.
-    state.verbosity = rustcode::controller::Verbosity::Low;
-    let snapshot = render_snapshot(&state);
-    assert!(super::conversation_render::live_tool_status_detail(&snapshot, 80).is_none());
 }
 
 #[test]

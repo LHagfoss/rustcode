@@ -132,11 +132,18 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             // cancelled: doing so loses queued user prompts when Esc races
             // with the end of the active stream.
             if cancel_token.is_cancelled() {
+                // The wakeups went with the cancelled turn; record what
+                // finished so no result stays listed as unread.
+                crate::flush_pending_background_outputs(&mut s);
                 s.release_orchestrator(&lease);
                 break;
             }
+            crate::prune_delivered_background_outputs(&mut s);
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
+                // Nothing will wake the model for what is still withheld
+                // (silent tasks): it joins history here, not at the next prompt.
+                crate::flush_pending_background_outputs(&mut s);
                 s.enter_idle();
                 s.delegation_active = false;
                 s.release_orchestrator(&lease);

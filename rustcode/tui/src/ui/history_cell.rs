@@ -71,6 +71,14 @@ pub(crate) struct TranscriptState {
     /// Whether the visible panel body responds to vertical scrolling.
     pub(crate) panel_selection_scrollable: bool,
     committed_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Line<'static>>>>>,
+    /// For each transcript line of the projection just built, whether it shows
+    /// tool calls. `None` while a selection pins the view: the rows painted
+    /// before the press stay the click targets.
+    pub(super) tool_line_flags: Option<Vec<bool>>,
+    /// Painted transcript area and, per row, whether it shows tool calls.
+    tool_rows: (ratatui::layout::Rect, Vec<bool>),
+    /// A press on a tool row; releasing in place toggles the calls like ctrl+o.
+    pub(crate) tool_click: Option<(u16, u16)>,
     /// The running indicator last painted and when, see
     /// [`Self::settle_indicator`].
     held_indicator: Option<HeldIndicator>,
@@ -123,6 +131,9 @@ impl Default for TranscriptState {
             panel_selection_area: None,
             panel_selection_scrollable: false,
             committed_cache: None,
+            tool_line_flags: None,
+            tool_rows: (ratatui::layout::Rect::default(), Vec::new()),
+            tool_click: None,
             held_indicator: None,
         }
     }
@@ -230,6 +241,20 @@ impl TranscriptState {
     pub(crate) fn indicator_hold_remaining(&self) -> Option<std::time::Duration> {
         let held = self.held_indicator.as_ref().filter(|held| held.stale)?;
         Some(INDICATOR_HOLD.saturating_sub(held.shown_at.elapsed()))
+    }
+
+    pub(super) fn set_tool_rows(&mut self, area: ratatui::layout::Rect, rows: Vec<bool>) {
+        self.tool_rows = (area, rows);
+    }
+
+    /// Whether the last painted frame showed tool calls at this cell.
+    pub(crate) fn tool_row_at(&self, column: u16, row: u16) -> bool {
+        let (area, rows) = &self.tool_rows;
+        area.contains(ratatui::layout::Position::new(column, row))
+            && rows
+                .get(usize::from(row - area.y))
+                .copied()
+                .unwrap_or(false)
     }
 
     pub(crate) fn scroll_rows(&self) -> usize {

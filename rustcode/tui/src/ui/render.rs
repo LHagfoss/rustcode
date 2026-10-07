@@ -414,18 +414,8 @@ pub(crate) fn render_with_transcript_snapshot(
     );
     // Own the gap and indicator rows so even a full transcript keeps activity
     // visible. Leave at least one transcript row on short terminals.
-    // The row under the indicator names the running call. It is reserved for
-    // as long as the indicator shows, so a call starting or finishing never
-    // moves the transcript by a row.
-    let indicator_detail = indicator
-        .is_some()
-        .then(|| super::conversation_render::live_tool_status_detail(state, chat_width))
-        .flatten();
-    let detail_rows = u16::from(super::conversation_render::live_tools_ride_the_status_row(
-        state,
-    ));
     let indicator_height = if indicator.is_some() {
-        (2 + detail_rows).min(chat_surface_height.saturating_sub(1))
+        2.min(chat_surface_height.saturating_sub(1))
     } else {
         0
     };
@@ -446,6 +436,14 @@ pub(crate) fn render_with_transcript_snapshot(
     // The content height is the sum of the same counts (no second full
     // `lines.clone()`) (#1582).
     let (wrapped_counts, conversation_content_height) = cached_wrap_counts(&lines, layout_width);
+    let tool_rows = transcript.tool_line_flags.take().map(|flags| {
+        flags
+            .iter()
+            .zip(wrapped_counts.iter())
+            .flat_map(|(&is_tool, &count)| std::iter::repeat_n(is_tool, count.max(1)))
+            .take(chat_height as usize)
+            .collect::<Vec<bool>>()
+    });
     let soft_wrap_before: Vec<bool> = wrapped_counts
         .iter()
         .flat_map(|&count| {
@@ -494,16 +492,6 @@ pub(crate) fn render_with_transcript_snapshot(
                 Paragraph::new(indicator).style(Style::default().bg(COLOR_BG())),
                 ratatui::layout::Rect::new(chat_surface.x, target, chat_surface.width, 1),
             );
-            let detail_row = target.saturating_add(1);
-            if let Some(detail) = indicator_detail
-                && detail_row < chat_surface.bottom()
-                && row_is_blank(f.buffer(), chat_surface, detail_row)
-            {
-                f.render_widget(
-                    Paragraph::new(detail).style(Style::default().bg(COLOR_BG())),
-                    ratatui::layout::Rect::new(chat_surface.x, detail_row, chat_surface.width, 1),
-                );
-            }
         }
     }
 
@@ -692,6 +680,9 @@ pub(crate) fn render_with_transcript_snapshot(
     } else {
         chunks[0]
     };
+    if let Some(rows) = tool_rows {
+        transcript.set_tool_rows(selection_area, rows);
+    }
     transcript.selection.refresh_view(
         selection_area,
         f.buffer(),
