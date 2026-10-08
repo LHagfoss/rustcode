@@ -506,7 +506,8 @@ pub(super) fn tool_result_action(
     // summarize as a question count plus every header/answer pair.
     if tool_name == "ask_question" {
         let args = tool_call_arguments(state, message_index, tool_name);
-        let answer = ask_question_answer(state.active_history(), message_index);
+        let answer =
+            replace_emoji_shortcodes(&ask_question_answer(state.active_history(), message_index));
         let chain_len = args
             .get("questions")
             .and_then(|value| value.as_array())
@@ -518,7 +519,7 @@ pub(super) fn tool_result_action(
                 format!("{chain_len} questions → {answer}"),
             );
         }
-        let question = ask_question_text(&args);
+        let question = replace_emoji_shortcodes(&ask_question_text(&args));
         return ("Asked".to_owned(), format!("{question} → {answer}"));
     }
     format_pi_tool_action(
@@ -1324,6 +1325,28 @@ fn expand_hint_span(width: u16, show_picker: bool) -> Span<'static> {
 /// The tree connector (`├`/`└`) restores the inward side lines that point at
 /// each child, while the marker keeps the execution state (#1725). Both are
 /// 4 columns wide combined, matching the previous flat indent.
+/// Models write chat-style shortcodes into option labels, and a terminal shows
+/// them as `:white_check_mark:`. The few that mark a choice become the glyph
+/// they stand for; anything else is left as written.
+pub(super) fn replace_emoji_shortcodes(text: &str) -> String {
+    const SHORTCODES: &[(&str, &str)] = &[
+        (":white_check_mark:", "✓"),
+        (":heavy_check_mark:", "✓"),
+        (":check:", "✓"),
+        (":x:", "✗"),
+        (":no_entry:", "✗"),
+        (":warning:", "!"),
+    ];
+    if !text.contains(':') {
+        return text.to_owned();
+    }
+    let mut text = text.to_owned();
+    for (code, glyph) in SHORTCODES {
+        text = text.replace(code, glyph);
+    }
+    text
+}
+
 /// A call that has not finished, whether it is running or waiting its turn.
 pub(super) const LIVE_ROW_GLYPH: char = '○';
 

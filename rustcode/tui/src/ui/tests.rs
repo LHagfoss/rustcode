@@ -5912,7 +5912,12 @@ fn status_panels_render_minimal_inline() {
     );
 
     assert_eq!(notice_lines.len(), 1, "ordinary notice panel skips header");
-    assert!(notice_lines[0].spans[0].content.contains("  "));
+    // The wrapper emits one span per word, so the indent is read off the row.
+    assert!(
+        notice_lines[0]
+            .to_string()
+            .starts_with("  Notice: background task finished")
+    );
 
     let mut loop_recovery_lines = Vec::new();
     render_status_panel(
@@ -11843,5 +11848,50 @@ fn the_model_picker_frame_offers_its_rows_and_its_esc_hint_to_the_pointer() {
         targets.contains(&super::PanelTarget::ListRow(1))
             && targets.contains(&super::PanelTarget::ListRow(2)),
         "{targets:?}"
+    );
+}
+
+// A long notice wrapped at the left edge, so its second row started under the
+// marker instead of under its own text.
+#[test]
+fn a_wrapped_notice_keeps_its_later_rows_under_its_text() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new(
+        "system",
+        "Error from LLM Provider: the provider closed the stream before it sent any event at all",
+    ));
+    let rows = super::render_committed_history_block(&state, 0, 40)
+        .into_iter()
+        .map(|line| line.to_string())
+        .filter(|row| !row.is_empty())
+        .collect::<Vec<_>>();
+    assert!(rows.len() > 1, "{rows:#?}");
+    assert!(rows[0].starts_with("! Error"), "{rows:#?}");
+    for row in &rows {
+        assert!(
+            unicode_width::UnicodeWidthStr::width(row.as_str()) <= 40,
+            "{rows:#?}"
+        );
+    }
+    for row in &rows[1..] {
+        assert!(
+            row.starts_with("  ") && !row.starts_with("   "),
+            "{rows:#?}"
+        );
+    }
+}
+
+#[test]
+fn choice_shortcodes_become_glyphs_and_other_text_is_left_alone() {
+    let replace = super::tool_transcript::replace_emoji_shortcodes;
+    assert_eq!(
+        replace(":white_check_mark: Yes, log exactly these blocks"),
+        "✓ Yes, log exactly these blocks"
+    );
+    assert_eq!(replace(":x: No"), "✗ No");
+    assert_eq!(
+        replace("08:00-08:30 :rocket: ship"),
+        "08:00-08:30 :rocket: ship"
     );
 }
