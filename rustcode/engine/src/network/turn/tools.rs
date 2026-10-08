@@ -846,10 +846,19 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             queued_call_count
         );
     }
+    // A response without calls would end the turn and release the queue, but
+    // the model was told the held calls run without another request from it.
+    // Treat the queue as work for this round so they run and their results
+    // reach the model before it can finish (#1857).
+    let held_calls_pending =
+        tool_calls.is_empty() && !state.lock().await.deferred_tool_calls.is_empty();
+    if held_calls_pending {
+        dbg_log!("Model answered without calls while the harness still holds queued calls");
+    }
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
         ctx.recovery.force_final,
-        !tool_calls.is_empty(),
+        !tool_calls.is_empty() || held_calls_pending,
         ctx.lifecycle.task_completed,
     ) {
         Ok(action) => action,
@@ -3164,6 +3173,49 @@ mod tests {
         // The queued call already owns an answer under its provider id, so the
         // auto-executed result must not claim that id again (#1590 pairing).
         assert_eq!(ctx.metrics.tool_calls, 3, "two writes and one clock read");
+    }
+
+    // #1857: the model may answer in text right after being told its held
+    // calls will run. The turn must run them instead of dropping them.
+    #[tokio::test]
+    async fn held_calls_run_when_the_model_answers_without_another_call() {
+        let temp = tempfile::tempdir().expect("temporary workspace");
+        let (state, session_id) = approving_state();
+        let policy = Arc::new(ApproveAll);
+        let mut ctx = TurnContext::new();
+        let first = write_call(&temp.path().join("first.txt"), "one");
+        let second = write_call(&temp.path().join("second.txt"), "two");
+
+        run_round(
+            &state,
+            &policy,
+            &mut ctx,
+            "",
+            vec![
+                envelope("call-first", &first),
+                envelope("call-second", &second),
+            ],
+            &session_id,
+        )
+        .await;
+        assert_eq!(state.lock().await.deferred_tool_calls.len(), 1);
+
+        let outcome = run_round(
+            &state,
+            &policy,
+            &mut ctx,
+            "Both files are written.",
+            Vec::new(),
+            &session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, super::ToolHandlingOutcome::Continue);
+        assert!(state.lock().await.deferred_tool_calls.is_empty());
+        assert!(
+            temp.path().join("second.txt").exists(),
+            "the held call ran although the model asked for nothing more"
+        );
     }
 
     #[tokio::test]
