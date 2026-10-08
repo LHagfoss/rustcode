@@ -2598,7 +2598,15 @@ mod tests {
             1,
             "implicit detached task was not retained"
         );
-        assert_eq!(stop.stopped, 1, "implicit detached task was not terminated");
+        // A task whose process is still starting is cancelled by request and
+        // reported as `requested`, not `stopped`. Which of the two the stop
+        // lands on is a matter of timing; that it lands is what is tested.
+        assert_eq!(
+            stop.stopped + stop.requested,
+            1,
+            "implicit detached task was not terminated"
+        );
+        assert_eq!(stop.failed, 0);
     }
 
     #[test]

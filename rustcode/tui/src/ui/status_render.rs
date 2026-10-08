@@ -273,29 +273,28 @@ pub(super) fn render_status_panel<'a>(
                 lines.push(Line::from(""));
                 continue;
             }
-            if is_warning {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "! ",
-                        get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::BOLD, show_picker),
-                    ),
-                    Span::styled(
-                        trimmed.to_string(),
-                        get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ),
-                ]));
+            let (marker, color, marker_weight) = if is_warning {
+                ("! ", COLOR_TIP(), Modifier::BOLD)
             } else {
-                lines.push(Line::from(vec![
+                ("  ", COLOR_MUTED(), Modifier::empty())
+            };
+            let text_style = get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker);
+            // Wrapped here so the rows after the first stay under the text
+            // instead of starting at the left edge, under the marker.
+            let mut wrapped = Vec::new();
+            push_wrapped_with_continuation(
+                &mut wrapped,
+                vec![
                     Span::styled(
-                        "  ",
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                        marker,
+                        get_themed_style(color, COLOR_BG(), marker_weight, show_picker),
                     ),
-                    Span::styled(
-                        trimmed.to_string(),
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ),
-                ]));
-            }
+                    Span::styled(trimmed.to_string(), text_style),
+                ],
+                usize::from(width).max(4),
+                Some(Span::styled("  ", text_style)),
+            );
+            lines.extend(wrapped);
         }
         return;
     }
