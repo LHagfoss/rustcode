@@ -686,20 +686,17 @@ fn committed_tail_start(state: &RenderSnapshot, display_start: usize) -> usize {
     start
 }
 
-/// An assistant step that stays inside the tool block around it: it carries
-/// tool calls and says at most a line. A real answer is a boundary.
+/// An assistant step that stays inside the tool block around it because it
+/// shows nothing. A step that says or thinks something is a boundary.
 fn is_joined_tool_step(state: &RenderSnapshot, index: usize) -> bool {
-    state
-        .history()
-        .get(index)
-        .is_some_and(|message| super::tool_transcript::tool_step_note(state, message).is_some())
+    super::tool_transcript::tool_step_is_silent(state, index)
 }
 
 /// First index of the tool-result chain ending at `last`, never below `floor`.
 ///
-/// Rounds with no more than a line of narration between them belong to one
-/// group, so the chain crosses those steps and the group renders under a
-/// single heading, however many rounds produced it.
+/// Rounds with nothing visible between them belong to one group, so the chain
+/// crosses silent tool steps and the group renders under a single heading,
+/// however many rounds produced it.
 fn tool_chain_start(state: &RenderSnapshot, last: usize, floor: usize) -> usize {
     let history = state.history();
     let mut first = last;

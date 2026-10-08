@@ -605,19 +605,6 @@ impl TranscriptState {
             .collect::<Vec<_>>();
         let mut block =
             super::render_committed_tool_result_group_snapshot(state, &indices, width, false);
-        // The step that asked for the calls in flight closes the chain; its
-        // narration is the row above them.
-        if !block.is_empty()
-            && let Some(note) = end
-                .checked_sub(1)
-                .and_then(|index| state.history().get(index))
-                .and_then(|message| super::tool_transcript::tool_step_note(state, message))
-                .filter(|note| !note.is_empty())
-        {
-            block.push(super::tool_transcript::tool_step_note_line(
-                &note, width, false,
-            ));
-        }
         // Calls still in flight are the next rows of this block, so nothing
         // separates them from it.
         if !block.is_empty() && !Self::block_stays_open(state, end) {
