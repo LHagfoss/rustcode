@@ -24,18 +24,6 @@ pub(super) fn render_finalized_assistant_scrollback(
     }
 }
 
-/// The note an assistant step leaves inside the tool block around it, or
-/// `None` when the message is a boundary.
-fn joined_tool_step_note(
-    snapshot: &crate::ui::render_snapshot::RenderSnapshot,
-    message_index: usize,
-) -> Option<String> {
-    snapshot
-        .active_history()
-        .get(message_index)
-        .and_then(|message| crate::ui::tool_step_note(snapshot, message))
-}
-
 /// Collect tool results from one provider batch and adjacent empty tool-only
 /// turns. A visible assistant message, system notice, or user message remains
 /// a hard transcript boundary even when its content is not part of the tool
@@ -57,7 +45,7 @@ pub(super) fn tool_result_group(
         index += 1;
 
         if index < end
-            && joined_tool_step_note(snapshot, index).is_some()
+            && crate::ui::tool_step_is_silent(snapshot, index)
             && index + 1 < end
             && history
                 .get(index + 1)
@@ -188,10 +176,7 @@ pub(super) fn commit_transcript(
             index = group_end;
             continue;
         } else if message.role == "assistant"
-            // A step that says a line needs an open block to say it in.
-            && joined_tool_step_note(snapshot, index).is_some_and(|note| {
-                note.is_empty() || transcript_cursor.tool_group_kind().is_some()
-            })
+            && crate::ui::tool_step_is_silent(snapshot, index)
             && snapshot
                 .history()
                 .get(index + 1)
@@ -331,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn a_line_of_narration_stays_inside_the_tool_group() {
+    fn visible_assistant_prose_keeps_tool_groups_separate() {
         let mut state = AppState::new();
         state.history.extend([
             tool_turn("call-1"),
@@ -347,11 +332,11 @@ mod tests {
         ]);
         let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
-        assert_eq!(tool_result_group(&snapshot, 1, 4), (vec![1, 3], 4));
+        assert_eq!(tool_result_group(&snapshot, 1, 4), (vec![1], 2));
     }
 
     #[test]
-    fn a_thought_between_rounds_stays_inside_the_tool_group() {
+    fn visible_assistant_thought_keeps_tool_groups_separate() {
         let mut state = AppState::new();
         state.history.extend([
             tool_turn("call-1"),
@@ -362,28 +347,6 @@ mod tests {
                     name: "get_time".to_owned(),
                     arguments: "{}".to_owned(),
                 }]),
-            result("call-2"),
-        ]);
-        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
-
-        assert_eq!(tool_result_group(&snapshot, 1, 4), (vec![1, 3], 4));
-    }
-
-    #[test]
-    fn a_real_answer_between_rounds_keeps_tool_groups_separate() {
-        let mut state = AppState::new();
-        state.history.extend([
-            tool_turn("call-1"),
-            result("call-1"),
-            ChatMessage::new(
-                "assistant",
-                "The first file is fine.\n\nThe second one needs a closer look.",
-            )
-            .with_tool_calls(vec![ToolCallRef {
-                id: "call-2".to_owned(),
-                name: "get_time".to_owned(),
-                arguments: "{}".to_owned(),
-            }]),
             result("call-2"),
         ]);
         let snapshot = render_snapshot(&rustcode::controller::render_state(&state));

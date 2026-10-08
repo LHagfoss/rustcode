@@ -10974,7 +10974,7 @@ fn committed_mcp_row_names_the_kind_of_call() {
         .map(Line::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("  ✓ MCP teams.list_chats"), "{text}");
+    assert!(text.contains("  ✓ Mcp teams.list_chats"), "{text}");
 }
 
 #[test]
@@ -11024,11 +11024,11 @@ fn tool_rounds_chain_under_one_heading() {
 }
 
 #[test]
-fn only_a_real_answer_between_tool_rounds_starts_a_new_group() {
+fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
-    // A step that says a line or only thinks stays inside the block, with the
-    // line as a row of it. An answer of its own is a boundary, and mixed tool
-    // kinds chain under the one heading (#1850).
+    // Chaining only crosses steps that show nothing. Prose or a thought is a
+    // boundary: it renders as text and the next round opens its own block.
+    // Mixed tool kinds chain under the one heading.
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let round =
         |state: &mut RenderState, id: &str, text: &str, tool: &str, args: serde_json::Value| {
@@ -11085,34 +11085,21 @@ fn only_a_real_answer_between_tool_rounds_starts_a_new_group() {
         );
         state
     };
-    for joined in [
+    for boundary in [
         "Now the second file.",
         "<think>Check the other file.</think>",
     ] {
-        let mut state = two_rounds(joined);
+        let mut state = two_rounds(boundary);
         assert_eq!(
             headings(&mut state),
-            ["• Ran", "  ✓ Read src/a.rs", "  ✓ Read src/b.rs"],
-            "{joined}"
+            ["• Ran", "  ✓ Read src/a.rs", "• Ran", "  ✓ Read src/b.rs"],
+            "{boundary}"
         );
     }
+    // The narration is text between the blocks, not a row of either.
     let rendered = render_state_to_text(&mut two_rounds("Now the second file."), 100, 40);
-    let rows = rendered.lines().map(str::trim_end).collect::<Vec<_>>();
-    let first = rows
-        .iter()
-        .position(|row| *row == "  ✓ Read src/a.rs")
-        .expect("first row");
-    assert_eq!(
-        rows[first + 1..first + 3],
-        ["  Now the second file.", "  ✓ Read src/b.rs"],
-        "{rendered}"
-    );
-
-    let mut state = two_rounds("The first file is fine.\n\nThe second needs a closer look.");
-    assert_eq!(
-        headings(&mut state),
-        ["• Ran", "  ✓ Read src/a.rs", "• Ran", "  ✓ Read src/b.rs"],
-    );
+    assert!(rendered.contains("• Now the second file."), "{rendered}");
+    assert!(!rendered.contains("  Now the second file."), "{rendered}");
 
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "look around"));
@@ -11509,7 +11496,7 @@ fn tool_rows_keep_their_state_on_the_row_at_every_width() {
                 ("  ✗ Bash", " · exit 1"),
                 ("  ✗ Read", " · failed"),
                 ("  ✗ Edit", " · failed"),
-                ("  ✗ MCP ", " · failed"),
+                ("  ✗ Mcp ", " · failed"),
                 ("  ✓ Task", ""),
             ];
             assert_eq!(rows.len(), expected.len(), "width {width}\n{text}");
@@ -11823,8 +11810,8 @@ fn live_calls_continue_the_committed_tool_block_under_one_heading() {
 }
 
 // The step that asked for a call is in the transcript before the call runs.
-// It must not split the live row from the block it continues, and its line of
-// narration is a row of the block.
+// A silent step must not split the live row from the block it continues; a
+// step that says something is a boundary, and the live row opens a new block.
 #[test]
 fn a_call_in_flight_joins_the_block_across_the_step_that_asked_for_it() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
@@ -11850,7 +11837,7 @@ fn a_call_in_flight_joins_the_block_across_the_step_that_asked_for_it() {
             }),
     );
     state.history.push(
-        ChatMessage::new("assistant", "Building it now.").with_tool_calls(vec![ToolCallRef {
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".into(),
             name: "run_command".into(),
             arguments: serde_json::json!({ "command": "cargo build" }).to_string(),
@@ -11873,19 +11860,32 @@ fn a_call_in_flight_joins_the_block_across_the_step_that_asked_for_it() {
         .position(|row| *row == "• Ran")
         .unwrap_or_else(|| panic!("no tool block: {rendered}"));
     assert_eq!(
-        rows[start..start + 4],
-        [
-            "• Ran",
-            "  ✓ Read src/a.rs",
-            "  Building it now.",
-            "  ○ Bash cargo build"
-        ],
+        rows[start..start + 3],
+        ["• Ran", "  ✓ Read src/a.rs", "  ○ Bash cargo build"],
         "{rendered}"
     );
     assert_eq!(rendered.matches("• Ran").count(), 1, "{rendered}");
+
+    state.history.last_mut().unwrap().content = "Building it now.".to_owned();
+    let rendered = render_state_to_text(&mut state, 100, 30);
+    let rows = rendered
+        .lines()
+        .map(str::trim_end)
+        .filter(|row| !row.is_empty())
+        .collect::<Vec<_>>();
+    let start = rows
+        .iter()
+        .position(|row| *row == "• Ran")
+        .unwrap_or_else(|| panic!("no tool block: {rendered}"));
     assert_eq!(
-        rendered.matches("Building it now.").count(),
-        1,
+        rows[start..start + 5],
+        [
+            "• Ran",
+            "  ✓ Read src/a.rs",
+            "• Building it now.",
+            "• Ran",
+            "  ○ Bash cargo build"
+        ],
         "{rendered}"
     );
 }

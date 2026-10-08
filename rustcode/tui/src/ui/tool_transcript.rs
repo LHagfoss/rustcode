@@ -1235,59 +1235,23 @@ pub(super) fn tool_group_header(title: &str, show_picker: bool) -> Line<'static>
 /// The heading every tool block carries.
 pub(super) const TOOL_BLOCK_HEADING: &str = "Ran";
 
-/// Longest narration, in characters, that stays inside a tool block.
-const TOOL_STEP_NOTE_MAX_CHARS: usize = 160;
-
-/// What an assistant step between two tool rounds adds to the block around
-/// it: `None` when the step is a boundary (it says something worth a block of
-/// its own), otherwise its one-line narration, empty when it only thought or
-/// said nothing. A line of narration per round would otherwise chop one run of
-/// work into as many one-row blocks (#1850).
-pub(crate) fn tool_step_note(state: &RenderSnapshot, message: &ChatMessage) -> Option<String> {
-    if message.role != "assistant" || message.conversation_recap {
-        return None;
-    }
-    let has_calls = !message.tool_calls.is_empty()
-        || !rustcode_tool_protocol::resolve_tool_calls(message, state.active_tool_protocol())
-            .is_empty();
-    if !has_calls {
-        return None;
-    }
-    let prose = rustcode_tool_protocol::text::strip_tool_call_syntax(&message.content);
-    let (prose, _) = super::assistant_render::split_thought_blocks(&prose);
-    let mut paragraphs = prose.split("\n\n").filter(|part| !part.trim().is_empty());
-    let first = paragraphs.next().unwrap_or_default();
-    if paragraphs.next().is_some() {
-        return None;
-    }
-    let note = first.split_whitespace().collect::<Vec<_>>().join(" ");
-    (note.chars().count() <= TOOL_STEP_NOTE_MAX_CHARS).then_some(note)
-}
-
-/// The row a step's narration takes inside a tool block.
-pub(super) fn tool_step_note_line(note: &str, width: u16, show_picker: bool) -> Line<'static> {
-    Line::from(Span::styled(
-        fit_to_width_ellipsis(&format!("  {note}"), usize::from(width)),
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-    ))
-}
-
-fn fit_to_width_ellipsis(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_owned();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + w + 1 > width {
-            break;
-        }
-        out.push(ch);
-        used += w;
-    }
-    out.push('…');
-    out
+/// Whether an assistant step between two tool rounds shows nothing: it only
+/// carries the calls of the next round. Such a step sits inside the tool
+/// block around it. A step that says or thinks something is a boundary: its
+/// text is rendered as text and the next round opens a block of its own.
+pub(crate) fn tool_step_is_silent(state: &RenderSnapshot, index: usize) -> bool {
+    let Some(message) = state.active_history().get(index) else {
+        return false;
+    };
+    message.role == "assistant"
+        && !message.conversation_recap
+        && (!message.tool_calls.is_empty()
+            || !rustcode_tool_protocol::resolve_tool_calls(message, state.active_tool_protocol())
+                .is_empty())
+        // The renderer is the authority on what shows. Whether a block is
+        // empty does not depend on the width, and an empty message skips it.
+        && (message.content.trim().is_empty()
+            || super::render_committed_history_block_snapshot(state, index, 80).is_empty())
 }
 
 /// Expand affordance appended to a collapsed body row. Reserved out of the
@@ -1700,7 +1664,7 @@ pub(super) fn tool_child_line(
     let is_mcp = entry.kind == ToolTranscriptKind::Tool && entry.action.contains('.');
     let label = vec![Span::styled(
         if is_mcp {
-            "MCP".to_owned()
+            "Mcp".to_owned()
         } else {
             entry.action.clone()
         },
@@ -2107,18 +2071,6 @@ fn render_tool_result_group_detailed(
                 {
                     lines.push(tool_round_spacer(show_picker));
                 }
-                // The step that asked for this round may have said a line
-                // first; it is part of the block, not a boundary.
-                if continues_block
-                    && let Some(note) = entry
-                        .message_index
-                        .checked_sub(1)
-                        .and_then(|index| state.active_history().get(index))
-                        .and_then(|message| tool_step_note(state, message))
-                        .filter(|note| !note.is_empty())
-                {
-                    lines.push(tool_step_note_line(&note, width, show_picker));
-                }
                 {
                     let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
                     // Command, generic Tool, and Edit-with-diff entries collapse
@@ -2264,9 +2216,8 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
             let has_calls = !msg.tool_calls.is_empty()
                 || !rustcode_tool_protocol::resolve_tool_calls(msg, state.active_tool_protocol())
                     .is_empty();
-            let joins = tool_step_note(state, msg).is_some();
             let next_is_tool = history.get(idx + 1).is_some_and(|next| next.role == "tool");
-            if has_calls && joins && next_is_tool {
+            if has_calls && tool_step_is_silent(state, idx) && next_is_tool {
                 idx += 1;
                 continue;
             }
