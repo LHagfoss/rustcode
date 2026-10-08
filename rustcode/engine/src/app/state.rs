@@ -63,6 +63,10 @@ pub struct AppState {
     /// Revision of the most recent clear or replacement, if any.
     pub(crate) current_response_last_rewrite_revision: u64,
     pub current_token_usage: Option<TokenUsage>,
+    /// Sticky-routing token a ChatGPT-plan response returned for the turn in
+    /// progress. Sent back on the turn's later requests so they reach the
+    /// backend that holds the prompt cache; cleared when a turn starts.
+    pub provider_turn_state: Option<String>,
     /// Provider usage accumulated across the current logical turn's completed
     /// requests. While a request is in flight, the renderer adds its live
     /// `current_token_usage` and marks the result provisional.
@@ -1140,6 +1144,7 @@ impl AppState {
             current_response_revision: 0,
             current_response_last_rewrite_revision: 0,
             current_token_usage: None,
+            provider_turn_state: None,
             current_turn_token_usage: None,
             current_round_token_usage: None,
             current_round_estimated_input_tokens: 0,

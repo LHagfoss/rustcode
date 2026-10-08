@@ -180,6 +180,11 @@ If the requested change is already present or cannot be applied safely, explain 
 
 pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. This is an advisory recovery message; tools remain enabled. Do not restate the requirements or repeat the same unchanged action. Take one bounded, evidence-producing step: use a safe read-only tool when more evidence is genuinely needed, mutate only when you have a trustworthy target and the user authorized the change, or give a clear diagnostic/final response.]";
 
+/// Sticky-routing header of the ChatGPT-plan backend. A response to the first
+/// request of a turn carries a token, and the Codex client replays it on every
+/// later request of that turn so they land on the same backend.
+pub(crate) const CHATGPT_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+
 /// Select native tool schemas without holding the application state mutex over
 /// synchronous MCP/filesystem work. Cache metadata is snapshotted before the
 /// computation and sticky names are committed only if that snapshot is still
