@@ -4590,6 +4590,9 @@ async fn stream_request_with_timeouts(
         apply_provider_parallel_tool_call_policy(&mut payload, api_protocol, allow_tools);
     }
     apply_openrouter_session_affinity(&mut payload, url, expected_session_id);
+    if chatgpt_plan {
+        payload["prompt_cache_key"] = serde_json::json!(request_session_id);
+    }
 
     let tool_count = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         payload
@@ -4928,6 +4931,11 @@ async fn stream_request_with_timeouts(
     };
 
     let mut request_payload_bytes = payload_bytes;
+    let chatgpt_turn_state = if chatgpt_plan {
+        state.lock().await.provider_turn_state.clone()
+    } else {
+        None
+    };
     let mut parallel_tool_calls_fallback_attempted = false;
     let mut attempt = 0usize;
     let stream: crate::network::claude_cli::ByteStream = loop {
@@ -4947,6 +4955,15 @@ async fn stream_request_with_timeouts(
         }
         if messages_api {
             req = req.header("anthropic-version", "2023-06-01");
+        }
+        if chatgpt_plan {
+            // The session identity the Codex client sends with every request.
+            for name in ["session-id", "thread-id", "x-client-request-id"] {
+                req = req.header(name, request_session_id.as_str());
+            }
+            if let Some(turn_state) = chatgpt_turn_state.as_deref() {
+                req = req.header(crate::network::CHATGPT_TURN_STATE_HEADER, turn_state);
+            }
         }
         if let Some(ref key) = api_key {
             req = apply_api_key_headers(
@@ -5012,6 +5029,25 @@ async fn stream_request_with_timeouts(
                     )
                 {
                     record_provider_rate_limits(&state, limits).await;
+                }
+                // Keep the first token of the turn, as the Codex client does:
+                // the backend answers every request with a new one, and only
+                // replaying the first keeps the turn on one route.
+                if chatgpt_plan
+                    && chatgpt_turn_state.is_none()
+                    && let Some(turn_state) = resp
+                        .headers()
+                        .get(crate::network::CHATGPT_TURN_STATE_HEADER)
+                        .and_then(|value| value.to_str().ok())
+                {
+                    let mut s = state.lock().await;
+                    if s.provider_turn_state.is_none() {
+                        s.provider_turn_state = Some(turn_state.to_owned());
+                    }
+                    request_event!(
+                        "provider.turn_state",
+                        serde_json::json!({ "outcome": "stored", "bytes": turn_state.len() }),
+                    );
                 }
                 break resp
                     .bytes_stream()

@@ -217,6 +217,8 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             super::clear_turn_steerability_for_session(&mut s, &turn_session_id);
             break;
         }
+        // The token routes one turn; the next turn gets its own.
+        state.lock().await.provider_turn_state = None;
         crate::logger::operational_event(
             "turn.start",
             serde_json::json!({

@@ -26,9 +26,12 @@ pub(crate) fn rate_limit_header_pairs(headers: &reqwest::header::HeaderMap) -> V
         .iter()
         .filter(|(name, _)| {
             let name = name.as_str();
-            ["ratelimit", "rate-limit", "quota", "x-codex-"]
-                .iter()
-                .any(|needle| name.contains(needle))
+            // The turn-state token is routing state, not quota data, and it
+            // is several hundred opaque bytes per response.
+            name != crate::network::CHATGPT_TURN_STATE_HEADER
+                && ["ratelimit", "rate-limit", "quota", "x-codex-"]
+                    .iter()
+                    .any(|needle| name.contains(needle))
         })
         .filter_map(|(name, value)| Some(format!("{}={}", name.as_str(), value.to_str().ok()?)))
         .collect()
@@ -113,6 +116,20 @@ impl ProviderRateLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_turn_state_token_is_not_logged_with_the_quota_headers() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-codex-primary-used-percent", "9".parse().unwrap());
+        headers.insert(
+            crate::network::CHATGPT_TURN_STATE_HEADER,
+            "opaque-routing-token".parse().unwrap(),
+        );
+        assert_eq!(
+            super::rate_limit_header_pairs(&headers),
+            ["x-codex-primary-used-percent=9"]
+        );
+    }
 
     #[test]
     fn headers_yield_both_windows_and_resolve_relative_resets() {
