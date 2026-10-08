@@ -877,6 +877,34 @@ fn agent_notice(state: &mut AppState, message: String) {
     state.set_notice(message);
 }
 
+/// Longest a single `wait_agent` call may block. The parent turn's
+/// cancellation still ends it at once.
+const MAX_WAIT_AGENT_TIMEOUT_MS: u64 = 3_600_000;
+
+/// The targets of `wait_agent`: `ids`, or the single `id`.
+fn agent_ids_arg(args: &serde_json::Value) -> Vec<u32> {
+    let parse = |value: &serde_json::Value| {
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+            .and_then(|id| u32::try_from(id).ok())
+    };
+    let mut ids = Vec::new();
+    for id in args
+        .get("ids")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(parse)
+        .chain(args.get("id").and_then(parse))
+    {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
 fn agent_id_arg(args: &serde_json::Value) -> Option<u32> {
     args.get("id")
         .and_then(|value| {
@@ -1312,12 +1340,88 @@ async fn handle_agent_tool_for_parent(
                     "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string(),
                 );
             }
-            let Some(id) = agent_id_arg(args) else {
+            let ids = agent_ids_arg(args);
+            if ids.is_empty() {
                 return crate::tools::ToolExecutionOutput::failure(
-                    "error: missing or invalid 'id' argument".to_string(),
+                    "error: missing or invalid 'id' or 'ids' argument".to_string(),
                 );
-            };
+            }
             let supervisor = state.lock().await.subagent_supervisor.clone();
+            let timeout_ms = args
+                .get("timeout_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(60_000)
+                .clamp(1, MAX_WAIT_AGENT_TIMEOUT_MS);
+            // Several targets: wait for whichever finishes first, then report
+            // that one exactly as a single-target wait would.
+            let id = if let [id] = ids[..] {
+                id
+            } else {
+                let (known, restored) = {
+                    let s = state.lock().await;
+                    let mut ancestors = Vec::new();
+                    let mut ancestor = parent_id;
+                    while let Some(candidate) = ancestor {
+                        ancestors.push(candidate);
+                        ancestor = s
+                            .subagents
+                            .iter()
+                            .find(|agent| agent.id == candidate)
+                            .and_then(|agent| agent.parent_id);
+                    }
+                    if ids.iter().any(|id| ancestors.contains(id)) {
+                        return crate::tools::ToolExecutionOutput::failure(
+                            "error: an agent cannot wait on itself or an ancestor".into(),
+                        );
+                    }
+                    (
+                        ids.iter()
+                            .all(|id| s.subagents.iter().any(|agent| agent.id == *id)),
+                        // A result restored with the session lives on the
+                        // agent record, not in the supervisor.
+                        ids.iter().copied().find(|id| {
+                            !supervisor.is_active(crate::app::SubagentId::from_raw(*id))
+                                && s.subagents
+                                    .iter()
+                                    .any(|agent| agent.id == *id && agent.completion.is_some())
+                        }),
+                    )
+                };
+                if !known {
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: unknown agent id in 'ids'".into(),
+                    );
+                }
+                if let Some(id) = restored {
+                    id
+                } else {
+                    let targets = ids
+                        .iter()
+                        .map(|id| crate::app::SubagentId::from_raw(*id))
+                        .collect::<Vec<_>>();
+                    let first = supervisor
+                        .yield_while_waiting(parent_id.map(crate::app::SubagentId::from_raw), async {
+                            tokio::select! {
+                                result = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), supervisor.wait_any(&targets)) => result.ok(),
+                                _ = cancel_token.cancelled() => Some(Err(crate::app::SubagentError::WaitCancelled(targets[0]))),
+                            }
+                        })
+                        .await;
+                    match first {
+                        Some(Ok(id)) => id.raw(),
+                        Some(Err(error)) => {
+                            return crate::tools::ToolExecutionOutput::failure(format!(
+                                "error: {error}"
+                            ));
+                        }
+                        None => {
+                            return crate::tools::ToolExecutionOutput::success(format!(
+                                "none of subagents {ids:?} finished before the wait timed out; their tasks remain available"
+                            ));
+                        }
+                    }
+                }
+            };
             if !supervisor.is_active(crate::app::SubagentId::from_raw(id)) {
                 let s = state.lock().await;
                 if let Some(agent) = s.subagents.iter().find(|agent| agent.id == id)
@@ -1367,11 +1471,6 @@ async fn handle_agent_tool_for_parent(
                         .and_then(|agent| agent.parent_id);
                 }
             }
-            let timeout_ms = args
-                .get("timeout_ms")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(60_000)
-                .clamp(1, 300_000);
             let wait = supervisor.yield_while_waiting(parent_id.map(crate::app::SubagentId::from_raw), async {
                 tokio::select! {
                     result = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), supervisor.wait_event(crate::app::SubagentId::from_raw(id))) => result,
@@ -1641,6 +1740,16 @@ fn subagent_context_workspace_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wait_targets_come_from_ids_or_id_without_duplicates() {
+        let ids = |args: serde_json::Value| agent_ids_arg(&args);
+        assert_eq!(ids(serde_json::json!({"id": 3})), [3]);
+        assert_eq!(ids(serde_json::json!({"id": "4"})), [4]);
+        assert_eq!(ids(serde_json::json!({"ids": [2, "5", 2]})), [2, 5]);
+        assert_eq!(ids(serde_json::json!({"ids": [2], "id": 7})), [2, 7]);
+        assert!(ids(serde_json::json!({"ids": ["x"], "timeout_ms": 5})).is_empty());
+    }
 
     #[tokio::test]
     async fn nested_depth_limit_rejects_before_creating_or_launching_another_child() {

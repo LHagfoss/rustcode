@@ -451,6 +451,33 @@ impl SubagentSupervisor {
         Ok(state.results.get(&id).cloned())
     }
 
+    /// The first of `ids` to have a result, waiting while none has one. Fails
+    /// when none of them is running or finished, so the wait cannot hang on
+    /// ids that will never report.
+    pub(crate) async fn wait_any(&self, ids: &[SubagentId]) -> Result<SubagentId, SubagentError> {
+        loop {
+            let notified = self.inner.activity.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let state = self
+                    .inner
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(id) = ids.iter().find(|id| state.results.contains_key(id)) {
+                    return Ok(*id);
+                }
+                if !ids.iter().any(|id| state.active.contains_key(id)) {
+                    return Err(SubagentError::MissingId(
+                        ids.first().copied().unwrap_or(SubagentId::from_raw(0)),
+                    ));
+                }
+            }
+            notified.await;
+        }
+    }
+
     pub(crate) fn has_result(&self, id: SubagentId) -> bool {
         self.inner
             .state
@@ -1343,6 +1370,44 @@ mod tests {
         assert_eq!(result.status, SubAgentStatus::Failed);
         assert!(result.output.contains("panicked"));
         assert!(!supervisor.is_active(id));
+    }
+
+    #[tokio::test]
+    async fn wait_any_returns_the_first_child_to_finish_and_rejects_unknown_ids() {
+        let supervisor = SubagentSupervisor::new(2);
+        let (slow, fast) = (SubagentId::from_raw(1), SubagentId::from_raw(2));
+        let (release, held) = oneshot::channel::<()>();
+        supervisor
+            .spawn(slow, CancellationToken::new(), async move {
+                let _ = held.await;
+                Ok("slow".to_owned())
+            })
+            .unwrap();
+        supervisor
+            .spawn(fast, CancellationToken::new(), async {
+                Ok("fast".to_owned())
+            })
+            .unwrap();
+
+        let first = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            supervisor.wait_any(&[slow, fast]),
+        )
+        .await
+        .expect("a finished child must end the wait")
+        .unwrap();
+        assert_eq!(first, fast);
+        assert!(supervisor.is_active(slow));
+
+        // Ids that are neither running nor finished fail instead of hanging.
+        assert!(
+            supervisor
+                .wait_any(&[SubagentId::from_raw(8), SubagentId::from_raw(9)])
+                .await
+                .is_err()
+        );
+        let _ = release.send(());
+        supervisor.wait(slow).await.unwrap();
     }
 
     #[tokio::test]
