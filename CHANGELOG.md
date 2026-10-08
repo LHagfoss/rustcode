@@ -1,3 +1,9 @@
+## [v0.59.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.59.1) - 2026-10-08
+
+### Fixes
+- One tool block for a run of work: calls in flight no longer get a `Running` heading of their own, the `Ran` heading keeps a static muted bullet instead of turning green or red, and a step that says a line or only thinks between two rounds stays inside the block with its line as a row. `esc interrupt` moves to the `Working` row (#1854)
+- The `Working` row is pinned directly above the composer; it no longer follows the last transcript row, jumps while scrolling or disappears (#1852)
+- Fixed an MCP status poll being suppressed as a duplicate side effect when repeated with the same arguments in one turn: it runs again once other work ran in between, and a suppressed replay no longer counts as new information (#1853)
 ## [v0.59.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.59.0) - 2026-10-08
 
 ### Features
