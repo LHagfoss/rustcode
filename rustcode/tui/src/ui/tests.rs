@@ -5912,7 +5912,12 @@ fn status_panels_render_minimal_inline() {
     );
 
     assert_eq!(notice_lines.len(), 1, "ordinary notice panel skips header");
-    assert!(notice_lines[0].spans[0].content.contains("  "));
+    // The wrapper emits one span per word, so the indent is read off the row.
+    assert!(
+        notice_lines[0]
+            .to_string()
+            .starts_with("  Notice: background task finished")
+    );
 
     let mut loop_recovery_lines = Vec::new();
     render_status_panel(
