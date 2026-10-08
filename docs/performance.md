@@ -27,6 +27,43 @@ command, generation, environment, checker configuration and sandbox identity.
 Failures, cancellation, partial output and unsafe external inputs never seed
 receipts; resume starts without verification receipts.
 
+## Recovering compacted context
+
+Compaction saves the exact removed messages in content-addressed JSONL archives.
+The read-only `zoom_context` tool navigates archives linked to the active session:
+
+1. Call `zoom_context` with `{}` to list message previews and obtain `root`.
+2. Open a message with `{"root":"<returned root>","message":2}`. Continue with
+   the returned `next_offset` until it is null; offsets count UTF-8 bytes.
+3. Follow a summary's `child_path`, for example
+   `{"root":"<returned root>","path":[1]}`, to list an earlier compaction.
+4. Continue an inventory using its `next_start`. Message numbers start at 1
+   within the selected archive, not within the whole session.
+
+Each inventory contains at most eight previews. Each message page contains at
+most 2 KiB of text, and the complete tool response is capped at 16 KiB. Native
+tool-call arguments and tool-result metadata are included when present. Listings
+and message slices are partial evidence; a preview is never a complete read.
+Older summaries without an archive link cannot be expanded. A changed `root`
+requires a fresh listing, so callers should pass it on every follow-up.
+
+Navigation follows typed compaction links, never caller-supplied filesystem
+paths or session IDs. Archives must be regular files in the archive directory
+with matching SHA-256 addresses. A call traverses at most 32 earlier compactions,
+reads at most 16 MiB per archive and 64 MiB in total, and fails explicitly on
+missing, corrupt, malformed or oversized data.
+
+Recalled messages describe historical conversation data. They do not prove the
+current state of a file or command. Recall appends ordinary tool results without
+rewriting history, rebuilding summaries or making background model calls. Tools
+remain fixed during a turn and changing runtime context remains at the request
+tail. These properties preserve prefix reuse; actual cache hits, cost and latency
+still depend on the provider and must be measured from its usage reports.
+
+This adopts on-demand recovery from the
+[UniiChat design](https://gist.github.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449),
+using RustCode's existing compaction links rather than its full summary tree.
+
 ## Local fixture measurements
 
 Debug tests use fresh temporary roots; these are not provider benchmarks.

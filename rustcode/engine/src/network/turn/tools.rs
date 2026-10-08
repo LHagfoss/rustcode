@@ -553,6 +553,16 @@ fn content_bearing_inspection_status(
     if !metadata.success || metadata.pending || content.trim().is_empty() {
         return None;
     }
+    // Archive reads establish historical conversation facts, without posing
+    // as fresh source-file inspections. Previews carry no completion evidence;
+    // a complete requested message page can support a recall-only answer.
+    if call.name == "zoom_context" {
+        return call
+            .arguments
+            .get("message")
+            .and_then(serde_json::Value::as_u64)
+            .map(|_| !incomplete_tool_result(metadata) && !metadata.payload_truncated);
+    }
     // MCP reads do not carry the file-range inspection metadata emitted by
     // source tools. Count only known read-only MCP results (or tools with an
     // explicit readOnlyHint); a deferred call has success=false above.
@@ -3949,6 +3959,40 @@ mod tests {
         assert_eq!(
             content_bearing_inspection_status(Some(&call), &metadata, "partial source"),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn archived_message_reads_support_completion_but_inventories_do_not() {
+        let mut call = crate::tools::ToolCall {
+            name: "zoom_context".into(),
+            arguments: serde_json::json!({"message":1}),
+            call_id: None,
+        };
+        let mut metadata = ToolResultMetadata {
+            success: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "archived message"),
+            Some(true)
+        );
+        metadata.completeness = ToolResultCompleteness::ByteTruncated;
+        metadata.truncated = true;
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "first page"),
+            Some(false)
+        );
+        metadata.truncated = false;
+        metadata.completeness = ToolResultCompleteness::UserLimited;
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "final requested page"),
+            Some(true)
+        );
+        call.arguments = serde_json::json!({});
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "inventory previews"),
+            None
         );
     }
 }

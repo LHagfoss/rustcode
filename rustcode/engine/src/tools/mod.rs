@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 mod audio;
+mod context_archive;
 mod delegate;
 mod dispatch;
 mod envelope;
@@ -1401,6 +1402,7 @@ pub const TOOLS: &[Tool] = &[
     misc::USE_SKILL,
     misc::REMEMBER,
     misc::RECALL_MEMORY,
+    misc::ZOOM_CONTEXT,
     misc::FORGET_MEMORY,
     audio::GENERATE_SOUND_EFFECT,
     audio::GENERATE_MUSIC,

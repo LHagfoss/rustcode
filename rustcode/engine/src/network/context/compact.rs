@@ -606,7 +606,7 @@ pub(crate) fn durable_compaction_message(
     ChatMessage::new(
         "system",
         format!(
-            "{SUMMARY_MARKER}\n{summary}\n[Full compacted history prefix: {history_archive}; exact JSONL archive with one original message per line.]\n[End Summary — the following messages are the most recent conversation]"
+            "{SUMMARY_MARKER}\n{summary}\n[Full compacted history prefix: {history_archive}; exact JSONL archive with one original message per line. Use zoom_context to recover exact details before acting on an incomplete summary.]\n[End Summary — the following messages are the most recent conversation]"
         ),
     )
     .with_compaction_boundary(compaction_boundary(summary, retained_tail, history_archive))
@@ -623,7 +623,7 @@ pub(crate) fn durable_compaction_record_message(
     ChatMessage::new(
         "system",
         format!(
-            "{record}\nFull compacted history prefix: {history_archive}; exact JSONL archive with one original message per line."
+            "{record}\nFull compacted history prefix: {history_archive}; exact JSONL archive with one original message per line. Use zoom_context to recover exact details before acting on an incomplete summary."
         ),
     )
     .with_compaction_boundary(compaction_boundary(record, retained_tail, history_archive))
