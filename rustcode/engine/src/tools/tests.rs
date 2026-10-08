@@ -524,6 +524,144 @@ fn newest_discovery_after_latest_user_turn_replaces_historical_matches() {
     assert_eq!(names, ["mcp__new__latest_tool"]);
 }
 
+// Regression: every request ends with a synthetic `user` context message.
+// Discovery looked for calls after the latest `user` message, found none, and
+// never bound what `list_mcp_tools` had just returned.
+#[test]
+fn discovery_binds_its_result_when_the_request_ends_with_runtime_context() {
+    let schema = serde_json::json!({"type":"object","properties":{}});
+    let mut mcp = (0..20)
+        .map(|index| {
+            (
+                format!("mcp__notes__entry_{index:02}"),
+                "Archive a historical item".to_string(),
+                schema.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut owners = vec!["notes".to_string(); 20];
+    let mut raw_names = (0..20)
+        .map(|index| format!("entry_{index:02}"))
+        .collect::<Vec<_>>();
+    mcp.push((
+        "mcp__chat__send_chat_message".to_string(),
+        "Send one message to a visible chat".to_string(),
+        schema,
+    ));
+    owners.push("chat".to_string());
+    raw_names.push("send_chat_message".to_string());
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Tell them the build is green"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{
+                "function":{
+                    "name":"list_mcp_tools",
+                    "arguments":"{\"query\":\"send message chat composer\",\"limit\":20}"
+                }
+            }]
+        }),
+        serde_json::json!({"role":"tool","content":"{\"results\":[]}"}),
+        serde_json::json!({
+            "role":"user",
+            "content":"<rustcode_context>\n# Environment\n</rustcode_context>"
+        }),
+    ];
+
+    let (selected, _) = super::schema::select_mcp_tools_for_context_with_raw_names(
+        &mcp,
+        &owners,
+        &raw_names,
+        &[],
+        &messages,
+        &[],
+        super::schema::ToolSchemaPhase::Established,
+    );
+    let names: Vec<&str> = selected
+        .iter()
+        .map(|index| mcp[*index].0.as_str())
+        .collect();
+    assert_eq!(names, ["mcp__chat__send_chat_message"]);
+}
+
+// Regression: naming a server requested all of its tools, and the first
+// sixteen by name were kept. `send_chat_message` sorts last.
+#[test]
+fn a_named_server_larger_than_the_cap_keeps_the_tools_the_request_points_at() {
+    let schema = serde_json::json!({"type":"object","properties":{}});
+    let mut mcp = (0..20)
+        .map(|index| {
+            (
+                format!("mcp__teams__inspect_page_{index:02}"),
+                "Inspect one part of the page".to_string(),
+                schema.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    mcp.push((
+        "mcp__teams__list_chats".to_string(),
+        "List the visible chats".to_string(),
+        schema.clone(),
+    ));
+    mcp.push((
+        "mcp__teams__send_chat_message".to_string(),
+        "Send one message to a visible chat".to_string(),
+        schema,
+    ));
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"what is new in teams"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{"function":{"name":"mcp__teams__list_chats","arguments":"{}"}}]
+        }),
+        serde_json::json!({"role":"user","content":"then send a message in teams: hello"}),
+    ];
+
+    let (selected, _) =
+        super::schema::select_mcp_tools_for_context_with_sticky(&mcp, &messages, &[]);
+    let names: Vec<&str> = selected
+        .iter()
+        .map(|index| mcp[*index].0.as_str())
+        .collect();
+    assert_eq!(names.len(), super::schema::MAX_MCP_NATIVE_SCHEMAS);
+    // The tool already in use and the one the words point at are both kept;
+    // four of the twenty look-alikes are what the cap drops.
+    assert!(names.contains(&"mcp__teams__list_chats"), "{names:?}");
+    assert!(
+        names.contains(&"mcp__teams__send_chat_message"),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn a_discovery_query_is_matched_by_its_words_and_ranked() {
+    let score = |query: &str, name: &str, description: &str| {
+        super::schema::mcp_discovery_score(query, name, description)
+    };
+    let send = score(
+        "send message chat Teams composer",
+        "send_chat_message",
+        "Send one message to a visible Teams chat",
+    );
+    let reply = score(
+        "send message chat Teams composer",
+        "reply_to_chat_message",
+        "Preview or send a quoted reply",
+    );
+    let unrelated = score(
+        "send message chat Teams composer",
+        "lighthouse_audit",
+        "Run an accessibility audit",
+    );
+    assert!(send > reply && reply > 0, "{send} {reply}");
+    assert_eq!(unrelated, 0);
+    // The whole query in a name outranks a tool that only shares a word, and
+    // the floor keeps that tool out of the result.
+    let exact = score("latest_tool", "latest_tool", "Current operation");
+    let shared = score("latest_tool", "tool_00", "Archive a historical item");
+    assert!(shared > 0 && shared < super::schema::mcp_discovery_floor(exact));
+}
+
 #[test]
 fn discovery_handoff_trims_server_and_query_like_runtime() {
     let mcp = vec![(

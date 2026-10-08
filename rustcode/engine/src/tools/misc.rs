@@ -850,32 +850,49 @@ fn format_mcp_discovery(
             continue;
         }
         for tool in tools {
-            let matches = query.as_ref().is_none_or(|query| {
-                tool.name.to_lowercase().contains(query)
-                    || tool.description.to_lowercase().contains(query)
-            });
-            if matches {
-                results.push(serde_json::json!({
-                    "server": server_name,
-                    "name": tool.name,
-                    "callable_name": tool.callable_name,
-                    "description": truncate_mcp_description(&tool.description)
-                }));
+            // The same score decides which schemas the next request binds,
+            // so what is listed here is what becomes callable.
+            let score = match query.as_ref() {
+                Some(query) => {
+                    super::schema::mcp_discovery_score(query, &tool.name, &tool.description)
+                }
+                None => 1,
+            };
+            if score > 0 {
+                results.push((
+                    score,
+                    serde_json::json!({
+                        "server": server_name,
+                        "name": tool.name,
+                        "callable_name": tool.callable_name,
+                        "description": truncate_mcp_description(&tool.description)
+                    }),
+                ));
             }
         }
     }
-    results.sort_by(|a, b| {
-        a.get("server")
-            .and_then(Value::as_str)
-            .cmp(&b.get("server").and_then(Value::as_str))
+    results.sort_by(|(a_score, a), (b_score, b)| {
+        b_score
+            .cmp(a_score)
+            .then_with(|| {
+                a.get("server")
+                    .and_then(Value::as_str)
+                    .cmp(&b.get("server").and_then(Value::as_str))
+            })
             .then_with(|| {
                 a.get("name")
                     .and_then(Value::as_str)
                     .cmp(&b.get("name").and_then(Value::as_str))
             })
     });
+    let floor = super::schema::mcp_discovery_floor(results.first().map_or(0, |best| best.0));
+    results.retain(|(score, _)| *score >= floor);
     let total = results.len();
-    results.truncate(limit);
+    let results = results
+        .into_iter()
+        .take(limit)
+        .map(|(_, result)| result)
+        .collect::<Vec<_>>();
     serde_json::to_string(&serde_json::json!({
         "results": results,
         "total": total,
