@@ -4340,15 +4340,18 @@ async fn stream_request_with_timeouts(
         .as_ref()
         .map(crate::config::ModelProfile::resolved_output_token_field)
         .unwrap_or(crate::config::OutputTokenField::MaxTokens);
-    let mut output_token_limit = profile
-        .as_ref()
-        .and_then(|p| {
-            p.output_token_limit(allow_tools, thinking_mode == ThinkingMode::BoundedRecovery)
-        })
-        .map(|limit| clamp_request_max_tokens(limit, thinking_mode))
-        .or_else(|| {
-            (allow_tools || thinking_mode == ThinkingMode::BoundedRecovery).then_some(max_tokens)
-        });
+    let bounded_recovery = thinking_mode == ThinkingMode::BoundedRecovery;
+    let mut output_token_limit = match profile.as_ref() {
+        // The recovery clamp assumes reasoning can be switched off for the
+        // retry. Where it cannot, the clamp would starve the answer.
+        Some(p) if p.reasoning_shares_output_cap() => {
+            p.output_token_limit(allow_tools, bounded_recovery)
+        }
+        Some(p) => p
+            .output_token_limit(allow_tools, bounded_recovery)
+            .map(|limit| clamp_request_max_tokens(limit, thinking_mode)),
+        None => (allow_tools || bounded_recovery).then_some(max_tokens),
+    };
     if allow_tools && thinking_mode == ThinkingMode::Normal {
         if let Some(override_limit) = tool_output_limit_override {
             let verified_ceiling = profile

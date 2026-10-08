@@ -2401,6 +2401,7 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
         || (content.starts_with("[harness: turn stopped — ") && !is_turn_cancelled_notice(content))
         || content.contains("Your reasoning became repetitive")
         || content.contains("reasoning loop")
+        || content.starts_with("The provider exhausted the output-token budget")
 }
 
 const COMPACT_TOOL_WARNING: &str = "[Warning, check debug for more info]";

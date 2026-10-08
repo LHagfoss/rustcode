@@ -38,7 +38,12 @@ pub(super) fn reasoning_loop_final_response() -> &'static str {
 
 const CLIENT_BUDGET_CONTINUATION_PROMPT: &str = "The client reasoning budget ended this response before the provider reported a stop. Continue from the saved response and tool results with one bounded, action-oriented step; do not restart the same inspection or repeat a completed tool call. If the available evidence is sufficient, answer directly. If not, use one different focused tool action.";
 const OUTPUT_BUDGET_CONTINUATION_PROMPT: &str = "The provider exhausted the output-token budget before finishing. Continue from the saved partial answer without repeating completed work. Preserve prior findings, finish the requested response, and keep any remaining gaps explicit.";
+const EMPTY_OUTPUT_BUDGET_CONTINUATION_PROMPT: &str = "The provider exhausted the output-token budget before producing any answer, so nothing was saved from that attempt. Keep reasoning brief and respond now: take one tool action or answer directly.";
 const MAX_OUTPUT_BUDGET_RECOVERIES: u8 = 1;
+
+pub(super) fn output_budget_final_response() -> &'static str {
+    "The model used its whole output-token budget before producing an answer. Raise `max_output_tokens` for this model profile or lower its reasoning effort, then send the request again."
+}
 
 const OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT: &str = "The user explicitly requested an external action, and the transcript does not show that action succeeding. Stop researching: do not search, query, browse, or gather more evidence. Use the evidence already gathered and take exactly one next step toward the requested action with the appropriate available tool. Preserve all normal safety, permission, and confirmation requirements; this recovery instruction does not authorize a side effect the user did not request. If required details are missing or the action cannot be completed safely, ask one focused question or explain the blocker instead of calling more research tools.";
 
@@ -345,17 +350,25 @@ pub(super) async fn handle_response_recovery(
     if response_finish_reason == Some("length") && native_tool_calls_empty {
         let mut s = state.lock().await;
         super::clear_turn_steerability_for_session(&mut s, turn_session_id);
-        let mut partial = ChatMessage::new("assistant", &ctx.response.final_content);
-        partial.response_time_ms = Some(turn_response_time_ms);
-        partial.token_usage = turn_token_usage;
-        partial.thought_time_ms = thought_time_ms;
-        partial.thought_tokens = thought_tokens;
-        s.history.push(partial);
-        ctx.response.final_content_persisted = true;
+        // An empty assistant message carries no checkpoint and only pollutes
+        // the next request.
+        let has_partial = !ctx.response.final_content.trim().is_empty();
+        if has_partial {
+            let mut partial = ChatMessage::new("assistant", &ctx.response.final_content);
+            partial.response_time_ms = Some(turn_response_time_ms);
+            partial.token_usage = turn_token_usage;
+            partial.thought_time_ms = thought_time_ms;
+            partial.thought_tokens = thought_tokens;
+            s.history.push(partial);
+            ctx.response.final_content_persisted = true;
+        }
 
         if ctx.recovery.output_budget_recovery_attempts >= MAX_OUTPUT_BUDGET_RECOVERIES {
             ctx.lifecycle.task_completed = false;
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
+            if !has_partial {
+                ctx.response.final_content = output_budget_final_response().to_string();
+            }
             crate::logger::operational_event(
                 "turn.output_budget_exhausted",
                 serde_json::json!({
@@ -384,7 +397,12 @@ pub(super) async fn handle_response_recovery(
         );
         push_or_replace_recovery_notice(
             s.history.as_mut_vec(),
-            OUTPUT_BUDGET_CONTINUATION_PROMPT.to_owned(),
+            if has_partial {
+                OUTPUT_BUDGET_CONTINUATION_PROMPT
+            } else {
+                EMPTY_OUTPUT_BUDGET_CONTINUATION_PROMPT
+            }
+            .to_owned(),
         );
         crate::config::save_session_history(&s.active_session_id, &s.history);
         s.clear_current_response();
@@ -706,6 +724,68 @@ mod tests {
             state.lock().await.history.iter().any(|message| {
                 message.role == "assistant" && message.content == "first partial"
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_output_budget_stop_saves_no_assistant_message_and_names_the_remedy() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let turn_session_id = state.lock().await.active_session_id.clone();
+        let mut ctx = TurnContext::new();
+
+        let outcome = handle_response_recovery(
+            &state,
+            &mut ctx,
+            true,
+            Some("length"),
+            10,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+            &turn_session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, ResponseRecoveryOutcome::Continue);
+        assert!(!ctx.response.final_content_persisted);
+        {
+            let state = state.lock().await;
+            assert!(!state.history.iter().any(|message| message.role == "assistant"));
+            assert!(state.history.iter().any(|message| {
+                message.role == "system" && message.content.contains("before producing any answer")
+            }));
+        }
+
+        let outcome = handle_response_recovery(
+            &state,
+            &mut ctx,
+            true,
+            Some("length"),
+            10,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::None,
+            ProviderFinalAnswerState::None,
+            &turn_session_id,
+        )
+        .await;
+
+        assert_eq!(outcome, ResponseRecoveryOutcome::Stop);
+        assert_eq!(
+            ctx.response.final_content,
+            crate::network::turn_engine::recovery::output_budget_final_response()
+        );
+        assert!(!ctx.response.final_content_persisted);
+        assert!(
+            !state
+                .lock()
+                .await
+                .history
+                .iter()
+                .any(|message| message.role == "assistant")
         );
     }
 
