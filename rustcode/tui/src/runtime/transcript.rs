@@ -24,23 +24,16 @@ pub(super) fn render_finalized_assistant_scrollback(
     }
 }
 
-fn is_tool_only_assistant(
+/// The note an assistant step leaves inside the tool block around it, or
+/// `None` when the message is a boundary.
+fn joined_tool_step_note(
     snapshot: &crate::ui::render_snapshot::RenderSnapshot,
     message_index: usize,
-    width: u16,
-) -> bool {
-    let Some(message) = snapshot.active_history().get(message_index) else {
-        return false;
-    };
-    if message.role != "assistant" {
-        return false;
-    }
-    let has_tool_calls = !message.tool_calls.is_empty()
-        || !rustcode_tool_protocol::resolve_tool_calls(message, snapshot.active_tool_protocol())
-            .is_empty();
-    has_tool_calls
-        && crate::ui::render_committed_history_block_snapshot(snapshot, message_index, width)
-            .is_empty()
+) -> Option<String> {
+    snapshot
+        .active_history()
+        .get(message_index)
+        .and_then(|message| crate::ui::tool_step_note(snapshot, message))
 }
 
 /// Collect tool results from one provider batch and adjacent empty tool-only
@@ -51,7 +44,6 @@ pub(super) fn tool_result_group(
     snapshot: &crate::ui::render_snapshot::RenderSnapshot,
     start: usize,
     end: usize,
-    width: u16,
 ) -> (Vec<usize>, usize) {
     let history = snapshot.active_history();
     let mut indices = Vec::new();
@@ -65,7 +57,7 @@ pub(super) fn tool_result_group(
         index += 1;
 
         if index < end
-            && is_tool_only_assistant(snapshot, index, width)
+            && joined_tool_step_note(snapshot, index).is_some()
             && index + 1 < end
             && history
                 .get(index + 1)
@@ -163,11 +155,10 @@ pub(super) fn commit_transcript(
     while index < history_range.end {
         let message = &snapshot.history()[index];
         if message.role == "tool" {
-            let (indices, group_end) =
-                tool_result_group(snapshot, index, history_range.end, terminal_width);
+            let (indices, group_end) = tool_result_group(snapshot, index, history_range.end);
             let group_kind = crate::ui::tool_result_group_kind(snapshot, &indices, terminal_width);
-            let continuing =
-                group_kind.is_some() && transcript_cursor.tool_group_kind() == group_kind;
+            // Mixed kinds share the one heading, so any open block continues.
+            let continuing = group_kind.is_some() && transcript_cursor.tool_group_kind().is_some();
             let mut block = if continuing {
                 crate::ui::render_committed_tool_result_continuation_snapshot(
                     snapshot,
@@ -197,15 +188,18 @@ pub(super) fn commit_transcript(
             index = group_end;
             continue;
         } else if message.role == "assistant"
-            && is_tool_only_assistant(snapshot, index, terminal_width)
+            // A step that says a line needs an open block to say it in.
+            && joined_tool_step_note(snapshot, index).is_some_and(|note| {
+                note.is_empty() || transcript_cursor.tool_group_kind().is_some()
+            })
             && snapshot
                 .history()
                 .get(index + 1)
                 .is_some_and(|next| next.role == "tool")
         {
-            // One-tool-per-round orchestration inserts an empty assistant
-            // call between results. It is part of the active visual group,
-            // not a new transcript boundary.
+            // One-tool-per-round orchestration inserts an assistant call
+            // between results. It is part of the active visual group, not a
+            // new transcript boundary.
             index += 1;
             continue;
         } else if message.role == "assistant" && !message.conversation_recap {
@@ -333,11 +327,11 @@ mod tests {
         ]);
         let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
-        assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1, 3], 4));
+        assert_eq!(tool_result_group(&snapshot, 1, 4), (vec![1, 3], 4));
     }
 
     #[test]
-    fn visible_assistant_prose_keeps_tool_groups_separate() {
+    fn a_line_of_narration_stays_inside_the_tool_group() {
         let mut state = AppState::new();
         state.history.extend([
             tool_turn("call-1"),
@@ -353,11 +347,11 @@ mod tests {
         ]);
         let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
-        assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1], 2));
+        assert_eq!(tool_result_group(&snapshot, 1, 4), (vec![1, 3], 4));
     }
 
     #[test]
-    fn visible_assistant_thought_keeps_tool_groups_separate() {
+    fn a_thought_between_rounds_stays_inside_the_tool_group() {
         let mut state = AppState::new();
         state.history.extend([
             tool_turn("call-1"),
@@ -372,7 +366,29 @@ mod tests {
         ]);
         let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
-        assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1], 2));
+        assert_eq!(tool_result_group(&snapshot, 1, 4), (vec![1, 3], 4));
+    }
+
+    #[test]
+    fn a_real_answer_between_rounds_keeps_tool_groups_separate() {
+        let mut state = AppState::new();
+        state.history.extend([
+            tool_turn("call-1"),
+            result("call-1"),
+            ChatMessage::new(
+                "assistant",
+                "The first file is fine.\n\nThe second one needs a closer look.",
+            )
+            .with_tool_calls(vec![ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "get_time".to_owned(),
+                arguments: "{}".to_owned(),
+            }]),
+            result("call-2"),
+        ]);
+        let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
+
+        assert_eq!(tool_result_group(&snapshot, 1, 4), (vec![1], 2));
     }
 
     #[test]
@@ -387,6 +403,6 @@ mod tests {
         ]);
         let snapshot = render_snapshot(&rustcode::controller::render_state(&state));
 
-        assert_eq!(tool_result_group(&snapshot, 1, 5, 80), (vec![1], 2));
+        assert_eq!(tool_result_group(&snapshot, 1, 5), (vec![1], 2));
     }
 }

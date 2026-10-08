@@ -17,8 +17,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use super::{
-    COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
-    push_wrapped_with_continuation, tool_transcript::tool_preview_window,
+    COLOR_BG, COLOR_MUTED, COLOR_TEXT, COLOR_TIP, get_themed_style, push_wrapped_with_continuation,
+    tool_transcript::tool_preview_window,
 };
 
 const MAX_LIVE_CHILDREN: usize = 8;
@@ -605,6 +605,19 @@ impl TranscriptState {
             .collect::<Vec<_>>();
         let mut block =
             super::render_committed_tool_result_group_snapshot(state, &indices, width, false);
+        // The step that asked for the calls in flight closes the chain; its
+        // narration is the row above them.
+        if !block.is_empty()
+            && let Some(note) = end
+                .checked_sub(1)
+                .and_then(|index| state.history().get(index))
+                .and_then(|message| super::tool_transcript::tool_step_note(state, message))
+                .filter(|note| !note.is_empty())
+        {
+            block.push(super::tool_transcript::tool_step_note_line(
+                &note, width, false,
+            ));
+        }
         // Calls still in flight are the next rows of this block, so nothing
         // separates them from it.
         if !block.is_empty() && !Self::block_stays_open(state, end) {
@@ -941,21 +954,6 @@ impl HistoryCell for AssistantMarkdownCell {
     }
 }
 
-/// Cancel affordance for a running live cell, sized to the space the heading
-/// has already used. The full hint needs 16 display columns and the short form
-/// 6, so narrow terminals keep a compact `esc` instead of losing the
-/// affordance entirely (#1725).
-fn cancel_hint_suffix(width: u16, used: usize) -> &'static str {
-    let available = usize::from(width).saturating_sub(used);
-    if available >= " · esc interrupt".width() {
-        " · esc interrupt"
-    } else if available >= " · esc".width() {
-        " · esc"
-    } else {
-        ""
-    }
-}
-
 pub(super) fn is_live_tool_call_visible(call: &LiveToolCall) -> bool {
     call.execution_started || (!call.target.is_empty() && call.target != "?")
 }
@@ -1063,26 +1061,17 @@ pub(super) fn render_live_tool_cell_at(
         return Vec::new();
     }
 
-    // One shape for every batch in flight: a `Running` heading with a row per
-    // call, the shape the committed `Ran` block takes once they finish, so the
-    // block changes its heading and row states instead of its layout.
-    let title_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
+    // Calls in flight take the shape and the heading of the committed block
+    // they become, so finishing changes a row's glyph and nothing else. How to
+    // interrupt them is on the status row (#1850).
     let detail_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
     let action_style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker);
     let target_style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker);
-    let heading = "Running";
-    let any_started = calls.iter().any(|call| call.execution_started);
-    let hint = if any_started {
-        cancel_hint_suffix(width, 2 + heading.width())
-    } else {
-        ""
-    };
     let mut lines = vec![fit_live_row(
-        Line::from(vec![
-            Span::styled("• ", title_style),
-            Span::styled(heading, title_style),
-            Span::styled(hint, detail_style),
-        ]),
+        super::tool_transcript::tool_group_header(
+            super::tool_transcript::TOOL_BLOCK_HEADING,
+            show_picker,
+        ),
         usize::from(width),
     )];
     let lone_command = calls.len() == 1 && calls[0].tool_name == "run_command";
