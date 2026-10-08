@@ -877,7 +877,9 @@ impl ProgressLedger {
             (false, ProgressReason::Churn)
         } else if observation.changed_workspace {
             (true, ProgressReason::WorkspaceChanged)
-        } else if observation.read_only && observation.replayed {
+        } else if observation.replayed {
+            // A replayed result repeats what the model already has, whether
+            // it stood in for a read or for a suppressed side effect (#1851).
             (false, ProgressReason::NoNewInformation)
         } else if observation.read_only && observation.success {
             if observation.fresh_read && new_read {
