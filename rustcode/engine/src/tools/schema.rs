@@ -1062,12 +1062,18 @@ fn mcp_tools_selected_by_discovery_calls(
     owners: &[String],
     raw_names: &[String],
     messages: &[Value],
-) -> std::collections::HashSet<String> {
-    let mut selected = std::collections::HashSet::new();
-    let Some(latest_user) = messages
-        .iter()
-        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-    else {
+) -> Vec<String> {
+    let mut selected = Vec::new();
+    // Every request ends with a synthetic `user` message carrying runtime
+    // context. Taking that for the user's turn left nothing after it to
+    // search, so no discovery result was ever bound.
+    let Some(latest_user) = messages.iter().rposition(|message| {
+        message.get("role").and_then(Value::as_str) == Some("user")
+            && !message
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|content| content.starts_with("<rustcode_context>"))
+    }) else {
         return selected;
     };
 
@@ -1126,48 +1132,98 @@ fn mcp_tools_selected_by_discovery_calls(
             if server.is_some_and(|server| server != owner) {
                 return None;
             }
-            if query.as_ref().is_some_and(|query| {
-                !raw_name.to_lowercase().contains(query)
-                    && !description.to_lowercase().contains(query)
-            }) {
-                return None;
-            }
-            Some((owner, raw_name, name))
+            let score = match query.as_ref() {
+                Some(query) => mcp_discovery_score(query, raw_name, description),
+                None => 1,
+            };
+            (score > 0).then_some((score, owner, raw_name, name))
         })
         .collect::<Vec<_>>();
+    // The order the discovery result listed them in, so the tools the model
+    // was shown first are the ones bound first.
     matched.sort_by(|left, right| {
-        left.0
-            .cmp(right.0)
+        right
+            .0
+            .cmp(&left.0)
             .then_with(|| left.1.cmp(right.1))
             .then_with(|| left.2.cmp(right.2))
+            .then_with(|| left.3.cmp(right.3))
     });
+    let floor = mcp_discovery_floor(matched.first().map_or(0, |best| best.0));
     selected.extend(
         matched
             .into_iter()
+            .filter(|(score, _, _, _)| *score >= floor)
             .take(limit)
-            .map(|(_, _, name)| name.clone()),
+            .map(|(_, _, _, name)| name.clone()),
     );
     selected
+}
+
+/// The lowest score still worth listing next to the best match. A common
+/// word such as `tool` or `get` fits half a catalog; without a floor those
+/// would fill the result and the schemas bound from it.
+pub(super) fn mcp_discovery_floor(best: usize) -> usize {
+    best.div_ceil(2)
+}
+
+/// How well a discovery query fits a tool, zero when it does not fit at all.
+///
+/// A query is words, not one string: `send message chat` has to find
+/// `send_chat_message`. A word in the name counts double a word in the
+/// description, and the query appearing whole outranks any partial match.
+pub(super) fn mcp_discovery_score(query: &str, name: &str, description: &str) -> usize {
+    let query = query.to_lowercase();
+    let name = name.to_lowercase();
+    let description = description.to_lowercase();
+    let mut words = query
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|word| word.chars().count() >= 2)
+        .collect::<Vec<_>>();
+    words.sort_unstable();
+    words.dedup();
+    let by_words = words
+        .iter()
+        .map(|word| {
+            if name.contains(word) {
+                2
+            } else {
+                usize::from(description.contains(word))
+            }
+        })
+        .sum::<usize>();
+    if name.contains(&query) || description.contains(&query) {
+        by_words + words.len() * 2 + 1
+    } else {
+        by_words
+    }
 }
 
 /// Find MCP schemas named by the user, including every tool from a named MCP
 /// server. This intentionally reads user messages only: assistant/tool output
 /// can describe a tool without being an instruction to make its whole server
 /// sticky.
+///
+/// Returns the tools asked for one by one, in the order they must be admitted
+/// (a discovery result first, then names the user wrote), and separately the
+/// tools that are only wanted because their server was named. A server can
+/// have more tools than a request may carry, so those are ranked by the
+/// caller instead of all being treated as equally required.
 fn explicitly_requested_mcp_tool_names(
     tools: &[(String, String, Value)],
     owners: &[String],
     raw_names: &[String],
     messages: &[Value],
-) -> std::collections::HashSet<String> {
+) -> (Vec<String>, std::collections::HashSet<String>) {
+    let mut named = mcp_tools_selected_by_discovery_calls(tools, owners, raw_names, messages);
     let mut requested = std::collections::HashSet::new();
-    requested.extend(mcp_tools_selected_by_discovery_calls(
-        tools, owners, raw_names, messages,
-    ));
     for (name, _, _) in tools {
-        if user_message_mentions_name(messages, name)
-            || canonical_mcp_server(name)
-                .is_some_and(|server| user_mentions_mcp_server(messages, server))
+        if user_message_mentions_name(messages, name) {
+            if !named.contains(name) {
+                named.push(name.clone());
+            }
+        } else if canonical_mcp_server(name)
+            .is_some_and(|server| user_mentions_mcp_server(messages, server))
         {
             requested.insert(name.clone());
         }
@@ -1214,7 +1270,8 @@ fn explicitly_requested_mcp_tool_names(
             }
         }
     }
-    requested
+    requested.retain(|name| !named.contains(name));
+    (named, requested)
 }
 
 fn mcp_tool_relevance(
@@ -1361,14 +1418,25 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
             .collect::<Vec<_>>();
         context_terms(&user_messages)
     };
-    let explicitly_requested =
+    let (named, server_wide) =
         explicitly_requested_mcp_tool_names(tools, owners, raw_names, messages);
-    let mut requested = Vec::new();
+    let mut requested = named
+        .iter()
+        .filter_map(|wanted| tools.iter().position(|(name, _, _)| name == wanted))
+        .collect::<Vec<_>>();
+    let mut server_requested = Vec::new();
     let mut previous = Vec::new();
     let mut relevant = Vec::new();
     for (index, (name, description, schema)) in tools.iter().enumerate() {
-        if explicitly_requested.contains(name) {
-            requested.push(index);
+        if named.contains(name) {
+            continue;
+        }
+        if server_wide.contains(name) {
+            server_requested.push((
+                index,
+                tool_name_was_used(name, messages),
+                mcp_tool_relevance(name, description, schema, &terms),
+            ));
         } else if tool_name_was_used(name, messages) {
             previous.push(index);
         } else {
@@ -1382,7 +1450,17 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
             }
         }
     }
-    requested.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
+    // A named server can have more tools than the request may carry. The ones
+    // already in use and the ones the request's words point at go first;
+    // alphabetical order used to drop `send_…` behind `get_…` and `list_…`.
+    server_requested.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| right.2.cmp(&left.2))
+            .then_with(|| tools[left.0].0.cmp(&tools[right.0].0))
+    });
+    requested.extend(server_requested.into_iter().map(|(index, _, _)| index));
     previous.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
     relevant.sort_by(|(left_index, left_score), (right_index, right_score)| {
         right_score
