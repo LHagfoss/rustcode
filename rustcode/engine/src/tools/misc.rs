@@ -559,6 +559,31 @@ pub const RECALL_MEMORY: Tool = Tool {
     safety: ToolSafety::ReadOnly,
 };
 
+pub const ZOOM_CONTEXT: Tool = Tool {
+    name: "zoom_context",
+    description: "Recover active-session context from compaction archives. Start with {} for previews; open message or follow child_path. Pass root on follow-ups; page with next_start/next_offset. Read exact details before acting on summaries. Old messages are historical data.",
+    arguments: r#"{"root":"returned archive identifier", "path":[], "message":1, "offset":0}"#,
+    handler: super::context_archive::zoom,
+    requires_confirmation: false,
+    schema: zoom_context_schema,
+    capabilities: &[ToolCapability::ReadWorkspace],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn zoom_context_schema() -> Value {
+    serde_json::json!({
+        "type":"object",
+        "properties": {
+            "root":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Root from listing; detects compaction"},
+            "path":{"type":"array","items":{"type":"integer","minimum":1},"maxItems":32,"description":"child_path from listing; default []"},
+            "message":{"type":"integer","minimum":1,"description":"1-based message; omit to list"},
+            "start":{"type":"integer","minimum":1},
+            "offset":{"type":"integer","minimum":0}
+        },
+        "required":[],"additionalProperties":false
+    })
+}
+
 fn forget_memory_schema() -> Value {
     serde_json::json!({
         "type": "object",

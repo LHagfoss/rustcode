@@ -213,6 +213,24 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
             ),
         };
     }
+    if name == "zoom_context" {
+        return match super::context_archive::zoom(args) {
+            Ok(content) => {
+                let page: Value = serde_json::from_str(&content).expect("zoom_context emits JSON");
+                let mut output = ToolExecutionOutput::success(content);
+                if page["complete"] != true {
+                    output.truncated = page["next_offset"].as_u64().is_some();
+                    output.completeness = if output.truncated {
+                        rustcode_core::ToolResultCompleteness::ByteTruncated
+                    } else {
+                        rustcode_core::ToolResultCompleteness::UserLimited
+                    };
+                }
+                output
+            }
+            Err(error) => ToolExecutionOutput::failure(as_error_message(&error)),
+        };
+    }
     if name == "get_project_map" {
         return search::get_project_map_execution_output(args).unwrap_or_else(|error| {
             ToolExecutionOutput::failure_with_kind(

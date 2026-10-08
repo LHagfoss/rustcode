@@ -1687,7 +1687,8 @@ fn read_only_inspection_profile_is_small_and_deterministic() {
             "list_directory",
             "find_symbol",
             "get_project_map",
-            "view_file"
+            "view_file",
+            "zoom_context"
         ]
     );
 
@@ -3845,6 +3846,39 @@ fn memory_tools_lifecycle_execution() {
     }))
     .unwrap();
     assert!(forget_res.contains("Removed"));
+}
+
+#[test]
+fn zoom_context_is_available_in_coding_and_inspection_surfaces() {
+    let tool = TOOLS
+        .iter()
+        .find(|tool| tool.name == "zoom_context")
+        .expect("compacted context must be recoverable through a built-in tool");
+    assert!(!tool.requires_confirmation);
+    assert_eq!(tool.safety, ToolSafety::ReadOnly);
+    for policy in [
+        ToolSchemaPolicy::root(false),
+        ToolSchemaPolicy::read_only_inspection(),
+        ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+            false,
+            crate::config::AgentMode::Build,
+            true,
+        ),
+    ] {
+        let schemas = native_tools_schema_for_context(policy, &[]).0;
+        assert!(
+            schemas
+                .iter()
+                .any(|schema| schema["function"]["name"] == "zoom_context")
+        );
+        let prompt = super::schema::tool_system_prompt_for_policy(
+            policy,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
+        assert!(prompt.contains("zoom_context"));
+    }
+    assert!(allowed_in_plan_mode("zoom_context"));
 }
 
 #[test]

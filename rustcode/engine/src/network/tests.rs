@@ -2,6 +2,61 @@ use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prom
 use super::*;
 
 #[test]
+fn zoom_context_dispatch_appends_recalled_data_without_rewriting_the_request_prefix() {
+    let original = vec![ChatMessage::new("user", "Correction: use port 5433.")];
+    let archive = crate::config::archive_history_prefix(&original).unwrap();
+    let session = rustcode_session::next_session_id();
+    let mut transcript = vec![
+        compaction::durable_compaction_record_message("Database setup discussed", &[], &archive),
+        ChatMessage::new("user", "Recover my exact correction"),
+    ];
+    crate::config::save_session_history(&session, &transcript);
+    crate::tools::set_active_session_id(Some(session));
+    let mut prefix = RequestPrefixCache::default();
+    let initial = history::to_messages(&transcript, "static system prompt");
+    let request = prefix.compose(&initial, "runtime context one");
+    prefix.record(initial.clone(), &request, "runtime context one");
+
+    for (round, args) in [serde_json::json!({}), serde_json::json!({"message":1})]
+        .into_iter()
+        .enumerate()
+    {
+        let call_id = format!("recall-{round}");
+        let result = crate::tools::execute_with_metadata("zoom_context", &args);
+        assert!(result.success, "{}", result.content);
+        let recalled: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        if round == 0 {
+            assert_eq!(
+                result.completeness,
+                rustcode_core::ToolResultCompleteness::UserLimited
+            );
+            assert_eq!(recalled["messages"][0]["message"], 1);
+        } else {
+            assert_eq!(recalled["text"], "Correction: use port 5433.");
+            assert_eq!(
+                result.completeness,
+                rustcode_core::ToolResultCompleteness::Complete
+            );
+        }
+        transcript.push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: call_id.clone(),
+                name: "zoom_context".into(),
+                arguments: args.to_string(),
+            },
+        ]));
+        transcript.push(ChatMessage::new("tool", result.content).answering(Some(call_id)));
+        let rendered = history::to_messages(&transcript, "static system prompt");
+        let next_request = prefix.compose(&rendered, "runtime context two");
+        assert_eq!(prefix.last_decision(), PrefixCacheDecision::Reused);
+        assert_eq!(&next_request[..initial.len()], initial.as_slice());
+        history::validate_native_tool_messages(&next_request).unwrap();
+        prefix.record(rendered, &next_request, "runtime context two");
+    }
+    crate::tools::set_active_session_id(None);
+}
+
+#[test]
 fn app_state_separates_source_from_active_workspace_root() {
     let workspace = tempfile::tempdir().expect("temporary workspace");
     let state = AppState::new_with_workspace_session(workspace.path(), Some("workspace-root-test"));
