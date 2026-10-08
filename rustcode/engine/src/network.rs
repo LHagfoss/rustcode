@@ -836,6 +836,33 @@ pub(crate) fn tool_signature(name: &str, args: &serde_json::Value) -> String {
     format!("{name}:{key}")
 }
 
+/// Join the content of two same-role messages. Plain text stays one string.
+/// A message with parts (an attached image) keeps them: reading it as a string
+/// used to turn the whole message into nothing, and the runtime-context message
+/// that follows every prompt made that happen to each image on the current turn.
+fn merge_message_content(
+    first: &serde_json::Value,
+    second: &serde_json::Value,
+) -> serde_json::Value {
+    if !first.is_array() && !second.is_array() {
+        return serde_json::Value::String(format!(
+            "{}\n\n{}",
+            first.as_str().unwrap_or(""),
+            second.as_str().unwrap_or("")
+        ));
+    }
+    let parts = |content: &serde_json::Value, separator: &str| match content {
+        serde_json::Value::Array(parts) => parts.clone(),
+        serde_json::Value::String(text) if !text.is_empty() => {
+            vec![serde_json::json!({"type": "text", "text": format!("{separator}{text}")})]
+        }
+        _ => Vec::new(),
+    };
+    let mut merged = parts(first, "");
+    merged.extend(parts(second, "\n\n"));
+    serde_json::Value::Array(merged)
+}
+
 pub(crate) fn align_alternating_messages(
     raw_msgs: Vec<serde_json::Value>,
 ) -> Vec<serde_json::Value> {
@@ -912,11 +939,6 @@ pub(crate) fn align_alternating_messages(
     // 3. Alternate roles, merging consecutive same-role non-tool messages
     for msg in msgs {
         let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-        let content = msg
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string();
 
         // A message carrying structured tool calls can never be merged: the
         // merge keeps only text, so folding it into a neighbour would silently
@@ -926,11 +948,9 @@ pub(crate) fn align_alternating_messages(
             let last_role = last.get("role").and_then(|r| r.as_str()).unwrap_or("user");
             let last_carries_calls = last.get("tool_calls").is_some();
             if last_role == role && role != "tool" && !carries_calls && !last_carries_calls {
+                let incoming = msg.get("content").cloned().unwrap_or_default();
                 if let Some(last_content) = last.get_mut("content") {
-                    let mut new_content = last_content.as_str().unwrap_or("").to_string();
-                    new_content.push_str("\n\n");
-                    new_content.push_str(&content);
-                    *last_content = serde_json::Value::String(new_content);
+                    *last_content = merge_message_content(last_content, &incoming);
                 }
                 continue;
             }

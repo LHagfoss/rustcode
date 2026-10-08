@@ -429,15 +429,26 @@ fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_js
         }
 
         let text = response_message_text(message.get("content"));
-        if !text.is_empty() {
+        // Only a user turn carries images; assistant and system text stays text.
+        let images = if role == "user" {
+            responses_image_parts(message.get("content"))
+        } else {
+            Vec::new()
+        };
+        if !text.is_empty() || !images.is_empty() {
             let content_type = if role == "assistant" {
                 "output_text"
             } else {
                 "input_text"
             };
+            let mut content = Vec::new();
+            if !text.is_empty() {
+                content.push(serde_json::json!({"type": content_type, "text": text}));
+            }
+            content.extend(images);
             let item = serde_json::json!({
                 "role": role,
-                "content": [{"type": content_type, "text": text}],
+                "content": content,
             });
             if open_calls.is_empty() {
                 input.push(item);
@@ -451,6 +462,31 @@ fn responses_input_from_messages(messages: &[serde_json::Value]) -> Vec<serde_js
     input.append(&mut buffered);
 
     input
+}
+
+/// The image parts of a multi-part message, in the Responses dialect. Taking
+/// only the text of a message used to drop every attached image before the
+/// request was written, so a vision model was asked about a picture it never
+/// received.
+fn responses_image_parts(content: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
+    content
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| {
+            let kind = part.get("type").and_then(serde_json::Value::as_str)?;
+            if !matches!(kind, "image_url" | "input_image") {
+                return None;
+            }
+            // Chat Completions nests the URL in an object; Responses takes it
+            // as a string.
+            let url = part
+                .pointer("/image_url/url")
+                .or_else(|| part.get("image_url"))
+                .and_then(serde_json::Value::as_str)?;
+            Some(serde_json::json!({"type": "input_image", "image_url": url}))
+        })
+        .collect()
 }
 
 /// ChatGPT plan requests reject Responses system-message items. Developer
@@ -2339,6 +2375,37 @@ mod tests {
         assert_eq!(input[2]["arguments"], "{\"pattern\":\"src/**\"}");
         assert_eq!(input[3]["type"], "function_call_output");
         assert_eq!(input[3]["call_id"], "call-1");
+    }
+
+    // Regression: only the text of a multi-part message was kept, so an
+    // attached image never reached a Responses-protocol vision model.
+    #[test]
+    fn responses_input_carries_image_parts_of_a_user_message() {
+        let input = responses_input_from_messages(&[
+            serde_json::json!({"role": "user", "content": [
+                {"type": "text", "text": "who is this"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+            ]}),
+            serde_json::json!({"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,BBB"}},
+            ]}),
+            serde_json::json!({"role": "user", "content": "plain text"}),
+        ]);
+        assert_eq!(
+            input,
+            [
+                serde_json::json!({"role": "user", "content": [
+                    {"type": "input_text", "text": "who is this"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,AAA"},
+                ]}),
+                serde_json::json!({"role": "user", "content": [
+                    {"type": "input_image", "image_url": "data:image/png;base64,BBB"},
+                ]}),
+                serde_json::json!({"role": "user", "content": [
+                    {"type": "input_text", "text": "plain text"},
+                ]}),
+            ]
+        );
     }
 
     #[test]

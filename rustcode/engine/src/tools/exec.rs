@@ -2604,7 +2604,8 @@ mod tests {
         assert_eq!(
             stop.stopped + stop.requested,
             1,
-            "implicit detached task was not terminated"
+            "implicit detached task was not terminated: output={:?} snapshots={snapshots:?}",
+            output.content
         );
         assert_eq!(stop.failed, 0);
     }
