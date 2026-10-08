@@ -52,17 +52,30 @@ pub(crate) fn successful_side_effect_replay(
         .iter()
         .rposition(|message| message.role == "user" && !message.content.starts_with('/'))?;
     let arguments_hash = stable_arguments_hash(&call.arguments);
-    let completed = history[turn_start + 1..].iter().any(|message| {
-        message.tool_result.as_ref().is_some_and(|result| {
-            result.success
-                && !result.pending
-                && result.tool_name.eq_ignore_ascii_case(&call.name)
-                && result.arguments_hash == arguments_hash
-        })
+    let turn = &history[turn_start + 1..];
+    let is_equivalent = |result: &crate::app::ToolResultRecord| {
+        result.tool_name.eq_ignore_ascii_case(&call.name) && result.arguments_hash == arguments_hash
+    };
+    let last_success = turn.iter().rposition(|message| {
+        message
+            .tool_result
+            .as_ref()
+            .is_some_and(|result| result.success && !result.pending && is_equivalent(result))
+    });
+    // An MCP call the model repeats after other work ran is a deliberate
+    // re-check (a status poll after a wait), not an accidental replay; only
+    // an immediate repeat is suppressed (#1851).
+    let completed = last_success.is_some_and(|index| {
+        !(matches!(crate::tools::tool_safety(&call.name), ToolSafety::Unknown)
+            && turn[index + 1..].iter().any(|message| {
+                message.tool_result.as_ref().is_some_and(|result| {
+                    result.success && !result.pending && !result.replayed && !is_equivalent(result)
+                })
+            }))
     });
     completed.then(|| ToolResult {
         tool_name: call.name.clone(),
-        content: "[Side-effect replay suppressed: an equivalent call already succeeded in this user turn.]"
+        content: "[Side-effect replay suppressed: an equivalent call already succeeded in this user turn. Its earlier result still stands; do not reissue it unchanged.]"
             .to_string(),
         diff: None,
         file_preview: None,
@@ -121,6 +134,36 @@ mod tests {
             .expect("equivalent successful side effect must not execute again");
         assert!(replay.metadata.success);
         assert!(replay.metadata.replayed);
+    }
+
+    #[test]
+    fn mcp_poll_repeats_after_other_work_but_not_back_to_back() {
+        let status = call("codebase_status", serde_json::json!({}));
+        let wait = call("run_command", serde_json::json!({"command":"sleep 45"}));
+        let mut history = vec![
+            ChatMessage::new("user", "Index and report progress"),
+            successful_result(&status),
+        ];
+        assert!(successful_side_effect_replay(&history, &status).is_some());
+
+        history.push(successful_result(&wait));
+        assert!(successful_side_effect_replay(&history, &status).is_none());
+
+        // The fresh poll is the latest equivalent result again.
+        history.push(successful_result(&status));
+        assert!(successful_side_effect_replay(&history, &status).is_some());
+
+        // Built-in mutations stay once per turn whatever ran in between.
+        let write = call(
+            "write_to_file",
+            serde_json::json!({"path":"a","content":"b"}),
+        );
+        let history = vec![
+            ChatMessage::new("user", "Write it"),
+            successful_result(&write),
+            successful_result(&wait),
+        ];
+        assert!(successful_side_effect_replay(&history, &write).is_some());
     }
 
     #[test]
