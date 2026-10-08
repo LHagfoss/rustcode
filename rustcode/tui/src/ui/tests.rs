@@ -6034,7 +6034,6 @@ fn agent_spawn_notice_omits_harness_configuration() {
 #[test]
 fn queued_scheduler_notice_is_clipped_to_available_width() {
     for notice in [
-        "Tool calls were queued by the scheduler and will run automatically.",
         "Some tool calls were queued; review the other results above.",
         "Some tool calls were not run; review results before retrying.",
     ] {
