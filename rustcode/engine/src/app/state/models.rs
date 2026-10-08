@@ -887,6 +887,16 @@ pub struct LiveToolOutputChunk {
     pub text: String,
 }
 
+/// How a live call ended. Its row stays in the live block with this state
+/// until the batch it belongs to is committed to history, so the row never
+/// disappears between finishing and being recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveToolFinish {
+    pub success: bool,
+    /// How long the call ran.
+    pub elapsed: std::time::Duration,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveToolCall {
     pub key: String,
@@ -897,6 +907,8 @@ pub struct LiveToolCall {
     /// Command working directory supplied to execution, if available.
     pub cwd: Option<String>,
     pub execution_started: bool,
+    /// Set once the call has ended but its result is not in history yet.
+    pub finished: Option<LiveToolFinish>,
     pub output: std::collections::VecDeque<LiveToolOutputChunk>,
     pub omitted_output_bytes: usize,
     pub started_at: std::time::Instant,
@@ -1040,6 +1052,7 @@ impl LiveToolCall {
             target: target.into(),
             cwd: None,
             execution_started: true,
+            finished: None,
             output: std::collections::VecDeque::new(),
             omitted_output_bytes: 0,
             started_at: std::time::Instant::now(),

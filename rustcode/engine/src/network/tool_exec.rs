@@ -1472,7 +1472,7 @@ async fn execute_tool_batch_validated(
         .await;
         {
             let mut s = state.lock().await;
-            s.finish_live_tool_call(&live_key);
+            s.finish_live_tool_call(&live_key, execution.success);
         }
         *user_wait_duration += user_wait;
         let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content) {

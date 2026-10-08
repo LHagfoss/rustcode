@@ -952,6 +952,11 @@ pub(super) const LIVE_TOOL_CALL_GRACE: std::time::Duration = std::time::Duration
 
 /// Whether a visible call has been in flight long enough to draw.
 pub(super) fn live_tool_call_is_settled(call: &LiveToolCall) -> bool {
+    // A call that ended inside the grace period never earned a row of its
+    // own; it only rides along once the block is on screen for another call.
+    if let Some(finish) = call.finished {
+        return finish.elapsed >= LIVE_TOOL_CALL_GRACE;
+    }
     // Rendering tests build calls and draw them in the same instant, and the
     // frozen `/test` preview pins its calls to a start time in the future.
     cfg!(test)
@@ -1085,7 +1090,7 @@ pub(super) fn render_live_tool_cell_at(
         };
         // How long the call has run sits behind it. A call still waiting its
         // turn looks the same without a time: it is in flight either way.
-        if call.execution_started {
+        if call.execution_started && call.finished.is_none() {
             let elapsed = now.saturating_duration_since(call.started_at).as_secs();
             if elapsed >= 1 {
                 suffix.push_str(&format!(" · {}", super::fmt_elapsed_compact(elapsed)));
@@ -1103,7 +1108,16 @@ pub(super) fn render_live_tool_cell_at(
         };
         lines.push(super::tool_transcript::fit_tool_row(
             vec![Span::styled(
-                format!("  {} ", super::tool_transcript::LIVE_ROW_GLYPH),
+                // A call that has ended keeps its row, with the glyph it
+                // will have once its batch is recorded.
+                format!(
+                    "  {} ",
+                    match call.finished {
+                        None => super::tool_transcript::LIVE_ROW_GLYPH,
+                        Some(finish) if finish.success => '✓',
+                        Some(_) => '✗',
+                    }
+                ),
                 detail_style,
             )],
             vec![Span::styled(call.action.clone(), action_style)],
@@ -1137,7 +1151,10 @@ pub(super) fn render_live_tool_cell_at(
         }
         // High verbosity keeps output closed while a call runs, as it does
         // once the call has finished.
-        if !call.execution_started || matches!(verbosity, Verbosity::High) {
+        if !call.execution_started
+            || call.finished.is_some()
+            || matches!(verbosity, Verbosity::High)
+        {
             continue;
         }
         if lone_command {

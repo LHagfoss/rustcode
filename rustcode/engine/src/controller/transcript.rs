@@ -20,7 +20,7 @@ pub use crate::app::state::PendingSteer;
 /// Live turn shapes: in-flight tool calls, their output chunks, and the
 /// token/thought stream tracker.
 pub use crate::app::{
-    CommandPanel, LiveToolCall, LiveToolOutputChunk, SettingsPicker, StreamTracker,
+    CommandPanel, LiveToolCall, LiveToolFinish, LiveToolOutputChunk, SettingsPicker, StreamTracker,
 };
 pub use crate::app::{SubAgentStatus, TokenUsage, Verbosity};
 pub use crate::network::events::{ToolResult, ToolResultMetadata};

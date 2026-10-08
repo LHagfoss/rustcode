@@ -11890,6 +11890,60 @@ fn a_call_in_flight_joins_the_block_across_the_step_that_asked_for_it() {
     );
 }
 
+// A call that has ended but is not in history yet keeps its row, with its
+// final glyph, next to the calls of the batch that are still running.
+#[test]
+fn a_finished_call_keeps_its_row_until_the_batch_is_recorded() {
+    let now = std::time::Instant::now();
+    let mut done = rustcode::controller::LiveToolCall::new(
+        "local:1",
+        None,
+        "run_command",
+        "Bash",
+        "cargo build",
+    );
+    done.started_at = now - std::time::Duration::from_secs(9);
+    done.finished = Some(rustcode::controller::LiveToolFinish {
+        success: true,
+        elapsed: std::time::Duration::from_secs(4),
+    });
+    let mut failed = done.clone();
+    failed.key = "local:2".into();
+    failed.target = "cargo test".into();
+    failed.finished = Some(rustcode::controller::LiveToolFinish {
+        success: false,
+        elapsed: std::time::Duration::from_secs(3),
+    });
+    let mut running = rustcode::controller::LiveToolCall::new(
+        "local:3",
+        None,
+        "run_command",
+        "Bash",
+        "cargo clippy",
+    );
+    running.started_at = now - std::time::Duration::from_secs(2);
+    let rows = super::history_cell::render_live_tool_cell_at(
+        &[done, failed, running],
+        80,
+        &rustcode::controller::Verbosity::High,
+        false,
+        now,
+        None,
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "• Ran",
+            "  ✓ Bash cargo build",
+            "  ✗ Bash cargo test",
+            "  ○ Bash cargo clippy · 2s",
+        ]
+    );
+}
+
 // Panels declare nothing for the pointer: targets are read from the painted
 // frame. This holds a real picker to that contract, so a picker that changes
 // its marker or its hint fails here instead of silently losing its clicks.
