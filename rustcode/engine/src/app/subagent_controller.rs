@@ -1,6 +1,6 @@
 use crate::app::{AppState, ChatMessage, SubAgent, SubAgentStatus};
 use futures_util::FutureExt;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
@@ -58,12 +58,18 @@ pub(crate) struct RootAgentMessage {
     pub(crate) message: String,
 }
 
+/// Leads a completion notice the harness itself puts in the root mailbox.
+const COMPLETION_NOTICE_PREFIX: &str = "Completion notice: ";
+
 struct SupervisorState {
     active: HashMap<SubagentId, ActiveChild>,
     results: HashMap<SubagentId, SubagentCompletion>,
     result_order: VecDeque<SubagentId>,
     scroll_positions: HashMap<Option<u32>, (u16, bool, u16)>,
     root_mailbox: VecDeque<RootAgentMessage>,
+    /// Children whose result the root already received from `wait_agent`, so
+    /// their completion notice would only repeat it.
+    completion_delivered: HashSet<u32>,
 }
 
 struct SupervisorInner {
@@ -98,6 +104,7 @@ impl SubagentSupervisor {
                     result_order: VecDeque::new(),
                     scroll_positions: HashMap::new(),
                     root_mailbox: VecDeque::new(),
+                    completion_delivered: HashSet::new(),
                 }),
                 activity: Notify::new(),
                 max_results: max_results.max(1),
@@ -331,6 +338,58 @@ impl SubagentSupervisor {
         Ok(())
     }
 
+    /// Tell the root that a child it started has finished, the way a waiting
+    /// parent would learn it, so a parent that moved on still hears about it.
+    /// Skipped when the root already received the result from `wait_agent`.
+    pub(crate) fn send_completion_notice(&self, id: u32, status: &str, summary: &str) {
+        if self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .completion_delivered
+            .remove(&id)
+        {
+            return;
+        }
+        let summary = crate::tools::truncate_bytes(summary.trim(), 1024);
+        let message = if summary.is_empty() {
+            format!("{COMPLETION_NOTICE_PREFIX}agent-{id} {status}.")
+        } else {
+            format!(
+                "{COMPLETION_NOTICE_PREFIX}agent-{id} {status}. Call wait_agent with id {id} for the full result.\n{summary}"
+            )
+        };
+        // A full mailbox drops the notice; the result stays available to
+        // `wait_agent` either way.
+        let _ = self.send_root_message(id, message);
+    }
+
+    /// Record that the root received this child's result directly, and drop
+    /// a completion notice still waiting to say the same thing.
+    pub(crate) fn mark_completion_delivered(&self, id: u32) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.completion_delivered.insert(id);
+        state.root_mailbox.retain(|mail| {
+            mail.sender_id != id || !mail.message.starts_with(COMPLETION_NOTICE_PREFIX)
+        });
+    }
+
+    /// A child starting a new turn will finish again; what the root heard
+    /// about its last turn says nothing about this one.
+    pub(crate) fn forget_completion_delivered(&self, id: u32) {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .completion_delivered
+            .remove(&id);
+    }
+
     pub(crate) fn root_messages(&self) -> Vec<RootAgentMessage> {
         self.inner
             .state
@@ -343,11 +402,14 @@ impl SubagentSupervisor {
     }
 
     pub(crate) fn restore_root_messages(&self, messages: Vec<RootAgentMessage>) {
-        self.inner
+        let mut state = self
+            .inner
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .root_mailbox = messages.into();
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.root_mailbox = messages.into();
+        // Agent ids start over with the restored session.
+        state.completion_delivered.clear();
     }
 
     /// Drain only at a root boundary after all announced native call results exist.
@@ -756,6 +818,36 @@ mod tests {
         assert!(messages[31].content.ends_with("evidence-32"));
         assert!(supervisor.root_messages().is_empty());
         assert!(supervisor.send_root_message(1, "x".repeat(8193)).is_err());
+    }
+
+    #[test]
+    fn a_completion_notice_reaches_the_root_unless_the_result_was_already_delivered() {
+        let supervisor = SubagentSupervisor::new(1);
+        supervisor.send_completion_notice(1, "completed", "found the bug in parser.rs");
+        supervisor
+            .send_root_message(1, "unrelated evidence".into())
+            .unwrap();
+        supervisor.send_completion_notice(2, "failed", "");
+
+        // The root waited on agent 1 after all: its notice is dropped, the
+        // evidence it sent is kept, and a late notice is not queued again.
+        supervisor.mark_completion_delivered(1);
+        supervisor.send_completion_notice(1, "completed", "found the bug in parser.rs");
+        assert_eq!(supervisor.root_messages().len(), 2);
+        // Its next turn is a new result the root has not seen.
+        supervisor.send_completion_notice(1, "completed", "second turn");
+        assert_eq!(supervisor.root_messages().len(), 3);
+        supervisor.mark_completion_delivered(1);
+        supervisor.forget_completion_delivered(1);
+
+        let messages = supervisor.take_root_messages();
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(messages[0].content.ends_with("unrelated evidence"));
+        assert!(
+            messages[1]
+                .content
+                .ends_with("Completion notice: agent-2 failed.")
+        );
     }
 
     #[test]

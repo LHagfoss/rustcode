@@ -772,6 +772,7 @@ async fn project_subagent_completion(
     if state.active_session_id != owner_session_id {
         return;
     }
+    let mut notify_root = false;
     if let Some(agent) = state
         .subagents
         .iter_mut()
@@ -785,23 +786,32 @@ async fn project_subagent_completion(
         }
         agent.review_manifest = review_manifest;
         agent.completion = Some(completion.output.clone());
+        // A child of the root reports in on its own; a nested child's parent
+        // is an agent that is waiting on it.
+        if agent.parent_id.is_none() {
+            notify_root = true;
+        }
     }
     let _ = crate::app::SubagentController.set_status(&mut state, completion.id, completion.status);
+    let status = match completion.status {
+        crate::app::SubAgentStatus::Completed => "completed",
+        crate::app::SubAgentStatus::Failed => "failed",
+        crate::app::SubAgentStatus::Cancelled => "cancelled",
+        crate::app::SubAgentStatus::Queued => "queued",
+        crate::app::SubAgentStatus::Interrupted => "interrupted",
+        crate::app::SubAgentStatus::Running => "running",
+    };
+    if notify_root {
+        state.subagent_supervisor.send_completion_notice(
+            completion.id.raw(),
+            status,
+            &completion.output,
+        );
+    }
     crate::app::subagent_persistence::save(&state);
     agent_notice(
         &mut state,
-        format!(
-            "agent-{} {}",
-            completion.id.raw(),
-            match completion.status {
-                crate::app::SubAgentStatus::Completed => "completed",
-                crate::app::SubAgentStatus::Failed => "failed",
-                crate::app::SubAgentStatus::Cancelled => "cancelled",
-                crate::app::SubAgentStatus::Queued => "queued",
-                crate::app::SubAgentStatus::Interrupted => "interrupted",
-                crate::app::SubAgentStatus::Running => "running",
-            }
-        ),
+        format!("agent-{} {status}", completion.id.raw()),
     );
 }
 
@@ -834,6 +844,7 @@ pub(crate) fn launch_subagent_turn(
     let completion_state = Arc::downgrade(state);
     let mcp_registry = crate::mcp::get_mcp_registry();
     let completion_owner = owner_session_id.clone();
+    supervisor.forget_completion_delivered(agent_id);
     supervisor.spawn_with_token_and_completion(
         crate::app::SubagentId::from_raw(agent_id),
         parent_cancel.clone(),
@@ -935,7 +946,30 @@ async fn handle_agent_tool_for_parent(
             let model = args
                 .get("model")
                 .and_then(|m| m.as_str())
+                .filter(|m| !m.trim().is_empty())
                 .map(|s| s.to_string());
+            // An unknown name used to fall back to the parent's model without
+            // a word; say which profiles exist instead.
+            if let Some(requested) = model.as_deref() {
+                let s = state.lock().await;
+                if !s
+                    .config
+                    .models
+                    .iter()
+                    .any(|profile| profile.name == requested || profile.model == requested)
+                {
+                    let known = s
+                        .config
+                        .models
+                        .iter()
+                        .map(|profile| profile.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return crate::tools::ToolExecutionOutput::failure(format!(
+                        "error: unknown model '{requested}'. Available model profiles: {known}"
+                    ));
+                }
+            }
             let write_access = args
                 .get("write_access")
                 .and_then(|value| value.as_bool())
@@ -1364,6 +1398,9 @@ async fn handle_agent_tool_for_parent(
                         ));
                     }
                 };
+            if parent_id.is_none() {
+                supervisor.mark_completion_delivered(id);
+            }
             let status = match completion.status {
                 crate::app::SubAgentStatus::Completed => "completed",
                 crate::app::SubAgentStatus::Failed => "failed",
