@@ -156,7 +156,7 @@ fn mutation_batch_guidance(policy: &crate::config::ToolSchedulingPolicy) -> Stri
         )
     } else {
         format!(
-            "Batch independent read-only calls freely in one response and wait for their results before choosing the next action. Keep workspace-changing calls to one per response (limit {}) and let control-plane calls run first with read-only calls following in order. Read-only inspection never consumes the mutation budget. Never assume an unexecuted call ran.",
+            "Batch independent read-only calls freely in one response and wait for their results before choosing the next action. Up to {} workspace-changing calls per response run in the order given; control-plane calls run first with read-only calls following in order. Read-only inspection never consumes the mutation budget. Never assume an unexecuted call ran.",
             policy.max_mutating_calls
         )
     }
@@ -243,11 +243,7 @@ impl ScheduledCalls {
 /// Per-round mutation allowance for one scheduling decision. A drain of the
 /// deferred queue uses the same cap so it can never re-enter a round's budget.
 fn mutation_cap(policy: crate::config::ToolSchedulingPolicy) -> usize {
-    if policy.allow_batching {
-        policy.max_mutating_calls.max(1)
-    } else {
-        1
-    }
+    policy.max_mutating_calls.max(1)
 }
 
 /// Whether the harness may run this call later instead of asking the model to
@@ -2892,6 +2888,7 @@ mod tests {
         app_state.active_turn_steerable_session = Some(session_id.clone());
         assert!(app_state.queue_steer("Use Teams".to_owned()));
         assert!(app_state.queue_steer("Keep the same channel".to_owned()));
+        one_mutation_per_response(&mut app_state);
         app_state.auto_confirm = true;
         let api_base_url = app_state.api_base_url.clone();
         app_state.record_function_calling_support(&api_base_url, true);
@@ -3022,8 +3019,17 @@ mod tests {
         assert!(temp.path().read_dir().unwrap().next().is_none());
     }
 
+    /// Restrict every profile to one workspace-changing call per response,
+    /// the policy the queue tests exercise.
+    fn one_mutation_per_response(app_state: &mut AppState) {
+        for profile in &mut app_state.config.models {
+            profile.allow_tool_batching = Some(false);
+        }
+    }
+
     fn approving_state() -> (Arc<Mutex<AppState>>, String) {
         let mut app_state = AppState::new();
+        one_mutation_per_response(&mut app_state);
         let session_id = app_state.active_session_id.clone();
         app_state
             .history
@@ -3183,6 +3189,44 @@ mod tests {
         // The queued call already owns an answer under its provider id, so the
         // auto-executed result must not claim that id again (#1590 pairing).
         assert_eq!(ctx.metrics.tool_calls, 3, "two writes and one clock read");
+    }
+
+    // Several workspace-changing calls in one response run in order under the
+    // default profile; nothing is held for a later round.
+    #[tokio::test]
+    async fn default_profile_runs_several_mutations_from_one_response_in_order() {
+        let temp = tempfile::tempdir().expect("temporary workspace");
+        let mut app_state = AppState::new();
+        let session_id = app_state.active_session_id.clone();
+        app_state
+            .history
+            .push(ChatMessage::new("user", "Apply both edits"));
+        app_state.status = AppStatus::Streaming;
+        app_state.auto_confirm = true;
+        let api_base_url = app_state.api_base_url.clone();
+        app_state.record_function_calling_support(&api_base_url, true);
+        let state = Arc::new(Mutex::new(app_state));
+        let policy = Arc::new(ApproveAll);
+        let mut ctx = TurnContext::new();
+        let first = write_call(&temp.path().join("first.txt"), "one");
+        let second = write_call(&temp.path().join("second.txt"), "two");
+
+        run_round(
+            &state,
+            &policy,
+            &mut ctx,
+            "",
+            vec![
+                envelope("call-first", &first),
+                envelope("call-second", &second),
+            ],
+            &session_id,
+        )
+        .await;
+
+        assert!(state.lock().await.deferred_tool_calls.is_empty());
+        assert!(temp.path().join("first.txt").exists());
+        assert!(temp.path().join("second.txt").exists());
     }
 
     // #1857: the model may answer in text right after being told its held
@@ -3540,7 +3584,9 @@ mod tests {
                 ..Default::default()
             });
             assert!(guidance.contains("Batch independent read-only calls freely"));
-            assert!(guidance.contains(&format!("one per response (limit {limit})")));
+            assert!(guidance.contains(&format!(
+                "Up to {limit} workspace-changing calls per response run in the order given"
+            )));
             assert!(guidance.contains("Read-only inspection never consumes the mutation budget"));
         }
     }

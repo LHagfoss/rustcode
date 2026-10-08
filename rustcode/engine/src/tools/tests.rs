@@ -2587,7 +2587,7 @@ fn the_prompt_matches_what_the_executor_actually_does() {
         "got: {prompt}"
     );
     assert!(
-        prompt.contains("one mutation per response"),
+        prompt.contains("mutations run in order"),
         "mutations stay ordered: {prompt}"
     );
     assert!(
@@ -2596,10 +2596,7 @@ fn the_prompt_matches_what_the_executor_actually_does() {
     );
 
     // And the stated limit on changes must be the one the executor enforces.
-    assert!(
-        prompt.contains("one mutation per response"),
-        "got: {prompt}"
-    );
+    assert!(prompt.contains("mutations run in order"), "got: {prompt}");
     assert!(
         prompt.contains("use `view_file` with `start_line`/`end_line`"),
         "got: {prompt}"

@@ -2001,8 +2001,9 @@ Calls beyond the limit are held by the harness and executed automatically in a l
             "\n\n# Tool response limit\n\
 The effective max_mutating_calls_per_response is {}. \
 Batch independent read-only calls freely in one assistant response and wait for their results before choosing the next action. \
-Keep workspace-changing calls to one per response: this includes mutating `run_command` calls, file writes/edits, \
-and other tools with side effects. Read-only inspection never consumes this limit. Never assume an unexecuted call ran. \
+Workspace-changing calls (mutating `run_command` calls, file writes/edits and other tools with side effects) run \
+one after another in the order given, up to that limit per response; send several together only when a later one \
+does not depend on an earlier result. Read-only inspection never consumes this limit. Never assume an unexecuted call ran. \
 Calls beyond the limit are held by the harness and executed automatically in a later round: never reissue them.\n",
             policy.max_mutating_calls
         )
@@ -2052,7 +2053,7 @@ For live local app/device state without a matching tool or route hint, check `li
 - If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
 - Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors or warnings, then rerun failed or stale checks. Subagent reports are advisory; inspect the workspace yourself.\n\
 - Use native `grep`/`glob` for exact discovery, `rg` through `run_command` for advanced searches, and SocratiCode `codebase_*` for semantic relationships. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
-- Batch independent reads in one response; one mutation per response, control-plane calls first. Wait for results before the next calls.\n\
+- Batch independent reads in one response; mutations run in order, control-plane calls first. Wait for results before the next calls.\n\
 - Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; complete results are authoritative, so do not reread them—edit or verify next. For manual previews, use the user's exact port, do not start/probe/fallback, and let them run it after verification; do not start a server merely to inspect a static app.\n\
 - Match neighboring signatures, state/lock, and error conventions.\n\
 - Run focused checks and cover boundaries for complex logic.\n\
@@ -2093,19 +2094,19 @@ For live local app/device state without a matching tool or route hint, check `li
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
-                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Batch independent reads as multiple fences; one mutation per response. Wait for results before the next calls.\n\n"
+                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Batch independent reads as multiple fences; mutations run in order. Wait for results before the next calls.\n\n"
             );
         }
         crate::config::ToolProtocol::Native => {
             p.push_str(
                 "Active tool protocol: textual native tags. Call tools only with native tags; emit no prose before/after.\n\n\
                 [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
-                Rules: batch independent reads as multiple [TOOL_CALLS] markers; one mutation per response, control-plane calls first. Wait for results before the next calls. Arguments must be a valid JSON object matching the tool parameters.\n\n"
+                Rules: batch independent reads as multiple [TOOL_CALLS] markers; mutations run in order, control-plane calls first. Wait for results before the next calls. Arguments must be a valid JSON object matching the tool parameters.\n\n"
             );
         }
         crate::config::ToolProtocol::ApiNative => {
             p.push_str(
-                "Active tool protocol: API-native. Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Batch independent reads together; one mutation per response, control-plane calls first. Wait for results before the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
+                "Active tool protocol: API-native. Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Batch independent reads together; mutations run in order, control-plane calls first. Wait for results before the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
             );
         }
     }
@@ -2283,7 +2284,7 @@ mod response_limit_tests {
         let prompt = tool_system_prompt(false, ToolProtocol::Native, AgentMode::Build);
 
         assert!(prompt.contains("multiple [TOOL_CALLS] markers"));
-        assert!(prompt.contains("one mutation per response"));
+        assert!(prompt.contains("mutations run in order"));
         assert!(!prompt.contains("exactly one [TOOL_CALLS] marker"));
     }
 }
