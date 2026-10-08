@@ -1,3 +1,17 @@
+## [v0.59.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.59.0) - 2026-10-08
+
+### Features
+- Sub-agents report back: the root is told when a child it started finishes, without having to call `wait_agent`. `wait_agent` can wait for the first of several children (`ids`) and for up to an hour. `spawn_agent` advertises `model` and rejects an unknown profile instead of silently using the parent's (#1835, #1843)
+- Compacted context can be recovered on demand: the new read-only `zoom_context` tool lists and opens the original messages behind a compaction summary, so an exact correction, command or tool argument is not lost (#1847)
+- Panels are clickable: the `esc` hint closes a panel, list rows can be clicked to choose them, and both light up under the pointer, as does the back-to-bottom control (#1833)
+- One tool block per batch of work: calls still running are listed under the same `Ran` heading as the ones before them, and every row carries one state glyph: `○` running or waiting, `✓` finished, `✗` failed, stopped or cancelled. The `waiting` suffix and the `Queued` indicator are gone, and MCP rows lead with `MCP` like built-in rows (#1833, #1841)
+- ChatGPT-plan requests now reach the prompt cache: about 80% of prompt tokens were cached from the second request of a turn in a measured run, up from about 1% (#1840)
+- Fixed Responses models (for example ChatGPT-plan `gpt-5.6`) returning nothing on planning prompts: tool rounds no longer cap hidden reasoning at 8192 output tokens, and the failure message names the output budget (#1832)
+- Fixed attached images never reaching the model: a prompt with an image was sent without its text or its picture (#1846)
+- Fixed MCP tools found by `list_mcp_tools` never becoming callable, which left the model searching in a loop. Naming a server now keeps the tools the request points at, and discovery queries match by word (#1837)
+- A model the provider does not offer is reported in words with a pointer to `/model`, and request logs show the real tool count (#1839)
+- Long notices wrap under their own text, question options show `✓` instead of `:white_check_mark:`, a recap is followed by a blank row, and the context panel says `esc` like the others (#1833, #1842)
+- `scripts/release.sh` no longer waits on a prompt nobody can see when run without a terminal (#1838)
 ## [v0.58.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.58.0) - 2026-10-07
 
 ### Features
