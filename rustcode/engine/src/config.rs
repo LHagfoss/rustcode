@@ -116,9 +116,8 @@ pub const MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS: u32 = 32768;
 const VERIFIED_KAT_CODER_PROFILE_NAME: &str = "kat-coder";
 const VERIFIED_KAT_CODER_MODEL: &str = "KAT-Coder-V2.5-Dev-OptiQ-4bit";
 const VERIFIED_KAT_CODER_HOST: &str = "https://tokmax.paral.no/";
-/// Safe mutation cap for explicitly enabled response batching. The scheduler
-/// batches every valid read-only call and runs one mutation per round by
-/// default; read-only inspection (`grep`, `glob`, `view_file`, and read-only
+/// Default cap on workspace-changing calls run from one response, in order.
+/// The scheduler batches every valid read-only call; read-only inspection (`grep`, `glob`, `view_file`, and read-only
 /// shell commands) is classified separately and never consumes this budget.
 pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 4;
 /// Keep profile overrides bounded even when a config typo requests an
@@ -372,18 +371,18 @@ pub struct ModelProfile {
     /// larger window than the running server accepts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_context_window: Option<u32>,
-    /// Maximum number of workspace-changing tool calls accepted from one
-    /// response when batching is enabled. Omitted profiles retain the safe
-    /// four-call cap, while scheduling remains strict by default.
+    /// Maximum number of workspace-changing tool calls run from one
+    /// response, in order. Omitted profiles use the four-call default; calls
+    /// beyond the cap are held and run in a later round.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mutating_calls_per_response: Option<usize>,
     /// Explicitly identify an OpenAI-compatible endpoint as local. This is
     /// needed for self-hosted gateways whose URL and engine name look remote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<bool>,
-    /// Explicitly allow this profile to batch multiple workspace-changing
-    /// tool calls in one response. Omitted profiles run one mutation per
-    /// round; read-only calls always batch regardless of this flag.
+    /// `false` restricts this profile to one workspace-changing call per
+    /// response. `true` additionally advertises the bounded batch to the
+    /// model. Read-only calls always batch regardless of this flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_tool_batching: Option<bool>,
     /// Maximum read-only calls in one response when batching is enabled.
@@ -559,10 +558,12 @@ impl ModelProfile {
             } else {
                 1
             },
-            max_mutating_calls: if self.tool_batching_enabled() {
-                self.max_mutating_calls_per_response()
-            } else {
+            // Several workspace-changing calls in one response run in order
+            // unless the profile opts out with `allow_tool_batching = false`.
+            max_mutating_calls: if self.allow_tool_batching == Some(false) {
                 1
+            } else {
+                self.max_mutating_calls_per_response()
             },
             max_continuations: self.max_tool_continuations(),
         }

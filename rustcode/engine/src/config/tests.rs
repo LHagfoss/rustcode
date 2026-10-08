@@ -621,12 +621,17 @@ fn mutation_limit_round_trips_through_toml() {
 }
 
 #[test]
-fn trusted_tool_scheduling_policy_is_bounded_and_strict_by_default() {
+fn tool_scheduling_policy_is_bounded_and_can_be_made_strict() {
     let mut profile = ModelProfile::default();
     let default_policy = profile.tool_scheduling_policy();
     assert!(!default_policy.allow_batching);
     assert_eq!(default_policy.max_read_only_calls, 1);
-    assert_eq!(default_policy.max_mutating_calls, 1);
+    assert_eq!(
+        default_policy.max_mutating_calls,
+        DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+    );
+    profile.allow_tool_batching = Some(false);
+    assert_eq!(profile.tool_scheduling_policy().max_mutating_calls, 1);
     assert_eq!(
         default_policy.max_continuations,
         DEFAULT_MAX_TOOL_CONTINUATIONS
