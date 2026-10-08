@@ -248,6 +248,12 @@ mod tests {
 
     #[test]
     fn demo_uses_existing_renderer_for_each_preview_state_and_is_stable() {
+        // The frame decides where the indicator goes by comparing cells with
+        // the theme's background. A test switching themes mid-frame made this
+        // one lose its indicator about once in ten runs.
+        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut demo = demo_view();
         demo.freeze();
         let snapshot = render_snapshot(demo.render_state());
