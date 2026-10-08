@@ -262,6 +262,9 @@ where
             }
             error
         })?;
+        // A request that produced nothing has no prefix to resume; replaying
+        // it would send the identical request again.
+        let chunk_made_progress = !chunk.content.is_empty();
         accumulated.push_str(&chunk.content);
         // This describes the segment that ended the collected response, not
         // any earlier segment. A later reasoning-only continuation must clear
@@ -273,7 +276,8 @@ where
         thought_tokens = thought_tokens.saturating_add(chunk.thought_tokens);
         add_usage(&mut token_usage, chunk.token_usage);
         if !has_native_tool_calls {
-            let cut_off = crate::network::is_cut_off(&accumulated, chunk.finish_reason.as_deref());
+            let cut_off = chunk_made_progress
+                && crate::network::is_cut_off(&accumulated, chunk.finish_reason.as_deref());
             let adaptive_candidate =
                 rustcode_tool_protocol::text::is_adaptive_tool_continuation_candidate(
                     &accumulated,
@@ -353,6 +357,32 @@ mod tests {
         let mut runner = TurnRunner::with_max_continuations(4);
         let prefix = "token ".repeat(MAX_CONTINUATION_REPLAY_TOKENS as usize * 2);
         assert!(!runner.allow_continuation(true, &prefix));
+    }
+
+    #[tokio::test]
+    async fn collect_response_does_not_replay_an_empty_cut_off_response() {
+        let mut calls = 0;
+        let result = collect_response(ContinuationPolicy::default(), |_request| {
+            calls += 1;
+            async move {
+                Ok::<_, ResponseError>(ResponseChunk {
+                    content: String::new(),
+                    final_answer_boundary: FinalAnswerBoundary::None,
+                    provider_final_answer_state: ProviderFinalAnswerState::None,
+                    finish_reason: Some("length".to_string()),
+                    has_native_tool_calls: false,
+                    output_token_limit: Some(8_192),
+                    thought_time_ms: 0,
+                    thought_tokens: 0,
+                    token_usage: None,
+                })
+            }
+        })
+        .await
+        .expect("empty response should still be returned");
+
+        assert_eq!(calls, 1);
+        assert_eq!(result.finish_reason.as_deref(), Some("length"));
     }
 
     #[tokio::test]

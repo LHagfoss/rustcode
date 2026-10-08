@@ -574,7 +574,7 @@ impl ModelProfile {
     /// Requests without tools retain the configured cap for normal answers.
     pub fn completion_token_limit(&self, allow_tools: bool) -> u32 {
         let configured = self.context_budget().max_output_tokens;
-        if allow_tools {
+        if allow_tools && !self.reasoning_shares_output_cap() {
             configured.min(DEFAULT_TOOL_ROUND_MAX_TOKENS)
         } else {
             configured
@@ -634,15 +634,22 @@ impl ModelProfile {
         is_google && !url.contains("/openai/") && is_native_path
     }
 
+    /// Whether hidden reasoning is billed against the wire output cap and
+    /// cannot be cut client-side. On the Responses API a small tool-round or
+    /// recovery cap can be spent entirely on reasoning, leaving no answer.
+    pub fn reasoning_shares_output_cap(&self) -> bool {
+        self.resolved_api_protocol() == ApiProtocol::Responses
+    }
+
     /// Return the wire output cap for one request. Context reserves remain
     /// independent: an unset ordinary response uses the provider default,
     /// while tool and recovery rounds retain a hard client-side ceiling.
     pub fn output_token_limit(&self, allow_tools: bool, bounded_recovery: bool) -> Option<u32> {
-        if self.max_output_tokens.is_some()
-            || self.max_tokens.is_some()
-            || allow_tools
-            || bounded_recovery
-        {
+        let configured = self.max_output_tokens.is_some() || self.max_tokens.is_some();
+        if self.reasoning_shares_output_cap() && !configured {
+            return None;
+        }
+        if configured || allow_tools || bounded_recovery {
             Some(self.completion_token_limit(allow_tools))
         } else {
             None

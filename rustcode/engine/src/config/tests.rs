@@ -828,6 +828,34 @@ fn every_model_tool_round_cap_preserves_full_final_cap() {
     assert_eq!(profile.completion_token_limit(false), 16_000);
 }
 
+// Regression: hidden reasoning counts against the Responses output cap, so
+// the 8192 tool-round cap left gpt-5.6 no room to answer a planning prompt.
+#[test]
+fn responses_profiles_skip_the_tool_round_and_recovery_caps() {
+    let unset = ModelProfile {
+        url: "https://api.openai.com/v1/responses".to_string(),
+        context_window: Some(272_000),
+        ..ModelProfile::default()
+    };
+    assert!(unset.reasoning_shares_output_cap());
+    assert_eq!(unset.output_token_limit(true, false), None);
+    assert_eq!(unset.output_token_limit(true, true), None);
+
+    let configured = ModelProfile {
+        max_output_tokens: Some(64_000),
+        ..unset.clone()
+    };
+    assert_eq!(configured.output_token_limit(true, false), Some(64_000));
+    assert_eq!(configured.completion_token_limit(true), 64_000);
+
+    let chat = ModelProfile {
+        url: "https://api.openai.com/v1/chat/completions".to_string(),
+        ..unset
+    };
+    assert!(!chat.reasoning_shares_output_cap());
+    assert_eq!(chat.output_token_limit(true, false), Some(8192));
+}
+
 #[test]
 fn verified_profile_can_raise_tool_ceiling_without_changing_initial_default() {
     let default_profile = ModelProfile {
