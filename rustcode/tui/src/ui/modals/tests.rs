@@ -1312,11 +1312,11 @@ fn tasks_panel_lists_running_then_finished_with_key_hints() {
         "{text}"
     );
     assert!(
-        rows[row_of("make lint")].contains("× make lint · exit 2"),
+        rows[row_of("make lint")].contains("✗ make lint · exit 2"),
         "{text}"
     );
     assert!(
-        rows[row_of("sleep 600")].contains("− sleep 600 · stopped"),
+        rows[row_of("sleep 600")].contains("✗ sleep 600 · stopped"),
         "{text}"
     );
     assert!(heading < row_of("cargo test"), "{text}");

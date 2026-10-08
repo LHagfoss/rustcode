@@ -534,7 +534,8 @@ impl ActiveWorkState {
             Self::Generating => "Generating",
             Self::Thinking => "Thinking",
             Self::Working => "Working",
-            Self::Queued => "Queued",
+            // A turn waiting to start is in flight like any other.
+            Self::Queued => "Working",
             Self::Approval => "Awaiting approval",
             Self::Input => "Awaiting input",
         }

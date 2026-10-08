@@ -37,6 +37,15 @@ pub(super) trait HistoryCell {
 /// its contents on deltas instead of appending duplicate terminal rows. The
 /// source and tool summaries here are intentionally not serialized or passed
 /// to providers; [`AppState`] remains the canonical conversation boundary.
+/// What a click on a cell of an open panel does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PanelTarget {
+    /// The `esc` hint: close the panel.
+    Escape,
+    /// A list row this many rows from the selected one: choose it.
+    ListRow(isize),
+}
+
 pub(crate) struct TranscriptState {
     assistant: Option<AssistantMarkdownCell>,
     tools: Option<LiveToolCell>,
@@ -84,6 +93,11 @@ pub(crate) struct TranscriptState {
     /// Where the footer's task counter was painted, if it was.
     pub(crate) tasks_chip: Option<ratatui::layout::Rect>,
     pub(crate) tasks_chip_hovered: bool,
+    /// Clickable cells of the panel painted last frame: its `esc` hint and
+    /// the rows of its list.
+    panel_targets: Vec<(ratatui::layout::Rect, PanelTarget)>,
+    /// The panel target or follow control under the pointer.
+    hovered_target: Option<ratatui::layout::Rect>,
     /// The running indicator last painted and when, see
     /// [`Self::settle_indicator`].
     held_indicator: Option<HeldIndicator>,
@@ -146,6 +160,8 @@ impl Default for TranscriptState {
             hovered_tool_block: None,
             tasks_chip: None,
             tasks_chip_hovered: false,
+            panel_targets: Vec::new(),
+            hovered_target: None,
             held_indicator: None,
         }
     }
@@ -285,15 +301,136 @@ impl TranscriptState {
             .is_some_and(|area| area.contains(ratatui::layout::Position::new(column, row)))
     }
 
+    /// Find what a click can reach in the panel just painted into `area`: an
+    /// `esc` hint closing a row, and, when the panel is a list, the rows
+    /// around its `›` selection marker. Panels are read from the painted
+    /// cells so every panel gets the same affordance without declaring it.
+    pub(super) fn set_panel_targets(
+        &mut self,
+        buffer: &ratatui::buffer::Buffer,
+        area: ratatui::layout::Rect,
+        list: bool,
+    ) {
+        let area = area.intersection(buffer.area);
+        // Per row: the column and symbol of its first cell with text, and the
+        // column after its last.
+        let rows = (area.y..area.bottom())
+            .map(|y| {
+                let filled = |x: &u16| !buffer[(*x, y)].symbol().trim().is_empty();
+                let first = (area.x..area.right()).find(filled)?;
+                let last = (area.x..area.right()).rev().find(filled)?;
+                Some((first, last + 1))
+            })
+            .collect::<Vec<_>>();
+        let mut targets = Vec::new();
+        for (offset, row) in rows.iter().enumerate() {
+            let Some((_, end)) = *row else { continue };
+            let y = area.y + offset as u16;
+            let word_start = (area.x..end)
+                .rev()
+                .take_while(|x| !buffer[(*x, y)].symbol().trim().is_empty())
+                .last()
+                .unwrap_or(end);
+            let word = (word_start..end)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>();
+            if word == "esc" {
+                targets.push((
+                    ratatui::layout::Rect::new(word_start, y, end - word_start, 1),
+                    PanelTarget::Escape,
+                ));
+            }
+        }
+        let selected = rows.iter().enumerate().find_map(|(offset, row)| {
+            let (first, _) = (*row)?;
+            (buffer[(first, area.y + offset as u16)].symbol() == "›").then_some((offset, first))
+        });
+        if list && let Some((selected, marker)) = selected {
+            // An item's text starts two cells in from the marker; a heading
+            // or a hint row starts elsewhere and ends the list.
+            let is_item = |offset: usize| {
+                rows.get(offset)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|(first, _)| first == marker + 2)
+            };
+            let above = (0..selected).rev().take_while(|&offset| is_item(offset));
+            let below = (selected + 1..rows.len()).take_while(|&offset| is_item(offset));
+            for offset in above.chain(below) {
+                targets.push((
+                    ratatui::layout::Rect::new(area.x, area.y + offset as u16, area.width, 1),
+                    PanelTarget::ListRow(offset as isize - selected as isize),
+                ));
+            }
+        }
+        if self
+            .hovered_target
+            .is_some_and(|hovered| !targets.iter().any(|(rect, _)| *rect == hovered))
+            && self.hovered_target != self.follow_control.area()
+        {
+            self.hovered_target = None;
+        }
+        self.panel_targets = targets;
+    }
+
+    /// What a click at this cell does in the panel painted last frame. An
+    /// `esc` hint inside a list row wins over the row.
+    pub(crate) fn panel_target_at(&self, column: u16, row: u16) -> Option<PanelTarget> {
+        self.panel_target_rect_at(column, row)
+            .map(|(_, target)| target)
+    }
+
+    fn panel_target_rect_at(
+        &self,
+        column: u16,
+        row: u16,
+    ) -> Option<(ratatui::layout::Rect, PanelTarget)> {
+        let position = ratatui::layout::Position::new(column, row);
+        self.panel_targets
+            .iter()
+            .filter(|(rect, _)| rect.contains(position))
+            .min_by_key(|(rect, _)| rect.width)
+            .copied()
+    }
+
     /// Move the hover to whatever clickable thing is at this cell. Returns
     /// whether it changed, so pointer motion inside one target costs no frame.
     pub(crate) fn hover_at(&mut self, column: u16, row: u16) -> bool {
         let block = self.tool_block_at(column, row);
         let chip = self.tasks_chip_at(column, row);
-        let changed = block != self.hovered_tool_block || chip != self.tasks_chip_hovered;
+        let target = self
+            .panel_target_rect_at(column, row)
+            .map(|(rect, _)| rect)
+            .or_else(|| {
+                self.follow_control
+                    .area()
+                    .filter(|area| area.contains(ratatui::layout::Position::new(column, row)))
+            });
+        let changed = block != self.hovered_tool_block
+            || chip != self.tasks_chip_hovered
+            || target != self.hovered_target;
         self.hovered_tool_block = block;
         self.tasks_chip_hovered = chip;
+        self.hovered_target = target;
         changed
+    }
+
+    /// Light the panel target or follow control under the pointer.
+    pub(super) fn highlight_hovered_target(&self, buffer: &mut ratatui::buffer::Buffer) {
+        let Some(hovered) = self.hovered_target else {
+            return;
+        };
+        let still_painted = self.follow_control.area() == Some(hovered)
+            || self.panel_targets.iter().any(|(rect, _)| *rect == hovered);
+        if !still_painted {
+            return;
+        }
+        let hovered = hovered.intersection(buffer.area);
+        for y in hovered.y..hovered.bottom() {
+            for x in hovered.x..hovered.right() {
+                buffer[(x, y)].set_bg(super::COLOR_HOVER_BG());
+            }
+        }
     }
 
     /// Light the hovered block's rows in the painted frame.
@@ -950,15 +1087,13 @@ pub(super) fn render_live_tool_cell_at(
         } else {
             String::new()
         };
-        // The state sits behind the call: how long it has run, or that it is
-        // still waiting its turn.
+        // How long the call has run sits behind it. A call still waiting its
+        // turn looks the same without a time: it is in flight either way.
         if call.execution_started {
             let elapsed = now.saturating_duration_since(call.started_at).as_secs();
             if elapsed >= 1 {
                 suffix.push_str(&format!(" · {}", super::fmt_elapsed_compact(elapsed)));
             }
-        } else {
-            suffix.push_str(" · waiting");
         }
         // The same one-line layout as a finished row: the state keeps its
         // place and the target takes what is left.
@@ -971,7 +1106,10 @@ pub(super) fn render_live_tool_cell_at(
             ))]
         };
         lines.push(super::tool_transcript::fit_tool_row(
-            vec![Span::styled("  ", detail_style)],
+            vec![Span::styled(
+                format!("  {} ", super::tool_transcript::LIVE_ROW_GLYPH),
+                detail_style,
+            )],
             vec![Span::styled(call.action.clone(), action_style)],
             if target.is_empty() {
                 Vec::new()
@@ -1119,7 +1257,62 @@ fn live_command_output(call: &LiveToolCall, width: u16, show_picker: bool) -> Ve
 
 #[cfg(test)]
 mod tests {
-    use super::{AssistantMarkdownCell, HistoryCell, TranscriptState};
+    use super::{AssistantMarkdownCell, HistoryCell, PanelTarget, TranscriptState};
+
+    fn painted(rows: &[&str]) -> (ratatui::buffer::Buffer, ratatui::layout::Rect) {
+        let area = ratatui::layout::Rect::new(0, 0, 40, rows.len() as u16);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        for (y, row) in rows.iter().enumerate() {
+            buffer.set_string(0, y as u16, row, ratatui::style::Style::default());
+        }
+        (buffer, area)
+    }
+
+    #[test]
+    fn a_panel_offers_its_esc_hint_and_list_rows_to_the_pointer() {
+        let (mut buffer, area) = painted(&[
+            "  Select model                      esc",
+            "",
+            "  › first/model            First Model",
+            "    second/model          Second Model",
+            "    third/model            Third Model",
+            "  select ↑/↓  confirm enter  cancel esc",
+        ]);
+        let mut transcript = TranscriptState::default();
+        transcript.set_panel_targets(&buffer, area, true);
+
+        // Both `esc` hints close the panel; the title and the blank row do nothing.
+        assert_eq!(transcript.panel_target_at(37, 0), Some(PanelTarget::Escape));
+        assert_eq!(transcript.panel_target_at(38, 5), Some(PanelTarget::Escape));
+        assert_eq!(transcript.panel_target_at(4, 0), None);
+        assert_eq!(transcript.panel_target_at(4, 1), None);
+        // Rows are counted from the selected one, which is not a target
+        // itself, and the hint row under the list is not an item.
+        assert_eq!(transcript.panel_target_at(10, 2), None);
+        assert_eq!(
+            transcript.panel_target_at(10, 3),
+            Some(PanelTarget::ListRow(1))
+        );
+        assert_eq!(
+            transcript.panel_target_at(30, 4),
+            Some(PanelTarget::ListRow(2))
+        );
+        assert_eq!(transcript.panel_target_at(4, 5), None);
+
+        // The row under the pointer is lit, and only that row.
+        assert!(transcript.hover_at(10, 3));
+        assert!(!transcript.hover_at(12, 3));
+        transcript.highlight_hovered_target(&mut buffer);
+        assert_eq!(buffer[(0, 3)].bg, crate::ui::COLOR_HOVER_BG());
+        assert_ne!(buffer[(0, 4)].bg, crate::ui::COLOR_HOVER_BG());
+
+        // A panel that is not a list offers only its `esc` hint, and a
+        // target that is no longer painted stops being lit.
+        transcript.set_panel_targets(&buffer, area, false);
+        assert_eq!(transcript.panel_target_at(10, 3), None);
+        assert_eq!(transcript.panel_target_at(37, 0), Some(PanelTarget::Escape));
+        assert!(!transcript.hover_at(10, 3));
+    }
     use rustcode::controller::{ChatMessage, History, RenderState};
 
     #[test]

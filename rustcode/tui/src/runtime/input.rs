@@ -2331,6 +2331,32 @@ pub(super) async fn handle_app_event(
                         transcript_state.jump_to_latest();
                         frame_requester.schedule_frame();
                     }
+                    // A panel's `esc` hint and its list rows act like the
+                    // keys they stand for, so the panel needs no second path.
+                    event::MouseEventKind::Down(event::MouseButton::Left)
+                        if transcript_state
+                            .panel_target_at(mouse.column, mouse.row)
+                            .is_some() =>
+                    {
+                        let keys = match transcript_state
+                            .panel_target_at(mouse.column, mouse.row)
+                            .expect("checked")
+                        {
+                            ui::PanelTarget::Escape => vec![KeyCode::Esc],
+                            ui::PanelTarget::ListRow(rows) => {
+                                let step = if rows < 0 { KeyCode::Up } else { KeyCode::Down };
+                                let mut keys = vec![step; rows.unsigned_abs()];
+                                keys.push(KeyCode::Enter);
+                                keys
+                            }
+                        };
+                        for key in keys {
+                            let _ = app_event_sender.send(AppEvent::Tui(TuiEvent::Key(
+                                event::KeyEvent::new(key, event::KeyModifiers::NONE),
+                            )));
+                        }
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     // Pointer motion only moves the hover; a frame is drawn
                     // when it reaches or leaves a tool block.
                     event::MouseEventKind::Moved => {

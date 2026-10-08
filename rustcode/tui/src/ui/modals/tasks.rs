@@ -125,8 +125,8 @@ fn tasks_panel_list_lines(
             TaskRowState::Finished { outcome, ran_for } => (
                 match outcome {
                     TaskOutcome::Done => '✓',
-                    TaskOutcome::Stopped => '−',
-                    TaskOutcome::Exit(_) | TaskOutcome::Failed => '×',
+                    TaskOutcome::Stopped => '✗',
+                    TaskOutcome::Exit(_) | TaskOutcome::Failed => '✗',
                 },
                 format!(
                     "{} · {}",

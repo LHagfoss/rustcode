@@ -672,12 +672,22 @@ pub(crate) fn render_with_transcript_snapshot(
         }
     });
 
+    let list_panel = state.show_model_picker()
+        || state.show_theme_picker()
+        || state.show_command_picker()
+        || state.show_history_picker()
+        || state.show_subagent_picker()
+        || state.tasks_panel().is_some()
+        || state.settings_picker().is_some();
+    transcript.set_panel_targets(f.buffer(), chunks[6], list_panel);
+
     render_transcript_status_row(
         f,
         state,
         transcript,
         (!control_row_suppressed).then_some(chunks[5]),
     );
+    transcript.highlight_hovered_target(f.buffer_mut());
 
     let selection_area = if let Some(question_area) = question_area {
         ratatui::layout::Rect::new(

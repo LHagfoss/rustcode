@@ -452,9 +452,9 @@ pub(in crate::ui) fn render_subagent_picker_modal(
             rustcode::controller::SubAgentStatus::Queued => '○',
             rustcode::controller::SubAgentStatus::Running => '●',
             rustcode::controller::SubAgentStatus::Completed => '✓',
-            rustcode::controller::SubAgentStatus::Failed => '×',
+            rustcode::controller::SubAgentStatus::Failed => '✗',
             rustcode::controller::SubAgentStatus::Interrupted
-            | rustcode::controller::SubAgentStatus::Cancelled => '−',
+            | rustcode::controller::SubAgentStatus::Cancelled => '✗',
         };
         let tree_name = format!("{}{marker} {}", "  ".repeat(depth - 1), agent.name);
         lines.push(agent_picker_line(
