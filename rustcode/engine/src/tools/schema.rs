@@ -527,6 +527,10 @@ const MCP_DISCOVERY_CORE: &[&str] = &[
 pub(crate) struct McpSchemaSelectionStats {
     pub available: usize,
     pub selected: usize,
+    /// Admitted because discovery returned them or the user named them or
+    /// their server. Without this a full menu could report zero for every
+    /// other reason and look unexplained.
+    pub requested: usize,
     pub relevant: usize,
     pub previously_used: usize,
     pub fallback: usize,
@@ -1700,6 +1704,10 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
     let stats = McpSchemaSelectionStats {
         available: tools.len(),
         selected: selected.len(),
+        requested: selected
+            .iter()
+            .filter(|index| admitted.get(index) == Some(&Admitted::Requested))
+            .count(),
         relevant: relevant_count,
         previously_used: previously_used_count,
         fallback: fallback_count.min(selected.len()),

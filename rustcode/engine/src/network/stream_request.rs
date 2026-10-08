@@ -4565,6 +4565,7 @@ async fn stream_request_with_timeouts(
             serde_json::json!({
                 "available": mcp_selection.available,
                 "selected": mcp_selection.selected,
+                "requested": mcp_selection.requested,
                 "relevant": mcp_selection.relevant,
                 "previously_used": mcp_selection.previously_used,
                 "fallback": mcp_selection.fallback,
@@ -4591,11 +4592,15 @@ async fn stream_request_with_timeouts(
     }
     apply_openrouter_session_affinity(&mut payload, url, expected_session_id);
 
+    // Count the schemas selected for the request, not one payload field: a
+    // ChatGPT-plan request carries them in an input item, and reading
+    // `tools` reported zero for every such request.
     let tool_count = if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-        payload
-            .get("tools")
-            .and_then(|tools| tools.as_array())
-            .map_or(0, |tools| tools.len())
+        if allow_tools {
+            native_tool_schemas.len()
+        } else {
+            0
+        }
     } else if allow_tools {
         tool_surface.total()
     } else {
