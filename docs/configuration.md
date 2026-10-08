@@ -21,11 +21,14 @@ Writes use a temporary file and replacement so an interrupted save does not
 leave a truncated configuration. On Unix, the file is written with owner-only
 permissions because model profiles may contain API keys.
 
-Each model profile may optionally set `max_mutating_calls_per_response` to a
-bounded value when its provider is trusted to emit independent edits. Omit the
-field to retain the safe default of one; zero is normalized to that default and
-values above the hard cap are clamped. Calls still execute sequentially and the
-absolute per-response tool-call ceiling remains in force:
+Several workspace-changing tool calls in one response (shell commands that are
+not provably read-only, file writes and edits, MCP tools without
+`readOnlyHint`) run one after another in the order given. Each model profile
+may set `max_mutating_calls_per_response` to change how many run per response:
+the default is four, zero is normalized to that default and values above the
+hard cap are clamped. Calls beyond the limit are held and run automatically in
+a later round. Set `allow_tool_batching = false` to restrict a profile to one
+workspace-changing call per response:
 
 ```toml
 [[models]]
