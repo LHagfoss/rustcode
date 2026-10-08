@@ -111,7 +111,7 @@ fn maybe_pause_native_schema_test_gate(messages: &[Value]) {
 pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     (
         "spawn_agent",
-        "Start an asynchronous read-only subagent and return its id. Use wait_agent for completion. Write access, allowed paths, and verification must be explicit.",
+        "Start an asynchronous read-only subagent and return its id. Delegate a self-contained task whose result you need but whose intermediate steps you do not: a broad search, an independent investigation, or one of several tasks that can run in parallel. Do the work yourself when it is a few tool calls, and never delegate the step you are blocked on and then wait for it. Give each child a complete brief: it sees none of this conversation unless context_inheritance says otherwise. Children that write must have disjoint allowed_paths. Keep working after spawning; a finished child reports back on its own, and wait_agent is for when you have nothing else to do. Write access, allowed paths, and verification must be explicit.",
         r#"{"task": "task description", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test", "workspace_mode": "shared", "base_sha": "origin/main"}"#,
     ),
     (
@@ -1854,7 +1854,7 @@ pub(super) fn schema_for_tool(name: &str) -> Value {
 pub(super) fn schema_for_agent_tool(name: &str) -> Value {
     match name {
         "spawn_agent" => {
-            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"model":{"type":"string","description":"Model profile name for the child. Defaults to the parent's model."},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
         }
         "send_agent" => {
             serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"}},"required":["id","message"]})
