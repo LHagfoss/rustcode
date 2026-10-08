@@ -612,8 +612,18 @@ pub(super) fn active_work_indicator(
     );
     let head_span = Span::styled(work.label(), muted);
     let detail_span = Span::styled(detail, muted);
+    // Tools that are running can be interrupted; the hint is the first thing
+    // a narrow row gives up.
+    let hint_span = Span::styled(
+        if matches!(work, ActiveWorkState::Working) {
+            " · esc interrupt"
+        } else {
+            ""
+        },
+        muted,
+    );
     Some(Line::from(fit_indicator_row(
-        vec![marker_span, head_span, detail_span],
+        vec![marker_span, head_span, detail_span, hint_span],
         suffix,
         usize::from(width),
     )))

@@ -279,7 +279,7 @@ mod tests {
         for expected in [
             "Static /test preview",
             "Bash cargo check --workspace",
-            "• Running · esc interrupt",
+            "• Ran",
             "  ○ Bash cargo test --workspace",
             "  ○ mail.Search release notes",
             "Working · ",

@@ -68,11 +68,36 @@ fn visible_live_tool_calls(state: &RenderSnapshot) -> Vec<rustcode::controller::
 /// they are listed there instead of under a heading of their own.
 pub(super) fn live_tools_join_committed_block(state: &RenderSnapshot) -> bool {
     state.selected_subagent().is_none()
-        && state
+        && !visible_live_tool_calls(state).is_empty()
+        && (state
             .history()
             .last()
             .is_some_and(|message| message.role == "tool")
+            || trailing_step_joins_block(state))
+}
+
+/// Whether the transcript ends with the step that asked for the calls now in
+/// flight, right after a tool block. The step is pushed before its calls run,
+/// so it sits between the block and the live rows; it belongs to the block
+/// like any step between two rounds.
+fn trailing_step_joins_block(state: &RenderSnapshot) -> bool {
+    let history = state.history();
+    history.len() >= 2
+        && history[history.len() - 2].role == "tool"
+        && is_joined_tool_step(state, history.len() - 1)
+        && state.selected_subagent().is_none()
         && !visible_live_tool_calls(state).is_empty()
+}
+
+/// Last tool result of the block that ends at `end` (exclusive), if a tool
+/// block ends there.
+pub(super) fn tool_block_tail(state: &RenderSnapshot, end: usize) -> Option<usize> {
+    let history = state.history();
+    let last = end.checked_sub(1)?;
+    if history.get(last)?.role == "tool" {
+        return Some(last);
+    }
+    (end == history.len() && trailing_step_joins_block(state)).then(|| last - 1)
 }
 
 fn render_live_tail_mode(
@@ -415,9 +440,10 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let mut index = state.history().len();
     while index > state.history_display_start() && rows < target_rows {
         let last = index - 1;
-        let is_tool = state.history()[last].role == "tool";
-        let (block, next_index) = if is_tool {
-            let first = tool_chain_start(state, last, state.history_display_start());
+        let tail = tool_block_tail(state, index);
+        let is_tool = tail.is_some();
+        let (block, next_index) = if let Some(tail) = tail {
+            let first = tool_chain_start(state, tail, state.history_display_start());
             (
                 transcript.committed_tool_group(state, first, index, width),
                 first,
@@ -653,36 +679,27 @@ fn committed_tail_start(state: &RenderSnapshot, display_start: usize) -> usize {
     let mut start = history.len();
     if start > display_start {
         start -= 1;
-        if history[start].role == "tool" {
-            start = tool_chain_start(state, start, display_start);
+        if let Some(tail) = tool_block_tail(state, history.len()) {
+            start = tool_chain_start(state, tail, display_start);
         }
     }
     start
 }
 
-/// An assistant message that shows nothing in the transcript: it only carries
-/// the tool calls of a one-tool-per-round step. Thoughts and prose are visible,
-/// so they end a chain.
-fn is_invisible_tool_step(state: &RenderSnapshot, index: usize) -> bool {
-    let Some(message) = state.history().get(index) else {
-        return false;
-    };
-    message.role == "assistant"
-        && !message.conversation_recap
-        && (!message.tool_calls.is_empty()
-            || !rustcode_tool_protocol::resolve_tool_calls(message, state.active_tool_protocol())
-                .is_empty())
-        // The renderer is the authority on what shows. Whether a block is
-        // empty does not depend on the width, and an empty message skips it.
-        && (message.content.trim().is_empty()
-            || render_committed_history_block_snapshot(state, index, 80).is_empty())
+/// An assistant step that stays inside the tool block around it: it carries
+/// tool calls and says at most a line. A real answer is a boundary.
+fn is_joined_tool_step(state: &RenderSnapshot, index: usize) -> bool {
+    state
+        .history()
+        .get(index)
+        .is_some_and(|message| super::tool_transcript::tool_step_note(state, message).is_some())
 }
 
 /// First index of the tool-result chain ending at `last`, never below `floor`.
 ///
-/// Rounds with nothing visible between them belong to one group, so the chain
-/// crosses invisible tool steps and the group renders under a single heading
-/// with one closed tree, however many rounds produced it.
+/// Rounds with no more than a line of narration between them belong to one
+/// group, so the chain crosses those steps and the group renders under a
+/// single heading, however many rounds produced it.
 fn tool_chain_start(state: &RenderSnapshot, last: usize, floor: usize) -> usize {
     let history = state.history();
     let mut first = last;
@@ -691,7 +708,7 @@ fn tool_chain_start(state: &RenderSnapshot, last: usize, floor: usize) -> usize 
             first -= 1;
         }
         if first >= floor + 2
-            && is_invisible_tool_step(state, first - 1)
+            && is_joined_tool_step(state, first - 1)
             && history[first - 2].role == "tool"
         {
             first -= 2;
@@ -710,17 +727,19 @@ fn tool_chain_end(state: &RenderSnapshot, first: usize) -> usize {
             end += 1;
         }
         if end + 1 < history.len()
-            && is_invisible_tool_step(state, end)
+            && is_joined_tool_step(state, end)
             && history[end + 1].role == "tool"
         {
             end += 1;
+        } else if end > first && end + 1 == history.len() && trailing_step_joins_block(state) {
+            return end + 1;
         } else {
             return end;
         }
     }
 }
 
-/// The tool results inside a chain, leaving out the invisible steps between.
+/// The tool results inside a chain, leaving out the steps between.
 fn tool_chain_indices(state: &RenderSnapshot, first: usize, end: usize) -> Vec<usize> {
     let history = state.history();
     (first..end)

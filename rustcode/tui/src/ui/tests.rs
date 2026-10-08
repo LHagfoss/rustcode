@@ -6728,7 +6728,7 @@ fn running_block_names_each_call_and_puts_its_state_behind_it() {
     assert_eq!(
         rows,
         [
-            "• Running · esc interrupt",
+            "• Ran",
             "  ○ Bash cargo test --workspace · 12s",
             "  ○ Read src/main.rs",
         ]
@@ -10286,7 +10286,8 @@ fn reduced_motion_chat_indicator_is_static_and_live_tools_are_shown() {
     assert!(text.contains("• Working"), "{text}");
     // Reduced motion still freezes animation, but live tools stay visible.
     assert!(text.contains("secret command"), "{text}");
-    assert!(text.contains("Running"), "{text}");
+    assert!(text.contains("• Ran"), "{text}");
+    assert!(text.contains("esc interrupt"), "{text}");
     assert!(
         !text.contains("⠋"),
         "reduced motion must not animate: {text}"
@@ -11023,10 +11024,11 @@ fn tool_rounds_chain_under_one_heading() {
 }
 
 #[test]
-fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
+fn only_a_real_answer_between_tool_rounds_starts_a_new_group() {
     use rustcode::controller::{ToolCallRef, ToolResultRecord};
-    // Chaining only crosses steps that show nothing. Prose or a thought is a
-    // visible boundary, and mixed tool kinds chain under the generic heading.
+    // A step that says a line or only thinks stays inside the block, with the
+    // line as a row of it. An answer of its own is a boundary, and mixed tool
+    // kinds chain under the one heading (#1850).
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let round =
         |state: &mut RenderState, id: &str, text: &str, tool: &str, args: serde_json::Value| {
@@ -11064,10 +11066,7 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
             .collect::<Vec<_>>()
     };
 
-    for boundary in [
-        "Now the second file.",
-        "<think>Check the other file.</think>",
-    ] {
+    let two_rounds = |between: &str| {
         let mut state = RenderState::new();
         state.history.push(ChatMessage::new("user", "look around"));
         round(
@@ -11080,16 +11079,40 @@ fn visible_text_or_thought_between_tool_rounds_starts_a_new_group() {
         round(
             &mut state,
             "b",
-            boundary,
+            between,
             "view_file",
             serde_json::json!({"path": "src/b.rs"}),
         );
+        state
+    };
+    for joined in [
+        "Now the second file.",
+        "<think>Check the other file.</think>",
+    ] {
+        let mut state = two_rounds(joined);
         assert_eq!(
             headings(&mut state),
-            ["• Ran", "  ✓ Read src/a.rs", "• Ran", "  ✓ Read src/b.rs"],
-            "{boundary}"
+            ["• Ran", "  ✓ Read src/a.rs", "  ✓ Read src/b.rs"],
+            "{joined}"
         );
     }
+    let rendered = render_state_to_text(&mut two_rounds("Now the second file."), 100, 40);
+    let rows = rendered.lines().map(str::trim_end).collect::<Vec<_>>();
+    let first = rows
+        .iter()
+        .position(|row| *row == "  ✓ Read src/a.rs")
+        .expect("first row");
+    assert_eq!(
+        rows[first + 1..first + 3],
+        ["  Now the second file.", "  ✓ Read src/b.rs"],
+        "{rendered}"
+    );
+
+    let mut state = two_rounds("The first file is fine.\n\nThe second needs a closer look.");
+    assert_eq!(
+        headings(&mut state),
+        ["• Ran", "  ✓ Read src/a.rs", "• Ran", "  ✓ Read src/b.rs"],
+    );
 
     let mut state = RenderState::new();
     state.history.push(ChatMessage::new("user", "look around"));
@@ -11797,6 +11820,74 @@ fn live_calls_continue_the_committed_tool_block_under_one_heading() {
         "{rows:#?}"
     );
     assert!(!rows.iter().any(|row| row.contains("Running")), "{rows:#?}");
+}
+
+// The step that asked for a call is in the transcript before the call runs.
+// It must not split the live row from the block it continues, and its line of
+// narration is a row of the block.
+#[test]
+fn a_call_in_flight_joins_the_block_across_the_step_that_asked_for_it() {
+    use rustcode::controller::{ToolCallRef, ToolResultRecord};
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    state.history.push(ChatMessage::new("user", "look around"));
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-0".into(),
+            name: "view_file".into(),
+            arguments: serde_json::json!({ "path": "src/a.rs" }).to_string(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "view_file: [File: src/a.rs]\nfn main() {}")
+            .answering(Some("call-0".into()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "view_file".into(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+    state.history.push(
+        ChatMessage::new("assistant", "Building it now.").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".into(),
+            name: "run_command".into(),
+            arguments: serde_json::json!({ "command": "cargo build" }).to_string(),
+        }]),
+    );
+    let mut running = rustcode::controller::LiveToolCall::new(
+        "local:1",
+        None,
+        "run_command",
+        "Bash",
+        "cargo build",
+    );
+    running.execution_started = true;
+    state.live_tool_calls = std::sync::Arc::new(vec![running]);
+
+    let rendered = render_state_to_text(&mut state, 100, 30);
+    let rows = rendered.lines().map(str::trim_end).collect::<Vec<_>>();
+    let start = rows
+        .iter()
+        .position(|row| *row == "• Ran")
+        .unwrap_or_else(|| panic!("no tool block: {rendered}"));
+    assert_eq!(
+        rows[start..start + 4],
+        [
+            "• Ran",
+            "  ✓ Read src/a.rs",
+            "  Building it now.",
+            "  ○ Bash cargo build"
+        ],
+        "{rendered}"
+    );
+    assert_eq!(rendered.matches("• Ran").count(), 1, "{rendered}");
+    assert_eq!(
+        rendered.matches("Building it now.").count(),
+        1,
+        "{rendered}"
+    );
 }
 
 // Panels declare nothing for the pointer: targets are read from the painted
