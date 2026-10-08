@@ -157,8 +157,7 @@ fn truncate_display_width(text: &str, max_width: usize) -> String {
 }
 
 fn is_compact_tool_batch_notice(content: &str) -> bool {
-    content.starts_with("Tool calls were queued by the scheduler")
-        || content.starts_with("Some tool calls were queued;")
+    content.starts_with("Some tool calls were queued;")
         || content.starts_with("Some tool calls were not run;")
 }
 

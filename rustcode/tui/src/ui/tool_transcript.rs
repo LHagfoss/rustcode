@@ -2459,8 +2459,6 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
 
 const COMPACT_TOOL_WARNING: &str = "[Warning, check debug for more info]";
 const DEFERRED_TOOL_NOTICE: &str = "Tool calls were deferred by the scheduler; they did not run.";
-const QUEUED_TOOL_NOTICE: &str =
-    "Tool calls were queued by the scheduler and will run automatically.";
 const MIXED_TOOL_NOTICE: &str = "Some tool calls were queued; review the other results above.";
 const UNSCHEDULED_TOOL_NOTICE: &str = "Some tool calls were not run; review the results above.";
 
@@ -2479,19 +2477,19 @@ fn is_current_tool_batch_notice(content: &str) -> bool {
         && content.contains("were executed this round.")
 }
 
+/// The notice for a round that did not run every call, or `None` when the
+/// harness only held calls it runs by itself: those need nothing from the
+/// reader, and their rows appear when they run.
 fn current_tool_batch_notice_for_display(content: &str) -> Option<&'static str> {
-    if !is_current_tool_batch_notice(content) {
-        return None;
-    }
     let queued = content.contains("scheduler held ")
         && content.contains("queued them for automatic execution");
     let others =
         content.contains("The harness did not schedule ") || content.contains("The remaining ");
-    Some(match (queued, others) {
-        (true, true) => MIXED_TOOL_NOTICE,
-        (true, false) => QUEUED_TOOL_NOTICE,
-        (false, _) => UNSCHEDULED_TOOL_NOTICE,
-    })
+    match (queued, others) {
+        (true, true) => Some(MIXED_TOOL_NOTICE),
+        (true, false) => None,
+        (false, _) => Some(UNSCHEDULED_TOOL_NOTICE),
+    }
 }
 
 fn is_validation_rejection_notice(content: &str) -> bool {
@@ -2506,8 +2504,8 @@ fn is_validation_rejection_notice(content: &str) -> bool {
 /// implementation details such as validation schemas, deferred tool names, and
 /// call ids should not expand into a wide, noisy transcript row.
 pub(crate) fn system_notice_for_display(content: &str) -> Option<&str> {
-    if let Some(notice) = current_tool_batch_notice_for_display(content) {
-        Some(notice)
+    if is_current_tool_batch_notice(content) {
+        current_tool_batch_notice_for_display(content)
     } else if is_deferred_tool_batch_notice(content) {
         Some(DEFERRED_TOOL_NOTICE)
     } else if is_validation_rejection_notice(content) {
@@ -2653,12 +2651,13 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_queued_notice_is_compact() {
+    fn scheduler_queued_notice_is_not_shown() {
         assert_eq!(
             super::system_notice_for_display(
                 "[The model emitted 2 tool calls. 1 were executed this round. The scheduler held 1 over the per-response workspace-change limit and queued them for automatic execution in a later round (run_command (call_123)); do not reissue them, their real results arrive without another request from you.]"
             ),
-            Some("Tool calls were queued by the scheduler and will run automatically.")
+            None,
+            "calls the harness runs by itself need no notice"
         );
     }
 
