@@ -4750,6 +4750,38 @@ fn structured_tool_calls_survive_alignment() {
     assert_eq!(aligned[2]["content"], "on it");
 }
 
+// Regression: the runtime-context message follows every prompt, and merging
+// the two read the prompt's content as a string. A prompt with an attached
+// image has parts, so the whole prompt, image included, became nothing.
+#[test]
+fn aligning_keeps_the_text_and_image_of_a_prompt_followed_by_runtime_context() {
+    let aligned = align_alternating_messages(vec![
+        serde_json::json!({"role": "user", "content": [
+            {"type": "text", "text": "who is this "},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        ]}),
+        serde_json::json!({"role": "user", "content": "<rustcode_context>\nnow\n</rustcode_context>"}),
+    ]);
+    assert_eq!(
+        aligned,
+        [serde_json::json!({"role": "user", "content": [
+            {"type": "text", "text": "who is this "},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+            {"type": "text", "text": "\n\n<rustcode_context>\nnow\n</rustcode_context>"},
+        ]})]
+    );
+
+    // Plain text still merges into one string.
+    let aligned = align_alternating_messages(vec![
+        serde_json::json!({"role": "user", "content": "first"}),
+        serde_json::json!({"role": "user", "content": "second"}),
+    ]);
+    assert_eq!(
+        aligned,
+        [serde_json::json!({"role": "user", "content": "first\n\nsecond"})]
+    );
+}
+
 #[test]
 fn test_align_alternating_messages() {
     let raw = vec![
