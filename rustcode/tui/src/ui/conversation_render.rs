@@ -1061,6 +1061,8 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
             continuation,
         ));
     }
+    // The recap closes a turn; whatever follows starts a new block.
+    lines.push(Line::from(""));
     lines
 }
 

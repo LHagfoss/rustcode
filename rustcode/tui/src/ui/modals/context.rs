@@ -764,7 +764,7 @@ pub(in crate::ui) fn render_context_modal(
         .split(inner_area);
 
     let title_text = "context usage";
-    let right_esc = "Esc to close";
+    let right_esc = "esc";
     let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
         Span::styled(

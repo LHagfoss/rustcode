@@ -28,7 +28,7 @@ pub(crate) use composer_render::render_input;
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
 use history_cell::{HistoryCell, is_live_tool_call_visible};
-pub(crate) use history_cell::{ToolBlock, TranscriptState, WHEEL_SCROLL_LINES};
+pub(crate) use history_cell::{PanelTarget, ToolBlock, TranscriptState, WHEEL_SCROLL_LINES};
 pub(crate) use transcript::TranscriptModel;
 mod follow_control;
 pub(crate) mod scrollback;

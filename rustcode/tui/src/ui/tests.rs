@@ -6724,8 +6724,8 @@ fn running_block_names_each_call_and_puts_its_state_behind_it() {
         rows,
         [
             "• Running · esc interrupt",
-            "  Bash cargo test --workspace · 12s",
-            "  Read src/main.rs · waiting",
+            "  ○ Bash cargo test --workspace · 12s",
+            "  ○ Read src/main.rs",
         ]
     );
 }
@@ -8036,8 +8036,11 @@ fn conversation_recap_wraps_inside_its_message_gutter() {
 
     assert!(text.len() > 2, "recap fixture must wrap: {text:?}");
     assert!(text[0].starts_with("  ↳ Recap: "));
+    // The recap closes with the blank row that separates it from what follows.
+    assert_eq!(text.last().map(String::as_str), Some(""));
     assert!(
-        text.iter()
+        text[..text.len() - 1]
+            .iter()
             .skip(1)
             .all(|line| line.starts_with("           "))
     );
@@ -9106,7 +9109,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
 
     let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
-    assert!(rendered.contains("Esc to close"), "rendered: {rendered:?}");
+    assert!(rendered.contains("esc"), "rendered: {rendered:?}");
     assert!(
         rendered.contains("saved history estimate"),
         "rendered: {rendered:?}"
@@ -10146,10 +10149,11 @@ fn running_turn_shows_a_plain_spinner_and_model_at_the_bottom_of_the_chat() {
             "{status:?} indicator must lead with the spinner: {indicator:?}"
         );
         if matches!(status, AppStatus::Queued) {
-            // A queued turn names its explicit state alongside the model.
+            // A turn waiting to start reads as working: it is in flight
+            // like any other, and `Queued` is not a state worth a word.
             assert!(
-                indicator.contains("Queued"),
-                "{status:?} indicator must name the queued state: {indicator:?}"
+                indicator.contains("Working") && !indicator.contains("Queued"),
+                "{status:?} indicator must read as working: {indicator:?}"
             );
         } else {
             // Deliberately plain: no status words or elapsed clocks.
@@ -10594,9 +10598,7 @@ fn committed_mixed_batch_marks_success_failure_cancel_and_background() {
         assert_eq!(children.len(), 4, "{text}");
         for child in children {
             assert!(
-                ["✓", "×", "−", "•"]
-                    .iter()
-                    .any(|marker| child.contains(marker)),
+                ["✓", "✗", "○"].iter().any(|marker| child.contains(marker)),
                 "child row needs its state marker: {child:?} in {text}"
             );
         }
@@ -10650,7 +10652,7 @@ fn low_verbosity_command_batch_keeps_one_group_and_per_call_outcomes() {
         "{text}"
     );
     assert!(
-        text.contains("  × Bash cargo test --package package-1 · exit 1"),
+        text.contains("  ✗ Bash cargo test --package package-1 · exit 1"),
         "{text}"
     );
 }
@@ -11230,9 +11232,9 @@ fn background_launch_row_follows_the_task_to_its_end() {
 
     for (exit_code, error_kind, expected) in [
         (Some(0), None, "  ✓ Bash cargo build"),
-        (Some(101), None, "  × Bash cargo build · exit 101"),
-        (None, Some("Execution"), "  × Bash cargo build · failed"),
-        (None, Some("Cancelled"), "  − Bash cargo build · cancelled"),
+        (Some(101), None, "  ✗ Bash cargo build · exit 101"),
+        (None, Some("Execution"), "  ✗ Bash cargo build · failed"),
+        (None, Some("Cancelled"), "  ✗ Bash cargo build · cancelled"),
     ] {
         let mut state = launch();
         state
@@ -11262,7 +11264,7 @@ fn background_launch_row_follows_the_task_to_its_end() {
         "manage_task: Task 'task-1' failed (exit code 2). Started at 1 ms; ended at 2 ms. Command: cargo build. Output:\nboom",
     ));
     let waited = tool_group_text(&state, &[1]);
-    assert!(waited.contains("× Bash cargo build · exit 2"), "{waited}");
+    assert!(waited.contains("✗ Bash cargo build · exit 2"), "{waited}");
 }
 
 #[test]
@@ -11443,9 +11445,7 @@ fn long_row_block() -> (RenderState, Vec<usize>) {
 }
 
 fn is_row_line(line: &str) -> bool {
-    ["  ✓ ", "  × ", "  − "]
-        .iter()
-        .any(|lead| line.starts_with(lead))
+    ["  ✓ ", "  ✗ "].iter().any(|lead| line.starts_with(lead))
 }
 
 #[test]
@@ -11484,10 +11484,10 @@ fn tool_rows_keep_their_state_on_the_row_at_every_width() {
             }
             let expected = [
                 ("  ✓ Ba", " · background"),
-                ("  × Bash", " · exit 1"),
-                ("  × Read", " · failed"),
-                ("  × Edit", " · failed"),
-                ("  × MCP ", " · failed"),
+                ("  ✗ Bash", " · exit 1"),
+                ("  ✗ Read", " · failed"),
+                ("  ✗ Edit", " · failed"),
+                ("  ✗ MCP ", " · failed"),
                 ("  ✓ Task", ""),
             ];
             assert_eq!(rows.len(), expected.len(), "width {width}\n{text}");
@@ -11497,7 +11497,7 @@ fn tool_rows_keep_their_state_on_the_row_at_every_width() {
             }
             if width >= 40 {
                 assert!(rows[0].starts_with("  ✓ Bash for d in"), "{text}");
-                assert!(rows[1].starts_with("  × Bash set -euo"), "{text}");
+                assert!(rows[1].starts_with("  ✗ Bash set -euo"), "{text}");
                 assert!(rows[2].contains("tool_transcript.rs · failed"), "{text}");
                 assert!(rows[5].contains(" · +2 earlier (1 failed)"), "{text}");
             }
@@ -11550,22 +11550,20 @@ fn live_rows_keep_their_state_on_the_row_at_every_width() {
             );
         }
         if width >= 20 {
-            assert!(text[1].starts_with("  Bash"), "{text:#?}");
+            assert!(text[1].starts_with("  ○ Bash"), "{text:#?}");
             assert!(text[1].ends_with(" · 1m 15s"), "{text:#?}");
-            assert!(text[2].ends_with(" · waiting"), "{text:#?}");
-            assert!(text[3].starts_with("  Read"), "{text:#?}");
-            assert!(text[3].ends_with(" · waiting"), "{text:#?}");
+            // A waiting call is in flight like a running one: no state word.
+            assert!(!text[2].contains("waiting"), "{text:#?}");
+            assert!(text[3].starts_with("  ○ Read"), "{text:#?}");
+            assert!(!text[3].contains("waiting"), "{text:#?}");
         }
         if width >= 40 {
-            assert!(text[1].starts_with("  Bash for d in"), "{text:#?}");
+            assert!(text[1].starts_with("  ○ Bash for d in"), "{text:#?}");
             assert!(
-                text[2].starts_with("  Bash set -euo pipefail "),
+                text[2].starts_with("  ○ Bash set -euo pipefail "),
                 "{text:#?}"
             );
-            assert!(
-                text[3].contains("tool_transcript.rs · waiting"),
-                "{text:#?}"
-            );
+            assert!(text[3].ends_with("tool_transcript.rs"), "{text:#?}");
         }
     }
 }
@@ -11696,7 +11694,7 @@ fn command_row_without_a_findable_call_still_says_what_ran() {
         [
             "  ✓ Bash make quoted",
             "  ✓ Bash (task task-5) · background",
-            "  × Bash (command not recorded) · exit 3",
+            "  ✗ Bash (command not recorded) · exit 3",
         ],
         "{text}"
     );

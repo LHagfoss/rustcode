@@ -1324,12 +1324,15 @@ fn expand_hint_span(width: u16, show_picker: bool) -> Span<'static> {
 /// The tree connector (`├`/`└`) restores the inward side lines that point at
 /// each child, while the marker keeps the execution state (#1725). Both are
 /// 4 columns wide combined, matching the previous flat indent.
+/// A call that has not finished, whether it is running or waiting its turn.
+pub(super) const LIVE_ROW_GLYPH: char = '○';
+
 fn tool_status_glyph(entry: &ToolTranscriptEntry) -> char {
     match entry.status.as_str() {
-        "running" => '•',
-        "cancelled" => '−',
+        "running" => LIVE_ROW_GLYPH,
         _ if entry.success => '✓',
-        _ => '×',
+        // Failed, stopped and cancelled all read the same: it did not finish.
+        _ => '✗',
     }
 }
 
@@ -1612,20 +1615,18 @@ pub(super) fn tool_child_line(
     show_picker: bool,
 ) -> Vec<Line<'static>> {
     let lead = entry_row_lead(entry, is_last, show_picker);
-    let mut label = Vec::new();
     // A dotted `server.tool` name alone reads as a broken row, most of all
-    // when the call took no arguments. Name what kind of call it was, the
-    // way siblings lead with `Bash`/`Read` (#1770).
-    if entry.kind == ToolTranscriptKind::Tool && entry.action.contains('.') {
-        label.push(Span::styled(
-            "MCP ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-    }
-    label.push(Span::styled(
-        entry.action.clone(),
+    // when the call took no arguments. `MCP` leads the row the way `Bash` and
+    // `Read` lead theirs, and the tool name joins the target (#1770).
+    let is_mcp = entry.kind == ToolTranscriptKind::Tool && entry.action.contains('.');
+    let label = vec![Span::styled(
+        if is_mcp {
+            "MCP".to_owned()
+        } else {
+            entry.action.clone()
+        },
         get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-    ));
+    )];
     let target_style = if entry.target_is_note {
         note_style(show_picker)
     } else {
@@ -1655,7 +1656,7 @@ pub(super) fn tool_child_line(
         return lines;
     }
 
-    let target = if target_is_missing(&entry.target) {
+    let mut target = if target_is_missing(&entry.target) {
         Vec::new()
     } else {
         // One row is one line: a target that spans lines is joined.
@@ -1668,6 +1669,20 @@ pub(super) fn tool_child_line(
             target_style,
         )]
     };
+    if is_mcp {
+        let name = if target.is_empty() {
+            entry.action.clone()
+        } else {
+            format!("{} ", entry.action)
+        };
+        target.insert(
+            0,
+            Span::styled(
+                name,
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        );
+    }
     vec![fit_tool_row(
         lead,
         label,
@@ -2515,7 +2530,7 @@ mod tests {
             earlier_failed: 0,
             target_is_note: false,
         };
-        assert_eq!(super::tool_status_glyph(&entry), '•');
+        assert_eq!(super::tool_status_glyph(&entry), '○');
 
         let mut completed = entry;
         completed.status = "completed".to_owned();
