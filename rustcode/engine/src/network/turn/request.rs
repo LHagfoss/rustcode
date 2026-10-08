@@ -23,6 +23,18 @@ const MAX_STREAM_RECOVERY_CHECKPOINT_BYTES: usize = 16 * 1024;
 const MAX_STREAM_RECOVERY_ERROR_BYTES: usize = 512;
 const MAX_STREAM_RECOVERY_ATTEMPTS: u8 = 1;
 
+/// What the transcript shows for a provider failure. A rejected model is a
+/// choice the user can change, so it is said in words instead of as the
+/// provider's JSON.
+fn provider_error_notice(error_message: &str, model_name: &str) -> String {
+    if error_message.contains("model_not_supported") {
+        return format!(
+            "Error from LLM Provider: model `{model_name}` is not available on this account or endpoint. Choose another model with /model."
+        );
+    }
+    format!("Error from LLM Provider: {error_message}")
+}
+
 fn is_recovery_request(ctx: &TurnContext) -> bool {
     ctx.recovery.force_final
         || ctx.recovery.reasoning_recovery_pending
@@ -961,7 +973,7 @@ pub(super) async fn collect_round(
                     transport_retry_attempts >= usize::from(MAX_STREAM_RECOVERY_ATTEMPTS),
                 )
             } else {
-                format!("Error from LLM Provider: {error_message}")
+                provider_error_notice(&error_message, &model_name)
             };
             s.history.push(ChatMessage::new("system", notice));
             s.current_token_usage = None;
@@ -1069,6 +1081,23 @@ mod tests {
         recoverable_textual_stream_failure, retryable_stream_failure, settle_retry_attempt_usage,
         should_retry_stream_transport, stream_interruption_notice, stream_output_phase,
     };
+
+    #[test]
+    fn a_rejected_model_is_reported_in_words_and_other_failures_keep_their_detail() {
+        let rejected = super::provider_error_notice(
+            r#"stream_failure:provider_error status=400 detail={"error":{"message":"The requested model is not supported.","code":"model_not_supported"}}"#,
+            "kimi-k3",
+        );
+        assert_eq!(
+            rejected,
+            "Error from LLM Provider: model `kimi-k3` is not available on this account or endpoint. Choose another model with /model."
+        );
+        assert_eq!(
+            super::provider_error_notice("stream_failure:provider_error status=500", "kimi-k3"),
+            "Error from LLM Provider: stream_failure:provider_error status=500"
+        );
+    }
+
     use crate::network::lifecycle;
     use crate::network::runner;
 

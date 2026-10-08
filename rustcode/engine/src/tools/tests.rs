@@ -617,8 +617,11 @@ fn a_named_server_larger_than_the_cap_keeps_the_tools_the_request_points_at() {
         serde_json::json!({"role":"user","content":"then send a message in teams: hello"}),
     ];
 
-    let (selected, _) =
+    let (selected, stats) =
         super::schema::select_mcp_tools_for_context_with_sticky(&mcp, &messages, &[]);
+    // Every slot went to the named server, and the stats say so.
+    assert_eq!(stats.requested, super::schema::MAX_MCP_NATIVE_SCHEMAS);
+    assert_eq!(stats.relevant, 0);
     let names: Vec<&str> = selected
         .iter()
         .map(|index| mcp[*index].0.as_str())
