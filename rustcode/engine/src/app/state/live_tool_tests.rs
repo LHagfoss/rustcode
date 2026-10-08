@@ -10,11 +10,11 @@ fn identical_live_calls_have_independent_execution_identity() {
     assert_ne!(first, second);
     assert_eq!(state.live_tool_calls.len(), 2);
 
-    state.finish_live_tool_call(&first);
+    state.finish_live_tool_call(&first, true);
     assert_eq!(state.live_tool_calls.len(), 1);
     assert_eq!(state.live_tool_calls[0].key, second);
 
-    state.finish_live_tool_call(&second);
+    state.finish_live_tool_call(&second, true);
     assert!(state.live_tool_calls.is_empty());
 }
 
@@ -292,4 +292,31 @@ fn render_projection_marks_withheld_background_outcomes_until_consumed() {
             .pending_background_results
             .is_empty()
     );
+}
+
+#[test]
+fn finished_calls_stay_listed_until_their_batch_is_recorded() {
+    let mut state = AppState::new();
+    state.retain_finished_live_tool_calls();
+    let first = state.begin_live_tool_call(None, "view_file", &serde_json::json!({"path":"a"}));
+    let second = state.begin_live_tool_call(None, "view_file", &serde_json::json!({"path":"b"}));
+
+    state.finish_live_tool_call(&first, false);
+    assert_eq!(state.live_tool_calls.len(), 2);
+    assert_eq!(
+        state.live_tool_calls[0]
+            .finished
+            .map(|finish| finish.success),
+        Some(false)
+    );
+    assert!(state.live_tool_calls[1].finished.is_none());
+
+    state.finish_live_tool_call(&second, true);
+    state.clear_finished_live_tool_calls();
+    assert!(state.live_tool_calls.is_empty());
+
+    // Outside a batch a finished call is dropped at once.
+    let lone = state.begin_live_tool_call(None, "view_file", &serde_json::json!({"path":"c"}));
+    state.finish_live_tool_call(&lone, true);
+    assert!(state.live_tool_calls.is_empty());
 }

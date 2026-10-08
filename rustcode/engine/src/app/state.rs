@@ -275,6 +275,8 @@ pub struct AppState {
     /// This is deliberately not serialized: it is a terminal presentation
     /// projection, not conversation context.
     pub live_tool_calls: Arc<Vec<LiveToolCall>>,
+    /// Whether finished live calls stay listed until their batch is recorded.
+    pub(crate) retain_finished_live_tool_calls: bool,
     /// Monotonic identity source for presentation-only live tool projections.
     pub live_tool_call_sequence: u64,
 
@@ -1004,19 +1006,55 @@ impl AppState {
 
     /// Finish one live tool projection. The completed semantic result is
     /// persisted separately as the normal `ChatMessage` tool result.
-    pub fn finish_live_tool_call(&mut self, key: &str) {
-        if let Some(position) = self
+    ///
+    /// While a turn is executing a batch the projection is kept and marked
+    /// finished, so its row holds its place until the whole batch is recorded;
+    /// removing it at once made rows vanish and reappear together.
+    pub fn finish_live_tool_call(&mut self, key: &str, success: bool) {
+        let Some(position) = self
             .live_tool_calls
             .iter()
             .position(|live_call| live_call.key == key)
+        else {
+            return;
+        };
+        let calls = Arc::make_mut(&mut self.live_tool_calls);
+        if self.retain_finished_live_tool_calls {
+            let call = &mut calls[position];
+            call.finished = Some(models::LiveToolFinish {
+                success,
+                elapsed: call.started_at.elapsed(),
+            });
+        } else {
+            calls.remove(position);
+        }
+        self.request_redraw();
+    }
+
+    /// Keep finished projections until [`Self::clear_finished_live_tool_calls`].
+    pub fn retain_finished_live_tool_calls(&mut self) {
+        self.retain_finished_live_tool_calls = true;
+    }
+
+    /// Drop the projections of calls whose results are now in history.
+    pub fn clear_finished_live_tool_calls(&mut self) {
+        self.retain_finished_live_tool_calls = false;
+        let before = self.live_tool_calls.len();
+        if self
+            .live_tool_calls
+            .iter()
+            .any(|call| call.finished.is_some())
         {
-            Arc::make_mut(&mut self.live_tool_calls).remove(position);
+            Arc::make_mut(&mut self.live_tool_calls).retain(|call| call.finished.is_none());
+        }
+        if self.live_tool_calls.len() != before {
             self.request_redraw();
         }
     }
 
     /// Remove projections left by cancellation or an interrupted turn.
     pub fn clear_live_tool_calls(&mut self) {
+        self.retain_finished_live_tool_calls = false;
         if !self.live_tool_calls.is_empty() {
             Arc::make_mut(&mut self.live_tool_calls).clear();
             self.request_redraw();
@@ -1255,6 +1293,7 @@ impl AppState {
             pending_question_done: Vec::new(),
             running_tools: Vec::new(),
             live_tool_calls: Arc::new(Vec::new()),
+            retain_finished_live_tool_calls: false,
             live_tool_call_sequence: 0,
             stream_tracker: None,
             auto_confirm: false,

@@ -46,8 +46,14 @@ pub(crate) fn render_live_tail_with_transcript(
 }
 
 /// The calls the live block lists this frame.
+///
+/// The block appears once one of its calls has been in flight long enough to
+/// draw, and then lists every call of the batch: the ones waiting, the ones
+/// running and the ones that have ended but are not in history yet. Without
+/// the last group a row vanished the moment its call finished and the whole
+/// batch reappeared at once when it was recorded.
 fn visible_live_tool_calls(state: &RenderSnapshot) -> Vec<rustcode::controller::LiveToolCall> {
-    let running_settled = state
+    let block_shown = state
         .live_tool_calls()
         .iter()
         .any(|call| call.execution_started && super::history_cell::live_tool_call_is_settled(call));
@@ -55,9 +61,11 @@ fn visible_live_tool_calls(state: &RenderSnapshot) -> Vec<rustcode::controller::
         .live_tool_calls()
         .iter()
         .filter(|call| {
-            running_settled
+            block_shown
                 && is_live_tool_call_visible(call)
-                && (!call.execution_started || super::history_cell::live_tool_call_is_settled(call))
+                && (!call.execution_started
+                    || call.finished.is_some()
+                    || super::history_cell::live_tool_call_is_settled(call))
         })
         .cloned()
         .collect()
@@ -357,6 +365,9 @@ pub(crate) fn render_visible_conversation_with_transcript(
     {
         call.key.hash(&mut live_content);
         call.execution_started.hash(&mut live_content);
+        call.finished
+            .map(|finish| finish.success)
+            .hash(&mut live_content);
         call.omitted_output_bytes.hash(&mut live_content);
         for chunk in &call.output {
             chunk.stderr.hash(&mut live_content);

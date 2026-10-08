@@ -1075,7 +1075,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // progress evidence. The other calls are closed below, never
             // silently dropped or described as if they ran.
             let tools_started = std::time::Instant::now();
-            let workspace_root = state.lock().await.effective_workspace_root();
+            let workspace_root = {
+                let mut s = state.lock().await;
+                // Rows of calls that finish stay listed until the batch is
+                // recorded below.
+                s.retain_finished_live_tool_calls();
+                s.effective_workspace_root()
+            };
             let absent_before =
                 absent_write_targets(&executable_tool_calls, workspace_root.as_deref());
             let results = super::super::tool_exec::execute_tool_batch_with_assessments(
@@ -1204,6 +1210,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .cancelled_tool_calls
                     .saturating_add(results.len());
                 let mut s = state.lock().await;
+                s.clear_finished_live_tool_calls();
                 // Pair by call id rather than position: harness-queued results
                 // (#1590) share the batch but own no provider announcement.
                 let mut announced_refs = Vec::new();
@@ -1250,6 +1257,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             }
 
             let mut s = state.lock().await;
+            // The results are recorded under this lock, so the finished rows
+            // hand over to their committed rows in one frame.
+            s.clear_finished_live_tool_calls();
             s.status = AppStatus::Streaming;
             let mut completed = false;
             // Completion is valid only when every result in the same batch
