@@ -1,3 +1,11 @@
+## [v0.60.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.60.0) - 2026-10-08
+
+### Features
+- Several workspace-changing tool calls in one response now run one after another in the order given, up to `max_mutating_calls_per_response` (default 4), instead of one per response with the rest held for a later round. Set `allow_tool_batching = false` on a model profile to restore one per response (#1860)
+- Fixed held tool calls being dropped when the model answered in text instead of starting another tool round: they now run and their results reach the model before the turn can finish (#1858)
+- Fixed tool rows vanishing while a batch was still running and the whole batch reappearing at once: a call that has ended keeps its row with `✓` or `✗` until the batch is recorded (#1862)
+- Narration or a thought between two tool rounds is shown as text again, and the next round opens its own `Ran` block, instead of the line appearing as a row inside the block. MCP rows are labelled `Mcp` (#1856)
+- The `Tool calls were queued by the scheduler and will run automatically.` notice is gone; held calls show up when they run (#1863)
 ## [v0.59.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.59.1) - 2026-10-08
 
 ### Fixes
