@@ -357,14 +357,21 @@ fn async_agent_tool(_args: &Value) -> Result<String, String> {
 fn wait_agent_schema() -> Value {
     let mut schema = subagent_id_schema();
     schema["properties"]["timeout_ms"] =
-        serde_json::json!({"type":"integer", "minimum":1, "maximum":300000, "default":60000});
+        serde_json::json!({"type":"integer", "minimum":1, "maximum":3600000, "default":60000});
+    // Either one `id` or several `ids`; the handler requires one of them.
+    schema["properties"]["ids"] = serde_json::json!({
+        "type": "array",
+        "minItems": 1,
+        "items": {"type": "integer", "minimum": 1}
+    });
+    schema["required"] = serde_json::json!([]);
     schema
 }
 
 pub const WAIT_AGENT: Tool = Tool {
     name: "wait_agent",
-    description: "Block until a subagent reaches a terminal state and return its bounded result; never poll.",
-    arguments: r#"{"id": "subagent id"}"#,
+    description: "Block until a subagent reaches a terminal state and return its bounded result; never poll. With ids, returns the first to finish.",
+    arguments: r#"{"id": "subagent id", "ids": [1, 2]}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
     schema: wait_agent_schema,
