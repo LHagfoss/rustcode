@@ -10173,7 +10173,7 @@ fn running_turn_shows_a_plain_spinner_and_model_at_the_bottom_of_the_chat() {
 }
 
 #[test]
-fn the_running_indicator_sits_directly_under_the_transcript() {
+fn the_running_indicator_is_pinned_above_the_composer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
     state.status = AppStatus::Streaming;
@@ -10188,10 +10188,11 @@ fn the_running_indicator_sits_directly_under_the_transcript() {
     let mut terminal =
         crate::inline_terminal::InlineTerminal::new(ratatui::backend::TestBackend::new(80, height))
             .unwrap();
+    let mut input_area = ratatui::layout::Rect::default();
     terminal
         .draw(|frame| {
             let snapshot = render_snapshot(&state);
-            let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+            input_area = render_with_transcript_snapshot(frame, &snapshot, &mut transcript).1;
         })
         .unwrap();
 
@@ -10215,23 +10216,16 @@ fn the_running_indicator_sits_directly_under_the_transcript() {
         .position(|row| row.trim_start().starts_with('•') && row.contains(&model))
         .unwrap_or_else(|| panic!("the indicator must be on screen: {rows:?}"));
 
-    // Preserve the user panel bottom padding and leave a blank row above the indicator.
-    assert_eq!(
-        terminal.backend().buffer()[(0, (prompt + 1) as u16)].bg,
-        COLOR_PANEL()
-    );
-    assert_eq!(
-        terminal.backend().buffer()[(0, (prompt + 2) as u16)].bg,
-        COLOR_BG()
-    );
-    assert_eq!(
-        indicator,
-        prompt + 3,
-        "the indicator must sit under the transcript, not at the viewport bottom: {rows:?}"
-    );
+    // The chat has spare room under the prompt, and the indicator still sits
+    // on the last chat row instead of following the transcript (#1849).
     assert!(
-        indicator + 2 < height as usize,
-        "the chat had spare room, so a bottom-anchored indicator was not expected: {rows:?}"
+        indicator > prompt + 3,
+        "the indicator must not follow the transcript: {rows:?}"
+    );
+    // Only the composer's own control row may sit between them.
+    assert!(
+        input_area.y as usize - indicator <= 2,
+        "the indicator must sit directly above the composer: {rows:?}"
     );
 }
 

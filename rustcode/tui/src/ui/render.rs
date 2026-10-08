@@ -213,38 +213,6 @@ pub(crate) fn desired_height(
 /// Interactive TUI entry point. `transcript` is terminal-only mutable state;
 /// it must never be persisted with `ChatMessage` history or included in a
 /// provider request.
-/// True when every cell of `row` inside `area` is still blank, so an overlay
-/// can claim it without hiding anything the transcript painted.
-fn row_is_blank(buffer: &ratatui::buffer::Buffer, area: ratatui::layout::Rect, row: u16) -> bool {
-    if area.width == 0 || row < area.y || row >= area.bottom() {
-        return false;
-    }
-    (area.x..area.right()).all(|x| {
-        let cell = &buffer[(x, row)];
-        cell.symbol() == " " && cell.bg == COLOR_BG()
-    })
-}
-
-/// The first row after the last row that carries content in `area`.
-///
-/// Returns `None` when every row is blank, so callers can tell "anchor under
-/// the activity" apart from "there is nothing on screen yet".
-fn row_after_last_content(
-    buffer: &ratatui::buffer::Buffer,
-    area: ratatui::layout::Rect,
-) -> Option<u16> {
-    if area.width == 0 || area.height == 0 {
-        return None;
-    }
-    (area.y..area.bottom())
-        .rev()
-        .find(|row| !row_is_blank(buffer, area, *row))
-        .and_then(|row| {
-            let below = row.saturating_add(1);
-            (below < area.bottom()).then_some(below)
-        })
-}
-
 pub(crate) fn render_with_transcript_snapshot(
     f: &mut Frame,
     state: &RenderSnapshot,
@@ -479,21 +447,17 @@ pub(crate) fn render_with_transcript_snapshot(
     );
     render_live_conversation(f, chunks[0], lines, layout_width);
 
-    // Scan backgrounds as well as text: the user's shaded bottom padding
-    // belongs to the message. Keep a blank row between it and the indicator.
+    // The indicator owns the last reserved row of the chat surface, directly
+    // above the composer, so it never moves as the transcript scrolls or
+    // grows (#1849).
     if let Some(indicator) = indicator
         && indicator_height > 0
     {
-        let target = row_after_last_content(f.buffer(), chat_surface)
-            .map(|row| row.saturating_add(1))
-            .unwrap_or(chat_surface.y)
-            .min(chat_surface.bottom().saturating_sub(1));
-        if row_is_blank(f.buffer(), chat_surface, target) {
-            f.render_widget(
-                Paragraph::new(indicator).style(Style::default().bg(COLOR_BG())),
-                ratatui::layout::Rect::new(chat_surface.x, target, chat_surface.width, 1),
-            );
-        }
+        let target = chat_surface.bottom().saturating_sub(1);
+        f.render_widget(
+            Paragraph::new(indicator).style(Style::default().bg(COLOR_BG())),
+            ratatui::layout::Rect::new(chat_surface.x, target, chat_surface.width, 1),
+        );
     }
 
     // The composer indexes these as [chat, queue, popup, input, footer]; the
