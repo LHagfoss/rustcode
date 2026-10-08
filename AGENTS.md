@@ -28,7 +28,9 @@ instructions for work in this repository.
   (it can create a merge commit) and never forced. If the working tree is dirty,
   leave it alone and say so instead.
 - Inspect first; make the smallest scoped change and preserve unrelated work.
-- Run `cargo check --tests` and `cargo test`.
+- Run `cargo check --workspace --tests` and `cargo test --workspace`. Without
+  `--workspace` only the engine package is built, and a TUI change passes
+  unchecked. CI also runs `cargo fmt --all -- --check`.
 - For releases, load `~/.agents/skills/release-automation/SKILL.md`;
   use `scripts/release.sh` as the source of truth.
 

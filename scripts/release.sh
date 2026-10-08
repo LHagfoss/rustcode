@@ -51,11 +51,21 @@ run() {
     fi
 }
 
-# Ask a yes/no question; --yes auto-answers yes.
+# Ask a yes/no question; --yes auto-answers yes. A dry run changes nothing, so
+# it never stops to ask, and a run without a terminal fails instead of waiting
+# forever on a prompt nobody can see.
 ask() {
     if $YES; then
         info "[auto-yes] $*"
         return 0
+    fi
+    if $DRY_RUN; then
+        info "[dry-run] would ask: $*"
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        die "Confirmation needed but stdin is not a terminal: $*
+Re-run with --yes to accept every confirmation, or --dry-run to preview."
     fi
     printf '%s [y/N] ' "$*"
     read -r answer

@@ -2574,7 +2574,10 @@ mod tests {
             "command": "sleep 30 &",
         }))
         .expect("shell background command should start detached");
-        for _ in 0..100 {
+        // The pid is recorded by the task's own thread. A second was not
+        // always enough under a full parallel test run, and a task without a
+        // pid cannot be stopped.
+        for _ in 0..1000 {
             if super::super::background_task_snapshots(&session_id)
                 .first()
                 .is_some_and(|task| task.child_pid.is_some())
