@@ -752,7 +752,12 @@ mod tests {
         assert!(!ctx.response.final_content_persisted);
         {
             let state = state.lock().await;
-            assert!(!state.history.iter().any(|message| message.role == "assistant"));
+            assert!(
+                !state
+                    .history
+                    .iter()
+                    .any(|message| message.role == "assistant")
+            );
             assert!(state.history.iter().any(|message| {
                 message.role == "system" && message.content.contains("before producing any answer")
             }));
