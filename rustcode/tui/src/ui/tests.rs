@@ -11738,3 +11738,110 @@ fn task_row_is_never_a_bare_label() {
         assert!(!text.contains("TaskDone"), "{text}");
     }
 }
+
+// A call still in flight is the next row of the tool block that ends the
+// transcript: one heading, finished rows then running rows, nothing between.
+#[test]
+fn live_calls_continue_the_committed_tool_block_under_one_heading() {
+    use rustcode::controller::{ToolCallRef, ToolResultRecord};
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.config.reduced_motion = true;
+    state.history.push(ChatMessage::new("user", "look around"));
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-0".into(),
+            name: "view_file".into(),
+            arguments: serde_json::json!({ "path": "src/a.rs" }).to_string(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "view_file: [File: src/a.rs]\nfn main() {}")
+            .answering(Some("call-0".into()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "view_file".into(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+    let block = |state: &mut RenderState| {
+        let rendered = render_state_to_text(state, 100, 30);
+        let rows = rendered.lines().map(str::trim_end).collect::<Vec<_>>();
+        let start = rows
+            .iter()
+            .position(|row| *row == "• Ran")
+            .unwrap_or_else(|| panic!("no tool block: {rendered}"));
+        rows[start..]
+            .iter()
+            .take(4)
+            .map(|row| (*row).to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // Nothing in flight: the block closes with its blank row.
+    assert_eq!(block(&mut state)[..3], ["• Ran", "  ✓ Read src/a.rs", ""]);
+
+    let mut running = rustcode::controller::LiveToolCall::new(
+        "local:1",
+        None,
+        "run_command",
+        "Bash",
+        "cargo build",
+    );
+    running.execution_started = true;
+    state.live_tool_calls = std::sync::Arc::new(vec![running]);
+    let rows = block(&mut state);
+    assert_eq!(
+        rows[..3],
+        ["• Ran", "  ✓ Read src/a.rs", "  ○ Bash cargo build"],
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("Running")), "{rows:#?}");
+}
+
+// Panels declare nothing for the pointer: targets are read from the painted
+// frame. This holds a real picker to that contract, so a picker that changes
+// its marker or its hint fails here instead of silently losing its clicks.
+#[test]
+fn the_model_picker_frame_offers_its_rows_and_its_esc_hint_to_the_pointer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    let mut second = state.config.models[0].clone();
+    second.name = "second/model".into();
+    let mut third = second.clone();
+    third.name = "third/model".into();
+    state.config.models.push(second);
+    state.config.models.push(third);
+    state.show_model_picker = true;
+
+    let (width, height) = (100u16, 30u16);
+    let mut transcript = TranscriptState::default();
+    let mut terminal = crate::inline_terminal::InlineTerminal::new(
+        ratatui::backend::TestBackend::new(width, height),
+    )
+    .unwrap();
+    terminal
+        .draw(|frame| {
+            let snapshot = render_snapshot(&state);
+            let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+        })
+        .unwrap();
+
+    let mut targets = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            if let Some(target) = transcript.panel_target_at(x, y)
+                && !targets.contains(&target)
+            {
+                targets.push(target);
+            }
+        }
+    }
+    assert!(targets.contains(&super::PanelTarget::Escape), "{targets:?}");
+    assert!(
+        targets.contains(&super::PanelTarget::ListRow(1))
+            && targets.contains(&super::PanelTarget::ListRow(2)),
+        "{targets:?}"
+    );
+}

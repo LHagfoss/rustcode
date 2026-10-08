@@ -605,12 +605,20 @@ impl TranscriptState {
             .collect::<Vec<_>>();
         let mut block =
             super::render_committed_tool_result_group_snapshot(state, &indices, width, false);
-        if !block.is_empty() {
+        // Calls still in flight are the next rows of this block, so nothing
+        // separates them from it.
+        if !block.is_empty() && !Self::block_stays_open(state, end) {
             block.push(Line::from(""));
         }
         let lines = Arc::new(block);
         self.committed_cache().insert(key, Arc::clone(&lines));
         lines
+    }
+
+    /// Whether the tool block ending at `end` is the one live calls continue.
+    fn block_stays_open(state: &super::RenderSnapshot, end: usize) -> bool {
+        end == state.history().len()
+            && super::conversation_render::live_tools_join_committed_block(state)
     }
 
     /// `end == index` names a single block; a tool chain uses its exclusive
@@ -627,6 +635,7 @@ impl TranscriptState {
         // Tool rows also depend on presentation settings outside history.
         state.verbosity().hash(&mut theme_hash);
         state.home_path().hash(&mut theme_hash);
+        Self::block_stays_open(state, end).hash(&mut theme_hash);
         for message in index..end.max(index + 1) {
             state
                 .expanded_thoughts()
@@ -734,6 +743,7 @@ impl TranscriptState {
                 calls: calls.to_vec(),
                 verbosity: Verbosity::Low,
                 home_path: None,
+                continues: false,
             });
         }
     }
@@ -743,12 +753,14 @@ impl TranscriptState {
         calls: &[LiveToolCall],
         verbosity: &Verbosity,
         home_path: Option<&str>,
+        continues: bool,
     ) {
         // Compare before allocating so an unchanged frame allocates nothing.
         let changed = self.tools.as_ref().is_none_or(|cell| {
             cell.calls != calls
                 || cell.verbosity != *verbosity
                 || cell.home_path.as_deref() != home_path
+                || cell.continues != continues
         });
         if changed {
             self.revision = self.revision.saturating_add(1);
@@ -756,6 +768,7 @@ impl TranscriptState {
                 calls: calls.to_vec(),
                 verbosity: verbosity.clone(),
                 home_path: home_path.map(str::to_owned),
+                continues,
             });
         }
     }
@@ -818,17 +831,24 @@ struct LiveToolCell {
     /// Home directory used to contract absolute paths, matching the committed
     /// transcript projection.
     home_path: Option<String>,
+    /// The rows continue the committed tool block above them, so they carry
+    /// no heading of their own.
+    continues: bool,
 }
 
 impl HistoryCell for LiveToolCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        render_live_tool_cell_with_verbosity(
+        let mut lines = render_live_tool_cell_with_verbosity(
             &self.calls,
             width,
             &self.verbosity,
             false,
             self.home_path.as_deref(),
-        )
+        );
+        if self.continues && !lines.is_empty() {
+            lines.remove(0);
+        }
+        lines
     }
 }
 

@@ -45,6 +45,36 @@ pub(crate) fn render_live_tail_with_transcript(
     render_live_tail_mode(state, width, height, transcript, false)
 }
 
+/// The calls the live block lists this frame.
+fn visible_live_tool_calls(state: &RenderSnapshot) -> Vec<rustcode::controller::LiveToolCall> {
+    let running_settled = state
+        .live_tool_calls()
+        .iter()
+        .any(|call| call.execution_started && super::history_cell::live_tool_call_is_settled(call));
+    state
+        .live_tool_calls()
+        .iter()
+        .filter(|call| {
+            running_settled
+                && is_live_tool_call_visible(call)
+                && (!call.execution_started || super::history_cell::live_tool_call_is_settled(call))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Whether the calls in flight belong under the tool block that ends the
+/// committed transcript. They are the next rows of the same batch of work, so
+/// they are listed there instead of under a heading of their own.
+pub(super) fn live_tools_join_committed_block(state: &RenderSnapshot) -> bool {
+    state.selected_subagent().is_none()
+        && state
+            .history()
+            .last()
+            .is_some_and(|message| message.role == "tool")
+        && !visible_live_tool_calls(state).is_empty()
+}
+
 fn render_live_tail_mode(
     state: &RenderSnapshot,
     width: u16,
@@ -72,20 +102,7 @@ fn render_live_tail_mode(
     // A `Running` block appears once a call has really been running for a
     // moment. Calls still being written by the model, and calls that finish at
     // once, never open one; calls waiting behind a running one are listed.
-    let running_settled = state
-        .live_tool_calls()
-        .iter()
-        .any(|call| call.execution_started && super::history_cell::live_tool_call_is_settled(call));
-    let visible_live_tool_calls = state
-        .live_tool_calls()
-        .iter()
-        .filter(|call| {
-            running_settled
-                && is_live_tool_call_visible(call)
-                && (!call.execution_started || super::history_cell::live_tool_call_is_settled(call))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let visible_live_tool_calls = visible_live_tool_calls(state);
     if !tail.is_empty() {
         let parsed_tool =
             rustcode_tool_protocol::parse_tool_call(&tail, state.active_tool_protocol());
@@ -127,6 +144,7 @@ fn render_live_tail_mode(
             &visible_live_tool_calls,
             state.verbosity(),
             state.home_path(),
+            live_tools_join_committed_block(state),
         );
         has_visible_active_cell = true;
     }
