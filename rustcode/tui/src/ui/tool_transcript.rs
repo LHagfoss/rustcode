@@ -1139,8 +1139,10 @@ pub(super) fn tool_transcript_entry(
         cached_file_edit_diff(
             diff,
             &target,
-            // Reserve the 2-column side spine, not the old 4-space gutter.
-            usize::from(width).saturating_sub(2),
+            // Reserve the side spine the body hangs under. The diff pads every
+            // row to this width, so a row wider than the space beside the spine
+            // wraps its padding onto a row of its own.
+            usize::from(width).saturating_sub(tool_body_spine(show_picker).width()),
             show_picker,
         )
     } else if is_launch_receipt(result) {
@@ -1189,7 +1191,8 @@ pub(super) fn tool_transcript_entry(
             &args,
             result,
             success,
-            width as usize,
+            // Padded rows, so the same spine reservation as a real diff.
+            usize::from(width).saturating_sub(tool_body_spine(show_picker).width()),
             show_picker,
         );
         if !preview.is_empty() {
