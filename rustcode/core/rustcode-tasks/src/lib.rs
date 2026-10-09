@@ -111,34 +111,61 @@ pub struct TaskSpec {
 /// cannot strand a detached worker indefinitely.
 #[derive(Clone)]
 pub struct TaskStartBarrier {
-    state: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    state: Arc<(Mutex<BarrierState>, std::sync::Condvar)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BarrierState {
+    Held,
+    Released,
+    Discarded,
 }
 
 impl TaskStartBarrier {
     pub fn new() -> Self {
         Self {
-            state: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+            state: Arc::new((Mutex::new(BarrierState::Held), std::sync::Condvar::new())),
         }
     }
 
-    /// Release the gate. Releasing more than once is harmless.
+    /// Release the gate. Releasing more than once is harmless, and a
+    /// discarded gate stays discarded.
     pub fn release(&self) {
-        let (released, wakeup) = &*self.state;
-        *released.lock().expect("task start barrier mutex poisoned") = true;
-        wakeup.notify_all();
+        self.settle(BarrierState::Released);
     }
 
-    fn wait(&self) {
-        const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
-        let (released, wakeup) = &*self.state;
-        let released = released.lock().expect("task start barrier mutex poisoned");
-        if *released {
-            return;
+    /// Drop the held terminal event instead of publishing it, for a caller
+    /// that hands the task's result over itself. Returns false when the gate
+    /// was already released, in which case the event is published as usual.
+    pub fn discard(&self) -> bool {
+        self.settle(BarrierState::Discarded)
+    }
+
+    fn settle(&self, outcome: BarrierState) -> bool {
+        let (state, wakeup) = &*self.state;
+        let mut state = state.lock().expect("task start barrier mutex poisoned");
+        if *state != BarrierState::Held {
+            return false;
         }
-        let (guard, _) = wakeup
-            .wait_timeout_while(released, MAX_WAIT, |released| !*released)
+        *state = outcome;
+        wakeup.notify_all();
+        true
+    }
+
+    fn is_released(&self) -> bool {
+        let (state, _) = &*self.state;
+        *state.lock().expect("task start barrier mutex poisoned") == BarrierState::Released
+    }
+
+    /// Block until the gate is settled; returns whether to publish.
+    fn wait(&self) -> bool {
+        const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+        let (state, wakeup) = &*self.state;
+        let state = state.lock().expect("task start barrier mutex poisoned");
+        let (state, _) = wakeup
+            .wait_timeout_while(state, MAX_WAIT, |state| *state == BarrierState::Held)
             .expect("task start barrier mutex poisoned");
-        drop(guard);
+        *state != BarrierState::Discarded
     }
 }
 
@@ -586,6 +613,26 @@ impl TaskManager {
                     && completion.id.as_str() == id.as_ref()
             })
             .cloned()
+    }
+
+    /// Remove and return one retained completion belonging to `session_id`,
+    /// for a caller that delivers the result itself and wants no trace of
+    /// the task left for status, wait or completion tracking.
+    pub fn take_completion(
+        &self,
+        session_id: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Option<TaskCompletion> {
+        let mut completions = self
+            .inner
+            .completions
+            .lock()
+            .expect("task completion mutex poisoned");
+        let index = completions.iter().position(|completion| {
+            completion.session_id.as_str() == session_id.as_ref()
+                && completion.id.as_str() == id.as_ref()
+        })?;
+        completions.remove(index)
     }
 
     /// Return retained completions for one session, oldest first.
@@ -1080,7 +1127,9 @@ impl TaskManager {
     }
 
     fn publish_after_barrier(&self, event: TaskEvent, barrier: Option<TaskStartBarrier>) {
-        let Some(barrier) = barrier else {
+        // An already released gate publishes on the calling thread, keeping
+        // the event ordered with the task's removal like an ungated task.
+        let Some(barrier) = barrier.filter(|barrier| !barrier.is_released()) else {
             self.publish(event);
             return;
         };
@@ -1088,8 +1137,9 @@ impl TaskManager {
         thread::Builder::new()
             .name("rustcode-task-terminal-barrier".to_owned())
             .spawn(move || {
-                barrier.wait();
-                manager.publish(event);
+                if barrier.wait() {
+                    manager.publish(event);
+                }
             })
             .expect("failed to spawn task terminal barrier worker");
     }
@@ -1326,6 +1376,53 @@ mod tests {
 
         barrier.release();
         assert!(matches!(events.recv().unwrap(), TaskEvent::Finished { .. }));
+    }
+
+    #[test]
+    fn discarded_start_barrier_drops_the_terminal_event_and_ignores_release() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let events = manager.subscribe();
+        let barrier = TaskStartBarrier::new();
+        manager
+            .spawn_with_id_and_start_barrier(
+                "barrier-discarded",
+                TaskSpec::new("session", test_request("printf done")),
+                barrier.clone(),
+            )
+            .unwrap();
+        assert!(matches!(events.recv().unwrap(), TaskEvent::Started { .. }));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while manager.completion("session", "barrier-discarded").is_none() {
+            assert!(Instant::now() < deadline, "task never finished");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert!(barrier.discard());
+        barrier.release();
+        assert!(!barrier.discard(), "a settled barrier cannot be discarded");
+        assert!(matches!(
+            events.recv_timeout(Duration::from_millis(200)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        assert!(
+            manager
+                .take_completion("other", "barrier-discarded")
+                .is_none()
+        );
+        let taken = manager
+            .take_completion("session", "barrier-discarded")
+            .expect("completion is retained until taken");
+        assert_eq!(taken.id.as_str(), "barrier-discarded");
+        assert!(manager.completion("session", "barrier-discarded").is_none());
+    }
+
+    #[test]
+    fn released_start_barrier_cannot_be_discarded() {
+        let barrier = TaskStartBarrier::new();
+        barrier.release();
+        assert!(!barrier.discard());
+        assert!(barrier.wait());
     }
 
     #[test]
