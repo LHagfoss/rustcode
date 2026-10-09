@@ -457,7 +457,77 @@ fn system_prompt(messages: &[Value]) -> String {
         .join("\n\n")
 }
 
+/// A tool the child can always call, whatever list it was started with.
+const RELAY_TOOL: &str = "call_tool";
+
+/// The child learns its tools once and refuses any other name itself, so a
+/// tool RustCode offers later in the conversation (one `list_mcp_tools` just
+/// found, say) could not be called until a new child replaced this one. The
+/// relay gives the model a name that is always listed to reach it through.
+fn relay_tool() -> Value {
+    json!({
+        "name": RELAY_TOOL,
+        "description": "Call a RustCode tool that is missing from your tool list, by its exact name. Your tool list is fixed for this conversation, so use this for a callable_name returned by list_mcp_tools and for any tool RustCode reports as available but withheld. Calling such a name directly fails with \"No such tool available\"; retry it here. Put the tool's own arguments in `arguments`.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Exact tool name."},
+                "arguments": {"type": "object", "description": "Arguments for that tool."},
+            },
+            "required": ["name"],
+        },
+    })
+}
+
+/// A relay call withheld from the stream until its input is complete.
+struct Relay {
+    start: Value,
+    input: String,
+}
+
+impl Relay {
+    /// The block as the call it stands for: the named tool with the nested
+    /// arguments, so RustCode validates and runs it like any other call.
+    fn into_events(self) -> [Value; 3] {
+        let Relay { mut start, input } = self;
+        let index = start["index"].clone();
+        let request = serde_json::from_str::<Value>(&input).unwrap_or(Value::Null);
+        let arguments = match request.get("name").and_then(Value::as_str) {
+            Some(name) => {
+                let name = name.strip_prefix(TOOL_PREFIX).unwrap_or(name);
+                start["content_block"]["name"] = Value::String(name.to_owned());
+                match request.get("arguments") {
+                    // Some models stringify a nested object.
+                    Some(Value::String(text)) => text.clone(),
+                    Some(arguments) => arguments.to_string(),
+                    None => "{}".to_owned(),
+                }
+            }
+            // Not a usable request. Hand it over as it came so validation
+            // answers the model instead of the call vanishing.
+            None => input,
+        };
+        [
+            start,
+            json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": arguments},
+            }),
+            json!({"type": "content_block_stop", "index": index}),
+        ]
+    }
+}
+
 fn mcp_tools(schemas: &[Value]) -> Vec<Value> {
+    let mut tools = offered_tools(schemas);
+    if !tools.is_empty() {
+        tools.push(relay_tool());
+    }
+    tools
+}
+
+fn offered_tools(schemas: &[Value]) -> Vec<Value> {
     schemas
         .iter()
         .filter_map(|schema| {
@@ -901,6 +971,8 @@ async fn start_round_with(
         turn,
         tool_ids: Vec::new(),
         stop_reason: None,
+        relay: None,
+        queued: std::collections::VecDeque::new(),
         done: false,
         complete: false,
     };
@@ -926,6 +998,9 @@ struct Round {
     turn: u64,
     tool_ids: Vec<String>,
     stop_reason: Option<String>,
+    relay: Option<Relay>,
+    /// Events already produced that the stream has not handed out yet.
+    queued: std::collections::VecDeque<Value>,
     done: bool,
     complete: bool,
 }
@@ -959,6 +1034,9 @@ impl Round {
 
     async fn next(&mut self) -> Value {
         loop {
+            if let Some(event) = self.queued.pop_front() {
+                return event;
+            }
             let event = self.live.events.lock().await.recv().await;
             match event {
                 None | Some(Event::Closed) => {
@@ -1018,6 +1096,33 @@ impl Round {
                             {
                                 block["name"] = Value::String(name);
                             }
+                            if block["name"] == RELAY_TOOL {
+                                self.relay = Some(Relay {
+                                    start: event,
+                                    input: String::new(),
+                                });
+                                continue;
+                            }
+                        }
+                        Some("content_block_delta" | "content_block_stop")
+                            if self
+                                .relay
+                                .as_ref()
+                                .is_some_and(|relay| relay.start["index"] == event["index"]) =>
+                        {
+                            if event["type"] == "content_block_delta" {
+                                if let (Some(relay), Some(part)) = (
+                                    self.relay.as_mut(),
+                                    event.pointer("/delta/partial_json").and_then(Value::as_str),
+                                ) {
+                                    relay.input.push_str(part);
+                                }
+                                continue;
+                            }
+                            if let Some(relay) = self.relay.take() {
+                                self.queued.extend(relay.into_events());
+                            }
+                            continue;
                         }
                         Some("message_delta") => {
                             self.stop_reason = event
@@ -1288,6 +1393,53 @@ mod tests {
         assert!(limits_event(&json!({"status": "allowed"})).is_none());
     }
 
+    #[test]
+    fn the_relay_tool_is_offered_alongside_any_other_tool() {
+        let schema = json!({"type": "function", "function": {"name": "read_file"}});
+        let names = tool_names(&mcp_tools(std::slice::from_ref(&schema)));
+        assert_eq!(
+            names,
+            HashSet::from(["read_file".to_owned(), RELAY_TOOL.to_owned()])
+        );
+        // A child started without tools has no MCP server to relay through.
+        assert!(mcp_tools(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_relay_call_becomes_the_call_it_names() {
+        let relay = |input: &str| {
+            Relay {
+                start: json!({"type": "content_block_start", "index": 2, "content_block": {
+                    "type": "tool_use", "id": "toolu_9", "name": RELAY_TOOL, "input": {},
+                }}),
+                input: input.to_owned(),
+            }
+            .into_events()
+        };
+        let arguments = |events: &[Value; 3]| {
+            serde_json::from_str::<Value>(events[1]["delta"]["partial_json"].as_str().unwrap())
+                .unwrap()
+        };
+
+        let events = relay(r#"{"name":"mcp__mail__list_emails","arguments":{"account":"work"}}"#);
+        assert_eq!(events[0]["content_block"]["name"], "mcp__mail__list_emails");
+        assert_eq!(events[0]["content_block"]["id"], "toolu_9");
+        assert_eq!(arguments(&events), json!({"account": "work"}));
+        assert_eq!(events[2], json!({"type": "content_block_stop", "index": 2}));
+        assert!(events.iter().all(|event| event["index"] == 2));
+
+        // The child's own prefix, a stringified object and absent arguments.
+        let events = relay(r#"{"name":"mcp__rc__read_file","arguments":"{\"path\":\"a.rs\"}"}"#);
+        assert_eq!(events[0]["content_block"]["name"], "read_file");
+        assert_eq!(arguments(&events), json!({"path": "a.rs"}));
+        assert_eq!(arguments(&relay(r#"{"name":"list_servers"}"#)), json!({}));
+
+        // Without a name it stays a `call_tool` call for validation to reject.
+        let events = relay(r#"{"arguments":{}}"#);
+        assert_eq!(events[0]["content_block"]["name"], RELAY_TOOL);
+        assert_eq!(arguments(&events), json!({"arguments": {}}));
+    }
+
     /// A stand-in `claude`: answers one user turn with a tool call, waits for
     /// RustCode's result on the tunnelled MCP channel, then finishes the turn.
     #[cfg(unix)]
@@ -1343,6 +1495,85 @@ done
             })
             .collect()
             .await
+    }
+
+    /// A stand-in `claude` whose model reaches a tool outside its list through
+    /// the relay, streaming the request in two pieces.
+    #[cfg(unix)]
+    const RELAYING_CLI: &str = r#"#!/bin/sh
+ev() { printf '{"type":"stream_event","parent_tool_use_id":null,"event":%s}\n' "$1"; }
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*)
+      printf '{"type":"control_response","response":{"subtype":"success","request_id":"rustcode-init","response":{}}}\n' ;;
+    *'"type":"user"'*)
+      ev '{"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":1}}}'
+      ev '{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"mcp__rc__call_tool","input":{}}}'
+      ev '{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"name\":\"mcp__mail__list_emails\",\"argu"}}'
+      ev '{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"ments\":{\"account\":\"work\"}}"}}'
+      ev '{"type":"content_block_stop","index":0}'
+      ev '{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}'
+      ev '{"type":"message_stop"}' ;;
+  esac
+done
+"#;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_relayed_call_reaches_rustcode_under_the_name_it_asked_for() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = format!("test-{}", uuid::Uuid::new_v4());
+        let schema = json!({"type": "function", "function": {
+            "name": "read_file", "description": "Read a file",
+            "parameters": {"type": "object", "properties": {}},
+        }});
+        let history = [user("check my mail")];
+        let events = collect(
+            start_round_with(
+                fake_cli(directory.path(), RELAYING_CLI),
+                RoundRequest {
+                    session_id: &session,
+                    model: "haiku",
+                    effort: None,
+                    messages: &history,
+                    tool_schemas: std::slice::from_ref(&schema),
+                    allow_tools: true,
+                },
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+
+        let kinds = events
+            .iter()
+            .map(|event| event["type"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                "message_start",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "message_delta",
+                "message_stop",
+            ]
+        );
+        assert_eq!(events[1]["content_block"]["name"], "mcp__mail__list_emails");
+        assert_eq!(events[1]["content_block"]["id"], "toolu_1");
+        assert_eq!(
+            serde_json::from_str::<Value>(events[2]["delta"]["partial_json"].as_str().unwrap())
+                .unwrap(),
+            json!({"account": "work"})
+        );
+
+        registry().retain(|live| {
+            if live.session_id == session {
+                live.kill();
+            }
+            live.session_id != session
+        });
     }
 
     #[cfg(unix)]
