@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VerificationKind {
     Check,
@@ -27,6 +29,41 @@ pub(crate) struct VerificationEvidence {
     pub kind: VerificationKind,
     pub exit_code: Option<i32>,
     pub generation: u64,
+    pub scope: VerificationScope,
+}
+
+/// What a verification command ran against, as far as the harness knows.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct VerificationScope {
+    /// Project roots, canonical. Empty when unknown.
+    roots: Vec<PathBuf>,
+    /// The workspace root and the revision the command left it at, kept only
+    /// when that root contains every other one.
+    workspace: Option<(PathBuf, u64)>,
+}
+
+impl VerificationScope {
+    pub(crate) fn new(
+        workspace_root: Option<&Path>,
+        project_root: Option<&Path>,
+        workspace_generation: Option<u64>,
+    ) -> Self {
+        let roots: Vec<PathBuf> = workspace_root
+            .into_iter()
+            .chain(project_root)
+            .map(canonical)
+            .collect();
+        let workspace = roots
+            .first()
+            .filter(|root| workspace_root.is_some() && roots.iter().all(|r| r.starts_with(root)))
+            .cloned()
+            .zip(workspace_generation);
+        Self { roots, workspace }
+    }
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -34,11 +71,77 @@ pub struct VerificationLedger {
     generation: u64,
     last: Option<VerificationEvidence>,
     explicit_last: Option<VerificationEvidence>,
+    /// Scope given to the commands recorded next.
+    scope: VerificationScope,
+    /// The edit that last advanced `generation`, when its path is known.
+    stale_path: Option<String>,
 }
 
 impl VerificationLedger {
     pub(crate) fn record_edit(&mut self) {
         self.generation = self.generation.saturating_add(1);
+        self.stale_path = None;
+    }
+
+    /// Record an edit to known files. `project_roots` are the roots in use
+    /// now. An edit outside those and outside every root the last successful
+    /// verification covered changes nothing that verification checked, so it
+    /// stays fresh (#1889). A path that cannot be resolved counts as inside.
+    pub(crate) fn record_edit_to(&mut self, paths: &[PathBuf], project_roots: &[PathBuf]) {
+        let outside = self.has_fresh_successful_verification()
+            && !paths.is_empty()
+            && self.last.as_ref().is_some_and(|evidence| {
+                let roots: Vec<PathBuf> = evidence
+                    .scope
+                    .roots
+                    .iter()
+                    .chain(project_roots)
+                    .map(|root| canonical(root))
+                    .collect();
+                !evidence.scope.roots.is_empty()
+                    && paths.iter().all(|path| {
+                        path.canonicalize()
+                            .is_ok_and(|path| !roots.iter().any(|root| path.starts_with(root)))
+                    })
+            });
+        if outside {
+            return;
+        }
+        self.record_edit();
+        self.stale_path = paths.first().map(|path| path.display().to_string());
+    }
+
+    /// Set what the commands recorded from here on ran against.
+    pub(crate) fn set_scope(&mut self, scope: VerificationScope) {
+        self.scope = scope;
+    }
+
+    /// Whether the workspace is still at the revision the last successful
+    /// verification left it at: the condition under which the verification
+    /// cache would answer the same command without running it. `current`
+    /// reports a root's revision now.
+    pub(crate) fn verified_workspace_is_unchanged(
+        &self,
+        current: impl Fn(&Path) -> Option<u64>,
+    ) -> bool {
+        self.last.as_ref().is_some_and(|evidence| {
+            evidence.exit_code == Some(0)
+                && evidence
+                    .scope
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|(root, generation)| current(root) == Some(*generation))
+        })
+    }
+
+    /// Why the finish gate has no verification to accept, for the model.
+    pub(crate) fn missing_verification_reason(&self) -> String {
+        match &self.stale_path {
+            Some(path) => {
+                format!("No verification command was run after the latest edit ({path}).")
+            }
+            None => "No verification command was run after the latest edit.".to_string(),
+        }
     }
 
     pub(crate) fn record_command(&mut self, command: &str, exit_code: Option<i32>) {
@@ -115,6 +218,7 @@ impl VerificationLedger {
             kind,
             exit_code,
             generation: self.generation,
+            scope: self.scope.clone(),
         }
     }
 }
@@ -354,7 +458,10 @@ fn is_documentation_or_asset(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{VerificationLedger, is_explicit_verification_request, requires_verification};
+    use super::{
+        VerificationLedger, VerificationScope, is_explicit_verification_request,
+        requires_verification,
+    };
 
     #[test]
     fn explicit_arbitrary_command_failure_is_authoritative() {
@@ -436,6 +543,133 @@ mod tests {
         ledger.record_edit();
 
         assert!(!ledger.has_fresh_successful_verification());
+    }
+
+    #[test]
+    fn edit_outside_the_verified_roots_keeps_verification_fresh() {
+        let project = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let source = project.path().join("lib.rs");
+        let config = elsewhere.path().join("config.toml");
+        std::fs::write(&source, "").unwrap();
+        std::fs::write(&config, "").unwrap();
+        let roots = [project.path().to_path_buf()];
+
+        let mut ledger = VerificationLedger::default();
+        ledger.record_edit_to(std::slice::from_ref(&source), &roots);
+        ledger.set_scope(VerificationScope::new(Some(project.path()), None, None));
+        ledger.record_command("cargo test", Some(0));
+
+        ledger.record_edit_to(std::slice::from_ref(&config), &roots);
+        assert!(ledger.has_fresh_successful_verification());
+
+        // An edit that also touches the project, or one in a project that the
+        // turn has since moved to, still needs its own verification.
+        let mut both = ledger.clone();
+        both.record_edit_to(&[config.clone(), source.clone()], &roots);
+        assert!(!both.has_fresh_successful_verification());
+        let mut moved = ledger.clone();
+        moved.record_edit_to(
+            std::slice::from_ref(&config),
+            &[elsewhere.path().to_path_buf()],
+        );
+        assert!(!moved.has_fresh_successful_verification());
+
+        ledger.record_edit_to(std::slice::from_ref(&source), &roots);
+        assert!(!ledger.has_fresh_successful_verification());
+        let reason = ledger.missing_verification_reason();
+        assert!(reason.contains(&source.display().to_string()), "{reason}");
+    }
+
+    #[test]
+    fn outside_edit_is_stale_without_a_verified_scope_or_a_resolvable_path() {
+        let project = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let config = elsewhere.path().join("config.toml");
+        std::fs::write(&config, "").unwrap();
+
+        // The roots of the verification are unknown.
+        let mut unscoped = VerificationLedger::default();
+        unscoped.record_command("cargo test", Some(0));
+        unscoped.record_edit_to(std::slice::from_ref(&config), &[]);
+        assert!(!unscoped.has_fresh_successful_verification());
+
+        let mut ledger = VerificationLedger::default();
+        ledger.set_scope(VerificationScope::new(Some(project.path()), None, None));
+        ledger.record_command("cargo test", Some(0));
+        // `..` back into the project is inside it; a missing file is unknown.
+        let through = elsewhere
+            .path()
+            .join("..")
+            .join(project.path().file_name().unwrap());
+        assert!(!through.starts_with(project.path()));
+        let mut inside = ledger.clone();
+        std::fs::write(project.path().join("lib.rs"), "").unwrap();
+        assert!(through.join("lib.rs").exists());
+        inside.record_edit_to(&[through.join("lib.rs")], &[]);
+        assert!(!inside.has_fresh_successful_verification());
+        ledger.record_edit_to(&[elsewhere.path().join("missing.toml")], &[]);
+        assert!(!ledger.has_fresh_successful_verification());
+        // A failed verification is never kept fresh.
+        let mut failed = VerificationLedger::default();
+        failed.set_scope(VerificationScope::new(Some(project.path()), None, None));
+        failed.record_command("cargo test", Some(1));
+        failed.record_edit_to(std::slice::from_ref(&config), &[]);
+        assert!(failed.last_failure().is_none());
+        assert!(!failed.has_fresh_successful_verification());
+    }
+
+    #[test]
+    fn unchanged_workspace_generation_satisfies_a_stale_ledger() {
+        let project = tempfile::tempdir().unwrap();
+        let source = project.path().join("lib.rs");
+        std::fs::write(&source, "first").unwrap();
+        let current = |root: &std::path::Path| {
+            crate::workspace_intelligence::snapshot(root)
+                .ok()
+                .map(|snapshot| snapshot.generation)
+        };
+
+        let mut ledger = VerificationLedger::default();
+        ledger.set_scope(VerificationScope::new(
+            Some(project.path()),
+            None,
+            current(project.path()),
+        ));
+        ledger.record_command("cargo test", Some(0));
+        // An edit the ledger cannot place, which left the workspace as it was.
+        ledger.record_edit();
+        assert!(!ledger.has_fresh_successful_verification());
+        assert!(ledger.verified_workspace_is_unchanged(current));
+
+        std::fs::write(&source, "second").unwrap();
+        assert!(!ledger.verified_workspace_is_unchanged(current));
+    }
+
+    #[test]
+    fn unchanged_generation_needs_a_successful_run_inside_the_workspace() {
+        let project = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let same = |_: &std::path::Path| Some(7);
+
+        let mut failed = VerificationLedger::default();
+        failed.set_scope(VerificationScope::new(Some(project.path()), None, Some(7)));
+        failed.record_command("cargo test", Some(1));
+        assert!(!failed.verified_workspace_is_unchanged(same));
+
+        // A project root outside the workspace has no revision on record.
+        let mut outside = VerificationLedger::default();
+        outside.set_scope(VerificationScope::new(
+            Some(project.path()),
+            Some(other.path()),
+            Some(7),
+        ));
+        outside.record_command("cargo test", Some(0));
+        assert!(!outside.verified_workspace_is_unchanged(same));
+
+        let mut unknown = VerificationLedger::default();
+        unknown.record_command("cargo test", Some(0));
+        assert!(!unknown.verified_workspace_is_unchanged(same));
     }
 
     #[test]
