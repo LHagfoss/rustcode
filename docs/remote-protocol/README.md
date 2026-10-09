@@ -461,6 +461,9 @@ discover them:
   custom answer is allowed; the terminal accepts a non-empty `custom` answer
   for every question.
 - Approval actions have no ID; a batch is approved or denied as a whole.
+- Session-list rows have no creation or update timestamp. Use the supplied
+  order or activity for the picker; known transcript and turn timestamps are
+  for conversation labels, and do not establish when a session was created.
 - Mutation receipts are bounded by count (1024 per registration), with no age
   eviction. At capacity, new mutations return `receipt_capacity`; known IDs
   remain queryable. Stop and re-share the session to create a new receipt store.
