@@ -242,15 +242,13 @@ pub(super) async fn render_frame(
         terminal_height,
     );
     let mut frame_metrics = None;
-    let presented = terminal_runtime
-        .terminal()
-        .draw_height(desired_height, |f| {
-            frame_metrics = Some(crate::ui::render_with_transcript_snapshot(
-                f,
-                &snapshot,
-                transcript_state,
-            ));
-        })?;
+    let presented = terminal_runtime.draw_height_synchronized(desired_height, |f| {
+        frame_metrics = Some(crate::ui::render_with_transcript_snapshot(
+            f,
+            &snapshot,
+            transcript_state,
+        ));
+    })?;
     *frame_presented = presented;
     // A held indicator has to be repainted away even when nothing else changes.
     if let Some(remaining) = transcript_state.indicator_hold_remaining() {

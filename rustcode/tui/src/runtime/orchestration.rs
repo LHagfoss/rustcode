@@ -48,6 +48,7 @@ impl AppRuntime {
         let mut last_progress_sent = std::time::Instant::now();
         let mut consecutive_skipped_frames = 0u32;
         let mut last_frame_at = std::time::Instant::now();
+        let mut last_frame_cost = Duration::ZERO;
         let composer = ui::Composer::new();
         loop {
             let active_session_id = app_state.lock().await.active_session_id.clone();
@@ -307,9 +308,9 @@ impl AppRuntime {
             // paint. Painting once per event let the queue grow until the view
             // trailed the gesture by seconds, so input that is already waiting
             // is applied first and the frame is painted once it is drained,
-            // or after `INPUT_COALESCE_WINDOW` so a long burst still animates.
+            // or after the coalesce window so a long burst still animates.
             let mut prefetched_event = None;
-            if should_draw && last_frame_at.elapsed() < INPUT_COALESCE_WINDOW {
+            if should_draw && last_frame_at.elapsed() < input_coalesce_window(last_frame_cost) {
                 use futures_util::FutureExt as _;
                 prefetched_event = tui_events
                     .next()
@@ -345,6 +346,7 @@ impl AppRuntime {
                 }))
                 .catch_unwind()
                 .await;
+                last_frame_cost = last_frame_at.elapsed();
                 match frame {
                     Ok(Ok(())) if frame_presented => {
                         consecutive_skipped_frames = 0;

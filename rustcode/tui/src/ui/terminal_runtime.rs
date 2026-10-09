@@ -260,6 +260,29 @@ impl TerminalRuntime {
         &mut self.terminal
     }
 
+    /// Paint one frame inside a synchronized update (DEC private mode 2026),
+    /// so the terminal presents it whole. A scroll rewrites nearly every row,
+    /// and without the bracket a terminal can show the top of the new frame
+    /// above the bottom of the old one. Terminals without the mode ignore it.
+    pub(crate) fn draw_height_synchronized<F>(&mut self, height: u16, render: F) -> io::Result<bool>
+    where
+        F: FnOnce(&mut crate::inline_terminal::Frame<'_>),
+    {
+        struct EndSynchronizedUpdate;
+        impl Drop for EndSynchronizedUpdate {
+            // Also runs when `render` panics: a terminal left mid-update
+            // stops repainting until its own timeout expires.
+            fn drop(&mut self) {
+                let mut out = io::stdout();
+                let _ = out.write_all(b"\x1b[?2026l");
+                let _ = out.flush();
+            }
+        }
+        io::stdout().write_all(b"\x1b[?2026h")?;
+        let _end = EndSynchronizedUpdate;
+        self.terminal.draw_height(height, render)
+    }
+
     pub(crate) fn restore(&mut self) -> io::Result<()> {
         self.restore_at(None)
     }
