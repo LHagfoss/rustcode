@@ -116,7 +116,8 @@ pub use enter::handle_enter;
 pub use enter::handle_enter_with_ui_events;
 pub use session::*;
 pub(crate) use submit::{
-    SubmitOutcome, begin_task_delegation, submit_plain_prompt, submit_plain_prompt_with_mode,
+    SubmitOutcome, begin_task_delegation, resume_delegation_for_wakeup, submit_plain_prompt,
+    submit_plain_prompt_with_mode,
 };
 
 #[cfg(test)]

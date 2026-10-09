@@ -162,6 +162,9 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             crate::flush_pending_background_outputs(&mut s);
             s.last_turn_had_model_final_response = false;
             let is_wakeup = prompt.starts_with("__task_wakeup__:");
+            if is_wakeup {
+                crate::app::actions::resume_delegation_for_wakeup(&mut s);
+            }
             let is_first_prompt = !is_wakeup && !crate::config::session_has_content(&s.history);
             s.session_title_tool_available = is_first_prompt;
             let max_tool_rounds = s.config.max_tool_rounds;

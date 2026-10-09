@@ -51,3 +51,14 @@ pub(crate) fn begin_task_delegation(state: &mut AppState) {
         state.config.delegation_enabled && (state.delegation_armed || state.delegation_sticky);
     state.delegation_armed = false;
 }
+
+/// Give a run the harness started (a background task finished while idle) the
+/// session's standing delegation setting. Nothing was submitted, so nothing
+/// armed delegation for it, and going idle had switched it off: the wakeup went
+/// out without the agent tools the turns around it had, which also replaced
+/// the cached `tools` block. A one-shot `/delegate` is not carried over.
+pub(crate) fn resume_delegation_for_wakeup(state: &mut AppState) {
+    if !state.delegation_active {
+        state.delegation_active = state.config.delegation_enabled && state.delegation_sticky;
+    }
+}
