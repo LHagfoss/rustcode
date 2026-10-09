@@ -1,3 +1,11 @@
+## [v0.64.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.0) - 2026-10-09
+
+### Features
+- `/remote` shares the running terminal session with a paired iPhone: it finds or starts the gateway, shows a QR code, the address and a pairing code, and the phone can then watch the session live, send, queue and steer prompts, cancel a turn and answer questions and approvals. `/remote status` lists attached devices and `/remote off` stops sharing. The terminal owns the session and must stay open; a phone disconnecting does not cancel work. Not yet exercised with a real phone over a network (#1907, #1913, #1914)
+- `rustcode remote serve|pair|devices|revoke|status|stop` runs the gateway and manages paired devices. It listens on loopback until given `--bind` (or `[remote] bind` in the user config) with a LAN or NetBird address. Device tokens are stored hashed and can be revoked; traffic on a plain LAN is not encrypted, so NetBird is the recommended path. See `docs/remote.md` (#1912, #1914)
+- The remote wire protocol is published as JSON Schema with example frames under `docs/remote-protocol/` for clients to build against (#1911)
+- `/login openai` and `/login github-copilot` take `--headless` to show the sign-in URL or device code instead of opening a browser, and `--browser` to require one. With neither, the browser is skipped when the session is reached over SSH or has no display, and the URL is shown if the browser cannot be opened (#1905)
+- Pressing Esc retires the stopped turn's identity, and a terminal answer to a question or approval that was already resolved is dropped with a notice instead of being applied (#1913)
 ## [v0.63.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.63.0) - 2026-10-09
 
 ### Features
