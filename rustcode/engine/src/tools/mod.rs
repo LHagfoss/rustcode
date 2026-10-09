@@ -51,7 +51,7 @@ pub(crate) use schema::{
 #[cfg(test)]
 pub(crate) use schema::install_native_schema_test_gate;
 
-use schema::{AGENT_TOOL_SPECS, collect_mcp_tools, schema_for_agent_tool, schema_for_tool};
+use schema::{AGENT_TOOL_SPECS, schema_for_agent_tool, schema_for_tool};
 
 #[cfg(test)]
 use dispatch::as_error_message;
@@ -517,7 +517,7 @@ fn registered_tool_schema(name: &str) -> Option<Value> {
     if let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) {
         return Some(schema_for_tool(tool.name));
     }
-    if let Some((_, _, schema)) = collect_mcp_tools().into_iter().find(|(n, _, _)| n == name) {
+    if let Some(schema) = schema::mcp_tool_schema(name) {
         return Some(schema);
     }
     if AGENT_TOOL_SPECS.iter().any(|(n, _, _)| *n == name) {

@@ -4328,3 +4328,39 @@ fn explicitly_restricted_native_tools_retain_the_workspace_boundary() {
         assert!(!path.exists());
     }
 }
+
+#[test]
+fn mcp_schema_lookup_accepts_the_canonical_name_of_a_bare_advertised_tool() {
+    let schema =
+        serde_json::json!({"type": "object", "properties": {"account": {"type": "string"}}});
+    // `list_emails` is unique, so requests advertise it without a prefix;
+    // `send_message` collides with a built-in and is advertised qualified.
+    let tools = || {
+        vec![
+            (
+                "list_emails".to_owned(),
+                "mail".to_owned(),
+                "list_emails".to_owned(),
+                String::new(),
+                schema.clone(),
+            ),
+            (
+                "mcp__chat__send_message".to_owned(),
+                "chat".to_owned(),
+                "send_message".to_owned(),
+                String::new(),
+                serde_json::json!({"type": "object"}),
+            ),
+        ]
+    };
+    let find = |name| {
+        super::schema::find_mcp_tool_schema(tools(), name, super::schema::mcp_canonical_name)
+    };
+
+    assert_eq!(find("list_emails"), Some(schema.clone()));
+    assert_eq!(find("mcp__mail__list_emails"), Some(schema.clone()));
+    assert!(find("mcp__chat__send_message").is_some());
+    // A qualified tool stays unreachable by its ambiguous bare name.
+    assert_eq!(find("send_message"), None);
+    assert_eq!(find("mcp__other__list_emails"), None);
+}
