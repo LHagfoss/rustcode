@@ -301,8 +301,59 @@ fn project_messages(
                     pending: record.pending,
                 }),
             timestamp: Some(message.timestamp.clone()).filter(|timestamp| !timestamp.is_empty()),
+            response_time_ms: message.response_time_ms,
+            thought_time_ms: message.thought_time_ms,
+            completed_at: message.completed_at.clone(),
+            turn: message.turn.as_ref().map(project_turn_timing),
         })
         .collect()
+}
+
+pub(super) fn project_turn_timing(turn: &crate::app::TurnTiming) -> RemoteTurnTiming {
+    RemoteTurnTiming {
+        turn_id: turn.turn_id.clone(),
+        started_at: turn.started_at.clone(),
+        ended_at: turn.ended_at.clone(),
+        elapsed_work_ms: turn.elapsed_work_ms,
+        outcome: turn.outcome.map(|outcome| match outcome {
+            crate::app::TurnOutcome::Completed => RemoteTurnOutcome::Completed,
+            crate::app::TurnOutcome::Cancelled => RemoteTurnOutcome::Cancelled,
+            crate::app::TurnOutcome::Failed => RemoteTurnOutcome::Failed,
+        }),
+    }
+}
+
+pub(super) fn project_live_thought_time(state: &AppState) -> Option<u64> {
+    (state.current_thought_started_at.is_some() || state.current_thought_time_ms > 0).then(|| {
+        state.current_thought_time_ms.saturating_add(
+            state.current_thought_started_at.map_or(0, |started| {
+                started.elapsed().as_millis().min(u64::MAX as u128) as u64
+            }),
+        )
+    })
+}
+
+pub(super) fn project_active_timing(state: &AppState) -> Option<RemoteTurnTiming> {
+    state
+        .measured_turn_timing()
+        .as_ref()
+        .map(project_turn_timing)
+}
+
+pub(super) fn project_ended_timing(state: &AppState, turn_id: &str) -> Option<RemoteTurnTiming> {
+    state
+        .active_turn_timing
+        .as_ref()
+        .filter(|turn| turn.turn_id == turn_id)
+        .or_else(|| {
+            state
+                .history
+                .iter()
+                .rev()
+                .filter_map(|message| message.turn.as_ref())
+                .find(|turn| turn.turn_id == turn_id)
+        })
+        .map(project_turn_timing)
 }
 
 /// Keep at most `limit` entries, reporting how many were left out.
@@ -355,6 +406,8 @@ pub fn project_snapshot(
             &mut omitted.tools,
         ),
         can_steer: state.can_accept_steer(),
+        timing: project_active_timing(state),
+        thought_time_ms: project_live_thought_time(state),
     });
     let pending_prompts = state
         .pending_steers
@@ -385,6 +438,13 @@ pub fn project_snapshot(
         sequence: context.sequence,
         generation: context.generation,
         turn,
+        last_turn: state
+            .history
+            .iter()
+            .rev()
+            .filter_map(|message| message.turn.as_ref())
+            .find(|turn| turn.outcome.is_some())
+            .map(project_turn_timing),
         transcript: project_messages(state, &revision, first..state.history.len(), limits),
         history_cursor: history_cursor(&revision, first),
         history_revision: revision,
@@ -555,11 +615,22 @@ pub fn project_event(
     limits: &ProjectionLimits,
 ) -> Vec<RemoteEvent> {
     match event {
-        AgentUiEvent::PromptStarted { prompt } => vec![RemoteEvent::TurnStarted {
-            turn_id: state.active_turn_id.clone(),
+        AgentUiEvent::PromptStarted { prompt, timing } => vec![RemoteEvent::TurnStarted {
+            turn_id: timing
+                .as_ref()
+                .map(|turn| turn.turn_id.clone())
+                .or_else(|| state.active_turn_id.clone()),
+            timing: timing
+                .as_ref()
+                .map(project_turn_timing)
+                .or_else(|| project_active_timing(state)),
             prompt: bound_text(prompt, limits.text_bytes, None),
         }],
-        AgentUiEvent::TextDelta { text } => vec![RemoteEvent::TextDelta { text: text.clone() }],
+        AgentUiEvent::TextDelta { text } => vec![RemoteEvent::TextDelta {
+            text: text.clone(),
+            timing: project_active_timing(state),
+            thought_time_ms: project_live_thought_time(state),
+        }],
         AgentUiEvent::ToolStarted { name, id, detail } => vec![RemoteEvent::ToolStarted {
             tool: RemoteTool {
                 id: id.clone(),
@@ -593,11 +664,19 @@ pub fn project_event(
             .map(|question| RemoteEvent::QuestionRequested { question })
             .into_iter()
             .collect(),
-        AgentUiEvent::TurnFinished { .. } => vec![RemoteEvent::TurnFinished {
-            turn_id: state.active_turn_id.clone(),
+        AgentUiEvent::TurnFinished { timing, .. } => vec![RemoteEvent::TurnFinished {
+            turn_id: timing
+                .as_ref()
+                .map(|turn| turn.turn_id.clone())
+                .or_else(|| state.active_turn_id.clone()),
+            timing: timing.as_ref().map(project_turn_timing),
         }],
-        AgentUiEvent::Cancelled { .. } => vec![RemoteEvent::TurnCancelled {
-            turn_id: state.active_turn_id.clone(),
+        AgentUiEvent::Cancelled { timing, .. } => vec![RemoteEvent::TurnCancelled {
+            turn_id: timing
+                .as_ref()
+                .map(|turn| turn.turn_id.clone())
+                .or_else(|| state.active_turn_id.clone()),
+            timing: timing.as_ref().map(project_turn_timing),
         }],
         #[cfg(test)]
         AgentUiEvent::TurnRecovered { .. } | AgentUiEvent::Error { .. } => Vec::new(),
@@ -608,6 +687,32 @@ pub fn project_event(
 mod tests {
     use super::*;
     use crate::app::{AppStatus, ChatMessage, ToolConfirmation};
+
+    #[test]
+    fn assistant_timing_survives_snapshot_and_history_projection() {
+        let mut state = state_with_history(0, 0);
+        let message: ChatMessage = serde_json::from_value(serde_json::json!({
+            "role": "assistant", "content": "<think>Check both paths</think>Done",
+            "response_time_ms": 12000, "thought_time_ms": 4000,
+            "completed_at": "2026-10-09T18:42:00+02:00",
+            "turn": {"turn_id": "timed-turn", "started_at": "2026-10-09T18:41:00+02:00",
+                "ended_at": "2026-10-09T18:42:00+02:00", "elapsed_work_ms": 32000,
+                "outcome": "completed"}
+        }))
+        .unwrap();
+        state.history.push(message);
+        let snapshot = project_snapshot(&state, &context(), &ProjectionLimits::default());
+        let page = project_history_page(&state, &ProjectionLimits::default(), None, 40).unwrap();
+        for message in [&snapshot.transcript[0], &page.messages[0]] {
+            let value = serde_json::to_value(message).unwrap();
+            assert_eq!(value["thought_time_ms"], 4000);
+            assert_eq!(value["response_time_ms"], 12000);
+            assert_eq!(value["completed_at"], "2026-10-09T18:42:00+02:00");
+            assert_eq!(value["turn"]["turn_id"], "timed-turn");
+            assert_eq!(value["turn"]["elapsed_work_ms"], 32000);
+            assert_eq!(value["turn"]["outcome"], "completed");
+        }
+    }
 
     fn context() -> ProjectionContext {
         ProjectionContext {
@@ -866,6 +971,7 @@ mod tests {
             &state,
             &AgentUiEvent::PromptStarted {
                 prompt: "hello".to_owned(),
+                timing: None,
             },
             &limits,
         );

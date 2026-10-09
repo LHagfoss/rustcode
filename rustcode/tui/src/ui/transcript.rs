@@ -247,6 +247,7 @@ mod tests {
         model.apply_agent_event(&rustcode::controller::AgentUiEvent::TurnFinished {
             content: "answer".to_owned(),
             completed: true,
+            timing: None,
         });
 
         assert_eq!(model.live_text(), None);

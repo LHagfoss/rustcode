@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 pub use rustcode_core::{
     ChatMessage, CompactionBoundary, CompactionEntry, History, TokenUsage, ToolCallRef,
-    ToolResultRecord, Verbosity,
+    ToolResultRecord, TurnOutcome, TurnTiming, Verbosity,
 };
 
 #[derive(Debug, PartialEq, Clone)]

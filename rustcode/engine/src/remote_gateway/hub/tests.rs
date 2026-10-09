@@ -60,6 +60,7 @@ fn snapshot(session_id: &str, epoch: u64, sequence: u64) -> Box<RemoteSnapshot> 
         subagents: Vec::new(),
         background_tasks: Vec::new(),
         omitted: RemoteOmitted::default(),
+        last_turn: None,
     })
 }
 
@@ -112,6 +113,8 @@ impl Owner {
                 generation: 0,
                 event: RemoteEvent::TextDelta {
                     text: text.to_owned(),
+                    timing: None,
+                    thought_time_ms: None,
                 },
             },
         }
@@ -541,6 +544,51 @@ async fn a_cursor_resumes_only_a_contiguous_range_of_the_same_instance() {
         resume(json!({"gateway_id": GATEWAY, "last_sequence": 2})),
     );
     assert_eq!(phone.response(&id)["result"]["code"], "stale_session");
+}
+
+#[tokio::test]
+async fn replay_retains_terminal_turn_timing_and_outcome() {
+    let hub = hub(limits());
+    let mut owner = Owner::register(&hub, "session-a", 1);
+    owner.text("before reconnect");
+    let timing: crate::remote::protocol::RemoteTurnTiming = serde_json::from_value(json!({
+        "turn_id": "turn:replay", "started_at": "2026-10-09T18:41:00+02:00",
+        "ended_at": "2026-10-09T18:42:00+02:00", "elapsed_work_ms": 32000, "outcome": "completed"
+    }))
+    .unwrap();
+    assert!(hub.owner_frame(
+        owner.id,
+        OwnerFrame::Event {
+            frame: RemoteEventFrame {
+                protocol_version: 1,
+                session_id: "session-a".to_owned(),
+                registration_epoch: 1,
+                sequence: 2,
+                generation: 0,
+                event: RemoteEvent::TurnFinished {
+                    turn_id: Some(timing.turn_id.clone()),
+                    timing: Some(timing.clone()),
+                }
+            }
+        }
+    ));
+    let mut phone = Device::connect(&hub, 1, "reconnected-phone");
+    let id = phone.send(
+        Some(("session-a", 1)),
+        json!({"type": "attach_session",
+        "resume": {"gateway_id": GATEWAY, "instance_id": INSTANCE, "last_sequence": 1}}),
+    );
+    assert_eq!(phone.response(&id)["result"]["type"], "resumed");
+    let frames = phone.drain();
+    let replayed = frames
+        .iter()
+        .find(|frame| frame["event"]["type"] == "turn_finished")
+        .unwrap();
+    assert_eq!(replayed["sequence"], 2);
+    assert_eq!(
+        replayed["event"]["timing"],
+        serde_json::to_value(timing).unwrap()
+    );
 }
 
 #[tokio::test]

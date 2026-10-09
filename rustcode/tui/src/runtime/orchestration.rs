@@ -139,7 +139,7 @@ impl AppRuntime {
                     None => None,
                     Some(recovery) => {
                         if recovery.reset_orchestrator {
-                            state.invalidate_orchestrator();
+                            state.fail_orchestrator();
                         }
                         let notice = if recovery.queue_preserved {
                             "[Watchdog: queued work stalled with no active turn for 5 minutes; state reset and queued prompts restarted. Reissue anything still missing.]"

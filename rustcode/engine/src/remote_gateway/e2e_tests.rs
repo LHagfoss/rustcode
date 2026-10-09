@@ -262,7 +262,10 @@ impl Terminal {
         let turn_id = state.begin_turn_identity();
         state.status = AppStatus::Streaming;
         self.observed
-            .send(AgentUiEvent::PromptStarted { prompt })
+            .send(AgentUiEvent::PromptStarted {
+                prompt,
+                timing: None,
+            })
             .unwrap();
         turn_id
     }
@@ -294,6 +297,7 @@ impl Terminal {
             .send(AgentUiEvent::TurnFinished {
                 content: content.to_owned(),
                 completed: true,
+                timing: None,
             })
             .unwrap();
     }

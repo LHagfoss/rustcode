@@ -133,6 +133,8 @@ pub struct AppState {
     /// prompt is dequeued and cleared when that turn ends, so a cancel that
     /// names an earlier turn cannot stop this one.
     pub active_turn_id: Option<String>,
+    pub(crate) active_turn_timing: Option<TurnTiming>,
+    pub(crate) current_user_wait_started_at: Option<std::time::Instant>,
     /// Time at which the app most recently entered an eligible idle state.
     /// Unlike user activity, this cannot be stale from before a turn ran.
     pub(crate) idle_since: std::time::Instant,
@@ -483,6 +485,7 @@ impl AppState {
         }
         self.orchestrator_owner = None;
         self.orchestrator_running = false;
+        self.finish_unwound_turn(TurnOutcome::Failed);
         self.active_turn_id = None;
         true
     }
@@ -494,13 +497,31 @@ impl AppState {
         self.orchestrator_generation = self.orchestrator_generation.wrapping_add(1);
         self.orchestrator_owner = None;
         self.orchestrator_running = false;
+        self.finish_unwound_turn(TurnOutcome::Cancelled);
         self.active_turn_id = None;
+    }
+
+    pub fn fail_orchestrator(&mut self) {
+        self.freeze_turn_timing(Some(TurnOutcome::Failed));
+        self.invalidate_orchestrator();
     }
 
     /// Give the prompt being dequeued its own turn identity.
     pub(crate) fn begin_turn_identity(&mut self) -> String {
+        self.current_user_wait_started_at = None;
+        self.current_thought_started_at = None;
+        self.current_thought_time_ms = 0;
         let turn_id = crate::controller::next_turn_id();
         self.active_turn_id = Some(turn_id.clone());
+        let timing = TurnTiming {
+            turn_id: turn_id.clone(),
+            started_at: Some(chrono::Utc::now().to_rfc3339()),
+            ended_at: None,
+            elapsed_work_ms: None,
+            outcome: None,
+        };
+        self.active_turn_timing = Some(timing.clone());
+        self.history.set_turn(Some(timing));
         turn_id
     }
 
@@ -510,12 +531,99 @@ impl AppState {
         if self.active_turn_id.as_deref() == Some(turn_id) {
             self.active_turn_id = None;
         }
+        if self
+            .active_turn_timing
+            .as_ref()
+            .is_some_and(|turn| turn.turn_id == turn_id)
+        {
+            self.active_turn_timing = None;
+            self.history.set_turn(None);
+        }
+    }
+
+    pub(crate) fn resume_turn_identity(&mut self, timing: TurnTiming) -> String {
+        let id = timing.turn_id.clone();
+        self.active_turn_id = Some(id.clone());
+        self.history.set_turn(Some(timing.clone()));
+        self.active_turn_timing = Some(timing);
+        id
+    }
+
+    pub(crate) fn measured_turn_timing(&self) -> Option<TurnTiming> {
+        let mut timing = self.active_turn_timing.clone()?;
+        if timing.outcome.is_none()
+            && timing.started_at.is_some()
+            && let Some(started) = self.current_turn_started_at
+        {
+            let elapsed = started.elapsed().saturating_sub(
+                self.current_user_wait_started_at
+                    .map_or(std::time::Duration::ZERO, |wait| wait.elapsed()),
+            );
+            timing.elapsed_work_ms = Some(elapsed.as_millis().min(u64::MAX as u128) as u64);
+        }
+        Some(timing)
+    }
+
+    /// Freeze measured work before the run clears its clocks. None means this
+    /// logical turn is suspended for a harness/background continuation.
+    pub(crate) fn freeze_turn_timing(
+        &mut self,
+        outcome: Option<TurnOutcome>,
+    ) -> Option<TurnTiming> {
+        let mut timing = self.measured_turn_timing()?;
+        if timing.outcome.is_none() {
+            timing.outcome = outcome;
+            if outcome.is_some() {
+                timing.ended_at = Some(chrono::Utc::now().to_rfc3339());
+                crate::config::clear_segment_checkpoint(&self.active_session_id);
+            }
+            self.active_turn_timing = Some(timing.clone());
+            self.history.set_turn(Some(timing.clone()));
+        }
+        self.history.update_turn(&timing);
+        Some(timing)
+    }
+
+    fn finish_unwound_turn(&mut self, outcome: TurnOutcome) {
+        if let Some(turn) = self.active_turn_timing.as_ref() {
+            let id = turn.turn_id.clone();
+            if turn.outcome.is_none() {
+                self.freeze_turn_timing(Some(outcome));
+                crate::config::save_session_history(&self.active_session_id, &self.history);
+            }
+            self.end_turn_identity(&id);
+        }
+    }
+
+    /// Finish suspended logical work before cancellation/session reset drops
+    /// its continuation context. Suspended work keeps its frozen measurement.
+    pub(crate) fn finish_pending_turn_timing(&mut self, outcome: TurnOutcome) {
+        self.freeze_turn_timing(Some(outcome));
+        let suspended = self
+            .background_turn_context
+            .as_mut()
+            .and_then(|context| context.lifecycle.turn_timing.as_mut())
+            .filter(|turn| turn.outcome.is_none())
+            .map(|turn| {
+                turn.outcome = Some(outcome);
+                turn.ended_at = Some(chrono::Utc::now().to_rfc3339());
+                turn.clone()
+            });
+        if let Some(turn) = suspended {
+            self.history.update_turn(&turn);
+            crate::config::clear_segment_checkpoint(&self.active_session_id);
+        }
+    }
+
+    pub(crate) fn begin_user_wait(&mut self, started: std::time::Instant) {
+        self.current_user_wait_started_at = Some(started);
     }
 
     /// Take time spent waiting on the user (an open question or approval)
     /// out of the turn clock: the `Working` row and `Worked for` report how
     /// long the agent worked, not how long the user took to answer (#1891).
     pub(crate) fn exclude_user_wait(&mut self, wait: std::time::Duration) {
+        self.current_user_wait_started_at = None;
         if let Some(started) = self.current_turn_started_at {
             self.current_turn_started_at = Some((started + wait).min(std::time::Instant::now()));
         }
@@ -1154,6 +1262,7 @@ impl AppState {
 
     /// Clear all render-only state left by a cancelled or interrupted turn.
     pub fn clear_active_turn_projection(&mut self) {
+        self.current_user_wait_started_at = None;
         self.clear_current_response();
         self.clear_live_tool_calls();
         self.running_tools.clear();
@@ -1292,6 +1401,8 @@ impl AppState {
             orchestrator_generation: 0,
             orchestrator_owner: None,
             active_turn_id: None,
+            active_turn_timing: None,
+            current_user_wait_started_at: None,
             idle_since: std::time::Instant::now(),
             last_turn_had_model_final_response: false,
             summary_in_flight: false,
@@ -2408,3 +2519,6 @@ mod stall_watchdog_tests;
 #[cfg(test)]
 #[path = "state/steering_tests.rs"]
 mod steering_tests;
+#[cfg(test)]
+#[path = "state/turn_timing_tests.rs"]
+mod turn_timing_tests;

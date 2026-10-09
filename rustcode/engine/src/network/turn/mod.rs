@@ -85,6 +85,15 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         // A real user prompt starts a new logical task. Do not let a stale
         // background result inherit the previous task's loop or verification
         // budgets.
+        if let Some(turn) = state
+            .background_turn_context
+            .as_ref()
+            .and_then(|context| context.lifecycle.turn_timing.clone())
+        {
+            let id = state.resume_turn_identity(turn);
+            state.freeze_turn_timing(Some(crate::app::TurnOutcome::Cancelled));
+            state.end_turn_identity(&id);
+        }
         state.background_turn_context = None;
         state.current_turn_started_at = Some(std::time::Instant::now());
         state.current_turn_token_usage = None;

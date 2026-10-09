@@ -228,6 +228,7 @@ impl InteractivePolicy {
                 s.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
                 s.tool_confirmation_response = Some(tx);
                 s.status = AppStatus::AwaitingToolConfirmation;
+                s.begin_user_wait(std::time::Instant::now());
                 s.request_redraw();
             }
 

@@ -1345,7 +1345,7 @@ async fn acp_continuation_releases_state_and_delivers_provider_completion() {
     );
     assert!(matches!(
         receiver.recv().await,
-        Some(ui_adapter::AgentUiEvent::PromptStarted { prompt }) if prompt.is_empty()
+        Some(ui_adapter::AgentUiEvent::PromptStarted { prompt , ..}) if prompt.is_empty()
     ));
     let mut completed_content = None;
     while let Some(event) = receiver.recv().await {

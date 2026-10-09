@@ -1476,6 +1476,7 @@ mod tests {
         let updates = stream.updates(crate::network::AgentUiEvent::TurnFinished {
             content: "hello".to_string(),
             completed: true,
+            timing: None,
         });
         assert!(
             updates.is_empty(),
@@ -1489,6 +1490,7 @@ mod tests {
         let updates = stream.updates(crate::network::AgentUiEvent::TurnFinished {
             content: "fallback".to_string(),
             completed: true,
+            timing: None,
         });
         assert!(matches!(
             updates.as_slice(),
@@ -1507,6 +1509,7 @@ mod tests {
         let updates = stream.updates(crate::network::AgentUiEvent::TurnFinished {
             content: "done".to_string(),
             completed: true,
+            timing: None,
         });
         assert!(matches!(
             updates.as_slice(),
@@ -1691,6 +1694,7 @@ mod tests {
             content: "<think>The time is 12:20 PM.</think>The current time is 12:20 PM."
                 .to_string(),
             completed: true,
+            timing: None,
         });
         assert!(
             turn_finished.is_empty(),
@@ -1704,6 +1708,7 @@ mod tests {
         let finished = stream.updates(crate::network::AgentUiEvent::TurnFinished {
             content: "<think>Reasoning scratchpad</think>Unstreamed answer".to_string(),
             completed: true,
+            timing: None,
         });
         assert_eq!(finished.len(), 1);
         assert!(matches!(

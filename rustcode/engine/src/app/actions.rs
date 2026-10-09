@@ -76,6 +76,8 @@ fn stop_active_turn(
 
     cancel_token.cancel();
     *cancel_token = tokio_util::sync::CancellationToken::new();
+    s.finish_pending_turn_timing(crate::app::TurnOutcome::Cancelled);
+    crate::config::save_session_history(&active_session_id, &s.history);
     s.clear_active_turn_projection();
     // The stopped turn can no longer be named: a cancel that still carries
     // its identity must be stale, not cancel the token that replaced it.

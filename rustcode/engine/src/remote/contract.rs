@@ -470,11 +470,26 @@ fn golden_tool() -> RemoteTool {
 fn golden_messages() -> Vec<RemoteMessage> {
     vec![
         RemoteMessage {
+            message_id: "m59".to_owned(),
+            role: "assistant".to_owned(),
+            content: whole("<think>Check both paths</think>Done", Some("message:h2:59")),
+            tool: None,
+            timestamp: Some("2026-10-09T18:40:25+02:00".to_owned()),
+            response_time_ms: Some(12000),
+            thought_time_ms: Some(4000),
+            completed_at: Some("2026-10-09T18:40:32+02:00".to_owned()),
+            turn: Some(golden_previous_timing()),
+        },
+        RemoteMessage {
             message_id: "m60".to_owned(),
             role: "user".to_owned(),
             content: whole("Why does the parser test fail?", Some("message:h2:60")),
             tool: None,
-            timestamp: Some("2026-10-09T08:14:02Z".to_owned()),
+            timestamp: Some("2026-10-09T18:41:00+02:00".to_owned()),
+            response_time_ms: None,
+            thought_time_ms: None,
+            completed_at: None,
+            turn: None,
         },
         RemoteMessage {
             message_id: "m61".to_owned(),
@@ -492,9 +507,31 @@ fn golden_messages() -> Vec<RemoteMessage> {
                 success: false,
                 pending: false,
             }),
-            timestamp: Some("2026-10-09T08:14:31Z".to_owned()),
+            timestamp: Some("2026-10-09T18:41:10+02:00".to_owned()),
+            response_time_ms: None,
+            thought_time_ms: None,
+            completed_at: None,
+            turn: None,
         },
     ]
+}
+
+fn golden_timing(outcome: Option<RemoteTurnOutcome>) -> RemoteTurnTiming {
+    RemoteTurnTiming {
+        turn_id: TURN.to_owned(),
+        started_at: Some("2026-10-09T18:41:00+02:00".to_owned()),
+        ended_at: outcome.map(|_| "2026-10-09T18:42:00+02:00".to_owned()),
+        elapsed_work_ms: Some(if outcome.is_some() { 32000 } else { 12000 }),
+        outcome,
+    }
+}
+
+fn golden_previous_timing() -> RemoteTurnTiming {
+    let mut timing = golden_timing(Some(RemoteTurnOutcome::Completed));
+    timing.turn_id = "turn:previous".to_owned();
+    timing.started_at = Some("2026-10-09T18:40:00+02:00".to_owned());
+    timing.ended_at = Some("2026-10-09T18:40:32+02:00".to_owned());
+    timing
 }
 
 fn golden_snapshot() -> RemoteSnapshot {
@@ -513,6 +550,8 @@ fn golden_snapshot() -> RemoteSnapshot {
             },
             tools: vec![golden_tool()],
             can_steer: false,
+            timing: Some(golden_timing(None)),
+            thought_time_ms: Some(4000),
         }),
         transcript: golden_messages(),
         history_revision: "h2".to_owned(),
@@ -530,6 +569,7 @@ fn golden_snapshot() -> RemoteSnapshot {
             elapsed_ms: 93400,
         }],
         omitted: RemoteOmitted::default(),
+        last_turn: Some(golden_previous_timing()),
     }
 }
 
@@ -769,6 +809,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             RemoteEvent::TurnStarted {
                 turn_id: Some(TURN.to_owned()),
                 prompt: whole("Run the test suite and fix what fails", None),
+                timing: Some(golden_timing(None)),
             },
         ),
         event(
@@ -776,6 +817,8 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             414,
             RemoteEvent::TextDelta {
                 text: "The failure comes from ".to_owned(),
+                timing: Some(golden_timing(None)),
+                thought_time_ms: Some(4000),
             },
         ),
         event(
@@ -841,12 +884,16 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             422,
             RemoteEvent::TurnFinished {
                 turn_id: Some(TURN.to_owned()),
+                timing: Some(golden_timing(Some(RemoteTurnOutcome::Completed))),
             },
         ),
         event(
             "turn_cancelled",
             423,
-            RemoteEvent::TurnCancelled { turn_id: None },
+            RemoteEvent::TurnCancelled {
+                turn_id: Some(TURN.to_owned()),
+                timing: Some(golden_timing(Some(RemoteTurnOutcome::Cancelled))),
+            },
         ),
         event(
             "snapshot",
@@ -859,6 +906,23 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                     pending_question: Some(golden_question()),
                     ..golden_snapshot()
                 }),
+            },
+        ),
+        event(
+            "turn_failed",
+            427,
+            RemoteEvent::TurnFinished {
+                turn_id: Some(TURN.to_owned()),
+                timing: Some(golden_timing(Some(RemoteTurnOutcome::Failed))),
+            },
+        ),
+        event(
+            "clock_update",
+            428,
+            RemoteEvent::TextDelta {
+                text: String::new(),
+                timing: Some(golden_timing(None)),
+                thought_time_ms: Some(4000),
             },
         ),
         event(
@@ -945,6 +1009,49 @@ pub fn contract_files() -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_v1_frames_decode_with_timing_absent() {
+        let old: RemoteEvent =
+            serde_json::from_str(r#"{"type":"turn_finished","turn_id":"old"}"#).unwrap();
+        assert!(matches!(
+            old,
+            RemoteEvent::TurnFinished { timing: None, .. }
+        ));
+        let old: RemoteEvent =
+            serde_json::from_str(r#"{"type":"text_delta","text":"hello"}"#).unwrap();
+        assert!(matches!(
+            old,
+            RemoteEvent::TextDelta {
+                timing: None,
+                thought_time_ms: None,
+                ..
+            }
+        ));
+        let old: RemoteMessage = serde_json::from_value(serde_json::json!({
+            "message_id": "m1", "role": "assistant", "content": {
+                "text": "old answer", "truncated": false, "offset": 0, "total_bytes": 10
+            }, "timestamp": "2026-01-01T10:00:00Z"
+        }))
+        .unwrap();
+        let value = serde_json::to_value(old).unwrap();
+        for key in [
+            "turn",
+            "response_time_ms",
+            "thought_time_ms",
+            "completed_at",
+        ] {
+            assert!(value.get(key).is_none());
+        }
+        let mut snapshot = serde_json::to_value(golden_snapshot()).unwrap();
+        snapshot.as_object_mut().unwrap().remove("last_turn");
+        let turn = snapshot["turn"].as_object_mut().unwrap();
+        turn.remove("timing");
+        turn.remove("thought_time_ms");
+        let decoded: RemoteSnapshot = serde_json::from_value(snapshot).unwrap();
+        assert!(decoded.last_turn.is_none());
+        assert!(decoded.turn.unwrap().timing.is_none());
+    }
     use serde_json::Value;
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};

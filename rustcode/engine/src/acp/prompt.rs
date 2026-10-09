@@ -475,7 +475,7 @@ where
                 let Some(event) = event else { continue };
                 let abort_background = matches!(
                     &event,
-                    crate::network::AgentUiEvent::Cancelled { .. }
+                    crate::network::AgentUiEvent::Cancelled { ..}
                 ) || {
                     #[cfg(test)]
                     {

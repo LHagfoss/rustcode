@@ -27,17 +27,12 @@ pub(crate) fn next_approval_batch_id() -> String {
     )
 }
 
-static NEXT_TURN_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_QUESTION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Creates a unique identity for one prompt the queue orchestrator runs, so a
 /// cancel can name the turn it observed.
 pub(crate) fn next_turn_id() -> String {
-    format!(
-        "turn:{}:{}",
-        std::process::id(),
-        NEXT_TURN_ID.fetch_add(1, Ordering::Relaxed)
-    )
+    format!("turn:{}", uuid::Uuid::new_v4())
 }
 
 /// Creates a unique identity for one pending `ask_question` prompt, so an

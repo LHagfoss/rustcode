@@ -252,6 +252,7 @@ pub fn toggle_auto_confirm(s: &mut AppState) {
 }
 
 pub fn start_new_session(s: &mut AppState) {
+    s.finish_pending_turn_timing(crate::app::TurnOutcome::Cancelled);
     if crate::config::session_has_content(&s.history) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
@@ -557,6 +558,19 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     // Strip legacy "Resumed session " system messages from loaded transcript
     loaded.retain(|m| !(m.role == "system" && m.content.starts_with("Resumed session ")));
 
+    let finalizing_current = s.active_turn_timing.is_some()
+        || s.background_turn_context
+            .as_ref()
+            .is_some_and(|context| context.lifecycle.turn_timing.is_some());
+    // Finalize against the outgoing session before replacing its ID/history.
+    s.finish_pending_turn_timing(crate::app::TurnOutcome::Cancelled);
+    if finalizing_current
+        && crate::config::session_id_from_path(&meta.path).as_deref()
+            == Some(s.active_session_id.as_str())
+    {
+        loaded = s.history.as_slice().to_vec();
+        loaded.retain(|m| !(m.role == "system" && m.content.starts_with("Resumed session ")));
+    }
     // Save current active session history if it has content
     if crate::config::session_has_content(&s.history) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
