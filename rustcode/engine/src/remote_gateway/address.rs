@@ -160,7 +160,8 @@ pub struct ListenPlan {
 
 /// Resolve `--bind` and `--advertise`.
 ///
-/// A loopback or specific bind advertises itself unless told otherwise. A
+/// `auto` chooses a local LAN address, falling back to loopback offline. A
+/// loopback or specific bind advertises itself unless told otherwise. A
 /// wildcard bind needs `--advertise` unless exactly one candidate exists;
 /// the error lists the candidates. `candidates` is passed in so the decision
 /// is testable; production callers use [`candidate_addresses`].
@@ -169,10 +170,13 @@ pub fn plan_listen(
     advertise: Option<&str>,
     candidates: &[Candidate],
 ) -> Result<ListenPlan, AddressError> {
-    let bind: IpAddr = bind
-        .trim()
-        .parse()
-        .map_err(|_| AddressError::InvalidBind(bind.to_string()))?;
+    let bind: IpAddr = if bind.trim() == "auto" {
+        automatic_address(candidates)
+    } else {
+        bind.trim()
+            .parse()
+            .map_err(|_| AddressError::InvalidBind(bind.to_string()))?
+    };
     if let Some(advertise) = advertise {
         return Ok(ListenPlan {
             bind,
@@ -200,6 +204,56 @@ pub fn plan_listen(
             candidates: reachable,
         }),
     }
+}
+
+/// Prefer Wi-Fi/Ethernet over VPN and virtual networks, so the QR works on
+/// the phone's ordinary Wi-Fi. Bind only the selected interface, not all of
+/// them. Interface names cover macOS and the usual Linux naming schemes.
+fn automatic_address(candidates: &[Candidate]) -> IpAddr {
+    // UDP connect asks the OS which local address it would route from. No
+    // packet is sent and internet access is not required for this lookup.
+    let route = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+        .ok()
+        .and_then(|socket| {
+            socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+            socket.local_addr().ok().map(|address| address.ip())
+        });
+    automatic_address_with_route(candidates, route)
+}
+
+fn automatic_address_with_route(candidates: &[Candidate], route: Option<IpAddr>) -> IpAddr {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            let interface = candidate.interface.as_str();
+            let address = candidate.address;
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && !address.is_multicast()
+                && !matches!(address, IpAddr::V4(ip) if ip.is_link_local() || ip.is_broadcast())
+                && !matches!(address, IpAddr::V6(ip) if ip.is_unicast_link_local())
+                && ![
+                    "br", "docker", "veth", "virbr", "vmnet", "vnic", "vboxnet", "awdl", "llw",
+                    "p2p",
+                ]
+                .iter()
+                .any(|prefix| interface.starts_with(prefix))
+        })
+        .min_by_key(|candidate| {
+            let physical = ["en", "eth", "wl"]
+                .iter()
+                .any(|prefix| candidate.interface.starts_with(prefix));
+            let rank = match (physical, candidate.address) {
+                (true, IpAddr::V4(ip)) if ip.is_private() => 0,
+                (true, IpAddr::V4(_)) => 1,
+                (true, IpAddr::V6(_)) => 2,
+                (false, IpAddr::V4(_)) => 3,
+                (false, IpAddr::V6(_)) => 4,
+            };
+            (rank, Some(candidate.address) != route, candidate.address)
+        })
+        .map(|candidate| candidate.address)
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
 }
 
 /// Non-loopback addresses of interfaces that are up. Link-local addresses are
@@ -270,6 +324,73 @@ mod tests {
             interface: interface.into(),
             address: address.parse().unwrap(),
         }
+    }
+
+    #[test]
+    fn automatic_bind_uses_lan_instead_of_loopback_or_vpn() {
+        let candidates = [
+            candidate("wt0", "100.90.16.237"),
+            candidate("bridge100", "192.168.64.1"),
+            candidate("en0", "192.168.31.185"),
+        ];
+        let plan = plan_listen("auto", None, &candidates).unwrap();
+        assert_eq!(plan.bind, "192.168.31.185".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            plan.advertise.with_port(17879).to_string(),
+            "192.168.31.185:17879"
+        );
+        let plan = plan_listen("auto", Some("mac.example"), &candidates).unwrap();
+        assert_eq!(plan.bind, "192.168.31.185".parse::<IpAddr>().unwrap());
+        assert_eq!(plan.advertise.with_port(7).to_string(), "mac.example:7");
+    }
+
+    #[test]
+    fn automatic_bind_without_network_keeps_local_access() {
+        let plan = plan_listen("auto", None, &[]).unwrap();
+        assert!(plan.bind.is_loopback());
+    }
+
+    #[test]
+    fn automatic_bind_prefers_the_active_route_among_lan_interfaces() {
+        let candidates = [
+            candidate("en0", "10.0.0.20"),
+            candidate("en1", "192.168.1.20"),
+            candidate("wt0", "100.90.16.237"),
+        ];
+        let lan = "192.168.1.20".parse::<IpAddr>().unwrap();
+        assert_eq!(automatic_address_with_route(&candidates, Some(lan)), lan);
+        // A full-tunnel VPN must not hide the LAN address from a nearby phone.
+        let vpn = "100.90.16.237".parse::<IpAddr>().unwrap();
+        assert_eq!(
+            automatic_address_with_route(&candidates, Some(vpn)),
+            "10.0.0.20".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            automatic_address_with_route(&[candidate("wt0", "100.90.16.237")], Some(vpn)),
+            vpn
+        );
+    }
+
+    #[test]
+    fn automatic_bind_ignores_virtual_and_unreachable_interfaces() {
+        let candidates = [
+            candidate("bridge100", "192.168.64.1"),
+            candidate("br0", "172.18.0.1"),
+            candidate("vmnet8", "192.168.80.1"),
+            candidate("vnic0", "10.211.55.1"),
+            candidate("vboxnet0", "192.168.56.1"),
+            candidate("en0", "169.254.1.2"),
+            candidate("en0", "fe80::1234"),
+            candidate("lo0", "127.0.0.1"),
+        ];
+        assert!(
+            plan_listen("auto", None, &candidates)
+                .unwrap()
+                .bind
+                .is_loopback()
+        );
+        let plan = plan_listen("auto", None, &[candidate("eth0", "2001:db8::20")]).unwrap();
+        assert_eq!(plan.advertise.with_port(5).to_string(), "[2001:db8::20]:5");
     }
 
     #[test]

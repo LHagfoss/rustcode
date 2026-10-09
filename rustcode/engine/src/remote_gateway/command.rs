@@ -34,13 +34,10 @@ pub fn loopback_guidance(markdown: bool) -> String {
     let mut blocks = vec![
         "The gateway listens on this machine only (loopback), so a phone cannot reach it."
             .to_owned(),
-        "To share with a phone, restart it on an address the phone can reach:".to_owned(),
-        block(&[
-            "rustcode remote stop",
-            "rustcode remote serve --bind <address>",
-        ]),
-        "or set it once in config.toml, for /remote to use when it starts the gateway:".to_owned(),
-        block(&["[remote]", "bind = \"<address>\""]),
+        "Join the same Wi-Fi as your phone, then restart with automatic LAN selection:".to_owned(),
+        block(&["rustcode remote stop", "rustcode remote serve"]),
+        "If config.toml explicitly sets a loopback bind, remove it or use:".to_owned(),
+        block(&["[remote]", "bind = \"auto\""]),
     ];
     let candidates = candidate_addresses();
     if candidates.is_empty() {
@@ -354,7 +351,7 @@ mod tests {
 
         let local = format_offer(&offer("127.0.0.1"), QrStyle::Text);
         assert!(local.starts_with("The gateway listens on this machine only"));
-        assert!(local.contains("rustcode remote serve --bind <address>"));
+        assert!(local.contains("rustcode remote serve"));
         assert!(local.contains("[remote]"));
         assert!(local.contains("QR payload: "));
     }

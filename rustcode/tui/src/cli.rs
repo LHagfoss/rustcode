@@ -281,8 +281,8 @@ pub enum DaemonCommands {
 pub enum RemoteCommands {
     /// Run the gateway in the foreground
     Serve {
-        /// Address to bind (loopback by default; a LAN or NetBird address is not encrypted)
-        #[arg(long, default_value = "127.0.0.1")]
+        /// Address to bind (auto selects Wi-Fi/Ethernet; plain LAN traffic is not encrypted)
+        #[arg(long, default_value = "auto")]
         bind: String,
         /// TCP port of the WebSocket listener
         #[arg(long, default_value_t = rustcode::remote_gateway::DEFAULT_PORT)]
@@ -789,7 +789,7 @@ mod tests {
                     port: 17879,
                     advertise: None,
                 }
-            }) if bind == "127.0.0.1"
+            }) if bind == "auto"
         ));
         let cli = Cli::try_parse_from([
             "rustcode",
