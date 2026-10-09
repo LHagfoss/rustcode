@@ -702,9 +702,9 @@ struct PromptCacheKey {
 /// changes when the protocol, agent mode, or MCP tool set changes. This caches
 /// it and rebuilds lazily only when [`PromptCacheKey`] moves. Native schemas are
 /// selected per request from the current conversation and explicit schema policy.
-/// MCP names selected during a request are pinned for the rest of the turn so
-/// the `tools` block — and therefore the cached prompt prefix — stays
-/// byte-identical across rounds. (#1591)
+/// MCP names selected during a request are pinned for the rest of the session
+/// so the `tools` block — and therefore the cached prompt prefix — stays
+/// byte-identical across rounds and turns unless the user asks for more. (#1591)
 #[derive(Clone, Debug)]
 pub(crate) struct NativeToolSchemaSnapshot {
     pub(crate) generation: u64,
@@ -716,18 +716,12 @@ pub(crate) struct NativeToolSchemaSnapshot {
 }
 
 /// Number of real user turns in the projected request. The runtime context tail
-/// is projected as a `user` message and appears or disappears between rounds of
-/// the same turn, so it must not be mistaken for a new turn. (#1591)
+/// and harness notices are projected as `user` messages and come and go between
+/// rounds of the same turn, so they must not be mistaken for a new turn. (#1591)
 fn turn_user_message_count(messages: &[serde_json::Value]) -> usize {
     messages
         .iter()
-        .filter(|message| {
-            message.get("role").and_then(serde_json::Value::as_str) == Some("user")
-                && !message
-                    .get("content")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|content| content.starts_with("<rustcode_context>"))
-        })
+        .filter(|message| crate::network::messages::is_user_turn_boundary(message))
         .count()
 }
 
@@ -749,11 +743,12 @@ pub struct PromptCache {
     mcp_selection_policy: Option<crate::tools::ToolSchemaPolicy>,
     mcp_selection_session_id: Option<String>,
     mcp_selection_user_count: Option<usize>,
-    /// The pinned MCP menu for the current turn. The schema selector gives this
-    /// absolute priority over its scoring buckets, so a growing transcript or a
-    /// server registering mid-turn cannot reshuffle a full budget. Cleared only
-    /// when the turn, session, or policy changes — never on `bump_mcp_generation`,
-    /// which fires for every lazily started server. (#1591)
+    /// The pinned MCP menu. The schema selector seats it ahead of everything
+    /// but explicit requests and the newest user message, so a growing
+    /// transcript or a server registering mid-turn cannot reshuffle a full
+    /// budget. Cleared only when the session or policy changes — never on a
+    /// new turn or on `bump_mcp_generation`, which fires for every lazily
+    /// started server. (#1591)
     mcp_selected_names: Vec<String>,
     /// Invalidates schema computations that started from an older cache
     /// snapshot, including concurrent requests with the same session inputs.
@@ -818,11 +813,13 @@ impl PromptCache {
         // it, and dropping the pin there is what made `selected_names` disjoint
         // between consecutive rounds of one turn. (#1591)
         let pin_policy = mcp_pin_policy(policy);
+        // A new user turn keeps the pin as well. Releasing it re-scored the
+        // menu from the whole transcript, so the `tools` block differed on the
+        // first request of every turn and the provider's cached prefix was
+        // rewritten each time. The selector admits what the new message asks
+        // for ahead of the pinned names instead.
         if self.mcp_selection_policy != Some(pin_policy)
             || self.mcp_selection_session_id.as_deref() != Some(session_id)
-            || self
-                .mcp_selection_user_count
-                .is_some_and(|previous| turn_user_message_count > previous)
         {
             self.mcp_selected_names.clear();
             self.mcp_selection_policy = Some(pin_policy);
@@ -1013,7 +1010,7 @@ mod prompt_cache_snapshot_tests {
     }
 
     #[test]
-    fn a_new_user_turn_releases_the_pin() {
+    fn a_new_user_turn_keeps_the_pin() {
         let _guard = GENERATION_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -1022,15 +1019,22 @@ mod prompt_cache_snapshot_tests {
         let first = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
         assert!(cache.commit_native_tool_schema_selection(&first, &["alpha_read".to_string()]));
 
-        // The runtime context tail is projected as a `user` message and appears or
-        // disappears between rounds, so it must not look like a new turn. (#1591)
+        // The runtime context tail and harness notices are projected as `user`
+        // messages and appear or disappear between rounds. (#1591)
         let mut with_tail = messages(1);
+        with_tail.push(json!({"role": "user", "content": "<rustcode_runtime_notice provenance=\"lifecycle\">\n[Tool call rejected]\n</rustcode_runtime_notice>"}));
         with_tail.push(json!({"role": "user", "content": "<rustcode_context>\n# Runtime"}));
         let round = cache.native_tool_schema_snapshot(policy, &with_tail, "session");
+        assert_eq!(round.turn_user_message_count, 1);
         assert_eq!(round.sticky_names, ["alpha_read"]);
 
+        // Releasing the pin here rewrote the cached `tools` block on the first
+        // request of every turn.
         let next = cache.native_tool_schema_snapshot(policy, &messages(2), "session");
-        assert!(next.sticky_names.is_empty());
+        assert_eq!(next.sticky_names, ["alpha_read"]);
+
+        let other = cache.native_tool_schema_snapshot(policy, &messages(2), "other-session");
+        assert!(other.sticky_names.is_empty());
     }
 }
 
