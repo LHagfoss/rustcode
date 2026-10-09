@@ -1,3 +1,15 @@
+## [v0.63.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.63.0) - 2026-10-09
+
+### Features
+- The model can register an MCP server and use it in the same session: the new `manage_mcp_servers` tool adds, lists, starts and removes servers through the same validation as `rustcode mcp add`, asks for approval on every operation, and never prints header or environment values. Use `rustcode mcp add` for real secrets, since values the model passes stay in the session history (#1901)
+- Sub-agents: `spawn_agent` takes an `agent_type` (`default`, `explorer`, `worker`) and returns JSON with the agent id, model and status; `followup_task` and `send_agent` take `interrupt: true` to stop a running child and redirect it; the transcript row names the child, its task and its model instead of "agent task" (#1902)
+- `write_to_file` accepts a complete file of any size up to the 40 KiB streamed-argument limit instead of rejecting content over 16 KiB after the model had generated it, and a rejected call is reported once (#1898)
+- `write_file_chunk` takes `more: true` on every chunk but the last, and no compiler check runs on a file that is still being written. Several writes in one response are checked once, and diagnostics are shown next to a successful write instead of marking it as failed (#1899)
+- Fixed the stall watchdog resetting a live turn to Idle when a question or approval was answered after more than five minutes (#1893)
+- Time spent waiting for the user is reported as `user_wait_us` in turn metrics and `rustcode bench --report`, and is no longer counted as tool time. The `Working` row clock and `Worked for` now leave that wait out (#1897)
+- `remember` stores a note that names where a credential comes from (an environment variable, `$VAR`, a file path) and refuses only a literal credential; the refusal names the rule that matched and is a validation error. Words such as `task-` or `risk-` no longer match the `sk-` rule (#1895)
+- Fixed the finish gate asking for verification again after an edit to a file outside the project; the block message names the path that made verification stale (#1896)
+- Fixed the hover highlight staying on the wrong rows, or painting over a question panel, when the layout changed height under a still pointer (#1900)
 ## [v0.62.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.62.0) - 2026-10-09
 
 ### Features
