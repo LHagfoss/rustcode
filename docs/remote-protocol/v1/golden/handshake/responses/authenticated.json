@@ -1,0 +1,9 @@
+{
+  "type": "authenticated",
+  "protocol_version": 1,
+  "gateway_id": "gw-8e1f4b7a",
+  "instance_id": "inst-41c07d92",
+  "device_id": "0011223344556677",
+  "device_name": "Lars's iPhone",
+  "host_name": "studio"
+}

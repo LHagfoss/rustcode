@@ -3,11 +3,12 @@
 //! One newline-delimited JSON request per connection, reusing the daemon's
 //! bounded framing. The socket is 0600 inside the 0700 gateway directory, so
 //! only the owning user can ask for a pairing challenge, revoke a device or
-//! stop the gateway. This is not the owner IPC that TUI sessions will use to
-//! register; that belongs to the routing half of issue #1909.
+//! stop the gateway. Session owners do not use it: they register on the
+//! owner socket next to it ([`super::owner_ipc`]).
 
 use super::address::AdvertisedAddress;
 use super::handshake::Secret;
+use super::hub::SessionSummary;
 use super::pairing::{self, PairingOffer};
 use crate::daemon::protocol::{read_async_frame, write_async_frame};
 use anyhow::Result;
@@ -73,6 +74,12 @@ pub struct GatewayStatus {
     pub connections: Vec<ConnectionSummary>,
     /// Whether a pairing challenge is currently redeemable.
     pub pairing_open: bool,
+    /// The advertised address is loopback: no other machine can pair.
+    #[serde(default)]
+    pub loopback_only: bool,
+    /// Shared sessions; `None` from a gateway without session routing.
+    #[serde(default)]
+    pub sessions: Option<Vec<SessionSummary>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +93,9 @@ pub struct ConnectionSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OfferDetails {
     pub advertised_address: String,
+    /// The address is loopback: only this machine can use the offer.
+    #[serde(default)]
+    pub loopback_only: bool,
     pub gateway_id: String,
     pub credential: Secret,
     pub code: Secret,
@@ -95,11 +105,22 @@ pub struct OfferDetails {
 }
 
 impl OfferDetails {
-    pub fn new(address: &AdvertisedAddress, gateway_id: &str, offer: PairingOffer) -> Self {
+    pub fn new(
+        address: &AdvertisedAddress,
+        gateway_id: &str,
+        host_name: Option<&str>,
+        offer: PairingOffer,
+    ) -> Self {
         Self {
             advertised_address: address.to_string(),
             gateway_id: gateway_id.to_string(),
-            qr_payload: Secret::new(pairing::qr_payload(address, gateway_id, &offer.credential)),
+            loopback_only: address.host().is_loopback(),
+            qr_payload: Secret::new(pairing::qr_payload(
+                address,
+                gateway_id,
+                &offer.credential,
+                host_name,
+            )),
             credential: offer.credential,
             code: offer.code,
             expires_in_secs: offer.lifetime.as_secs(),
@@ -129,7 +150,7 @@ mod tests {
             code: Secret::new("1234-5678"),
             lifetime: Duration::from_secs(120),
         };
-        let details = OfferDetails::new(&address, "gw", offer);
+        let details = OfferDetails::new(&address, "gw", Some("studio"), offer);
         assert_eq!(details.advertised_address, "192.168.1.20:17879");
         assert_eq!(details.expires_in_secs, 120);
         assert!(details.qr_payload.expose().contains("credential-value"));

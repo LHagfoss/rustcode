@@ -13,6 +13,7 @@ use super::address::AdvertisedAddress;
 use super::handshake::{HANDSHAKE_PROTOCOL_VERSION, PairingMethod, Secret};
 use base64::Engine as _;
 use rand::RngExt as _;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -42,25 +43,34 @@ pub struct PairingOffer {
 }
 
 /// What the QR code encodes. Compact JSON; see [`qr_payload`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct QrPayload {
     pub protocol_version: u32,
     /// `host:port` of the WebSocket listener, never an unspecified address.
     pub address: String,
     pub gateway_id: String,
     pub credential: Secret,
+    /// The host's own name, for display; cut to keep the code scannable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
 }
 
-/// The exact string a pairing QR code encodes.
-///
-/// QR rendering hook: the workspace has no QR encoder, so the CLI prints this
-/// string. Whatever draws the code later must encode exactly this value.
-pub fn qr_payload(address: &AdvertisedAddress, gateway_id: &str, credential: &Secret) -> String {
+/// Longest host name the QR payload carries.
+pub const QR_HOST_NAME_CHARS: usize = 24;
+
+/// The exact string a pairing QR code encodes; [`super::qr`] draws it.
+pub fn qr_payload(
+    address: &AdvertisedAddress,
+    gateway_id: &str,
+    credential: &Secret,
+    host_name: Option<&str>,
+) -> String {
     serde_json::to_string(&QrPayload {
         protocol_version: HANDSHAKE_PROTOCOL_VERSION,
         address: address.to_string(),
         gateway_id: gateway_id.to_string(),
         credential: credential.clone(),
+        host_name: host_name.map(|name| name.chars().take(QR_HOST_NAME_CHARS).collect()),
     })
     .expect("QR payload always serializes")
 }
@@ -403,7 +413,7 @@ mod tests {
     #[test]
     fn qr_payload_carries_version_address_identity_and_credential() {
         let address = AdvertisedAddress::new("192.168.1.20", 17879).unwrap();
-        let payload = qr_payload(&address, "gateway-1", &Secret::new("cred"));
+        let payload = qr_payload(&address, "gateway-1", &Secret::new("cred"), None);
         assert_eq!(
             payload,
             r#"{"protocol_version":1,"address":"192.168.1.20:17879","gateway_id":"gateway-1","credential":"cred"}"#

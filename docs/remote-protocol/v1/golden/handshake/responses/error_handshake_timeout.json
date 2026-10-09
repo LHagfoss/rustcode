@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "handshake_timeout",
+  "message": "why the connection is being closed"
+}

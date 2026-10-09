@@ -189,7 +189,10 @@ impl AppRuntime {
             agent_ui_event_receiver,
             task_subscriptions: HashMap::new(),
             demo_state: None,
-            remote: remote::RemoteBridge::new(),
+            // Tests never reach for the user's gateway.
+            remote: remote::RemoteBridge::with_connector(Box::new(
+                rustcode::remote::owner::NoGatewayConnector,
+            )),
         }
     }
 

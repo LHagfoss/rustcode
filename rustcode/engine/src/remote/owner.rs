@@ -90,6 +90,22 @@ pub enum OwnerMessage {
     Unregister { reason: SessionCloseReason },
 }
 
+/// What the gateway reports about a registration, for `/remote status`.
+/// Device names are labels a device chose; no credential is ever part of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GatewayLinkStatus {
+    /// False while the link is trying to reach a gateway again.
+    pub connected: bool,
+    /// `host:port` a device dials.
+    pub advertised_address: String,
+    /// The gateway listens on loopback only: no other machine can reach it.
+    pub loopback_only: bool,
+    /// Devices attached to this session.
+    pub attached_devices: Vec<String>,
+    /// Devices connected to the gateway, attached to this session or not.
+    pub connected_devices: Vec<String>,
+}
+
 /// Gateway → owner.
 #[derive(Debug)]
 pub enum OwnerCommand {
@@ -104,6 +120,10 @@ pub enum OwnerCommand {
     /// The gateway needs current state (a device attached and replay is not
     /// possible). Answered by an [`OwnerMessage::Snapshot`] on the link.
     SnapshotRequested,
+    /// The gateway's view of the registration changed: it was accepted, a
+    /// device attached or left, or the gateway became unreachable. Sent
+    /// without waiting; only the latest one matters.
+    Status(GatewayLinkStatus),
     /// The gateway ended the registration, for example because another live
     /// owner already shares this session. The owner stops sharing.
     Closed { reason: String },
@@ -209,6 +229,14 @@ impl std::error::Error for OwnerLinkError {}
 /// reports a later failure with [`OwnerCommand::Closed`].
 pub trait OwnerConnector: Send {
     fn connect(&mut self, registration: &SessionRegistration) -> Result<OwnerLink, OwnerLinkError>;
+
+    /// The configuration directory of the gateway this connector reaches,
+    /// which is where pairing details for `/remote` are asked for. `None`
+    /// when there is no such gateway (in-memory links, unsupported
+    /// platforms): `/remote` then shows no pairing details.
+    fn gateway_directory(&self) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 /// The connector of a build without a gateway: sharing cannot start.
@@ -224,9 +252,16 @@ impl OwnerConnector for NoGatewayConnector {
     }
 }
 
-/// The connector a session owner uses at runtime. The gateway's local IPC
-/// client replaces [`NoGatewayConnector`] here; nothing else has to change.
+/// The connector a session owner uses at runtime: the gateway's local IPC
+/// client, which discovers the running gateway or starts one. Platforms
+/// without the gateway, and a process without a configuration directory, get
+/// [`NoGatewayConnector`].
 pub fn default_connector() -> Box<dyn OwnerConnector> {
+    #[cfg(unix)]
+    if let Some(connector) = crate::remote_gateway::owner_client::GatewayConnector::for_this_host()
+    {
+        return Box::new(connector);
+    }
     Box::new(NoGatewayConnector)
 }
 
@@ -342,9 +377,9 @@ mod tests {
 
     #[test]
     fn a_build_without_a_gateway_cannot_open_a_link() {
-        let error = default_connector()
+        let error = NoGatewayConnector
             .connect(&registration())
-            .expect_err("no gateway exists yet");
+            .expect_err("there is no gateway to connect to");
         assert_eq!(error, OwnerLinkError::NoGateway);
         assert_eq!(error.to_string(), "no remote gateway is available");
     }

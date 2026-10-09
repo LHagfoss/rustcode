@@ -1,0 +1,191 @@
+{
+  "$defs": {
+    "ErrorCode": {
+      "oneOf": [
+        {
+          "enum": [
+            "frame_too_large",
+            "unsupported_version",
+            "shutting_down",
+            "internal"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "invalid_frame",
+          "description": "The frame is not JSON, not text, or not a known handshake request.",
+          "type": "string"
+        },
+        {
+          "const": "handshake_timeout",
+          "description": "No frame arrived within the handshake deadline.",
+          "type": "string"
+        },
+        {
+          "const": "pairing_failed",
+          "description": "Wrong, expired, exhausted or already used pairing secret. The cases\nare deliberately indistinguishable.",
+          "type": "string"
+        },
+        {
+          "const": "rate_limited",
+          "description": "Too many failed pairing attempts on this host; see `retry_after_secs`.",
+          "type": "string"
+        },
+        {
+          "const": "unauthorized",
+          "description": "Unknown device, revoked device or wrong token; indistinguishable.",
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "description": "The gateway is at its connection or device limit.",
+          "type": "string"
+        },
+        {
+          "const": "revoked",
+          "description": "The device was revoked while connected. Do not reconnect.",
+          "type": "string"
+        },
+        {
+          "const": "slow_consumer",
+          "description": "The device did not read fast enough and its queue overflowed.",
+          "type": "string"
+        },
+        {
+          "const": "idle_timeout",
+          "description": "Nothing was received from the device for too long.",
+          "type": "string"
+        },
+        {
+          "const": "not_implemented",
+          "description": "Sent only by a gateway without session routing; kept for\ncompatibility.",
+          "type": "string"
+        }
+      ]
+    },
+    "Secret": {
+      "description": "A pairing credential, manual code or device token. Serializes as a plain\nstring; `Debug` never prints the value, so it cannot reach logs or error\nstrings through a derived impl.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Frames the gateway sends during the handshake, and the error frame that\nprecedes a close. After authentication an `error` frame is never the\nanswer to a request: those are `response` frames carrying the request ID.",
+  "oneOf": [
+    {
+      "description": "Pairing succeeded. `token` is shown exactly once; the connection is\nauthenticated as this device from here on.",
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "device_name": {
+          "type": "string"
+        },
+        "gateway_id": {
+          "type": "string"
+        },
+        "host_name": {
+          "description": "The host's own name, for display. A label, not an identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token": {
+          "$ref": "#/$defs/Secret"
+        },
+        "type": {
+          "const": "paired",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "gateway_id",
+        "instance_id",
+        "device_id",
+        "device_name",
+        "token"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The device token was accepted.",
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "device_name": {
+          "type": "string"
+        },
+        "gateway_id": {
+          "type": "string"
+        },
+        "host_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "const": "authenticated",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "gateway_id",
+        "instance_id",
+        "device_id",
+        "device_name"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retry_after_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "code",
+        "message"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "HandshakeResponse"
+}

@@ -15,7 +15,9 @@ use super::devices::{DeviceError, DeviceRecord, DeviceStore, Devices};
 use super::handshake::{
     ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse, PairingMethod,
 };
+use super::hub::{HubIdentity, SessionHub};
 use super::lifecycle::{GatewayRegistration, RemoteLifecycle};
+use super::owner_ipc;
 use super::pairing::{PairingError, PairingState};
 use super::router::{ConnectionControl, DeviceContext, FrameQueue, FrameRouter, FrameSink};
 use super::transport;
@@ -76,7 +78,32 @@ pub struct GatewayConfig {
     pub plan: ListenPlan,
     pub port: u16,
     pub router: Arc<dyn FrameRouter>,
+    /// The session registry behind `router`, when it is one: session owners
+    /// that connect to the owner socket register with it. `None` leaves the
+    /// owner socket closed.
+    pub sessions: Option<Arc<SessionHub>>,
     pub limits: Limits,
+}
+
+/// This machine's name as its user knows it, for a device to show next to
+/// the address. Printable characters only, and short.
+pub(super) fn host_name() -> Option<String> {
+    let mut buffer = [0u8; 256];
+    // SAFETY: the buffer is valid for its length; the last byte stays zero.
+    let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len() - 1) };
+    if status != 0 {
+        return None;
+    }
+    let length = buffer.iter().position(|byte| *byte == 0)?;
+    let name = String::from_utf8_lossy(&buffer[..length]);
+    let name: String = name
+        .trim()
+        .trim_end_matches(".local")
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(64)
+        .collect();
+    (!name.is_empty()).then_some(name)
 }
 
 struct State {
@@ -104,6 +131,8 @@ pub(super) struct Shared {
     pub(super) advertised: AdvertisedAddress,
     pub(super) limits: Limits,
     pub(super) router: Arc<dyn FrameRouter>,
+    sessions: Option<Arc<SessionHub>>,
+    host_name: Option<String>,
     pub(super) shutdown: CancellationToken,
     store: DeviceStore,
     state: Mutex<State>,
@@ -249,6 +278,7 @@ impl Shared {
             device_id: record.id.clone(),
             device_name: record.name.clone(),
             token,
+            host_name: self.host_name.clone(),
         };
         Ok(self.register(&mut state, &record, welcome))
     }
@@ -274,6 +304,7 @@ impl Shared {
             instance_id: self.instance_id.clone(),
             device_id: record.id.clone(),
             device_name: record.name.clone(),
+            host_name: self.host_name.clone(),
         };
         Ok(self.register(&mut state, &record, welcome))
     }
@@ -351,7 +382,12 @@ impl Shared {
 
     fn issue_pairing(&self) -> OfferDetails {
         let offer = self.state().pairing.issue(Instant::now());
-        OfferDetails::new(&self.advertised, &self.gateway_id, offer)
+        OfferDetails::new(
+            &self.advertised,
+            &self.gateway_id,
+            self.host_name.as_deref(),
+            offer,
+        )
     }
 }
 
@@ -372,6 +408,7 @@ impl Drop for Ownership {
         // Socket first: stop() waits for the registration to disappear and
         // must not return while the socket is still on disk.
         let _ = remove_if_exists(&self.lifecycle.socket_path());
+        let _ = remove_if_exists(&self.lifecycle.owner_socket_path());
         if GatewayRegistration::read(&self.lifecycle.registration_path())
             .ok()
             .as_ref()
@@ -385,6 +422,7 @@ impl Drop for Ownership {
 pub struct Gateway {
     listener: TcpListener,
     control: UnixListener,
+    owners: UnixListener,
     shared: Arc<Shared>,
     registration: GatewayRegistration,
     started: Instant,
@@ -405,6 +443,7 @@ impl Gateway {
         let advertised = config.plan.advertise.with_port(local.port());
         let registration = GatewayRegistration::current(
             lifecycle.socket_path(),
+            lifecycle.owner_socket_path(),
             gateway_id.clone(),
             local.to_string(),
             advertised.to_string(),
@@ -421,6 +460,24 @@ impl Gateway {
             _lock: lock,
         };
         fs::set_permissions(lifecycle.socket_path(), fs::Permissions::from_mode(0o600))?;
+        let owners = UnixListener::bind(lifecycle.owner_socket_path()).with_context(|| {
+            format!(
+                "failed to bind owner socket {}",
+                lifecycle.owner_socket_path().display()
+            )
+        })?;
+        fs::set_permissions(
+            lifecycle.owner_socket_path(),
+            fs::Permissions::from_mode(0o600),
+        )?;
+        if let Some(sessions) = &config.sessions {
+            sessions.bind_identity(HubIdentity {
+                gateway_id: gateway_id.clone(),
+                instance_id: registration.instance_id.clone(),
+                advertised_address: advertised.to_string(),
+                loopback_only: config.plan.bind.is_loopback(),
+            });
+        }
         registration.publish(&lifecycle.registration_path())?;
         let shared = Arc::new(Shared {
             gateway_id,
@@ -428,6 +485,8 @@ impl Gateway {
             advertised,
             limits: config.limits,
             router: config.router,
+            sessions: config.sessions,
+            host_name: host_name(),
             shutdown: CancellationToken::new(),
             store,
             state: Mutex::new(State {
@@ -441,6 +500,7 @@ impl Gateway {
         Ok(Self {
             listener,
             control,
+            owners,
             shared,
             registration,
             started: Instant::now(),
@@ -475,6 +535,7 @@ impl Gateway {
         let Gateway {
             listener,
             control,
+            owners,
             shared,
             registration,
             started,
@@ -508,6 +569,17 @@ impl Gateway {
                             registration.clone(),
                             started,
                             stream,
+                        ));
+                    }
+                }
+                accepted = owners.accept() => {
+                    // Without a session registry there is nobody to register
+                    // with: the connection is dropped.
+                    if let (Ok((stream, _)), Some(sessions)) = (accepted, &shared.sessions) {
+                        tasks.spawn(owner_ipc::serve_owner(
+                            Arc::clone(sessions),
+                            stream,
+                            shared.shutdown.clone(),
                         ));
                     }
                 }
@@ -601,6 +673,8 @@ fn status(shared: &Shared, registration: &GatewayRegistration, started: Instant)
         paired_devices: state.devices.list().len(),
         connections: connections.into_iter().map(|(_, c)| c).collect(),
         pairing_open: state.pairing.is_open(Instant::now()),
+        loopback_only: shared.advertised.host().is_loopback(),
+        sessions: shared.sessions.as_ref().map(|sessions| sessions.summary()),
     }
 }
 
