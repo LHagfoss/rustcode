@@ -107,7 +107,10 @@ pub(crate) fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_toke
     dropped
 }
 
-fn is_user_turn_boundary(message: &serde_json::Value) -> bool {
+/// Whether a projected `user` message is one the user wrote. Tool results in
+/// the text protocol, the runtime context tail and harness notices are all
+/// projected with the `user` role too.
+pub(crate) fn is_user_turn_boundary(message: &serde_json::Value) -> bool {
     message.get("role").and_then(|role| role.as_str()) == Some("user")
         && !message
             .get("content")

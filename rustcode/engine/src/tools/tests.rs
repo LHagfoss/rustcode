@@ -4364,3 +4364,115 @@ fn mcp_schema_lookup_accepts_the_canonical_name_of_a_bare_advertised_tool() {
     assert_eq!(find("send_message"), None);
     assert_eq!(find("mcp__other__list_emails"), None);
 }
+
+/// A menu of `count` tools that no test prompt is relevant to, plus a small
+/// mail server whose tools the word "mails" points at.
+fn pinned_menu_with_mail_tools(count: usize) -> (Vec<(String, String, Value)>, Vec<String>) {
+    let schema = serde_json::json!({"type": "object", "properties": {}});
+    let mut tools = (0..count)
+        .map(|index| {
+            (
+                format!("zeta_{index:02}"),
+                "Zeta".to_string(),
+                schema.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let pinned = tools.iter().map(|(name, _, _)| name.clone()).collect();
+    for name in ["list_emails", "read_email"] {
+        tools.push((
+            name.to_string(),
+            "Mailbox access".to_string(),
+            schema.clone(),
+        ));
+    }
+    (tools, pinned)
+}
+
+#[test]
+fn a_new_user_message_seats_its_tools_ahead_of_a_full_pinned_menu() {
+    let (tools, pinned) = pinned_menu_with_mail_tools(MAX_MCP_NATIVE_SCHEMAS);
+    let mut messages = vec![
+        serde_json::json!({"role": "user", "content": "tidy the parser"}),
+        serde_json::json!({"role": "assistant", "content": "Done."}),
+    ];
+
+    // A turn that asks for nothing new leaves the menu, and the cached
+    // `tools` block, exactly as it was.
+    messages.push(serde_json::json!({"role": "user", "content": "now tidy the lexer"}));
+    let (_, same) = select_mcp_tools_for_context_with_sticky(&tools, &messages, &pinned);
+    assert_eq!(same.selected_names, pinned);
+
+    // A full menu still admits what the newest message asks for.
+    messages.push(serde_json::json!({"role": "assistant", "content": "Done."}));
+    messages.push(serde_json::json!({"role": "user", "content": "check my latest mails"}));
+    let (_, turn) = select_mcp_tools_for_context_with_sticky(&tools, &messages, &pinned);
+    assert_eq!(turn.selected, MAX_MCP_NATIVE_SCHEMAS);
+    assert!(turn.selected_names.contains(&"list_emails".to_string()));
+    assert!(turn.selected_names.contains(&"read_email".to_string()));
+    assert_eq!(turn.relevant, 2);
+
+    // Later rounds of that turn, pinned to its menu, select the same names.
+    messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": "Reading the inbox with zeta and the parser in mind.",
+        "tool_calls": [{"function": {"name": "list_emails"}}]
+    }));
+    messages.push(serde_json::json!({"role": "tool", "content": "3 messages"}));
+    let (_, round) =
+        select_mcp_tools_for_context_with_sticky(&tools, &messages, &turn.selected_names);
+    assert_eq!(round.selected_names, turn.selected_names);
+    assert_eq!(round.relevant, 0);
+}
+
+#[test]
+fn a_harness_notice_does_not_unbind_a_discovery_result() {
+    let (tools, pinned) = pinned_menu_with_mail_tools(MAX_MCP_NATIVE_SCHEMAS);
+    let owners = tools
+        .iter()
+        .map(|(name, _, _)| {
+            if name.starts_with("zeta") {
+                "zeta"
+            } else {
+                "mail"
+            }
+            .to_string()
+        })
+        .collect::<Vec<_>>();
+    let mut messages = vec![
+        serde_json::json!({"role": "user", "content": "what is in my inbox"}),
+        serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {
+                "name": "list_mcp_tools",
+                "arguments": "{\"server\":\"mail\"}"
+            }}]
+        }),
+        serde_json::json!({"role": "tool", "content": "list_emails, read_email"}),
+    ];
+    let select = |messages: &[Value]| {
+        super::schema::select_mcp_tools_for_context_with_sticky_and_reservations_in_phase(
+            &tools,
+            &owners,
+            &[],
+            messages,
+            &pinned,
+            ToolSchemaPhase::Established,
+        )
+        .1
+    };
+    let bound = select(&messages);
+    assert!(bound.selected_names.contains(&"list_emails".to_string()));
+
+    // A rejected call is answered with a notice projected as a `user`
+    // message. It used to pass for the user's turn, which left the discovery
+    // call behind it and dropped the tools the model had just been shown.
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": "<rustcode_runtime_notice provenance=\"lifecycle\">\n[Tool call rejected before execution]\n</rustcode_runtime_notice>"
+    }));
+    messages.push(serde_json::json!({"role": "user", "content": "<rustcode_context>\n# Runtime"}));
+    let after = select(&messages);
+    assert_eq!(after.selected_names, bound.selected_names);
+}

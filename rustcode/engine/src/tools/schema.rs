@@ -1098,16 +1098,14 @@ fn mcp_tools_selected_by_discovery_calls(
     messages: &[Value],
 ) -> Vec<String> {
     let mut selected = Vec::new();
-    // Every request ends with a synthetic `user` message carrying runtime
-    // context. Taking that for the user's turn left nothing after it to
-    // search, so no discovery result was ever bound.
-    let Some(latest_user) = messages.iter().rposition(|message| {
-        message.get("role").and_then(Value::as_str) == Some("user")
-            && !message
-                .get("content")
-                .and_then(Value::as_str)
-                .is_some_and(|content| content.starts_with("<rustcode_context>"))
-    }) else {
+    // Runtime context and harness notices are projected as `user` messages.
+    // Taking the context tail for the user's turn left nothing after it to
+    // search, and taking a notice (a rejected call, a loop warning) for it
+    // unbound the discovery result on the very next request.
+    let Some(latest_user) = messages
+        .iter()
+        .rposition(crate::network::messages::is_user_turn_boundary)
+    else {
         return selected;
     };
 
@@ -1439,18 +1437,26 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
     sticky_names: &[String],
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
-    // Once a menu is pinned for the turn, only what the user wrote may add to
-    // it. Assistant prose and tool calls grow every round, and each tool they
-    // pulled in rewrote the `tools` block the provider had cached.
+    // Once a menu is pinned, only what the user wrote may add to it. Assistant
+    // prose, tool calls and harness notices grow every round, and each tool
+    // they pulled in rewrote the `tools` block the provider had cached.
+    let authored = messages
+        .iter()
+        .filter(|message| crate::network::messages::is_user_turn_boundary(message))
+        .cloned()
+        .collect::<Vec<_>>();
     let terms = if sticky_names.is_empty() {
         context_terms(messages)
     } else {
-        let user_messages = messages
-            .iter()
-            .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-            .cloned()
-            .collect::<Vec<_>>();
-        context_terms(&user_messages)
+        context_terms(&authored)
+    };
+    // The pinned menu outlives the turn, so a full one would never admit a
+    // tool by relevance again. What the newest user message points at is
+    // therefore seated ahead of the pin. It is the same on every round of a
+    // turn, so it changes the menu at most once per user message.
+    let fresh_terms = match authored.last() {
+        Some(latest) if !sticky_names.is_empty() => context_terms(std::slice::from_ref(latest)),
+        _ => std::collections::HashSet::new(),
     };
     let (named, server_wide) =
         explicitly_requested_mcp_tool_names(tools, owners, raw_names, messages);
@@ -1461,9 +1467,16 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
     let mut server_requested = Vec::new();
     let mut previous = Vec::new();
     let mut relevant = Vec::new();
+    let mut fresh = Vec::new();
     for (index, (name, description, schema)) in tools.iter().enumerate() {
         if named.contains(name) {
             continue;
+        }
+        if !fresh_terms.is_empty() {
+            let score = mcp_tool_relevance(name, description, schema, &fresh_terms);
+            if score >= MCP_RELEVANCE_THRESHOLD {
+                fresh.push((index, score));
+            }
         }
         if server_wide.contains(name) {
             server_requested.push((
@@ -1496,11 +1509,13 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
     });
     requested.extend(server_requested.into_iter().map(|(index, _, _)| index));
     previous.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
-    relevant.sort_by(|(left_index, left_score), (right_index, right_score)| {
-        right_score
-            .cmp(left_score)
-            .then_with(|| tools[*left_index].0.cmp(&tools[*right_index].0))
-    });
+    for ranked in [&mut relevant, &mut fresh] {
+        ranked.sort_by(|(left_index, left_score), (right_index, right_score)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| tools[*left_index].0.cmp(&tools[*right_index].0))
+        });
+    }
 
     // Reserve complete configured server toolsets first. A reservation is
     // all-or-none: if adding the complete set would exceed either hard limit,
@@ -1572,6 +1587,21 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
             .copied()
             .filter(|index| !rejected_indices.contains(index))
             .map(|index| (index, Admitted::Requested)),
+    );
+    candidates.extend(
+        fresh
+            .iter()
+            .map(|(index, _)| *index)
+            .filter(|index| !rejected_indices.contains(index))
+            .map(|index| {
+                // A pinned tool the message also points at was retained, not
+                // newly admitted; only its seat moved.
+                if sticky_names.contains(&tools[index].0) {
+                    (index, Admitted::Retained)
+                } else {
+                    (index, Admitted::Relevant)
+                }
+            }),
     );
     candidates.extend(
         sticky_names
