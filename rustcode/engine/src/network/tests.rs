@@ -3123,11 +3123,10 @@ fn oversized_utf8_compiler_diagnostics_are_bounded_and_recoverable() {
     assert!(result.content.len() <= 50 * 1024);
     assert!(result.content.lines().count() <= 1000);
     assert!(result.content.contains("error[E0425]: missing_tail_symbol"));
-    assert_eq!(
-        result.metadata.error_kind,
-        Some(crate::tools::ToolErrorKind::CompilerFailed)
-    );
-    assert!(result.metadata.retryable);
+    // Diagnostics are reported next to a successful edit, not as its status.
+    assert!(result.metadata.success);
+    assert_eq!(result.metadata.error_kind, None);
+    assert!(!result.metadata.retryable);
     let artifact = result
         .metadata
         .full_output_artifact

@@ -329,12 +329,29 @@ fn append_standalone_compiler_result(
     result: &mut crate::tools::ToolExecutionOutput,
     compiler_output: &str,
 ) {
+    // Diagnostics sit next to the result; the write itself succeeded, so it
+    // keeps no failure `error_kind` (#1887).
     result.content.push_str("\n\nCompiler errors/warnings:\n");
     result.content.push_str(compiler_output);
-    if !compiler_output.starts_with("__BUILD_UNVERIFIED__") {
-        result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
-        result.retryable = true;
+}
+
+/// True when the batch ends with a file that `write_file_chunk` was told is
+/// not finished (`more: true`). Such a file is incomplete by construction, so
+/// the compiler check waits for the chunk that completes it (#1887).
+fn leaves_chunked_file_incomplete(tool_calls: &[crate::tools::ToolCall]) -> bool {
+    let mut incomplete = std::collections::HashSet::new();
+    for call in tool_calls {
+        if call.name != "write_file_chunk" {
+            continue;
+        }
+        let path = call.arguments.get("path").and_then(|path| path.as_str());
+        if call.arguments.get("more").and_then(|more| more.as_bool()) == Some(true) {
+            incomplete.insert(path);
+        } else {
+            incomplete.remove(&path);
+        }
     }
+    !incomplete.is_empty()
 }
 
 pub(crate) async fn confirm_and_execute_for_call(
@@ -1039,10 +1056,14 @@ pub(crate) async fn execute_tool_batch_with_assessments(
         user_wait_duration,
         deferred_notice,
         assessment_cache,
+        !leaves_chunked_file_incomplete(tool_calls),
     )
     .await
 }
 
+/// `check_compiler` is false for every call of a batch but its last mutation,
+/// so several writes in one response are checked once, after the last (#1887).
+#[allow(clippy::too_many_arguments)]
 async fn execute_tool_batch_validated(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -1055,6 +1076,7 @@ async fn execute_tool_batch_validated(
     user_wait_duration: &mut std::time::Duration,
     deferred_notice: Option<String>,
     assessment_cache: &crate::tools::ShellAssessmentCache,
+    check_compiler: bool,
 ) -> Vec<ToolResult> {
     if cancel_token.is_cancelled() {
         return tool_calls.iter().map(cancelled_tool_result).collect();
@@ -1081,6 +1103,9 @@ async fn execute_tool_batch_validated(
     // Contiguous independent inspections overlap. A mutation, control call,
     // shell call or duplicate signature closes the group and stays ordered.
     if tool_calls.len() > 1 {
+        let last_mutation = tool_calls
+            .iter()
+            .rposition(|call| is_mutating_tool(&call.name));
         let mut results = Vec::with_capacity(tool_calls.len());
         let mut offset = 0;
         while offset < tool_calls.len() {
@@ -1123,6 +1148,7 @@ async fn execute_tool_batch_validated(
                                 &mut wait,
                                 notice,
                                 assessment_cache,
+                                false,
                             ))
                             .await;
                             (result, wait)
@@ -1148,6 +1174,7 @@ async fn execute_tool_batch_validated(
                         user_wait_duration,
                         deferred_notice.clone(),
                         assessment_cache,
+                        check_compiler && last_mutation == Some(offset),
                     ))
                     .await,
                 );
@@ -1566,14 +1593,17 @@ async fn execute_tool_batch_validated(
                 .unwrap_or_default(),
         };
         let sandbox_mode = { state.lock().await.effective_sandbox_mode() };
-        if let Some(compiler_errors) = cached_compiler_check(
-            &root,
-            compile_dirty,
-            compile_cache,
-            cancel_token,
-            sandbox_mode,
-        )
-        .await
+        // A skipped check leaves `compile_dirty` set, so the next one (a
+        // later batch or the finish gate) is never answered from the cache.
+        if check_compiler
+            && let Some(compiler_errors) = cached_compiler_check(
+                &root,
+                compile_dirty,
+                compile_cache,
+                cancel_token,
+                sandbox_mode,
+            )
+            .await
         {
             dbg_log!("Inline compiler check returned diagnostics after edit");
             if let Some(result) = results
