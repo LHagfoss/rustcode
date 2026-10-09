@@ -236,6 +236,54 @@ async fn run_daemon_or_cron_command(
     }
     Ok(false)
 }
+/// Run `rustcode mcp …`. Edits go to the user config; the workspace's merged
+/// view is consulted only to say when a project file hides the change.
+fn run_mcp_command(
+    command: &crate::cli::McpCommands,
+    workspace: &std::path::Path,
+) -> Result<(), String> {
+    let active = |name: &str| {
+        let (_, _, config) = rustcode::config::load_config_for_workspace(workspace);
+        config.mcp_servers.iter().any(|server| server.name == name)
+    };
+    match command {
+        crate::cli::McpCommands::Add(args) => {
+            let server = crate::cli::mcp_server_from_args(args)?;
+            let summary = crate::cli::mcp_server_summary(&server);
+            let replaced = rustcode::config::add_mcp_server(server, args.force)?;
+            println!(
+                "{} MCP server: {summary}",
+                if replaced { "Replaced" } else { "Added" }
+            );
+            if !active(&args.name) {
+                println!(
+                    "Note: a project .rustcode/config.toml sets its own mcp_servers, so '{}' is not active in this workspace.",
+                    args.name
+                );
+            }
+        }
+        crate::cli::McpCommands::List => {
+            let (_, _, config) = rustcode::config::load_config_for_workspace(workspace);
+            if config.mcp_servers.is_empty() {
+                println!("No MCP servers configured. Add one with `rustcode mcp add`.");
+            }
+            for server in &config.mcp_servers {
+                println!("{}", crate::cli::mcp_server_summary(server));
+            }
+        }
+        crate::cli::McpCommands::Remove { name } => {
+            rustcode::config::remove_mcp_server(name)?;
+            println!("Removed MCP server: {name}");
+            if active(name) {
+                println!(
+                    "Note: a project .rustcode/config.toml still defines '{name}' for this workspace."
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = crate::cli::Cli::parse();
     if run_daemon_or_cron_command(&cli_args).await? {
@@ -360,6 +408,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             completed: *completed,
         };
         println!("{}", rustcode::benchmark::format_report(stats));
+        return Ok(());
+    }
+
+    if let Some(crate::cli::Commands::Mcp { command }) = cli_args.command.as_ref() {
+        if let Err(error) = run_mcp_command(command, &std::env::current_dir()?) {
+            eprintln!("rustcode mcp: {error}");
+            std::process::exit(1);
+        }
         return Ok(());
     }
 

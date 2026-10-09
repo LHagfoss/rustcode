@@ -2363,6 +2363,9 @@ fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
     result
 }
 
+mod mcp_servers;
+pub use mcp_servers::{add_mcp_server, parse_mcp_env, parse_mcp_header, remove_mcp_server};
+
 mod session;
 pub use session::session_title;
 pub use session::*;

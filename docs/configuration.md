@@ -62,6 +62,27 @@ Zen model and valid billing/API credentials for this provider profile.
 Configured MCP servers are started by Rustcode before ACP prompts are handled;
 ACP's optional MCP-over-ACP transport is not required.
 
+Add, list, and remove servers from the command line. `rustcode mcp add` takes
+a name followed by a URL for a remote (Streamable HTTP) server, or by a command
+to spawn over stdio:
+
+```sh
+rustcode mcp add --transport http api https://mcp.example.com/mcp \
+  --header "Authorization: Bearer <token>"
+rustcode mcp add --env API_KEY=<key> files -- npx -y @example/files-mcp
+rustcode mcp list
+rustcode mcp remove api
+```
+
+`--transport` is inferred from an `http(s)://` target when omitted. Repeat
+`--header` (remote) or `--env` (stdio) as needed, and put a stdio command after
+`--` when its arguments start with a dash. `--force` replaces a server with the
+same name. Servers are written to `[[mcp_servers]]` in the user `config.toml`
+and start with the next session. Header and environment values are stored
+there in plain text (the file is created with mode `0600`), and `mcp list`
+prints only their names. `config.toml` is one of the files `rustcode sync`
+pushes, so keep the sync remote private when it holds tokens.
+
 Native API requests expose at most 16 MCP tool schemas at a time. Set
 `always_include = true` on an MCP server's `[[mcp_servers]]` entry to reserve
 slots for its complete toolset, independent of the current prompt:

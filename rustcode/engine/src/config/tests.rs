@@ -2010,3 +2010,105 @@ fn anthropic_messages_profile_selects_its_native_endpoint_and_output_field() {
         super::OutputTokenField::MaxTokens
     );
 }
+
+fn remote_mcp_server(name: &str, token: &str) -> McpServerConfig {
+    McpServerConfig {
+        name: name.to_owned(),
+        command: String::new(),
+        args: Vec::new(),
+        env: std::collections::HashMap::new(),
+        url: Some("https://mcp.example.test/mcp".to_owned()),
+        headers: [("Authorization".to_owned(), format!("Bearer {token}"))].into(),
+        client_id: None,
+        enabled: true,
+        always_include: false,
+    }
+}
+
+#[test]
+fn mcp_add_persists_a_remote_server_with_its_headers() {
+    let dir = TempDir::new().unwrap();
+    let server = remote_mcp_server("paral-x", "one");
+
+    assert!(!mcp_servers::add_mcp_server_in(dir.path(), server.clone(), false).unwrap());
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.mcp_servers.contains(&server));
+}
+
+#[test]
+fn mcp_add_keeps_an_existing_server_unless_forced() {
+    let dir = TempDir::new().unwrap();
+    mcp_servers::add_mcp_server_in(dir.path(), remote_mcp_server("paral-x", "one"), false).unwrap();
+
+    let error =
+        mcp_servers::add_mcp_server_in(dir.path(), remote_mcp_server("paral-x", "two"), false)
+            .unwrap_err();
+    assert!(error.contains("--force"), "{error}");
+    assert!(!error.contains("two"), "error must not echo the header");
+
+    let replacement = remote_mcp_server("paral-x", "two");
+    assert!(mcp_servers::add_mcp_server_in(dir.path(), replacement.clone(), true).unwrap());
+    let (_, _, config) = load_config_from(dir.path());
+    let stored: Vec<_> = config
+        .mcp_servers
+        .iter()
+        .filter(|entry| entry.name == "paral-x")
+        .collect();
+    assert_eq!(stored, [&replacement]);
+}
+
+#[test]
+fn mcp_add_rejects_names_and_entries_the_runtime_cannot_use() {
+    let dir = TempDir::new().unwrap();
+    for name in ["", "two words", "a/b"] {
+        assert!(
+            mcp_servers::add_mcp_server_in(dir.path(), remote_mcp_server(name, "one"), false)
+                .is_err(),
+            "{name:?}"
+        );
+    }
+    let mut neither = remote_mcp_server("empty", "one");
+    neither.url = None;
+    assert!(mcp_servers::add_mcp_server_in(dir.path(), neither, false).is_err());
+}
+
+#[test]
+fn mcp_remove_deletes_only_the_named_server() {
+    let dir = TempDir::new().unwrap();
+    mcp_servers::add_mcp_server_in(dir.path(), remote_mcp_server("keep", "one"), false).unwrap();
+    mcp_servers::add_mcp_server_in(dir.path(), remote_mcp_server("drop", "two"), false).unwrap();
+
+    let removed = mcp_servers::remove_mcp_server_in(dir.path(), "drop").unwrap();
+    assert_eq!(removed.name, "drop");
+    assert!(mcp_servers::remove_mcp_server_in(dir.path(), "drop").is_err());
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.mcp_servers.iter().any(|entry| entry.name == "keep"));
+    assert!(!config.mcp_servers.iter().any(|entry| entry.name == "drop"));
+}
+
+#[test]
+fn mcp_header_and_env_arguments_are_split_and_validated() {
+    assert_eq!(
+        parse_mcp_header("Authorization: Bearer a:b").unwrap(),
+        ("Authorization".to_owned(), "Bearer a:b".to_owned())
+    );
+    for raw in [
+        "no-separator",
+        "bad name: value",
+        "X-Empty:",
+        "X-Key: line\nbreak",
+    ] {
+        assert!(parse_mcp_header(raw).is_err(), "{raw:?}");
+    }
+    let error = parse_mcp_header("X-Key: secret\nvalue").unwrap_err();
+    assert!(!error.contains("secret"), "{error}");
+
+    assert_eq!(
+        parse_mcp_env("TOKEN=a=b").unwrap(),
+        ("TOKEN".to_owned(), "a=b".to_owned())
+    );
+    assert!(parse_mcp_env("TOKEN").is_err());
+    assert!(parse_mcp_env("=value").is_err());
+}
