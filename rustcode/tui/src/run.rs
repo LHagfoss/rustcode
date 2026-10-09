@@ -236,6 +236,57 @@ async fn run_daemon_or_cron_command(
     }
     Ok(false)
 }
+#[cfg(unix)]
+async fn run_remote_command(
+    command: &crate::cli::RemoteCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::cli::RemoteCommands;
+    use rustcode::remote_gateway::{command as remote, lifecycle::RemoteLifecycle};
+
+    let config_dir = rustcode::config::get_config_dir().ok_or("config directory unavailable")?;
+    let lifecycle = RemoteLifecycle::new(&config_dir);
+    match command {
+        RemoteCommands::Serve {
+            bind,
+            port,
+            advertise,
+        } => remote::serve(&config_dir, bind, *port, advertise.as_deref()).await?,
+        RemoteCommands::Pair => println!("{}", remote::format_offer(&lifecycle.pair().await?)),
+        RemoteCommands::Devices { json } => {
+            let devices = lifecycle.devices()?;
+            if *json {
+                println!("{}", remote::devices_json(&devices));
+            } else {
+                println!("{}", remote::format_devices(&devices));
+            }
+        }
+        RemoteCommands::Revoke { device } => {
+            println!(
+                "{}",
+                remote::format_revocation(&lifecycle.revoke(device).await?)
+            );
+        }
+        RemoteCommands::Status => {
+            println!(
+                "{}",
+                remote::format_status(lifecycle.status().await?.as_ref())
+            );
+        }
+        RemoteCommands::Stop => match lifecycle.stop().await? {
+            Some(status) => println!("Remote gateway stopped (pid {}).", status.pid),
+            None => println!("Remote gateway is not running."),
+        },
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn run_remote_command(
+    _command: &crate::cli::RemoteCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Err("the remote gateway is supported on macOS and Linux".into())
+}
+
 /// Run `rustcode mcp …`. Edits go to the user config; the workspace's merged
 /// view is consulted only to say when a project file hides the change.
 fn run_mcp_command(
@@ -287,6 +338,10 @@ fn run_mcp_command(
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = crate::cli::Cli::parse();
     if run_daemon_or_cron_command(&cli_args).await? {
+        return Ok(());
+    }
+    if let Some(crate::cli::Commands::Remote { command }) = cli_args.command.as_ref() {
+        run_remote_command(command).await?;
         return Ok(());
     }
     if let Some(crate::cli::Commands::Serve {

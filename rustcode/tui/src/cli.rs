@@ -154,6 +154,12 @@ pub enum Commands {
         allow_remote: bool,
     },
 
+    /// Run the remote gateway and manage paired devices (foundation; shares no sessions yet)
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommands,
+    },
+
     /// Manage scheduled jobs through the running daemon
     Cron {
         #[command(subcommand)]
@@ -269,6 +275,38 @@ pub enum DaemonCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum RemoteCommands {
+    /// Run the gateway in the foreground
+    Serve {
+        /// Address to bind (loopback by default; a LAN or NetBird address is not encrypted)
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        /// TCP port of the WebSocket listener
+        #[arg(long, default_value_t = rustcode::remote_gateway::DEFAULT_PORT)]
+        port: u16,
+        /// Address devices should dial, when it differs from --bind (required for 0.0.0.0 with several interfaces)
+        #[arg(long)]
+        advertise: Option<String>,
+    },
+    /// Create a pairing challenge on the running gateway and show it
+    Pair,
+    /// List paired devices
+    Devices {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Revoke a paired device and close its connections
+    Revoke {
+        /// Device identifier, identifier prefix, or unique name
+        device: String,
+    },
+    /// Show gateway status
+    Status,
+    /// Stop the running gateway
+    Stop,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -738,6 +776,56 @@ mod tests {
             resolve_sync_action(Some(SyncCommands::Pull), true, false),
             Err("sync flags cannot be combined with a sync subcommand")
         );
+    }
+
+    #[test]
+    fn parses_remote_gateway_commands() {
+        let cli = Cli::try_parse_from(["rustcode", "remote", "serve"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Remote {
+                command: RemoteCommands::Serve {
+                    ref bind,
+                    port: 17879,
+                    advertise: None,
+                }
+            }) if bind == "127.0.0.1"
+        ));
+        let cli = Cli::try_parse_from([
+            "rustcode",
+            "remote",
+            "serve",
+            "--bind",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "--advertise",
+            "100.64.0.7",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Remote {
+                command: RemoteCommands::Serve {
+                    port: 9000,
+                    advertise: Some(ref advertise),
+                    ..
+                }
+            }) if advertise == "100.64.0.7"
+        ));
+        for action in ["pair", "devices", "status", "stop"] {
+            let cli = Cli::try_parse_from(["rustcode", "remote", action]).unwrap();
+            assert!(matches!(cli.command, Some(Commands::Remote { .. })));
+        }
+        let cli = Cli::try_parse_from(["rustcode", "remote", "revoke", "phone"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Remote {
+                command: RemoteCommands::Revoke { ref device }
+            }) if device == "phone"
+        ));
+        assert!(Cli::try_parse_from(["rustcode", "remote", "revoke"]).is_err());
+        assert!(Cli::try_parse_from(["rustcode", "remote"]).is_err());
     }
 
     #[test]

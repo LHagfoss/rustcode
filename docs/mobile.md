@@ -6,6 +6,10 @@ That plan covers `/remote`, a multi-session gateway, pairing, WebSocket and a
 native iOS app in its own repository. It is a proposal; the transport below describes
 the currently implemented behavior.
 
+The first piece of that plan exists as a gateway foundation, described in
+[remote.md](remote.md): `rustcode remote serve`, device pairing and
+revocation. It shares no sessions yet and does not change `rustcode serve`.
+
 Decision: the phone never links Rust and never embeds the agent loop. Mobile
 is a remote control for a PC or Mac that already runs RustCode. There is no
 on-device core, no shared renderer strategy, and no Expo app in the release

@@ -55,7 +55,7 @@ serde_json = "1.0.150"
 similar = { version = "3.1.1", features = ["inline"] }
 streaming-iterator = "0.1.9"
 sysinfo = "0.39.6"
-tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = "0.1.16"
 tokio-util = { version = "0.7.18", features = ["io"] }
 tiktoken-rs = "0.5.9"
@@ -86,6 +86,7 @@ rustcode-command = { path = "rustcode/core/rustcode-command" }
 rustcode-lifecycle = { path = "rustcode/core/rustcode-lifecycle" }
 rustcode-loop-detect = { path = "rustcode/core/rustcode-loop-detect" }
 rustcode-tasks = { path = "rustcode/core/rustcode-tasks" }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 # Optimize dependencies even in debug builds — syntect, pulldown-cmark,
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
 # dominate scroll latency in long sessions. Our own code stays at opt-level=0
