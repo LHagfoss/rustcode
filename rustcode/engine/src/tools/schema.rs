@@ -468,6 +468,34 @@ fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, String, Valu
     out
 }
 
+/// Schema for an MCP tool named either the way requests advertise it or by
+/// its canonical `mcp__server__tool` form. `list_mcp_tools` hands out the
+/// canonical form and dispatch accepts it, including for a tool whose bare
+/// name is unique and is therefore advertised without the prefix.
+pub(super) fn mcp_tool_schema(name: &str) -> Option<Value> {
+    let mut clients = crate::mcp::get_mcp_registry()
+        .lock()
+        .map(|registry| registry.values().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    clients.sort_by(|a, b| a.name.cmp(&b.name));
+    find_mcp_tool_schema(collect_mcp_tools_with_servers(), name, |server, raw| {
+        mcp_canonical_name_for_clients(server, raw, &clients)
+    })
+}
+
+pub(super) fn find_mcp_tool_schema(
+    tools: Vec<(String, String, String, String, Value)>,
+    name: &str,
+    canonical: impl Fn(&str, &str) -> String,
+) -> Option<Value> {
+    tools
+        .into_iter()
+        .find(|(advertised, server, raw, _, _)| {
+            advertised == name || canonical(server, raw) == name
+        })
+        .map(|(_, _, _, _, schema)| schema)
+}
+
 pub(crate) fn mcp_tool_read_only_hint(name: &str) -> bool {
     let registry_handle = crate::mcp::get_mcp_registry();
     let Ok(registry) = registry_handle.lock() else {
