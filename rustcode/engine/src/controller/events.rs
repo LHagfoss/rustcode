@@ -1,6 +1,8 @@
 use super::{ApprovalBatchPrompt, ApprovalPrompt, ControllerSnapshot, PendingPrompt};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalChoice {
     Approve,
@@ -15,6 +17,12 @@ pub enum ControllerError {
     Model(String),
     Provider(String),
     ChannelClosed,
+    /// An identity-bound cancel named a turn that is no longer running.
+    StaleTurn,
+    /// An identity-bound answer named a question that is no longer pending.
+    StaleQuestion,
+    /// An identity-bound answer does not fit the question it names.
+    InvalidAnswer(String),
 }
 
 impl ControllerError {
@@ -29,6 +37,15 @@ impl ControllerError {
             Self::Model(detail) => ("model", detail.clone()),
             Self::Provider(detail) => ("provider", detail.clone()),
             Self::ChannelClosed => ("channel_closed", "session worker gone".to_owned()),
+            Self::StaleTurn => (
+                "stale_turn",
+                "the named turn is no longer running".to_owned(),
+            ),
+            Self::StaleQuestion => (
+                "stale_question",
+                "the named question is no longer pending".to_owned(),
+            ),
+            Self::InvalidAnswer(detail) => ("invalid_answer", detail.clone()),
         }
     }
 }

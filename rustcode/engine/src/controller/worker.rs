@@ -279,6 +279,17 @@ async fn controller_worker(
                     send_error(&updates, generation, ControllerError::NoActiveSession);
                 }
             }
+            Command::CancelTurn { turn_id } => {
+                let Some(session) = active.as_mut() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                if cancel_turn_for_turn(&session.state, &session.cancel_token, &turn_id).await {
+                    cancel_active_turn(session, &updates).await;
+                } else {
+                    send_error(&updates, session.generation, ControllerError::StaleTurn);
+                }
+            }
             Command::SaveConfig => {
                 if let Some(session) = active.as_ref() {
                     let state = session.state.lock().await;
@@ -414,6 +425,24 @@ async fn controller_worker(
                 match answer_question(&session.state, &mut session.cancel_token, answer).await {
                     Ok(()) => send_snapshot(&updates, session.generation, &session.state).await,
                     Err(error) => send_error(&updates, session.generation, error),
+                }
+            }
+            Command::AnswerQuestionFor { question_id, reply } => {
+                let Some(session) = active.as_ref() else {
+                    send_error(&updates, generation, ControllerError::NoActiveSession);
+                    continue;
+                };
+                match apply_question_answer_for_question(&session.state, &question_id, reply).await
+                {
+                    Ok(()) => send_snapshot(&updates, session.generation, &session.state).await,
+                    Err(QuestionRejection::Stale) => {
+                        send_error(&updates, session.generation, ControllerError::StaleQuestion);
+                    }
+                    Err(QuestionRejection::Invalid(detail)) => send_error(
+                        &updates,
+                        session.generation,
+                        ControllerError::InvalidAnswer(detail),
+                    ),
                 }
             }
             Command::Approval(_choice) => {

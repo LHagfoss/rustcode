@@ -204,6 +204,75 @@ async fn legacy_approval_command_is_rejected_without_a_batch_identity() {
     ));
 }
 
+#[tokio::test]
+async fn identity_bound_commands_reject_stale_turn_and_question_ids() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _ = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    let _ = updates.recv().await.expect("session snapshot");
+
+    for (command, expected) in [
+        (
+            Command::CancelTurn {
+                turn_id: "turn:0:0".to_owned(),
+            },
+            "stale_turn",
+        ),
+        (
+            Command::AnswerQuestionFor {
+                question_id: "question:0:0".to_owned(),
+                reply: super::QuestionReply::Options(vec!["Proceed".to_owned()]),
+            },
+            "stale_question",
+        ),
+    ] {
+        handle
+            .send(command)
+            .expect("command is accepted by channel");
+        let event = tokio::time::timeout(Duration::from_secs(1), updates.recv())
+            .await
+            .expect("a stale identity should be rejected promptly")
+            .expect("controller remains active");
+        let ControllerUpdate::Error(error) = event.update else {
+            panic!("expected a rejection, got {:?}", event.update);
+        };
+        assert_eq!(error.wire().0, expected);
+    }
+    handle.send(Command::Shutdown).expect("shutdown");
+}
+
+#[test]
+fn turn_identity_ends_with_its_own_turn_only() {
+    let mut state = AppState::new();
+    let lease = state
+        .claim_orchestrator()
+        .expect("idle state grants a lease");
+    assert_eq!(state.active_turn_id, None);
+    let first = state.begin_turn_identity();
+    let second = state.begin_turn_identity();
+    assert_ne!(first, second);
+
+    // An older turn that is still unwinding cannot retire its replacement.
+    state.end_turn_identity(&first);
+    assert_eq!(state.active_turn_id.as_deref(), Some(second.as_str()));
+    state.end_turn_identity(&second);
+    assert_eq!(state.active_turn_id, None);
+
+    // Releasing or invalidating the orchestrator ends whatever turn it ran.
+    state.begin_turn_identity();
+    assert!(state.release_orchestrator(&lease));
+    assert_eq!(state.active_turn_id, None);
+    state.begin_turn_identity();
+    state.invalidate_orchestrator();
+    assert_eq!(state.active_turn_id, None);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace() {
     use tokio::io::AsyncWriteExt;

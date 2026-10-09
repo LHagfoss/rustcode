@@ -1,0 +1,1474 @@
+{
+  "$defs": {
+    "ApprovalChoice": {
+      "enum": [
+        "approve",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "BoundedText": {
+      "description": "Text that may have been cut to fit a frame. `text` is the byte range\n`offset..offset + text.len()` of the full content, cut on character\nboundaries.",
+      "properties": {
+        "content_id": {
+          "description": "Pass to `get_content` for the rest. Absent when the content cannot\nbe fetched later.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "total_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "truncated",
+        "offset",
+        "total_bytes"
+      ],
+      "type": "object"
+    },
+    "OwnerHealth": {
+      "description": "Liveness of the terminal that owns the session, as the gateway sees it.",
+      "oneOf": [
+        {
+          "enum": [
+            "live"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unresponsive",
+          "description": "Heartbeats are late; commands may not be answered.",
+          "type": "string"
+        }
+      ]
+    },
+    "PromptDisposition": {
+      "oneOf": [
+        {
+          "enum": [
+            "queued",
+            "steered"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "started",
+          "description": "The session was idle; the prompt starts a turn.",
+          "type": "string"
+        }
+      ]
+    },
+    "ReceiptState": {
+      "description": "What the session owner did with a mutation. `applied` and `rejected` come\nfrom the owner; `received` is only ever reported by `get_request_status`.",
+      "oneOf": [
+        {
+          "enum": [
+            "applied",
+            "rejected"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "received",
+          "description": "Accepted by the gateway, not yet decided by the owner.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "The owner is gone or holds no record. The client must not resend\non its own.",
+          "type": "string"
+        }
+      ]
+    },
+    "RemoteApprovalAction": {
+      "properties": {
+        "details": {
+          "$ref": "#/$defs/BoundedText",
+          "description": "The literal arguments under review. When truncated, the rest must be\nfetched before the batch is resolved; a preview is not the action."
+        },
+        "risk": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_name",
+        "summary",
+        "risk",
+        "details"
+      ],
+      "type": "object"
+    },
+    "RemoteApprovalBatch": {
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/RemoteApprovalAction"
+          },
+          "type": "array"
+        },
+        "batch_id": {
+          "description": "Name this in `resolve_approval`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "batch_id",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "RemoteAttention": {
+      "description": "What is waiting on the user.",
+      "properties": {
+        "approval": {
+          "type": "boolean"
+        },
+        "question": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approval",
+        "question"
+      ],
+      "type": "object"
+    },
+    "RemoteBackgroundTask": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "elapsed_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "command",
+        "elapsed_ms"
+      ],
+      "type": "object"
+    },
+    "RemoteContentChunk": {
+      "properties": {
+        "content_id": {
+          "type": "string"
+        },
+        "next_offset": {
+          "description": "Offset of the next chunk; absent at the end of the content.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "total_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "content_id",
+        "offset",
+        "text",
+        "total_bytes"
+      ],
+      "type": "object"
+    },
+    "RemoteError": {
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/RemoteErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "supported_versions": {
+          "description": "Set with `incompatible_version`.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "RemoteErrorCode": {
+      "oneOf": [
+        {
+          "enum": [
+            "incompatible_version",
+            "unauthorized",
+            "stale_turn",
+            "stale_question",
+            "stale_approval",
+            "frame_too_large",
+            "rate_limited",
+            "internal"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "invalid_request",
+          "description": "The frame is not a well-formed request for its operation.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported_operation",
+          "description": "Unknown operation, a slash command, or steering a turn that does\nnot accept it.",
+          "type": "string"
+        },
+        {
+          "const": "not_found",
+          "description": "No such shared session, content or request.",
+          "type": "string"
+        },
+        {
+          "const": "stale_session",
+          "description": "`session_id` or `registration_epoch` no longer names the live\nregistration.",
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "description": "`submit_prompt` while a turn is running.",
+          "type": "string"
+        },
+        {
+          "const": "not_running",
+          "description": "`steer` or `queue` while no turn is running.",
+          "type": "string"
+        },
+        {
+          "const": "invalid_answer",
+          "description": "The question is pending but the answer does not fit it.",
+          "type": "string"
+        },
+        {
+          "const": "stale_cursor",
+          "description": "A history cursor from a transcript that has since been rewritten.",
+          "type": "string"
+        },
+        {
+          "const": "request_conflict",
+          "description": "`request_id` was already used with a different payload.",
+          "type": "string"
+        },
+        {
+          "const": "owner_unavailable",
+          "description": "The owner did not answer. Sent with receipt `unknown`: the mutation\nmay or may not have been applied.",
+          "type": "string"
+        },
+        {
+          "const": "receipt_capacity",
+          "description": "The owner cannot record another receipt; nothing was applied.",
+          "type": "string"
+        }
+      ]
+    },
+    "RemoteEvent": {
+      "oneOf": [
+        {
+          "description": "`turn_id` is absent only when the turn had already ended by the time\nthe event was projected.",
+          "properties": {
+            "prompt": {
+              "$ref": "#/$defs/BoundedText"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "turn_started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "text_delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "tool": {
+              "$ref": "#/$defs/RemoteTool"
+            },
+            "type": {
+              "const": "tool_started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": {
+              "$ref": "#/$defs/BoundedText"
+            },
+            "id": {
+              "type": "string"
+            },
+            "pending": {
+              "description": "The tool handed off to a background task and has no result yet.",
+              "type": "boolean"
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "tool_finished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "success",
+            "pending",
+            "content"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "subagent": {
+              "$ref": "#/$defs/RemoteSubagent"
+            },
+            "type": {
+              "const": "subagent_updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "subagent"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "approval": {
+              "$ref": "#/$defs/RemoteApprovalBatch"
+            },
+            "type": {
+              "const": "approval_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "approval"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The batch left the pending state, whoever resolved it.",
+          "properties": {
+            "batch_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "approval_resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "batch_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "question": {
+              "$ref": "#/$defs/RemoteQuestion"
+            },
+            "type": {
+              "const": "question_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "question"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "question_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "question_resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "question_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "turn_finished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "turn_cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Replaces all client state for the session.",
+          "properties": {
+            "snapshot": {
+              "$ref": "#/$defs/RemoteSnapshot"
+            },
+            "type": {
+              "const": "snapshot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "snapshot"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Events were lost for this subscriber. A `snapshot` event or a fresh\n`attach_session` restores state; nothing in between can be trusted.",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/ResyncReason"
+            },
+            "type": {
+              "const": "resync_required",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The registration ended. The session ID is private again until it is\nshared anew.",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/SessionCloseReason"
+            },
+            "type": {
+              "const": "session_closed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RemoteEventFrame": {
+      "description": "One applied update of one registration.",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/RemoteEvent"
+        },
+        "generation": {
+          "description": "Controller generation the event belongs to; not an ordering key.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "registration_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sequence": {
+          "description": "Increases by exactly one per event within a registration. A gap means\nthe client must attach again.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "session_id",
+        "registration_epoch",
+        "sequence",
+        "generation",
+        "event"
+      ],
+      "type": "object"
+    },
+    "RemoteHistoryPage": {
+      "properties": {
+        "history_revision": {
+          "type": "string"
+        },
+        "messages": {
+          "description": "Oldest first.",
+          "items": {
+            "$ref": "#/$defs/RemoteMessage"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "description": "Fetches the page before this one; absent at the start of history.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "history_revision",
+        "messages"
+      ],
+      "type": "object"
+    },
+    "RemoteMessage": {
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/BoundedText"
+        },
+        "message_id": {
+          "description": "Stable within `history_revision`.",
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteMessageTool"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message_id",
+        "role",
+        "content"
+      ],
+      "type": "object"
+    },
+    "RemoteMessageTool": {
+      "description": "Set on a tool-result message.",
+      "properties": {
+        "detail": {
+          "description": "Short human label, e.g. the file or command.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "pending": {
+          "type": "boolean"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "success",
+        "pending"
+      ],
+      "type": "object"
+    },
+    "RemoteOmitted": {
+      "properties": {
+        "background_tasks": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pending_prompts": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subagents": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tools": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tools",
+        "subagents",
+        "pending_prompts",
+        "background_tasks"
+      ],
+      "type": "object"
+    },
+    "RemotePendingPrompt": {
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RemotePendingPromptKind"
+        },
+        "text": {
+          "$ref": "#/$defs/BoundedText"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "RemotePendingPromptKind": {
+      "enum": [
+        "steer",
+        "queue"
+      ],
+      "type": "string"
+    },
+    "RemoteQuestion": {
+      "properties": {
+        "chain_length": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "header": {
+          "type": "string"
+        },
+        "multiple": {
+          "description": "Whether more than one option may be selected.",
+          "type": "boolean"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/RemoteQuestionOption"
+          },
+          "type": "array"
+        },
+        "position": {
+          "description": "1-based position within a chain of questions from one tool call.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "question_id": {
+          "description": "Name this in `answer_question`.",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "question_id",
+        "header",
+        "text",
+        "options",
+        "multiple",
+        "position",
+        "chain_length"
+      ],
+      "type": "object"
+    },
+    "RemoteQuestionOption": {
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "type": "object"
+    },
+    "RemoteResponse": {
+      "properties": {
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReceiptState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present for mutations only: `applied` or `rejected` once the owner\nhas decided, `unknown` when it could not be reached."
+        },
+        "request_id": {
+          "description": "Echoes the request. Empty when the request was too malformed to\ncarry one.",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/RemoteResult"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "result"
+      ],
+      "type": "object"
+    },
+    "RemoteResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RemoteError",
+          "properties": {
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "gateway_id": {
+              "type": "string"
+            },
+            "sessions": {
+              "items": {
+                "$ref": "#/$defs/RemoteSessionInfo"
+              },
+              "type": "array"
+            },
+            "subscribed": {
+              "description": "True when `sessions` frames will follow.",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "gateway_id",
+            "sessions",
+            "subscribed"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Authoritative state. Events with `sequence` above\n`snapshot.sequence` follow.",
+          "properties": {
+            "gateway_id": {
+              "type": "string"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/RemoteSnapshot"
+            },
+            "type": {
+              "const": "attached",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "gateway_id",
+            "snapshot"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The requested replay is available: the events after\n`last_sequence` follow, with no snapshot.",
+          "properties": {
+            "gateway_id": {
+              "type": "string"
+            },
+            "next_sequence": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "resumed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "gateway_id",
+            "next_sequence"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "detached",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RemoteHistoryPage",
+          "properties": {
+            "type": {
+              "const": "history",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RemoteContentChunk",
+          "properties": {
+            "type": {
+              "const": "content",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "disposition": {
+              "$ref": "#/$defs/PromptDisposition"
+            },
+            "type": {
+              "const": "prompt_accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "disposition"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "turn_cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "question_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "question_answered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "question_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "batch_id": {
+              "type": "string"
+            },
+            "choice": {
+              "$ref": "#/$defs/ApprovalChoice"
+            },
+            "type": {
+              "const": "approval_resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "batch_id",
+            "choice"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/ReceiptState"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RemoteResult"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The original outcome, when the owner still holds it."
+            },
+            "target_request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "request_status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target_request_id",
+            "receipt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RemoteSessionInfo": {
+      "properties": {
+        "activity": {
+          "$ref": "#/$defs/SessionActivity"
+        },
+        "attention": {
+          "$ref": "#/$defs/RemoteAttention"
+        },
+        "health": {
+          "$ref": "#/$defs/OwnerHealth"
+        },
+        "model": {
+          "type": "string"
+        },
+        "registration_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "registration_epoch",
+        "title",
+        "model",
+        "activity",
+        "attention",
+        "health"
+      ],
+      "type": "object"
+    },
+    "RemoteSessionsFrame": {
+      "description": "Pushed after `subscribe_sessions` whenever the live list changes.",
+      "properties": {
+        "gateway_id": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/RemoteSessionInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "gateway_id",
+        "sessions"
+      ],
+      "type": "object"
+    },
+    "RemoteSnapshot": {
+      "description": "Bounded view of one session. `sequence` is the exact watermark: the\nsnapshot already contains every event up to and including it.",
+      "properties": {
+        "background_tasks": {
+          "items": {
+            "$ref": "#/$defs/RemoteBackgroundTask"
+          },
+          "type": "array"
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history_cursor": {
+          "description": "Fetches the page before `transcript`; absent when nothing is older.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "history_revision": {
+          "description": "Identifies the transcript the message IDs and cursors refer to.",
+          "type": "string"
+        },
+        "omitted": {
+          "$ref": "#/$defs/RemoteOmitted",
+          "description": "Counts of entries left out of the lists above to fit the frame."
+        },
+        "pending_approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteApprovalBatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending_prompts": {
+          "items": {
+            "$ref": "#/$defs/RemotePendingPrompt"
+          },
+          "type": "array"
+        },
+        "pending_question": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteQuestion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/RemoteSessionInfo"
+        },
+        "subagents": {
+          "items": {
+            "$ref": "#/$defs/RemoteSubagent"
+          },
+          "type": "array"
+        },
+        "transcript": {
+          "description": "Transcript tail, oldest first.",
+          "items": {
+            "$ref": "#/$defs/RemoteMessage"
+          },
+          "type": "array"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteTurn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present while a prompt is being run. Absent in the short gap between\na prompt being accepted and its turn starting, even though\n`session.activity` is already `running`."
+        }
+      },
+      "required": [
+        "session",
+        "sequence",
+        "generation",
+        "transcript",
+        "history_revision",
+        "pending_prompts",
+        "subagents",
+        "background_tasks",
+        "omitted"
+      ],
+      "type": "object"
+    },
+    "RemoteSubagent": {
+      "properties": {
+        "active_turn": {
+          "type": "boolean"
+        },
+        "depth": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "parent_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/RemoteSubagentStatus"
+        },
+        "task": {
+          "$ref": "#/$defs/BoundedText"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "task",
+        "status",
+        "active_turn",
+        "depth",
+        "message_count"
+      ],
+      "type": "object"
+    },
+    "RemoteSubagentStatus": {
+      "enum": [
+        "queued",
+        "running",
+        "interrupted",
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "RemoteTool": {
+      "properties": {
+        "detail": {
+          "description": "Short human label, e.g. the file or command.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RemoteToolState"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "state"
+      ],
+      "type": "object"
+    },
+    "RemoteToolState": {
+      "oneOf": [
+        {
+          "enum": [
+            "running",
+            "succeeded",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "preparing",
+          "description": "Still streaming from the model; not executing yet.",
+          "type": "string"
+        }
+      ]
+    },
+    "RemoteTurn": {
+      "properties": {
+        "can_steer": {
+          "type": "boolean"
+        },
+        "live_response": {
+          "$ref": "#/$defs/BoundedText",
+          "description": "Tail of the response text streamed so far."
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/RemoteTool"
+          },
+          "type": "array"
+        },
+        "turn_id": {
+          "description": "Name this in `cancel_turn`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "live_response",
+        "tools",
+        "can_steer"
+      ],
+      "type": "object"
+    },
+    "ResyncReason": {
+      "oneOf": [
+        {
+          "enum": [
+            "gateway_restarted"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "lagged",
+          "description": "The subscriber fell behind the replay ring.",
+          "type": "string"
+        },
+        {
+          "const": "sequence_gap",
+          "description": "The requested range is no longer contiguous.",
+          "type": "string"
+        },
+        {
+          "const": "history_changed",
+          "description": "The transcript was rewritten; history cursors are invalid.",
+          "type": "string"
+        }
+      ]
+    },
+    "SessionActivity": {
+      "enum": [
+        "idle",
+        "running",
+        "awaiting_approval",
+        "awaiting_question"
+      ],
+      "type": "string"
+    },
+    "SessionCloseReason": {
+      "oneOf": [
+        {
+          "enum": [
+            "sharing_disabled",
+            "owner_exited",
+            "device_revoked"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "session_changed",
+          "description": "The terminal moved to another session.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Host → client.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RemoteResponse",
+      "properties": {
+        "kind": {
+          "const": "response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    {
+      "$ref": "#/$defs/RemoteEventFrame",
+      "properties": {
+        "kind": {
+          "const": "event",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    {
+      "$ref": "#/$defs/RemoteSessionsFrame",
+      "properties": {
+        "kind": {
+          "const": "sessions",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "RemoteFrame"
+}

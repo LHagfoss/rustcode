@@ -490,6 +490,12 @@ impl History {
         self.last_rewrite_revision <= revision
     }
 
+    /// Revision of the last change that was not an append. Message positions
+    /// are stable for as long as this stays the same.
+    pub fn rewrite_revision(&self) -> u64 {
+        self.last_rewrite_revision
+    }
+
     pub fn snapshot(&self) -> Self {
         self.clone()
     }

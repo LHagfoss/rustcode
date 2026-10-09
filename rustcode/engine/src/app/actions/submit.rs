@@ -42,6 +42,36 @@ pub(crate) fn submit_plain_prompt(state: &mut AppState, text: String) -> SubmitO
     SubmitOutcome::Queued
 }
 
+/// Accept a prompt that did not come from the composer (a remote client).
+/// Same routing as [`submit_plain_prompt`] for the chosen `mode`, but the
+/// terminal's unsent draft, cursor and saved submit mode are left untouched.
+/// A steer the active turn cannot take is refused, never silently queued.
+pub(crate) fn submit_detached_prompt(
+    state: &mut AppState,
+    text: &str,
+    mode: DraftSubmitMode,
+) -> SubmitOutcome {
+    let text = text.trim().to_owned();
+    if text.is_empty() {
+        return SubmitOutcome::Empty;
+    }
+    match mode {
+        DraftSubmitMode::Steer => {
+            if !state.queue_steer(text) {
+                return SubmitOutcome::Empty;
+            }
+            state.request_redraw();
+            SubmitOutcome::Steered
+        }
+        DraftSubmitMode::Queue => {
+            begin_task_delegation(state);
+            state.pending_queue.push(text);
+            state.request_redraw();
+            SubmitOutcome::Queued
+        }
+    }
+}
+
 /// Decide whether the task may use subagents, consuming the one-shot
 /// `/delegate` arming. Delegation is available by default for the session, but
 /// the user config setting is a hard gate and `/delegate off` remains in force

@@ -27,6 +27,29 @@ pub(crate) fn next_approval_batch_id() -> String {
     )
 }
 
+static NEXT_TURN_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_QUESTION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Creates a unique identity for one prompt the queue orchestrator runs, so a
+/// cancel can name the turn it observed.
+pub(crate) fn next_turn_id() -> String {
+    format!(
+        "turn:{}:{}",
+        std::process::id(),
+        NEXT_TURN_ID.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Creates a unique identity for one pending `ask_question` prompt, so an
+/// answer can name the question it was written for.
+pub(crate) fn next_question_id() -> String {
+    format!(
+        "question:{}:{}",
+        std::process::id(),
+        NEXT_QUESTION_ID.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -35,8 +58,9 @@ pub use crate::provider_auth::{
     provider_usage_summary,
 };
 pub use apply::{
-    apply_approval_decision, apply_approval_decision_for_batch, apply_background_task_event,
-    apply_question_answer, refresh_workspace_location_async, spawn_observed_orchestrator,
+    QuestionRejection, QuestionReply, apply_approval_decision, apply_approval_decision_for_batch,
+    apply_background_task_event, apply_question_answer, apply_question_answer_for_question,
+    cancel_turn_for_turn, refresh_workspace_location_async, spawn_observed_orchestrator,
 };
 pub use attachments::save_image_attachment;
 pub use config::{
@@ -60,6 +84,7 @@ pub use input::{
 pub use render_state::{RenderState, SubAgentView, render_state};
 /// Name of the shell `run_command` uses on this host, for labelling its calls.
 pub use rustcode_command::shell_label;
+pub(crate) use snapshot::transcript_tool_details;
 pub use snapshot::{
     ApprovalAction, ApprovalBatchPrompt, ApprovalDecision, ApprovalPrompt, Command,
     ControllerHandle, ControllerSnapshot, DraftSubmitMode, McpEditState, ModelChoice,

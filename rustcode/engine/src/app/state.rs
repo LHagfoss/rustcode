@@ -129,6 +129,10 @@ pub struct AppState {
     pub orchestrator_running: bool,
     pub(crate) orchestrator_generation: u64,
     pub(crate) orchestrator_owner: Option<OrchestratorLease>,
+    /// Identity of the prompt the orchestrator is running now. Set when the
+    /// prompt is dequeued and cleared when that turn ends, so a cancel that
+    /// names an earlier turn cannot stop this one.
+    pub active_turn_id: Option<String>,
     /// Time at which the app most recently entered an eligible idle state.
     /// Unlike user activity, this cannot be stale from before a turn ran.
     pub(crate) idle_since: std::time::Instant,
@@ -476,6 +480,7 @@ impl AppState {
         }
         self.orchestrator_owner = None;
         self.orchestrator_running = false;
+        self.active_turn_id = None;
         true
     }
 
@@ -486,6 +491,22 @@ impl AppState {
         self.orchestrator_generation = self.orchestrator_generation.wrapping_add(1);
         self.orchestrator_owner = None;
         self.orchestrator_running = false;
+        self.active_turn_id = None;
+    }
+
+    /// Give the prompt being dequeued its own turn identity.
+    pub(crate) fn begin_turn_identity(&mut self) -> String {
+        let turn_id = crate::controller::next_turn_id();
+        self.active_turn_id = Some(turn_id.clone());
+        turn_id
+    }
+
+    /// Retire `turn_id` once its turn has ended. A stale orchestrator that is
+    /// still unwinding cannot clear the identity of the turn that replaced it.
+    pub(crate) fn end_turn_identity(&mut self, turn_id: &str) {
+        if self.active_turn_id.as_deref() == Some(turn_id) {
+            self.active_turn_id = None;
+        }
     }
 
     /// Take time spent waiting on the user (an open question or approval)
@@ -508,6 +529,18 @@ impl AppState {
         self.current_turn_started_at = None;
         self.stream_tracker = None;
         self.turn_progress_at = None;
+    }
+
+    /// Whether a turn is running or waiting on the user. The one definition
+    /// behind every frontend's "busy" state.
+    pub fn has_active_turn(&self) -> bool {
+        matches!(
+            self.status,
+            AppStatus::Streaming
+                | AppStatus::Queued
+                | AppStatus::AwaitingToolConfirmation
+                | AppStatus::AwaitingQuestion
+        ) || self.orchestrator_running
     }
 
     /// Record that the turn machinery just did something the stream clock
@@ -1255,6 +1288,7 @@ impl AppState {
             orchestrator_running: false,
             orchestrator_generation: 0,
             orchestrator_owner: None,
+            active_turn_id: None,
             idle_since: std::time::Instant::now(),
             last_turn_had_model_final_response: false,
             summary_in_flight: false,

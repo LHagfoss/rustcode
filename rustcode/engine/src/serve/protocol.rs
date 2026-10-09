@@ -81,6 +81,143 @@ mod tests {
         assert_eq!(json["choice"], "deny");
     }
 
+    /// The request frames documented in `docs/mobile.md`, byte for byte.
+    /// The remote protocol (`crate::remote`) is a separate wire; adding it
+    /// must leave every one of these decoding and encoding exactly as before.
+    #[test]
+    fn legacy_request_fixtures_are_unchanged_on_the_wire() {
+        let fixtures = [
+            (
+                r#"{"type":"auth","token":"t0k3n"}"#,
+                ServeRequest::Auth {
+                    token: "t0k3n".into(),
+                },
+            ),
+            (r#"{"type":"list_sessions"}"#, ServeRequest::ListSessions),
+            (
+                r#"{"type":"submit","prompt":"hello"}"#,
+                ServeRequest::Submit {
+                    prompt: "hello".into(),
+                },
+            ),
+            (
+                r#"{"type":"answer_question","answer":"Proceed"}"#,
+                ServeRequest::AnswerQuestion {
+                    answer: "Proceed".into(),
+                },
+            ),
+            (
+                r#"{"type":"approve","batch_id":"controller:1:2","choice":"approve"}"#,
+                ServeRequest::Approve {
+                    batch_id: "controller:1:2".into(),
+                    choice: ApprovalChoice::Approve,
+                },
+            ),
+            (r#"{"type":"cancel"}"#, ServeRequest::Cancel),
+        ];
+        for (frame, request) in fixtures {
+            assert_eq!(
+                serde_json::from_str::<ServeRequest>(frame).unwrap(),
+                request
+            );
+            assert_eq!(serde_json::to_string(&request).unwrap(), frame);
+        }
+        assert_eq!(SERVE_PROTOCOL_VERSION, 1);
+    }
+
+    /// The response frames a legacy client decodes, byte for byte. Question
+    /// and turn identities exist in session state now but must not appear in
+    /// these shapes.
+    #[test]
+    fn legacy_response_fixtures_are_unchanged_on_the_wire() {
+        use crate::controller::{ControllerUpdate, QuestionPrompt, TurnUpdate};
+
+        let ready = ServeResponse::Ready {
+            version: SERVE_PROTOCOL_VERSION,
+        };
+        assert_eq!(
+            serde_json::to_string(&ready).unwrap(),
+            r#"{"type":"ready","version":1}"#
+        );
+        let question = ServeResponse::from_event(ControllerEvent {
+            generation: 3,
+            update: ControllerUpdate::Turn(TurnUpdate::QuestionRequested(QuestionPrompt {
+                header: "Question".into(),
+                text: "Continue?".into(),
+                options: vec!["Proceed".into()],
+                descriptions: vec![],
+                multiple: false,
+            })),
+        });
+        assert_eq!(
+            serde_json::to_value(&question).unwrap(),
+            serde_json::json!({
+                "type": "event",
+                "generation": 3,
+                "update": {
+                    "type": "question_requested",
+                    "question": {
+                        "header": "Question",
+                        "text": "Continue?",
+                        "options": ["Proceed"],
+                        "descriptions": [],
+                        "multiple": false,
+                    },
+                },
+            })
+        );
+
+        let mut state = crate::app::AppState::new();
+        state.begin_turn_identity();
+        state.begin_question_chain(vec![crate::app::PendingQuestion::new(
+            "Continue?".into(),
+            vec!["Proceed".into()],
+            false,
+        )]);
+        let snapshot =
+            serde_json::to_value(crate::controller::ControllerSnapshot::from_state(1, &state))
+                .unwrap();
+        let mut keys = snapshot
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "auto_approve",
+                "background_tasks",
+                "can_steer",
+                "generation",
+                "live_response",
+                "models",
+                "pending_approval",
+                "pending_approval_batch",
+                "pending_prompts",
+                "pending_question",
+                "queued_count",
+                "selected_model",
+                "session_id",
+                "sessions",
+                "transcript",
+                "turn_active",
+                "workspace",
+            ]
+        );
+        assert_eq!(
+            snapshot["pending_question"],
+            serde_json::json!({
+                "header": "Question",
+                "text": "Continue?",
+                "options": ["Proceed"],
+                "descriptions": [],
+                "multiple": false,
+            })
+        );
+    }
+
     #[test]
     fn controller_events_ride_the_wire_unchanged() {
         let json = serde_json::to_value(ServeResponse::Error {
