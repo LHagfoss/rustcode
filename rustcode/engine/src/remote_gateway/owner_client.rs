@@ -712,7 +712,22 @@ impl Client {
                         }
                         Some(OwnerMessage::Unregister { reason }) => {
                             self.flush_answers(&mut connection).await;
-                            self.write(&mut connection, &OwnerFrame::Unregister { reason }).await;
+                            if self.write(&mut connection, &OwnerFrame::Unregister { reason }).await {
+                                // Keep the read half alive until the gateway processes
+                                // Unregister and closes. It may still be writing a
+                                // queued status: an early socket close makes that
+                                // write fail before it reads our explicit reason.
+                                let _ = tokio::time::timeout(timing.write_timeout, async {
+                                    while let Ok(frame) = read_async_frame_with_buffer::<_, GatewayFrame>(
+                                        &mut connection.reader,
+                                        &mut connection.buffer,
+                                    ).await {
+                                        if matches!(frame, GatewayFrame::Closed { .. }) {
+                                            break;
+                                        }
+                                    }
+                                }).await;
+                            }
                             return Ended::Owner;
                         }
                         Some(OwnerMessage::Register { .. }) => continue,
@@ -796,6 +811,77 @@ async fn wait(
 mod tests {
     use super::*;
     use crate::remote::REMOTE_PROTOCOL_VERSION;
+
+    #[tokio::test]
+    async fn unregister_keeps_the_socket_open_until_the_gateway_reads_the_reason() {
+        let directory = tempfile::tempdir().unwrap();
+        let (owner, gateway) = owner_link_pair(8, 8);
+        let mut client = Client {
+            connector: GatewayConnector::discover(RemoteLifecycle::new(directory.path())),
+            registration: SessionRegistration {
+                session_id: "s".into(),
+                registration_epoch: 1,
+            },
+            link: gateway,
+            receipts: Receipts::new(8),
+            in_flight: FuturesUnordered::new(),
+            generation: 0,
+            status: GatewayLinkStatus::default(),
+            status_due: false,
+            snapshot_due: false,
+        };
+        let (socket, peer) = UnixStream::pair().unwrap();
+        let (reader, writer) = socket.into_split();
+        let mut task = tokio::spawn(async move {
+            client
+                .serve(Connection {
+                    reader: BufReader::new(reader),
+                    writer,
+                    buffer: Vec::new(),
+                })
+                .await
+        });
+        owner
+            .outbound
+            .send(OwnerMessage::Unregister {
+                reason: crate::remote::SessionCloseReason::SharingDisabled,
+            })
+            .await
+            .unwrap();
+        drop(owner);
+        let (reader, mut writer) = peer.into_split();
+        let mut reader = BufReader::new(reader);
+        let mut buffer = Vec::new();
+        let frame: OwnerFrame = read_async_frame_with_buffer(&mut reader, &mut buffer)
+            .await
+            .unwrap();
+        assert!(matches!(
+            frame,
+            OwnerFrame::Unregister {
+                reason: crate::remote::SessionCloseReason::SharingDisabled
+            }
+        ));
+        // The gateway can still have an outbound status queued before it
+        // processes Unregister. Closing now makes that write fail and ends
+        // the registration as owner_exited instead of sharing_disabled.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut task)
+                .await
+                .is_err()
+        );
+        write_async_frame(&mut writer, &GatewayFrame::Pong)
+            .await
+            .unwrap();
+        drop(reader);
+        drop(writer);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ended::Owner
+        ));
+    }
 
     fn prompt(request_id: &str, text: &str) -> RemoteRequest {
         RemoteRequest {
