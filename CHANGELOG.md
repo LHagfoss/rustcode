@@ -1,3 +1,10 @@
+## [v0.64.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.1) - 2026-10-10
+
+### Fixes
+- Make `/remote` pairing scan-first: automatically select the Mac's Wi-Fi/Ethernet address while preserving explicit LAN, loopback, and NetBird configuration. [#1927](https://github.com/LHagfoss/rustcode/pull/1927)
+- Give the `/remote` QR panel the terminal's full height and render a stable black-on-white code with a quiet zone. [#1919](https://github.com/LHagfoss/rustcode/pull/1919)
+- Export authoritative turn identity, work/thought durations, end timestamps, and completed/cancelled/failed outcomes for the iPhone app, preserving timing through harness resumes and teardown. [#1921](https://github.com/LHagfoss/rustcode/pull/1921), [#1922](https://github.com/LHagfoss/rustcode/pull/1922)
+- Preserve reconnect snapshot identity and real message timestamps; improve empty-session titles and document the app UI contract. [#1923](https://github.com/LHagfoss/rustcode/pull/1923), [app UI guide](https://github.com/LHagfoss/rustcode/blob/main/docs/remote-protocol/APP-UI.md)
 ## [v0.64.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.0) - 2026-10-09
 
 ### Features
