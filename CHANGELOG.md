@@ -1,3 +1,13 @@
+## [v0.61.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.61.0) - 2026-10-09
+
+### Features
+- MCP servers can be managed from the command line: `rustcode mcp add <name> <url-or-command>` with repeatable `--header` (remote) and `--env` (stdio), plus `rustcode mcp list` and `rustcode mcp remove`. Header and environment values are stored in the user `config.toml` and `mcp list` prints only their names (#1865)
+- On Windows, `run_command` runs in PowerShell 7 when `pwsh` is installed, else Windows PowerShell 5.1, else `cmd.exe`, instead of always `cmd /C`. The model is told which shell it has and to write PowerShell, the transcript labels the call `PowerShell` or `Cmd`, and commands with quotes or backslash paths ask for confirmation. Not yet exercised on a Windows machine (#1873)
+- Fixed a command being approved as read-only when a `#` comment hid a second command on the next line; the same text also slipped past deny rules (#1874)
+- The MCP tools offered to the model no longer change at the start of every turn or after a rejected tool call, so the cached prompt prefix survives between turns; tools found by `list_mcp_tools` stay available, and a new message still brings in the tools it asks for (#1870)
+- Fixed a call to an MCP tool by the `mcp__<server>__<tool>` name that `list_mcp_tools` returns being rejected as an unknown tool (#1867)
+- On Claude Code CLI profiles the model can call a tool that was offered after the conversation started, through a `call_tool` relay, instead of failing with "No such tool available" until the next turn (#1872)
+- Wheel scrolling repaints at about 60 frames a second instead of about 21 while input keeps arriving, and each frame is written as a synchronized update so a scroll is not shown half-painted (#1868)
 ## [v0.60.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.60.0) - 2026-10-08
 
 ### Features
