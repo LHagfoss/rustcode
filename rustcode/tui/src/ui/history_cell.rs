@@ -98,6 +98,9 @@ pub(crate) struct TranscriptState {
     panel_targets: Vec<(ratatui::layout::Rect, PanelTarget)>,
     /// The panel target or follow control under the pointer.
     hovered_target: Option<ratatui::layout::Rect>,
+    /// Where the pointer last was. Rows move under a still pointer whenever
+    /// the layout changes height, so each frame resolves the hover again.
+    pointer: Option<(u16, u16)>,
     /// The running indicator last painted and when, see
     /// [`Self::settle_indicator`].
     held_indicator: Option<HeldIndicator>,
@@ -162,6 +165,7 @@ impl Default for TranscriptState {
             tasks_chip_hovered: false,
             panel_targets: Vec::new(),
             hovered_target: None,
+            pointer: None,
             held_indicator: None,
         }
     }
@@ -283,6 +287,10 @@ impl TranscriptState {
         {
             self.hovered_tool_block = None;
         }
+        // A panel over the bottom of the chat cuts the area short; the rows
+        // under it are not on screen.
+        let mut rows = rows;
+        rows.truncate(usize::from(area.height));
         self.tool_rows = (area, rows);
     }
 
@@ -396,6 +404,19 @@ impl TranscriptState {
     /// Move the hover to whatever clickable thing is at this cell. Returns
     /// whether it changed, so pointer motion inside one target costs no frame.
     pub(crate) fn hover_at(&mut self, column: u16, row: u16) -> bool {
+        self.pointer = Some((column, row));
+        self.resolve_hover(column, row)
+    }
+
+    /// Point the hover at what the frame being painted shows under the
+    /// pointer, which has not moved but may now be over something else.
+    pub(super) fn refresh_hover(&mut self) {
+        if let Some((column, row)) = self.pointer {
+            self.resolve_hover(column, row);
+        }
+    }
+
+    fn resolve_hover(&mut self, column: u16, row: u16) -> bool {
         let block = self.tool_block_at(column, row);
         let chip = self.tasks_chip_at(column, row);
         let target = self
@@ -1325,6 +1346,38 @@ mod tests {
         assert_eq!(transcript.panel_target_at(10, 3), None);
         assert_eq!(transcript.panel_target_at(37, 0), Some(PanelTarget::Escape));
         assert!(!transcript.hover_at(10, 3));
+    }
+
+    #[test]
+    fn hover_follows_the_rows_that_move_under_a_still_pointer() {
+        let (mut buffer, area) = painted(&["• Ran", "", "• Read", "", ""]);
+        let hover = crate::ui::COLOR_HOVER_BG();
+        let (ran, read) = ((2, 3), (5, 6));
+        let mut transcript = TranscriptState::default();
+        transcript.set_tool_rows(area, vec![Some(ran), None, Some(read), None, None]);
+        assert!(transcript.hover_at(1, 2));
+
+        // The indicator row went away and every row moved down two.
+        transcript.set_tool_rows(area, vec![None, None, Some(ran), None, Some(read)]);
+        transcript.refresh_hover();
+        transcript.highlight_hovered_tool_block(&mut buffer);
+        assert_eq!(buffer[(0, 2)].bg, hover);
+        assert_ne!(buffer[(0, 4)].bg, hover);
+        assert_eq!(transcript.tool_block_at(1, 2), Some(ran));
+    }
+
+    #[test]
+    fn hover_stays_out_of_the_rows_a_panel_covers() {
+        let (mut buffer, area) = painted(&["• Ran", "  Bash ls", "  question", "  › yes"]);
+        let hover = crate::ui::COLOR_HOVER_BG();
+        let visible = ratatui::layout::Rect::new(area.x, area.y, area.width, 2);
+        let mut transcript = TranscriptState::default();
+        transcript.set_tool_rows(visible, vec![Some((2, 3)); 4]);
+        assert!(transcript.hover_at(1, 0));
+        transcript.highlight_hovered_tool_block(&mut buffer);
+        assert_eq!(buffer[(0, 1)].bg, hover);
+        assert_ne!(buffer[(0, 2)].bg, hover);
+        assert_ne!(buffer[(0, 3)].bg, hover);
     }
     use rustcode::controller::{ChatMessage, History, RenderState};
 
