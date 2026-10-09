@@ -159,6 +159,143 @@ pub enum Commands {
         #[command(subcommand)]
         command: CronCommands,
     },
+
+    /// Add, list, or remove MCP servers in the user config
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum McpCommands {
+    /// Add an MCP server: a URL for a remote server, or a command to spawn
+    #[command(after_help = "Examples:
+  rustcode mcp add --transport http api https://mcp.example.com/mcp --header \"Authorization: Bearer <token>\"
+  rustcode mcp add --env API_KEY=<key> files -- npx -y @example/files-mcp")]
+    Add(McpAddArgs),
+    /// List configured MCP servers (header and environment values are hidden)
+    List,
+    /// Remove an MCP server from the user config
+    #[command(alias = "rm")]
+    Remove { name: String },
+}
+
+#[derive(clap::Args, Debug)]
+pub struct McpAddArgs {
+    /// Name the server's tools are grouped under
+    pub name: String,
+    /// Server URL, or the command and its arguments (put them after `--`
+    /// when an argument starts with a dash)
+    #[arg(required = true, num_args = 1.., value_name = "URL_OR_COMMAND")]
+    pub target: Vec<String>,
+    /// Transport; inferred from an http(s):// target when omitted
+    #[arg(short = 't', long, value_enum)]
+    pub transport: Option<McpTransport>,
+    /// HTTP header sent with every request to a remote server, as `Name: value`
+    #[arg(short = 'H', long = "header", value_name = "HEADER")]
+    pub headers: Vec<String>,
+    /// Environment variable for a spawned server, as `KEY=value`
+    #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+    pub env: Vec<String>,
+    /// Pre-registered OAuth client ID for a remote server
+    #[arg(long)]
+    pub client_id: Option<String>,
+    /// Reserve this server's whole toolset in every native tool request
+    #[arg(long)]
+    pub always_include: bool,
+    /// Replace an existing server with the same name
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpTransport {
+    /// Spawn a local command and talk over stdin/stdout
+    Stdio,
+    /// Remote Streamable HTTP endpoint
+    #[value(alias = "streamable-http")]
+    Http,
+}
+
+/// Turn `mcp add` arguments into a config entry, rejecting options that
+/// do not apply to the chosen transport instead of dropping them.
+pub(crate) fn mcp_server_from_args(
+    args: &McpAddArgs,
+) -> Result<rustcode::config::McpServerConfig, String> {
+    let first = args.target[0].as_str();
+    let looks_remote = first.starts_with("http://") || first.starts_with("https://");
+    let remote = match args.transport {
+        Some(McpTransport::Http) if !looks_remote => {
+            return Err("--transport http needs an http:// or https:// URL".to_owned());
+        }
+        Some(McpTransport::Http) => true,
+        Some(McpTransport::Stdio) => false,
+        None => looks_remote,
+    };
+    if remote {
+        if args.target.len() > 1 {
+            return Err("a remote server takes a URL and no further arguments".to_owned());
+        }
+        if !args.env.is_empty() {
+            return Err("--env only applies to stdio servers; use --header".to_owned());
+        }
+    } else if !args.headers.is_empty() || args.client_id.is_some() {
+        return Err("--header and --client-id only apply to remote (http) servers".to_owned());
+    }
+    let headers = args
+        .headers
+        .iter()
+        .map(|raw| rustcode::config::parse_mcp_header(raw))
+        .collect::<Result<_, _>>()?;
+    let env = args
+        .env
+        .iter()
+        .map(|raw| rustcode::config::parse_mcp_env(raw))
+        .collect::<Result<_, _>>()?;
+    Ok(rustcode::config::McpServerConfig {
+        name: args.name.clone(),
+        command: if remote {
+            String::new()
+        } else {
+            first.to_owned()
+        },
+        args: if remote {
+            Vec::new()
+        } else {
+            args.target[1..].to_vec()
+        },
+        env,
+        url: remote.then(|| first.to_owned()),
+        headers,
+        client_id: args.client_id.clone(),
+        enabled: true,
+        always_include: args.always_include,
+    })
+}
+
+/// One `mcp list` line. Header and environment values are secrets, so only
+/// their names are shown.
+pub(crate) fn mcp_server_summary(server: &rustcode::config::McpServerConfig) -> String {
+    let mut line = match server.url.as_deref().filter(|_| server.is_remote()) {
+        Some(url) => format!("{}  http  {url}", server.name),
+        None => {
+            let mut command = vec![server.command.as_str()];
+            command.extend(server.args.iter().map(String::as_str));
+            format!("{}  stdio  {}", server.name, command.join(" "))
+        }
+    };
+    for (label, values) in [("headers", &server.headers), ("env", &server.env)] {
+        if !values.is_empty() {
+            let mut names: Vec<&str> = values.keys().map(String::as_str).collect();
+            names.sort_unstable();
+            line.push_str(&format!("  ({label}: {})", names.join(", ")));
+        }
+    }
+    if !server.enabled {
+        line.push_str("  [disabled]");
+    }
+    line
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -758,6 +895,103 @@ mod tests {
         assert!(Cli::try_parse_from(["rustcode", "daemon", "logs", "--lines", "0"]).is_err());
         assert!(
             Cli::try_parse_from(["rustcode", "cron", "history", "job-1", "--limit", "51"]).is_err()
+        );
+    }
+
+    fn mcp_add(args: &[&str]) -> Result<rustcode::config::McpServerConfig, String> {
+        let argv = ["rustcode", "mcp", "add"].iter().chain(args).copied();
+        match Cli::try_parse_from(argv)
+            .map_err(|error| error.to_string())?
+            .command
+        {
+            Some(Commands::Mcp {
+                command: McpCommands::Add(args),
+            }) => mcp_server_from_args(&args),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_add_accepts_a_remote_server_with_trailing_header() {
+        let server = mcp_add(&[
+            "--transport",
+            "http",
+            "paral-x",
+            "https://mcp.example.test/mcp",
+            "--header",
+            "Authorization: Bearer token",
+        ])
+        .unwrap();
+        assert_eq!(server.name, "paral-x");
+        assert_eq!(server.url.as_deref(), Some("https://mcp.example.test/mcp"));
+        assert!(server.command.is_empty());
+        assert_eq!(server.headers["Authorization"], "Bearer token");
+        assert!(server.enabled);
+
+        // The transport is inferred from the URL when the flag is omitted.
+        assert_eq!(
+            mcp_add(&["paral-x", "https://mcp.example.test/mcp"])
+                .unwrap()
+                .url,
+            server.url
+        );
+    }
+
+    #[test]
+    fn mcp_add_accepts_a_stdio_command_with_dashed_arguments() {
+        let server = mcp_add(&[
+            "--env",
+            "API_KEY=k",
+            "files",
+            "--",
+            "npx",
+            "-y",
+            "files-mcp",
+        ])
+        .unwrap();
+        assert_eq!(server.command, "npx");
+        assert_eq!(server.args, ["-y", "files-mcp"]);
+        assert_eq!(server.env["API_KEY"], "k");
+        assert_eq!(server.url, None);
+    }
+
+    #[test]
+    fn mcp_add_rejects_options_that_do_not_fit_the_transport() {
+        for args in [
+            &["--transport", "http", "x", "npx"][..],
+            &["x", "https://mcp.example.test", "extra"],
+            &["x", "https://mcp.example.test", "--env", "A=b"],
+            &["x", "npx", "--header", "A: b"],
+            &["x", "https://mcp.example.test", "--header", "no-separator"],
+            &["--transport", "sse", "x", "https://mcp.example.test"],
+            &["x"],
+        ] {
+            assert!(mcp_add(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn mcp_list_summary_hides_header_and_environment_values() {
+        let mut server = mcp_add(&[
+            "api",
+            "https://mcp.example.test/mcp",
+            "-H",
+            "Authorization: Bearer hunter2",
+            "-H",
+            "X-Org: acme-secret",
+        ])
+        .unwrap();
+        assert_eq!(
+            mcp_server_summary(&server),
+            "api  http  https://mcp.example.test/mcp  (headers: Authorization, X-Org)"
+        );
+        server.enabled = false;
+        assert!(mcp_server_summary(&server).ends_with("[disabled]"));
+
+        let stdio = mcp_add(&["-e", "API_KEY=hunter2", "files", "--", "npx", "-y", "m"]).unwrap();
+        assert_eq!(
+            mcp_server_summary(&stdio),
+            "files  stdio  npx -y m  (env: API_KEY)"
         );
     }
 }
