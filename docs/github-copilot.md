@@ -30,6 +30,10 @@ installation instructions instead of hanging.
 - `/login github-copilot` — reuse the saved account catalog, or sign in when
   none is saved.
 - `/login github-copilot new` — sign in a second account.
+- `/login github-copilot [new] --headless` — show the device page and code
+  without opening a browser; `--browser` opens it and fails if it cannot.
+  With neither, the browser is opened unless the session is remote (SSH) or
+  has no display.
 - `/login github-copilot <account-id>` — refresh that saved account's model
   catalog (account IDs come from `/auth status`).
 - `/refresh github-copilot [account-id]` (or `/account refresh ...`) —

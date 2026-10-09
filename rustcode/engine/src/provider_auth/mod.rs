@@ -46,6 +46,59 @@ impl fmt::Debug for AuthMethod {
     }
 }
 
+/// How a sign-in reaches a browser. `/login <provider> --browser` and
+/// `--headless` choose; with neither the session decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LoginMode {
+    /// Open the browser unless the session is remote or has no display, and
+    /// show the URL instead when it cannot be opened.
+    Auto,
+    /// Open the browser on this machine, and fail if that is not possible.
+    Browser,
+    /// Never open a browser; show what to open on any device.
+    Headless,
+}
+
+/// Whether `word` is one of the `/login` flags that choose a [`LoginMode`].
+pub fn is_login_mode_flag(word: &str) -> bool {
+    word.eq_ignore_ascii_case("--browser") || word.eq_ignore_ascii_case("--headless")
+}
+
+impl LoginMode {
+    /// Take the mode flags out of a `/login` command, wherever they stand.
+    fn take(words: &mut Vec<&str>) -> Result<Self> {
+        let browser = words
+            .iter()
+            .any(|word| word.eq_ignore_ascii_case("--browser"));
+        let headless = words
+            .iter()
+            .any(|word| word.eq_ignore_ascii_case("--headless"));
+        words.retain(|word| !is_login_mode_flag(word));
+        match (browser, headless) {
+            (true, true) => bail!("choose one of --browser and --headless"),
+            (true, false) => Ok(Self::Browser),
+            (false, true) => Ok(Self::Headless),
+            (false, false) => Ok(Self::Auto),
+        }
+    }
+
+    pub(super) fn opens_browser(self) -> bool {
+        match self {
+            Self::Browser => true,
+            Self::Headless => false,
+            Self::Auto => !session_has_no_browser(|name| std::env::var_os(name).is_some()),
+        }
+    }
+}
+
+/// A session reached over SSH, or a Linux session without a display, has no
+/// browser the person signing in can see.
+fn session_has_no_browser(is_set: impl Fn(&str) -> bool) -> bool {
+    is_set("SSH_CONNECTION")
+        || is_set("SSH_TTY")
+        || (cfg!(target_os = "linux") && !is_set("DISPLAY") && !is_set("WAYLAND_DISPLAY"))
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialRef {
     pub provider: String,
@@ -181,7 +234,12 @@ pub async fn execute_command_with_progress(
     if let Some(first) = words.first_mut() {
         *first = first.trim_start_matches('/').to_owned();
     }
-    let words = words.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut words = words.iter().map(String::as_str).collect::<Vec<_>>();
+    let mode = if words.first() == Some(&"login") {
+        LoginMode::take(&mut words)?
+    } else {
+        LoginMode::Auto
+    };
     match words.as_slice() {
         ["login"] | ["login", "list"] => Ok(AuthCommandResult {
             message: status_message(config).await?,
@@ -204,10 +262,10 @@ pub async fn execute_command_with_progress(
             profiles: Vec::new(),
         }),
         ["login", provider] if provider.eq_ignore_ascii_case("github-copilot") => {
-            github_copilot::login(config, None, cancel, progress).await
+            github_copilot::login(config, None, cancel, progress, mode).await
         }
         ["login", provider, account] if provider.eq_ignore_ascii_case("github-copilot") => {
-            github_copilot::login(config, Some(account), cancel, progress).await
+            github_copilot::login(config, Some(account), cancel, progress, mode).await
         }
         ["login", provider] | ["refresh", provider] | ["account", "refresh", provider]
             if provider.eq_ignore_ascii_case(claude_cli::PROVIDER) =>
@@ -264,11 +322,11 @@ pub async fn execute_command_with_progress(
                 return Ok(result);
             }
             let guard = openai::login_guard().await?;
-            openai::login(config, None, guard).await
+            openai::login(config, None, guard, mode, progress).await
         }
         ["login", provider, "new"] if provider.eq_ignore_ascii_case("openai") => {
             let guard = openai::login_guard().await?;
-            openai::login(config, Some("new"), guard).await
+            openai::login(config, Some("new"), guard, mode, progress).await
         }
         ["login", provider] => {
             let definition = provider_definition(config, provider)?;
@@ -281,7 +339,7 @@ pub async fn execute_command_with_progress(
         }
         ["login", provider, account] if provider.eq_ignore_ascii_case("openai") => {
             let guard = openai::login_guard().await?;
-            openai::login(config, Some(account), guard).await
+            openai::login(config, Some(account), guard, mode, progress).await
         }
         ["login", provider, method, env_var] if method.eq_ignore_ascii_case("api-key") => {
             store_api_key(config, provider, env_var).await
@@ -289,7 +347,7 @@ pub async fn execute_command_with_progress(
         ["logout", provider] => logout(provider, None).await,
         ["logout", provider, account] => logout(provider, Some(account)).await,
         _ => bail!(
-            "use /login [list], /login openai [account|new], /login claude, /login <provider> api-key <ENV_VAR>, /auth status, /accounts, /account, /refresh [provider] [account], or /logout <provider> [account]"
+            "use /login [list], /login openai [account|new] [--browser|--headless], /login github-copilot [account|new] [--browser|--headless], /login claude, /login <provider> api-key <ENV_VAR>, /auth status, /accounts, /account, /refresh [provider] [account], or /logout <provider> [account]"
         ),
     }
 }
@@ -1144,6 +1202,52 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    #[test]
+    fn login_mode_flags_are_taken_from_any_position() {
+        let take = |command: &str| {
+            let mut words = command.split_whitespace().collect::<Vec<_>>();
+            LoginMode::take(&mut words).map(|mode| (mode, words.join(" ")))
+        };
+        assert_eq!(
+            take("login openai").unwrap(),
+            (LoginMode::Auto, "login openai".to_owned())
+        );
+        assert_eq!(
+            take("login openai new --headless").unwrap(),
+            (LoginMode::Headless, "login openai new".to_owned())
+        );
+        assert_eq!(
+            take("login --BROWSER github-copilot").unwrap(),
+            (LoginMode::Browser, "login github-copilot".to_owned())
+        );
+        assert!(take("login openai --browser --headless").is_err());
+        assert!(LoginMode::Browser.opens_browser());
+        assert!(!LoginMode::Headless.opens_browser());
+    }
+
+    #[test]
+    fn a_remote_or_displayless_session_has_no_browser() {
+        let with =
+            |set: &'static [&'static str]| session_has_no_browser(|name| set.contains(&name));
+        assert!(with(&["SSH_CONNECTION", "DISPLAY"]));
+        assert!(with(&["SSH_TTY", "WAYLAND_DISPLAY"]));
+        assert!(!with(&["DISPLAY"]));
+        assert!(!with(&["WAYLAND_DISPLAY"]));
+        // Only Linux needs a display variable to have a browser.
+        assert_eq!(with(&[]), cfg!(target_os = "linux"));
+    }
+
+    #[tokio::test]
+    async fn two_login_modes_are_refused_before_anything_starts() {
+        let config = AppConfig::default();
+        let error = execute_command("/login openai --browser --headless", &config)
+            .await
+            .err()
+            .expect("two modes")
+            .to_string();
+        assert!(error.contains("--browser and --headless"), "{error}");
+    }
 
     #[derive(Default)]
     pub(super) struct MemoryStore(Mutex<HashMap<(String, String, String), String>>);
