@@ -1423,6 +1423,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         && verification_command;
                     ctx.verification
                         .ledger
+                        .set_scope(verification::VerificationScope::new(
+                            workspace_root.as_deref(),
+                            ctx.compiler.edit_root.as_deref(),
+                            metadata.workspace_generation,
+                        ));
+                    ctx.verification
+                        .ledger
                         .record_command(command, metadata.exit_code);
                     if explicit_verification_user_index.is_some_and(|index| {
                         verification::is_explicit_verification_command(
@@ -1512,8 +1519,25 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             ctx.progress.untracked_edits = true;
                         }
                         ctx.progress.consecutive_failed_mutations = 0;
-                        if !metadata.changed_paths.is_empty() || name != "run_command" {
-                            ctx.verification.ledger.record_edit();
+                        if metadata.changed_paths.is_empty() {
+                            if name != "run_command" {
+                                ctx.verification.ledger.record_edit();
+                            }
+                        } else {
+                            let base = workspace_root.clone().unwrap_or_default();
+                            let edited: Vec<_> = metadata
+                                .changed_paths
+                                .iter()
+                                .map(|path| base.join(path))
+                                .collect();
+                            let project_roots: Vec<_> = workspace_root
+                                .iter()
+                                .chain(&ctx.compiler.edit_root)
+                                .cloned()
+                                .collect();
+                            ctx.verification
+                                .ledger
+                                .record_edit_to(&edited, &project_roots);
                         }
                     }
                     if made_progress {
@@ -2325,6 +2349,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         || ctx.verification.ledger.last_failure().is_some());
                 if requires_verification
                     && !ctx.verification.ledger.has_fresh_successful_verification()
+                    // Unchanged since it passed: running it again would only
+                    // be answered from the verification cache.
+                    && !ctx.verification.ledger.verified_workspace_is_unchanged(|root| {
+                        crate::workspace_intelligence::snapshot(root)
+                            .ok()
+                            .map(|snapshot| snapshot.generation)
+                    })
                     && ctx.verification.blocks < MAX_VERIFICATION_BLOCKS
                 {
                     ctx.verification.blocks += 1;
@@ -2338,9 +2369,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                                 evidence.command, evidence.exit_code
                             )
                         })
-                        .unwrap_or_else(|| {
-                            "No verification command was run after the latest edit.".to_string()
-                        });
+                        .unwrap_or_else(|| ctx.verification.ledger.missing_verification_reason());
                     s.history.push(ChatMessage::new(
                         "system",
                         format!(
