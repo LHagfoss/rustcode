@@ -133,6 +133,7 @@ scrollback and motion settings — is in the
 | Background tasks | [docs/background-tasks.md](docs/background-tasks.md) |
 | Subagents | [docs/multi-agent.md](docs/multi-agent.md) |
 | ACP server | [docs/acp.md](docs/acp.md) |
+| Remote sessions (`/remote`, iPhone) | [docs/remote.md](docs/remote.md) |
 | Remote frontends (experimental) | [docs/mobile.md](docs/mobile.md) · [frontends](docs/frontends.md) |
 | Audio and video tools | [docs/media.md](docs/media.md) |
 | Thinking routing | [docs/thinking-router.md](docs/thinking-router.md) |

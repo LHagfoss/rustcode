@@ -154,7 +154,7 @@ pub enum Commands {
         allow_remote: bool,
     },
 
-    /// Run the remote gateway and manage paired devices (foundation; shares no sessions yet)
+    /// Run the remote gateway that shares `/remote` sessions and manage paired devices
     Remote {
         #[command(subcommand)]
         command: RemoteCommands,
