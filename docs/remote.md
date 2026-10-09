@@ -28,63 +28,53 @@ unchanged.
 
 ## Quick start
 
-On NetBird (recommended):
+Connect the phone and Mac to the same trusted Wi-Fi or LAN. In the terminal
+session you want to share, run:
 
-```sh
-# 1. Find this Mac's NetBird address (100.x.y.z).
-netbird status | grep "NetBird IP"
-
-# 2. Start the gateway on it. Leave it running, or let /remote start it (below).
-rustcode remote serve --bind 100.92.13.44
-
-# 3. In the terminal session you want to share:
+```text
 /remote
 ```
 
-On a trusted LAN:
+The gateway starts automatically and chooses this machine's Wi-Fi or Ethernet
+address. `/remote` shows its address and a QR code in a full-height panel. Open
+the app, tap **Scan QR**, and scan it. The shared session appears in the app's
+session list. No IP address needs to be typed. Address and code are available
+as a fallback when the camera cannot scan.
 
-```sh
-# 1. Find this Mac's LAN address.
-ipconfig getifaddr en0          # macOS; `ip -4 addr` on Linux
-
-# 2. Start the gateway on it.
-rustcode remote serve --bind 192.168.1.20
-
-# 3. In the terminal session you want to share:
-/remote
-```
-
-`/remote` shows the address, a QR code and a manual code. Scan the QR code in
-the app, or type the address and the code. The session then appears in the
-app's session list.
-
-To have `/remote` start the gateway itself, put the address in the user
-`config.toml` once:
+The QR uses the Mac's address, not the router's address or its public internet
+IP. A public IP alone cannot route through your router to the Mac. For access
+away from home, connect both devices to NetBird and set this machine's NetBird
+address once in the user `config.toml`:
 
 ```toml
 [remote]
-bind = "100.92.13.44"      # the NetBird or LAN address of this machine
+bind = "100.92.13.44"      # this machine's NetBird address
 # port = 17879             # optional
 # advertise = "mac.netbird.cloud"   # optional: the name devices should dial
 ```
 
-With that, `/remote` in any session starts the gateway in the background if
-none is running (its output goes to `remote/gateway.log` in the configuration
-directory) and stops nothing when the terminal exits; `rustcode remote stop`
-stops it.
+Alternatively, run `rustcode remote serve --bind 100.92.13.44` first. Obtain
+the address with `netbird status`. Ordinary same-LAN pairing needs no config.
 
-## Loopback is the default
+The gateway runs in the background when started by `/remote`; output goes to
+`remote/gateway.log` in the configuration directory. It keeps running when the
+terminal exits; `rustcode remote stop` stops it.
 
-Without `--bind` and without `[remote]` in the config, the gateway listens on
-`127.0.0.1`. That is deliberate: nothing is exposed until you name an address.
-A phone cannot reach loopback, so `/remote`, `rustcode remote pair`,
-`rustcode remote serve` and `rustcode remote status` all say so and print the
-commands above together with this machine's candidate addresses. A session
-shared with a loopback gateway is still registered and can be reached from the
-same machine (the iOS Simulator, a test client).
+## Automatic address selection
+
+Without `--bind` or a configured bind, `auto` chooses an active Wi-Fi/Ethernet
+address, preferring private IPv4 LAN addresses over VPN addresses. The OS route
+breaks ties between LAN interfaces. Virtual bridges and link-local addresses
+are excluded. The listener binds only the selected address and advertises it.
+
+With no usable network interface, it falls back to `127.0.0.1` and explains
+that a phone cannot reach it. Explicit `--bind 127.0.0.1` keeps local-only
+access for a Simulator or test client.
 
 To move a running gateway to another address: `rustcode remote stop`, then
-`rustcode remote serve --bind <address>`. Sessions that were shared register
+`rustcode remote serve` for automatic selection, or add an explicit `--bind`.
+This also upgrades a gateway started by an older loopback-default version.
+Sessions that were shared register
 with the new gateway on their own within two minutes; devices stay paired.
 
 ## In the terminal
@@ -126,11 +116,13 @@ its process birth time and its files are reclaimed.
 ## Addresses
 
 `--bind` (or `[remote] bind`) is where the WebSocket listener accepts
-connections: `127.0.0.1` by default, port `17879`. `--advertise` is the host
+connections: `auto` by default, port `17879`. `--advertise` is the host
 that pairing details tell a device to dial; it takes an IP address or host
 name and uses the listener's port.
 
 - A loopback or specific bind advertises itself unless `--advertise` is given.
+- `auto` selects one local address as described above; `bind = "auto"` also
+  works in the user configuration.
 - `0.0.0.0` and `::` are never advertised. Binding a wildcard requires
   `--advertise` unless exactly one interface address is a candidate; the
   error lists the candidates.

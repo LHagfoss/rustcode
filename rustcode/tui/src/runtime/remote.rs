@@ -962,7 +962,7 @@ mod tests {
         // The gateway is on loopback: the panel says what that means and
         // what to run instead.
         assert!(report.contains("a phone cannot reach it"), "{report}");
-        assert!(report.contains("rustcode remote serve --bind <address>"));
+        assert!(report.contains("rustcode remote serve"));
         assert!(report.contains("[remote]"));
         // A scannable code, as marked rows the panel paints black on white.
         assert!(
@@ -1236,12 +1236,7 @@ mod tests {
                     }
                 }
                 OwnerMessage::Event(frame) => {
-                    if let RemoteEvent::TextDelta {
-                        text: delta,
-                        timing: None,
-                        thought_time_ms: None,
-                    } = &frame.event
-                    {
+                    if let RemoteEvent::TextDelta { text: delta, .. } = &frame.event {
                         text.push_str(delta);
                     }
                 }

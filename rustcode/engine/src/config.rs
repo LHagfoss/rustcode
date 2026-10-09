@@ -147,8 +147,8 @@ fn default_loop_detector_abort() -> usize {
 }
 
 /// Where `/remote` starts the remote gateway when none is running, under
-/// `[remote]` in config.toml. Everything unset means loopback on the default
-/// port, which a phone cannot reach. A checked-out project config must not
+/// `[remote]` in config.toml. Everything unset chooses a local LAN address on
+/// the default port, falling back to loopback offline. A project config must not
 /// decide which network interface exposes the user's sessions; only the user
 /// config may.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
