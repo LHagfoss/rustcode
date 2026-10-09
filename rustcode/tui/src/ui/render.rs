@@ -220,6 +220,26 @@ pub(crate) fn render_with_transcript_snapshot(
 ) -> (u16, ratatui::layout::Rect) {
     theme::set_active_theme(&state.config().theme);
 
+    if state
+        .command_panel()
+        .is_some_and(|panel| panel.title == "Remote")
+    {
+        let area = f.area();
+        render_command_panel(f, state, area);
+        transcript.settle_indicator(None, false);
+        transcript.follow_control.clear();
+        transcript.tasks_chip = None;
+        transcript.tasks_chip_hovered = false;
+        transcript.set_tool_rows(ratatui::layout::Rect::default(), Vec::new());
+        transcript.set_panel_targets(f.buffer(), area, false);
+        transcript.refresh_hover();
+        refresh_panel_selection(f, state, transcript, area);
+        return (
+            0,
+            ratatui::layout::Rect::new(area.x, area.bottom(), area.width, 0),
+        );
+    }
+
     let completion_dismissed =
         state.dismissed_completion() == state.completion_identity().as_deref();
     let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed || state.modal_open() {
@@ -676,7 +696,18 @@ pub(crate) fn render_with_transcript_snapshot(
     );
     transcript.selection.highlight(f.buffer_mut());
 
-    let panel_selection = panel_selection_surface(f, state, input_box_area);
+    refresh_panel_selection(f, state, transcript, input_box_area);
+
+    (conversation_content_height, input_box_area)
+}
+
+fn refresh_panel_selection(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    transcript: &mut TranscriptState,
+    input_area: ratatui::layout::Rect,
+) {
+    let panel_selection = panel_selection_surface(f, state, input_area);
     transcript.panel_selection_area = panel_selection.as_ref().map(|(area, _)| *area);
     transcript.panel_selection_scrollable = state.command_panel().is_some();
     if let Some((area, soft_wrap_before)) = panel_selection {
@@ -689,8 +720,6 @@ pub(crate) fn render_with_transcript_snapshot(
         // conversation on the next frame.
         transcript.panel_selection.clear();
     }
-
-    (conversation_content_height, input_box_area)
 }
 
 /// Test-only frame entry point that keeps a caller-owned transcript.

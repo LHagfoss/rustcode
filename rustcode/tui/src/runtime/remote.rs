@@ -777,6 +777,89 @@ mod tests {
             .unwrap_or_default()
     }
 
+    #[test]
+    fn remote_panel_paints_the_whole_qr_black_on_white_in_light_and_dark_themes() {
+        use crate::inline_terminal::InlineTerminal as Terminal;
+        use crate::ui::render;
+        use crate::ui::tests::THEME_TEST_LOCK;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+        use rustcode::controller::RenderState;
+        use rustcode::remote_gateway::address::AdvertisedAddress;
+        use rustcode::remote_gateway::command::{QrStyle, format_offer};
+        use rustcode::remote_gateway::control::OfferDetails;
+        use rustcode::remote_gateway::handshake::Secret;
+        use rustcode::remote_gateway::pairing::PairingOffer;
+        use rustcode::remote_gateway::qr;
+
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+        for (theme, host) in [("default", "192.168.1.20"), ("light", "127.0.0.1")] {
+            let offer = OfferDetails::new(
+                &AdvertisedAddress::new(host, 17879).unwrap(),
+                "0123456789abcdef0123456789abcdef",
+                Some("a-host-with-a-longer-name"),
+                PairingOffer {
+                    credential: Secret::new("q0lYc1o3bXJ3T2d5d0l2Rk5kU2tqeTZqZ0Z2ZUo0V2s"),
+                    code: Secret::new("1234-5678"),
+                    lifetime: std::time::Duration::from_secs(120),
+                },
+            );
+            let rows = qr::rows(offer.qr_payload.expose()).unwrap();
+            let mut state = RenderState::new();
+            state.config.theme = theme.into();
+            state.command_panel = Some(rustcode::controller::CommandPanel {
+                title: "Remote",
+                content: format!(
+                    "{}\n\nThis session is shared with the remote gateway.\nSession  test-session\nAttached devices  none",
+                    format_offer(&offer, QrStyle::Panel)
+                ),
+            });
+            let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render(frame, &state);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let qr_y = (0..40)
+                .find(|&y| buffer[(2, y)].bg == Color::Indexed(231))
+                .expect("QR is visible");
+            assert!(
+                qr_y + rows.len() as u16 <= 38,
+                "the entire QR fits above the footer"
+            );
+            let text = (0..7)
+                .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(&offer.advertised_address) && text.contains("1234-5678"),
+                "{text}"
+            );
+            for (y, row) in rows.iter().enumerate() {
+                for (x, symbol) in row.chars().enumerate() {
+                    let cell = &buffer[(2 + x as u16, qr_y + y as u16)];
+                    assert_eq!(
+                        cell.symbol(),
+                        symbol.to_string(),
+                        "QR cell ({x}, {y}) in {theme}"
+                    );
+                    assert_eq!(
+                        cell.fg,
+                        Color::Indexed(16),
+                        "QR foreground ({x}, {y}) in {theme}"
+                    );
+                    assert_eq!(
+                        cell.bg,
+                        Color::Indexed(231),
+                        "QR background ({x}, {y}) in {theme}"
+                    );
+                }
+            }
+        }
+        crate::ui::theme::set_active_theme("default");
+    }
+
     #[tokio::test]
     async fn remote_without_a_gateway_reports_it_and_shares_nothing() {
         let mut runtime = AppRuntime::for_test(AppState::new());

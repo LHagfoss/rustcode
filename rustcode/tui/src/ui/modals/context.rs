@@ -34,7 +34,7 @@ pub(in crate::ui) fn panel_selection_surface(
     } else if state.show_session_modal() {
         SESSION_MODAL_HEIGHT
     } else if state.command_panel().is_some() {
-        let area = input_anchor_rect(f, input_area, super::panel::COMMAND_PANEL_HEIGHT);
+        let area = super::panel::command_panel_area(f, state, input_area);
         let inner = area
             .inner(Margin {
                 vertical: 1,

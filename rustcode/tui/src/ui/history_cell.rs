@@ -1382,6 +1382,38 @@ mod tests {
     use rustcode::controller::{ChatMessage, History, RenderState};
 
     #[test]
+    fn remote_panel_clears_a_hidden_indicator_hold() {
+        let _theme_guard = super::super::tests::THEME_TEST_LOCK
+            .lock()
+            .expect("theme test lock");
+        let mut transcript = TranscriptState::default();
+        let now = std::time::Instant::now();
+        let hold = std::time::Duration::from_secs(1);
+        transcript.settle_indicator_at(
+            Some(ratatui::text::Line::from("Executing")),
+            true,
+            now,
+            hold,
+        );
+        transcript.settle_indicator_at(None, true, now, hold);
+        assert!(transcript.indicator_hold_remaining().is_some());
+        let mut state = RenderState::new();
+        state.command_panel = Some(rustcode::controller::CommandPanel {
+            title: "Remote",
+            content: "Pair a device".into(),
+        });
+        let mut terminal =
+            crate::inline_terminal::InlineTerminal::new(ratatui::backend::TestBackend::new(80, 40))
+                .unwrap();
+        terminal
+            .draw(|frame| {
+                crate::ui::render_with_transcript(frame, &state, &mut transcript);
+            })
+            .unwrap();
+        assert!(transcript.indicator_hold_remaining().is_none());
+    }
+
+    #[test]
     fn indicator_survives_a_short_gap_but_not_a_long_or_deliberate_one() {
         let hold = std::time::Duration::from_millis(350);
         let start = std::time::Instant::now();
