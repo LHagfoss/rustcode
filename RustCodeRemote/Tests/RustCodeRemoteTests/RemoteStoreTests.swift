@@ -1,0 +1,503 @@
+import Foundation
+import Synchronization
+import Testing
+@testable import RustCodeRemote
+
+/// A client whose behaviour each test scripts directly.
+private actor StubClient: RemoteClient {
+    var connectResults: [Result<Void, RemoteError>] = []
+    var submitResult: Result<ReceiptState, RemoteError> = .success(.applied)
+    var statusResult: Result<ReceiptState, RemoteError> = .success(.unknown)
+    var sessions: [SessionSummary] = [makeSession("s1")]
+    /// Sequences of the updates each successive attach delivers after its snapshot.
+    var attachScripts: [[UInt64]] = []
+
+    private(set) var connectCalls = 0
+    private(set) var submitCalls: [RequestID] = []
+    private(set) var statusCalls: [RequestID] = []
+    private(set) var attachCalls: [UInt64?] = []
+    private(set) var disconnectCalls = 0
+    private var listContinuation: AsyncThrowingStream<[SessionSummary], any Error>.Continuation?
+
+    func set(connectResults: [Result<Void, RemoteError>]) { self.connectResults = connectResults }
+    func set(submitResult: Result<ReceiptState, RemoteError>) { self.submitResult = submitResult }
+    func set(statusResult: Result<ReceiptState, RemoteError>) { self.statusResult = statusResult }
+    func set(attachScripts: [[UInt64]]) { self.attachScripts = attachScripts }
+
+    func publish(_ sessions: [SessionSummary]) {
+        self.sessions = sessions
+        listContinuation?.yield(sessions)
+    }
+
+    func dropConnection(_ error: RemoteError) {
+        listContinuation?.finish(throwing: error)
+        listContinuation = nil
+    }
+
+    func pair(_ request: PairingRequest, deviceName: String) async throws -> StoredCredential {
+        if case .scanned = request { throw RemoteError.pairingFailed("expired") }
+        return makeCredential()
+    }
+
+    func connect(using credential: StoredCredential) async throws {
+        connectCalls += 1
+        if !connectResults.isEmpty {
+            try connectResults.removeFirst().get()
+        }
+    }
+
+    func disconnect() async {
+        disconnectCalls += 1
+        listContinuation?.finish()
+        listContinuation = nil
+    }
+
+    func subscribeSessions() async throws -> AsyncThrowingStream<[SessionSummary], any Error> {
+        let (stream, continuation) = AsyncThrowingStream.makeStream(of: [SessionSummary].self)
+        listContinuation = continuation
+        continuation.yield(sessions)
+        return stream
+    }
+
+    func attach(_ session: SessionRef, resumeAfter: UInt64?) async throws -> SessionAttachment {
+        attachCalls.append(resumeAfter)
+        let (stream, continuation) = AsyncThrowingStream.makeStream(of: SessionUpdate.self)
+        let script = attachScripts.isEmpty ? [] : attachScripts.removeFirst()
+        for sequence in script {
+            continuation.yield(update(session, sequence, .assistantDelta(itemID: "a", text: "\(sequence) ")))
+        }
+        return SessionAttachment(start: .snapshot(SessionSnapshot(session: session, sequence: 10)), updates: stream)
+    }
+
+    func detach(_ session: SessionRef) async {}
+
+    func getHistory(_ session: SessionRef, before cursor: HistoryCursor, limit: Int) async throws -> HistoryPage {
+        HistoryPage(items: [], nextCursor: nil)
+    }
+
+    func submit(_ text: String, to session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        submitCalls.append(requestID)
+        return RequestReceipt(requestID: requestID, state: try submitResult.get())
+    }
+
+    func steer(_ text: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        RequestReceipt(requestID: requestID, state: .applied)
+    }
+
+    func queue(_ text: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        RequestReceipt(requestID: requestID, state: .applied)
+    }
+
+    func cancel(turnID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        RequestReceipt(requestID: requestID, state: .applied)
+    }
+
+    func answerQuestion(_ questionID: String, with answer: QuestionAnswer, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        RequestReceipt(requestID: requestID, state: .applied)
+    }
+
+    func resolveApproval(batchID: String, decision: ApprovalDecision, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        RequestReceipt(requestID: requestID, state: .applied)
+    }
+
+    func getRequestStatus(_ requestID: RequestID, in session: SessionRef) async throws -> RequestReceipt {
+        statusCalls.append(requestID)
+        return RequestReceipt(requestID: requestID, state: try statusResult.get())
+    }
+}
+
+/// Records the delays the store asked to sleep for, instead of sleeping.
+private final class DelayLog: Sendable {
+    private let storage = Mutex<[Duration]>([])
+
+    var values: [Duration] { storage.withLock { $0 } }
+
+    func append(_ delay: Duration) {
+        storage.withLock { $0.append(delay) }
+    }
+}
+
+@MainActor
+@Suite struct RemoteStoreTests {
+    private let delays = DelayLog()
+
+    private func makeStore(
+        _ client: StubClient,
+        credentials: InMemoryCredentialStore = InMemoryCredentialStore(makeCredential()),
+        backoff: BackoffPolicy = BackoffPolicy(maximumAttempts: 3),
+        demoPace: Duration = .zero
+    ) -> RemoteStore {
+        RemoteStore(
+            client: client,
+            demoClient: { DemoRemoteClient(pace: demoPace) },
+            credentials: credentials,
+            backoff: backoff,
+            sleep: { [delays] delay in delays.append(delay) },
+            randomUnit: { 0.5 }
+        )
+    }
+
+    // MARK: Pairing and connection
+
+    @Test func bootstrapWithoutACredentialStaysUnpaired() {
+        let store = makeStore(StubClient(), credentials: InMemoryCredentialStore())
+        store.bootstrap()
+        #expect(store.connection == .unpaired)
+        #expect(store.host == nil)
+    }
+
+    @Test func bootstrapConnectsWithTheStoredCredential() async {
+        let store = makeStore(StubClient())
+        store.bootstrap()
+        #expect(store.host?.name == "Test Mac")
+        #expect(await waitUntil { store.connection == .connected && store.sessions.count == 1 })
+    }
+
+    @Test func pairingStoresTheCredentialAndConnects() async {
+        let credentials = InMemoryCredentialStore()
+        let store = makeStore(StubClient(), credentials: credentials)
+        await store.pair(.manual(address: HostAddress(host: "192.168.1.20", port: 7878), code: "123456"), deviceName: "Phone")
+
+        #expect(store.pairing == .idle)
+        #expect(credentials.load() == makeCredential())
+        #expect(await waitUntil { store.connection == .connected })
+    }
+
+    @Test func aFailedPairingReportsWhyAndStoresNothing() async {
+        let credentials = InMemoryCredentialStore()
+        let store = makeStore(StubClient(), credentials: credentials)
+        await store.pair(.scanned("stale"), deviceName: "Phone")
+
+        #expect(store.pairing == .failed("Pairing failed: expired"))
+        #expect(credentials.load() == nil)
+        #expect(store.connection == .unpaired)
+        store.clearPairingError()
+        #expect(store.pairing == .idle)
+    }
+
+    @Test func transientFailuresBackOffThenConnect() async {
+        let client = StubClient()
+        await client.set(connectResults: [.failure(.timeout), .failure(.connectionClosed), .success(())])
+        let store = makeStore(client)
+        store.bootstrap()
+
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(delays.values == [.seconds(1), .seconds(2)])
+        #expect(await client.connectCalls == 3)
+    }
+
+    @Test func givesUpAfterTheAttemptLimitAndManualRetryStartsOver() async {
+        let client = StubClient()
+        await client.set(connectResults: Array(repeating: .failure(.timeout), count: 4))
+        let store = makeStore(client)
+        store.bootstrap()
+
+        #expect(await waitUntil { store.connection == .offline(reason: RemoteError.timeout.localizedDescription) })
+        #expect(await client.connectCalls == 4)
+        #expect(delays.values == [.seconds(1), .seconds(2), .seconds(4)])
+        #expect(store.canRetry)
+
+        store.retryNow()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await client.connectCalls == 5)
+    }
+
+    @Test func unauthorizedStopsReconnectingAndRemovesTheToken() async {
+        let client = StubClient()
+        await client.set(connectResults: [.failure(.unauthorized)])
+        let credentials = InMemoryCredentialStore(makeCredential())
+        let store = makeStore(client, credentials: credentials)
+        store.bootstrap()
+
+        #expect(await waitUntil { store.connection == .unauthorized })
+        #expect(credentials.load() == nil)
+        #expect(store.host == nil)
+        #expect(!store.canRetry)
+        store.retryNow()
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(await client.connectCalls == 1)
+        #expect(delays.values.isEmpty)
+    }
+
+    @Test func revocationWhileConnectedAlsoStops() async {
+        let client = StubClient()
+        let credentials = InMemoryCredentialStore(makeCredential())
+        let store = makeStore(client, credentials: credentials)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+
+        await client.dropConnection(.unauthorized)
+        #expect(await waitUntil { store.connection == .unauthorized })
+        #expect(credentials.load() == nil)
+        #expect(store.sessions.isEmpty)
+    }
+
+    @Test func aMissingCodecIsNotRetried() async {
+        let client = StubClient()
+        await client.set(connectResults: [.failure(.codecUnavailable)])
+        let store = makeStore(client)
+        store.bootstrap()
+
+        #expect(await waitUntil { store.connection == .offline(reason: RemoteError.codecUnavailable.localizedDescription) })
+        #expect(await client.connectCalls == 1)
+    }
+
+    @Test func suspendClosesTheSocketAndResumeResyncsTheSelectedSession() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+
+        await store.suspend()
+        #expect(store.connection == .suspended)
+        #expect(await client.disconnectCalls == 1)
+
+        store.resume()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await waitUntil { await client.attachCalls.count == 2 })
+        // Same registration: the reattach offers the last applied sequence for replay.
+        #expect(await client.attachCalls == [nil, 10])
+    }
+
+    @Test func unpairingRemovesTheTokenAndCachedHostData() async {
+        let credentials = InMemoryCredentialStore(makeCredential())
+        let store = makeStore(StubClient(), credentials: credentials)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+
+        await store.unpair()
+        #expect(credentials.load() == nil)
+        #expect(store.host == nil)
+        #expect(store.sessions.isEmpty)
+        #expect(store.attached == nil)
+        #expect(store.connection == .unpaired)
+    }
+
+    // MARK: Sessions
+
+    @Test func aSequenceGapForcesAFreshSnapshot() async {
+        let client = StubClient()
+        await client.set(attachScripts: [[11, 13], [11]])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+
+        #expect(await waitUntil { await client.attachCalls.count == 2 && store.attached?.sequence == 11 })
+        // The second attach asks for a snapshot, not a replay from a cursor it cannot trust.
+        #expect(await client.attachCalls == [nil, nil])
+        #expect(store.attached?.items.first?.content == .assistant(AssistantText(text: "11 ", isStreaming: true)))
+    }
+
+    @Test func aSessionThatStopsBeingSharedIsDeselected() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+
+        await client.publish([makeSession("s2")])
+        #expect(await waitUntil { store.selectedSessionID == nil })
+        #expect(store.attached == nil)
+        #expect(store.notice != nil)
+    }
+
+    @Test func aNewRegistrationEpochIsAttachedAfresh() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached?.session.registrationEpoch == 1 })
+
+        await client.publish([makeSession("s1", epoch: 2)])
+        #expect(await waitUntil { store.attached?.session.registrationEpoch == 2 })
+        #expect(await client.attachCalls == [nil, nil])
+    }
+
+    @Test func completionBadgesAppearForSessionsInTheBackground() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+
+        await client.publish([makeSession("s1", activity: .running)])
+        await client.publish([makeSession("s1")])
+        #expect(await waitUntil { store.badges.unseenCompletions == ["s1"] })
+        store.select("s1")
+        #expect(store.badges.unseenCompletions.isEmpty)
+    }
+
+    // MARK: Receipts
+
+    @Test func aLostReplyLeavesTheRequestUncertainAndIsNeverResent() async {
+        let client = StubClient()
+        await client.set(submitResult: .failure(.timeout))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+
+        #expect(await store.send("deploy it"))
+        #expect(store.visibleRequests.count == 1)
+        #expect(store.visibleRequests.first?.phase == .settled(.unknown))
+        let id = store.visibleRequests[0].id
+
+        // Still unknown to the host: stays visible.
+        await store.checkStatus(of: id)
+        #expect(store.visibleRequests.count == 1)
+
+        await client.set(statusResult: .success(.applied))
+        await store.checkStatus(of: id)
+        #expect(store.visibleRequests.isEmpty)
+        #expect(await client.submitCalls == [id])
+        #expect(await client.statusCalls == [id, id])
+    }
+
+    @Test func uncertainRequestsAreQueriedAfterReconnect() async {
+        let client = StubClient()
+        await client.set(submitResult: .failure(.connectionClosed))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+        await store.send("deploy it")
+        let id = store.visibleRequests[0].id
+
+        await client.set(statusResult: .success(.applied))
+        await client.dropConnection(.connectionClosed)
+        #expect(await waitUntil { store.receipts.requests.isEmpty })
+        #expect(await client.submitCalls == [id])
+        #expect(await client.statusCalls == [id])
+    }
+
+    @Test func aRejectionIsReportedAndTheTextIsHandedBack() async {
+        let client = StubClient()
+        await client.set(submitResult: .success(.rejected(.busy)))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+
+        #expect(await store.send("hello") == false)
+        #expect(store.notice == RemoteRejection.busy.message)
+        #expect(store.visibleRequests.isEmpty)
+    }
+
+    @Test func nothingIsSentWithoutAnAttachedSessionOrText() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await store.send("hello") == false)
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+        #expect(await store.send("   ") == false)
+        #expect(await client.submitCalls.isEmpty)
+    }
+
+    // MARK: Demo host
+
+    @Test func demoListsItsSessionsWithoutTouchingTheCredentialStore() async {
+        let credentials = InMemoryCredentialStore()
+        let store = makeStore(StubClient(), credentials: credentials)
+        await store.startDemo(deviceName: "Phone")
+
+        #expect(store.isDemo)
+        #expect(await waitUntil { store.connection == .connected && store.sessions.count == 3 })
+        #expect(credentials.load() == nil)
+        #expect(store.badges.badge(for: store.sessions[1]) == .question)
+    }
+
+    @Test func demoStreamsATurnThenAsksForApprovalAndRunsItWhenApproved() async {
+        let store = makeStore(StubClient())
+        await store.startDemo(deviceName: "Phone")
+        #expect(await waitUntil { store.sessions.count == 3 })
+        store.select(DemoRemoteClient.approvalSessionID)
+
+        #expect(await waitUntil { store.attached?.pendingApproval != nil })
+        let approval = store.attached!.pendingApproval!
+        #expect(store.attached?.isRunning == true)
+        #expect(await waitUntil { store.selectedSession?.attention.pendingApprovals == 1 })
+        let tools = store.attached!.items.compactMap { item -> ToolCall? in
+            if case .tool(let tool) = item.content { tool } else { nil }
+        }
+        #expect(tools.map(\.status) == [.succeeded, .succeeded])
+
+        #expect(await store.resolve(approval, decision: .approve))
+        #expect(await waitUntil { store.attached?.isRunning == false })
+        #expect(store.attached?.pendingApproval == nil)
+        #expect(store.attached?.items.contains { item in
+            if case .tool(let tool) = item.content { tool.name == "run_command" && tool.status == .succeeded } else { false }
+        } == true)
+        #expect(store.receipts.requests.isEmpty)
+
+        // The batch is gone: resolving it again is stale.
+        #expect(await store.resolve(approval, decision: .approve) == false)
+        #expect(store.notice == RemoteRejection.staleApproval.message)
+    }
+
+    @Test func demoAnswersAQuestionAndFinishesTheTurn() async {
+        let store = makeStore(StubClient())
+        await store.startDemo(deviceName: "Phone")
+        #expect(await waitUntil { store.sessions.count == 3 })
+        store.select(DemoRemoteClient.questionSessionID)
+        #expect(await waitUntil { store.attached?.pendingQuestion != nil })
+        let question = store.attached!.pendingQuestion!
+
+        #expect(await store.answer(question, with: QuestionAnswer()) == false)
+        #expect(await store.answer(question, with: QuestionAnswer(selectedOptionIDs: ["segments"])))
+        #expect(await waitUntil { store.attached?.isRunning == false })
+        #expect(store.attached?.pendingQuestion == nil)
+        #expect(store.attached?.items.contains(TranscriptItem(id: "user-live-1", .user("Segment files"))) == true)
+        #expect(await waitUntil { store.selectedSession?.activity == .idle })
+    }
+
+    @Test func demoSubmitsWhenIdleQueuesWhileRunningAndPagesHistory() async {
+        // Paced, so the running turn stays observable long enough to queue behind it.
+        let store = makeStore(StubClient(), demoPace: .milliseconds(3))
+        await store.startDemo(deviceName: "Phone")
+        #expect(await waitUntil { store.sessions.count == 3 })
+        store.select(DemoRemoteClient.idleSessionID)
+        #expect(await waitUntil { store.attached != nil })
+
+        await store.loadEarlierHistory()
+        #expect(store.attached?.items.first?.id == "notes-1")
+        #expect(store.attached?.historyCursor == nil)
+
+        #expect(await store.send("first"))
+        // Until the turn's first update arrives the store still sees an idle session, and
+        // the host would answer a second submit with `busy`.
+        #expect(await waitUntil { store.attached?.isRunning == true })
+        #expect(await store.send("second"))
+        #expect(await waitUntil {
+            store.attached?.isRunning == false
+                && store.attached?.items.filter { $0.content == .user("second") }.count == 1
+        })
+        let users = store.attached!.items.compactMap { item -> String? in
+            if case .user(let text) = item.content { text } else { nil }
+        }
+        #expect(users.suffix(2) == ["first", "second"])
+        #expect(store.attached?.items.contains { $0.content == .notice("Queued: second") } == true)
+    }
+
+    @Test func demoCancelsTheObservedTurn() async {
+        let store = makeStore(StubClient())
+        await store.startDemo(deviceName: "Phone")
+        #expect(await waitUntil { store.sessions.count == 3 })
+        store.select(DemoRemoteClient.questionSessionID)
+        #expect(await waitUntil { store.attached?.isRunning == true })
+
+        await store.cancelTurn()
+        #expect(await waitUntil { store.attached?.isRunning == false })
+        #expect(store.attached?.pendingQuestion == nil)
+    }
+}
