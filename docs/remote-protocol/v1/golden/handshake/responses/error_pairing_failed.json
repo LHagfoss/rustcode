@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "pairing_failed",
+  "message": "why the connection is being closed"
+}

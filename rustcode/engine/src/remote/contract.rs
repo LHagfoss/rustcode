@@ -13,6 +13,12 @@
 
 use crate::controller::ApprovalChoice;
 
+use crate::remote_gateway::handshake::{
+    ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse, PairingMethod,
+    Secret,
+};
+use crate::remote_gateway::pairing::QrPayload;
+
 use super::protocol::*;
 
 /// Directory of the committed contract, relative to the repository root.
@@ -74,7 +80,119 @@ pub fn schema_documents() -> Vec<(&'static str, String)> {
             "frame.schema.json",
             document(schemars::schema_for!(RemoteFrame)),
         ),
+        (
+            "handshake-request.schema.json",
+            document(schemars::schema_for!(HandshakeRequest)),
+        ),
+        (
+            "handshake-response.schema.json",
+            document(schemars::schema_for!(HandshakeResponse)),
+        ),
+        (
+            "pairing-qr.schema.json",
+            document(schemars::schema_for!(QrPayload)),
+        ),
     ]
+}
+
+/// The first frame a device sends, one example per shape. The secrets are
+/// examples; no gateway ever issued them.
+pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
+    vec![
+        (
+            "pair_credential",
+            HandshakeRequest::Pair {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                method: PairingMethod::Credential,
+                secret: Secret::new("q0lYc1o3bXJ3T2d5d0l2Rk5kU2tqeTZqZ0Z2ZUo0V2s"),
+                device_name: "Lars's iPhone".to_owned(),
+            },
+        ),
+        (
+            "pair_code",
+            HandshakeRequest::Pair {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                method: PairingMethod::Code,
+                secret: Secret::new("4821-9034"),
+                device_name: "Lars's iPhone".to_owned(),
+            },
+        ),
+        (
+            "authenticate",
+            HandshakeRequest::Authenticate {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                device_id: "0011223344556677".to_owned(),
+                token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
+            },
+        ),
+    ]
+}
+
+/// The handshake answers and one bare error frame per code.
+pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
+    let mut frames = vec![
+        (
+            "paired".to_owned(),
+            HandshakeResponse::Paired {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                gateway_id: GATEWAY.to_owned(),
+                instance_id: INSTANCE.to_owned(),
+                device_id: "0011223344556677".to_owned(),
+                device_name: "Lars's iPhone".to_owned(),
+                token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
+                host_name: Some("studio".to_owned()),
+            },
+        ),
+        (
+            "authenticated".to_owned(),
+            HandshakeResponse::Authenticated {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                gateway_id: GATEWAY.to_owned(),
+                instance_id: INSTANCE.to_owned(),
+                device_id: "0011223344556677".to_owned(),
+                device_name: "Lars's iPhone".to_owned(),
+                host_name: Some("studio".to_owned()),
+            },
+        ),
+    ];
+    for code in [
+        ErrorCode::InvalidFrame,
+        ErrorCode::FrameTooLarge,
+        ErrorCode::UnsupportedVersion,
+        ErrorCode::HandshakeTimeout,
+        ErrorCode::PairingFailed,
+        ErrorCode::RateLimited,
+        ErrorCode::Unauthorized,
+        ErrorCode::Busy,
+        ErrorCode::Revoked,
+        ErrorCode::SlowConsumer,
+        ErrorCode::IdleTimeout,
+        ErrorCode::ShuttingDown,
+        ErrorCode::NotImplemented,
+        ErrorCode::Internal,
+    ] {
+        let name = serde_json::to_value(code).expect("codes serialize");
+        frames.push((
+            format!("error_{}", name.as_str().expect("codes are strings")),
+            HandshakeResponse::Error {
+                code,
+                message: "why the connection is being closed".to_owned(),
+                retry_after_secs: (code == ErrorCode::RateLimited).then_some(240),
+            },
+        ));
+    }
+    frames
+}
+
+/// What a pairing QR code encodes.
+pub fn golden_qr_payload() -> QrPayload {
+    QrPayload {
+        protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+        address: "100.92.13.44:17879".to_owned(),
+        gateway_id: GATEWAY.to_owned(),
+        credential: Secret::new("q0lYc1o3bXJ3T2d5d0l2Rk5kU2tqeTZqZ0Z2ZUo0V2s"),
+        host_name: Some("studio".to_owned()),
+    }
 }
 
 fn request(
@@ -93,6 +211,7 @@ fn request(
 
 const SESSION: (&str, u64) = ("5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44", 3);
 const GATEWAY: &str = "gw-8e1f4b7a";
+const INSTANCE: &str = "inst-41c07d92";
 const TURN: &str = "turn:48213:12";
 const QUESTION: &str = "question:48213:4";
 const BATCH: &str = "controller:48213:7";
@@ -125,6 +244,7 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
                 RemoteOperation::AttachSession {
                     resume: Some(ResumeCursor {
                         gateway_id: GATEWAY.to_owned(),
+                        instance_id: Some(INSTANCE.to_owned()),
                         last_sequence: 412,
                     }),
                 },
@@ -451,6 +571,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             None,
             RemoteResult::Sessions {
                 gateway_id: GATEWAY.to_owned(),
+                instance_id: Some(INSTANCE.to_owned()),
                 sessions: vec![golden_session_info()],
                 subscribed: false,
             },
@@ -461,6 +582,20 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             None,
             RemoteResult::Attached {
                 gateway_id: GATEWAY.to_owned(),
+                instance_id: Some(INSTANCE.to_owned()),
+                resync: None,
+                snapshot: Box::new(golden_snapshot()),
+            },
+        ),
+        // A `resume` cursor that could not be replayed.
+        response(
+            "attached_resync",
+            "req-0003",
+            None,
+            RemoteResult::Attached {
+                gateway_id: GATEWAY.to_owned(),
+                instance_id: Some(INSTANCE.to_owned()),
+                resync: Some(ResyncReason::GatewayRestarted),
                 snapshot: Box::new(golden_snapshot()),
             },
         ),
@@ -470,6 +605,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             None,
             RemoteResult::Resumed {
                 gateway_id: GATEWAY.to_owned(),
+                instance_id: Some(INSTANCE.to_owned()),
                 next_sequence: 413,
             },
         ),
@@ -744,6 +880,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             RemoteFrame::Sessions(RemoteSessionsFrame {
                 protocol_version: REMOTE_PROTOCOL_VERSION,
                 gateway_id: GATEWAY.to_owned(),
+                instance_id: Some(INSTANCE.to_owned()),
                 sessions: vec![
                     golden_session_info(),
                     RemoteSessionInfo {
@@ -786,6 +923,22 @@ pub fn contract_files() -> Vec<(String, String)> {
             .iter()
             .map(|(name, frame)| (format!("golden/frames/{name}.json"), pretty(frame))),
     );
+    files.extend(golden_handshake_requests().iter().map(|(name, frame)| {
+        (
+            format!("golden/handshake/requests/{name}.json"),
+            pretty(frame),
+        )
+    }));
+    files.extend(golden_handshake_responses().iter().map(|(name, frame)| {
+        (
+            format!("golden/handshake/responses/{name}.json"),
+            pretty(frame),
+        )
+    }));
+    files.push((
+        "golden/handshake/pairing_qr.json".to_owned(),
+        pretty(&golden_qr_payload()),
+    ));
     files
 }
 
@@ -795,6 +948,13 @@ mod tests {
     use serde_json::Value;
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
+
+    const GOLDEN_DIRECTORIES: [&str; 4] = [
+        "golden/requests",
+        "golden/frames",
+        "golden/handshake/requests",
+        "golden/handshake/responses",
+    ];
 
     fn contract_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(CONTRACT_DIR)
@@ -828,7 +988,7 @@ mod tests {
     fn committed_contract_matches_the_wire_types() {
         let files = contract_files();
         if std::env::var_os("RUSTCODE_UPDATE_REMOTE_PROTOCOL").is_some() {
-            for directory in ["golden/requests", "golden/frames"] {
+            for directory in GOLDEN_DIRECTORIES {
                 let directory = contract_dir().join(directory);
                 let _ = std::fs::remove_dir_all(&directory);
                 std::fs::create_dir_all(&directory).expect("create golden directory");
@@ -859,7 +1019,7 @@ mod tests {
             .iter()
             .map(|(relative, _)| relative.clone())
             .collect::<BTreeSet<_>>();
-        for directory in ["golden/requests", "golden/frames"] {
+        for directory in GOLDEN_DIRECTORIES {
             for (relative, _) in committed_json(directory) {
                 assert!(
                     generated.contains(&relative),
@@ -1018,6 +1178,11 @@ mod tests {
         for (schema_name, directory) in [
             ("request.schema.json", "golden/requests"),
             ("frame.schema.json", "golden/frames"),
+            ("handshake-request.schema.json", "golden/handshake/requests"),
+            (
+                "handshake-response.schema.json",
+                "golden/handshake/responses",
+            ),
         ] {
             let schema = schema(schema_name);
             for (relative, value) in committed_json(directory) {
@@ -1088,6 +1253,43 @@ mod tests {
             .iter()
             .filter_map(|(_, value)| value.pointer(pointer)?.as_str().map(str::to_owned))
             .collect()
+    }
+
+    #[test]
+    fn handshake_golden_frames_round_trip_and_cover_every_shape() {
+        let requests = committed_json("golden/handshake/requests");
+        for (relative, value) in &requests {
+            let frame = HandshakeRequest::parse(&value.to_string())
+                .unwrap_or_else(|rejection| panic!("{relative} was rejected: {rejection:?}"));
+            assert_eq!(&serde_json::to_value(&frame).unwrap(), value, "{relative}");
+        }
+        let responses = committed_json("golden/handshake/responses");
+        for (relative, value) in &responses {
+            let frame: HandshakeResponse = serde_json::from_value(value.clone())
+                .unwrap_or_else(|error| panic!("{relative}: {error}"));
+            assert_eq!(&serde_json::to_value(&frame).unwrap(), value, "{relative}");
+        }
+        let request_schema = schema("handshake-request.schema.json");
+        let response_schema = schema("handshake-response.schema.json");
+        assert_eq!(
+            strings(&requests, "/type"),
+            tags(&request_schema, None, "type")
+        );
+        assert_eq!(
+            strings(&responses, "/type"),
+            tags(&response_schema, None, "type")
+        );
+        assert_eq!(
+            strings(&responses, "/code"),
+            tags_of_enum(&response_schema, "ErrorCode")
+        );
+
+        let qr: Value = serde_json::from_str(&committed("golden/handshake/pairing_qr.json"))
+            .expect("QR payload is JSON");
+        let qr_schema = schema("pairing-qr.schema.json");
+        validate(&qr_schema, &qr, &qr_schema, "$").expect("QR payload satisfies its schema");
+        let decoded: QrPayload = serde_json::from_value(qr.clone()).expect("QR payload decodes");
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), qr);
     }
 
     /// A shape added to the protocol must come with a golden frame.

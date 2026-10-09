@@ -251,7 +251,15 @@ async fn run_remote_command(
             port,
             advertise,
         } => remote::serve(&config_dir, bind, *port, advertise.as_deref()).await?,
-        RemoteCommands::Pair => println!("{}", remote::format_offer(&lifecycle.pair().await?)),
+        RemoteCommands::Pair => {
+            use std::io::IsTerminal;
+            let style = if std::io::stdout().is_terminal() {
+                remote::QrStyle::Ansi
+            } else {
+                remote::QrStyle::Text
+            };
+            println!("{}", remote::format_offer(&lifecycle.pair().await?, style));
+        }
         RemoteCommands::Devices { json } => {
             let devices = lifecycle.devices()?;
             if *json {

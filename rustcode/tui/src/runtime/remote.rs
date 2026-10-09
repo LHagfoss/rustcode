@@ -10,8 +10,8 @@
 
 use super::*;
 use rustcode::remote::owner::{
-    OwnerCommand, OwnerConnector, OwnerLink, OwnerLinkError, OwnerMessage, OwnerReply,
-    SharingCommand, default_connector, next_registration_epoch,
+    GatewayLinkStatus, OwnerCommand, OwnerConnector, OwnerLink, OwnerLinkError, OwnerMessage,
+    OwnerReply, SharingCommand, default_connector, next_registration_epoch,
 };
 use rustcode::remote::{
     OwnerFollowUp, ProjectionLimits, ReceiptState, RemoteError, RemoteErrorCode, RemoteRequest,
@@ -29,6 +29,12 @@ const PANEL_TITLE: &str = "Remote";
 struct Share {
     publisher: SessionPublisher,
     link: OwnerLink,
+    /// What the gateway last reported; `None` until it accepts the
+    /// registration.
+    gateway: Option<GatewayLinkStatus>,
+    /// `/remote` was entered and its pairing details are not on screen yet:
+    /// they are asked for once the gateway is known to be there.
+    pairing_due: bool,
 }
 
 /// What the loop lends the bridge for one iteration.
@@ -100,7 +106,13 @@ impl RemoteBridge {
 
     async fn run_command(&mut self, command: SharingCommand, app_state: &Arc<Mutex<AppState>>) {
         let report = match command {
-            SharingCommand::Enable => self.enable(app_state).await,
+            SharingCommand::Enable => {
+                let report = self.enable(app_state).await;
+                if self.show_pairing_details(app_state) {
+                    return;
+                }
+                report
+            }
             SharingCommand::Status => self.status(),
             SharingCommand::Off => {
                 if self.close(SessionCloseReason::SharingDisabled) {
@@ -117,9 +129,42 @@ impl RemoteBridge {
             .show_command_panel(PANEL_TITLE, report);
     }
 
-    /// Share the session on screen. Repeating it changes nothing.
+    /// Put the pairing details for the last `/remote` on screen, if they are
+    /// due and the gateway has accepted the registration. The request runs on
+    /// its own task: the loop does not wait on the gateway's control socket.
+    fn show_pairing_details(&mut self, app_state: &Arc<Mutex<AppState>>) -> bool {
+        let due = self.share.as_ref().is_some_and(|share| {
+            share.pairing_due
+                && share
+                    .gateway
+                    .as_ref()
+                    .is_some_and(|gateway| gateway.connected)
+        });
+        if !due {
+            return false;
+        }
+        if let Some(share) = self.share.as_mut() {
+            share.pairing_due = false;
+        }
+        #[cfg(unix)]
+        if let Some(directory) = self.connector.gateway_directory() {
+            tokio::spawn(rustcode::remote_gateway::command::show_pairing_details(
+                Arc::clone(app_state),
+                PANEL_TITLE,
+                self.status(),
+                directory,
+            ));
+            return true;
+        }
+        let _ = app_state;
+        false
+    }
+
+    /// Share the session on screen. Repeating it changes nothing about the
+    /// registration; it shows fresh pairing details.
     async fn enable(&mut self, app_state: &Arc<Mutex<AppState>>) -> String {
-        if self.share.is_some() {
+        if let Some(share) = self.share.as_mut() {
+            share.pairing_due = true;
             return self.status();
         }
         let registration = SessionRegistration {
@@ -133,7 +178,7 @@ impl RemoteBridge {
             Err(error @ OwnerLinkError::NoGateway) => {
                 return format!(
                     "Remote sharing is not available: {error}.\n\
-                     This session stays private. `/remote` is experimental and this build has no gateway to connect to yet."
+                     This session stays private. The remote gateway runs on macOS and Linux."
                 );
             }
             Err(error) => {
@@ -154,7 +199,12 @@ impl RemoteBridge {
             return "Remote sharing could not start: the gateway link closed.\nThis session stays private."
                 .to_owned();
         }
-        self.share = Some(Share { publisher, link });
+        self.share = Some(Share {
+            publisher,
+            link,
+            gateway: None,
+            pairing_due: true,
+        });
         self.status()
     }
 
@@ -164,10 +214,38 @@ impl RemoteBridge {
                 .to_owned();
         };
         let registration = share.publisher.registration();
+        let names = |names: &[String]| {
+            if names.is_empty() {
+                "none".to_owned()
+            } else {
+                names.join(", ")
+            }
+        };
+        let gateway = match &share.gateway {
+            None => "Gateway  connecting…".to_owned(),
+            Some(gateway) if !gateway.connected => {
+                "Gateway  unreachable; looking for it again. Devices cannot see this session meanwhile."
+                    .to_owned()
+            }
+            Some(gateway) => format!(
+                "Gateway  {}{}\n\
+                 Attached devices  {}\n\
+                 Connected devices  {}",
+                gateway.advertised_address,
+                if gateway.loopback_only {
+                    " (this machine only; a phone cannot reach it)"
+                } else {
+                    ""
+                },
+                names(&gateway.attached_devices),
+                names(&gateway.connected_devices),
+            ),
+        };
         format!(
             "This session is shared with the remote gateway.\n\
              Session  {}\n\
              Epoch  {}\n\
+             {gateway}\n\
              Published  {} updates{}\n\
              Run /remote off to stop sharing. Switching to another session stops it too.",
             registration.session_id,
@@ -244,6 +322,7 @@ impl RemoteBridge {
                     *needs_redraw = true;
                 }
                 Ok(OwnerCommand::SnapshotRequested) => share.publisher.request_snapshot(),
+                Ok(OwnerCommand::Status(status)) => share.gateway = Some(status),
                 Ok(OwnerCommand::Closed { reason }) => {
                     closed = Some(format!("Remote sharing stopped: {reason}"));
                     break;
@@ -301,7 +380,12 @@ impl RemoteBridge {
 
         if let Some(notice) = closed {
             self.close(SessionCloseReason::OwnerExited);
-            app_state.lock().await.set_transient_notice(notice);
+            let mut state = app_state.lock().await;
+            // The panel may still say that sharing is starting.
+            state.update_command_panel(PANEL_TITLE, format!("{notice}\nThis session is private."));
+            state.set_transient_notice(notice);
+            *needs_redraw = true;
+        } else if self.show_pairing_details(app_state) {
             *needs_redraw = true;
         }
     }
@@ -720,6 +804,158 @@ mod tests {
         assert!(runtime.app_state().await.remote_command.is_none());
     }
 
+    /// Run the loop until the `/remote` panel satisfies `done`.
+    async fn panel_until(runtime: &mut AppRuntime, done: impl Fn(&str) -> bool) -> String {
+        tokio::time::timeout(WAIT, async {
+            loop {
+                runtime.run_remote_iteration().await;
+                let report = panel(runtime).await;
+                if done(&report) {
+                    return report;
+                }
+                tokio::time::sleep(EVENT_POLL_INTERVAL).await;
+            }
+        })
+        .await
+        .expect("the panel shows what the test waits for")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_registers_with_a_running_gateway_and_shows_how_to_pair() {
+        use rustcode::remote_gateway::address::plan_listen;
+        use rustcode::remote_gateway::gateway::{Gateway, GatewayConfig, Limits};
+        use rustcode::remote_gateway::hub::{HubLimits, SessionHub};
+        use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
+        use rustcode::remote_gateway::owner_client::GatewayConnector;
+
+        // A gateway on a loopback port in its own configuration directory.
+        let dir = std::path::PathBuf::from(format!(
+            "/tmp/rustcode-tui-remote-{}-{}",
+            std::process::id(),
+            next_registration_epoch()
+        ));
+        std::fs::create_dir_all(&dir).expect("temporary configuration directory");
+        let lifecycle = RemoteLifecycle::new(&dir);
+        let hub = SessionHub::start(HubLimits::default());
+        let gateway = Gateway::bind(
+            &lifecycle,
+            GatewayConfig {
+                plan: plan_listen("127.0.0.1", None, &[]).expect("loopback plan"),
+                port: 0,
+                router: hub.clone(),
+                sessions: Some(hub),
+                limits: Limits::default(),
+            },
+        )
+        .await
+        .expect("the gateway binds");
+        let address = gateway.local_addr().to_string();
+        let shutdown = gateway.shutdown_token();
+        let serving = tokio::spawn(gateway.run());
+
+        let mut runtime = AppRuntime::for_test(AppState::new());
+        runtime.remote =
+            RemoteBridge::with_connector(Box::new(GatewayConnector::discover(lifecycle.clone())));
+        let session_id = runtime.app_state().await.active_session_id.clone();
+
+        // `/remote` answers at once; the gateway is reached from its own task.
+        enter(&mut runtime, "/remote").await;
+        runtime.run_remote_iteration().await;
+        assert!(panel(&runtime).await.contains("This session is shared"));
+        let report = panel_until(&mut runtime, |report| report.contains("code:")).await;
+        assert!(report.contains(&format!("Gateway  {address}")), "{report}");
+        assert!(report.contains(&format!("address:  {address}")), "{report}");
+        // The gateway is on loopback: the panel says what that means and
+        // what to run instead.
+        assert!(report.contains("a phone cannot reach it"), "{report}");
+        assert!(report.contains("rustcode remote serve --bind <address>"));
+        assert!(report.contains("[remote]"));
+        // A scannable code, as marked rows the panel paints black on white.
+        assert!(
+            report
+                .lines()
+                .filter(|line| line.starts_with('\u{2060}'))
+                .count()
+                > 10
+        );
+        let offer_code = report
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("code:"))
+            .expect("the manual code is shown")
+            .trim()
+            .to_owned();
+        assert_eq!(offer_code.len(), 9, "{offer_code}");
+
+        let status = lifecycle
+            .status()
+            .await
+            .unwrap()
+            .expect("gateway is running");
+        let sessions = status.sessions.expect("the gateway routes sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, session_id);
+
+        // Repeating `/remote` keeps the registration and replaces the offer.
+        let registration = runtime.remote.registration().cloned();
+        enter(&mut runtime, "/remote").await;
+        let again = panel_until(&mut runtime, |report| {
+            report.contains("code:") && !report.contains(&offer_code)
+        })
+        .await;
+        assert!(again.contains("This session is shared"));
+        assert_eq!(runtime.remote.registration().cloned(), registration);
+        assert_eq!(
+            lifecycle
+                .status()
+                .await
+                .unwrap()
+                .unwrap()
+                .sessions
+                .unwrap()
+                .len(),
+            1
+        );
+
+        enter(&mut runtime, "/remote status").await;
+        runtime.run_remote_iteration().await;
+        let status = panel(&runtime).await;
+        assert!(status.contains("Attached devices  none"), "{status}");
+        assert!(!status.contains("code:"), "status shows no pairing secret");
+
+        // `/remote off` removes the session from the gateway.
+        enter(&mut runtime, "/remote off").await;
+        runtime.run_remote_iteration().await;
+        assert!(panel(&runtime).await.contains("Remote sharing is off"));
+        tokio::time::timeout(WAIT, async {
+            while !lifecycle
+                .status()
+                .await
+                .unwrap()
+                .unwrap()
+                .sessions
+                .unwrap()
+                .is_empty()
+            {
+                tokio::time::sleep(EVENT_POLL_INTERVAL).await;
+            }
+        })
+        .await
+        .expect("the registration is removed");
+
+        shutdown.cancel();
+        serving.await.unwrap().unwrap();
+
+        // Without a gateway, and with nothing allowed to start one, sharing
+        // stops and says what to run.
+        enter(&mut runtime, "/remote").await;
+        let stopped = panel_until(&mut runtime, |report| report.contains("stopped")).await;
+        assert!(stopped.contains("rustcode remote serve"), "{stopped}");
+        assert!(stopped.contains("This session is private"), "{stopped}");
+        assert!(runtime.remote.registration().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn repeating_remote_keeps_the_same_registration() {
         let (mut runtime, gateway) = shared_runtime(AppState::new(), 16);
@@ -843,17 +1079,41 @@ mod tests {
         let mut received = Vec::new();
         publish_until(&mut runtime, &mut link, &mut received, turn_ended).await;
         let published = events(&received);
-        assert!(matches!(
-            published.first(),
-            Some((_, RemoteEvent::TurnStarted { turn_id: Some(_), prompt })) if prompt.text == "from the phone"
-        ));
-        let text: String = published
+        // The turn is announced once: by a `turn_started` event, or, when the
+        // orchestrator got there before the first publication, by the
+        // snapshot that already shows it running.
+        let started = published
             .iter()
-            .filter_map(|(_, event)| match event {
-                RemoteEvent::TextDelta { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
+            .filter(|(_, event)| matches!(event, RemoteEvent::TurnStarted { .. }))
+            .count();
+        let announced_by_snapshot = received.iter().any(|message| {
+            matches!(message, OwnerMessage::Snapshot { snapshot, .. } if snapshot.turn.is_some())
+        });
+        if started == 1 {
+            assert!(matches!(
+                published.first(),
+                Some((_, RemoteEvent::TurnStarted { turn_id: Some(_), prompt })) if prompt.text == "from the phone"
+            ));
+        } else {
+            assert!(started == 0 && announced_by_snapshot, "{published:?}");
+        }
+        // Snapshot text plus the deltas after it is the response, once.
+        let mut text = String::new();
+        for message in &received {
+            match message {
+                OwnerMessage::Snapshot { snapshot, .. } => {
+                    if let Some(turn) = &snapshot.turn {
+                        text = turn.live_response.text.clone();
+                    }
+                }
+                OwnerMessage::Event(frame) => {
+                    if let RemoteEvent::TextDelta { text: delta } = &frame.event {
+                        text.push_str(delta);
+                    }
+                }
+                _ => {}
+            }
+        }
         assert_eq!(text, PROVIDER_TEXT);
 
         let state = runtime.app_state().await;

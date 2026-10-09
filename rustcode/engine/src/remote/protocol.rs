@@ -160,6 +160,13 @@ impl RemoteOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ResumeCursor {
     pub gateway_id: String,
+    /// The `instance_id` the cursor was obtained under, as the handshake and
+    /// the `attached`/`resumed` results report it. A cursor from another
+    /// gateway instance is never replayed. When absent the gateway decides
+    /// from the sequence alone, which also refuses a cursor that predates a
+    /// restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
     /// Sequence of the last event the client applied.
     pub last_sequence: u64,
 }
@@ -239,6 +246,9 @@ pub enum RemoteResult {
     Error(RemoteError),
     Sessions {
         gateway_id: String,
+        /// The running gateway process; changes on every gateway start.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_id: Option<String>,
         sessions: Vec<RemoteSessionInfo>,
         /// True when `sessions` frames will follow.
         subscribed: bool,
@@ -247,12 +257,21 @@ pub enum RemoteResult {
     /// `snapshot.sequence` follow.
     Attached {
         gateway_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_id: Option<String>,
+        /// Set when the request carried a `resume` cursor that could not be
+        /// replayed: the client discards what it holds for the session and
+        /// starts from `snapshot`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resync: Option<ResyncReason>,
         snapshot: Box<RemoteSnapshot>,
     },
     /// The requested replay is available: the events after
     /// `last_sequence` follow, with no snapshot.
     Resumed {
         gateway_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_id: Option<String>,
         next_sequence: u64,
     },
     Detached,
@@ -460,6 +479,8 @@ pub enum SessionCloseReason {
 pub struct RemoteSessionsFrame {
     pub protocol_version: u32,
     pub gateway_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
     pub sessions: Vec<RemoteSessionInfo>,
 }
 

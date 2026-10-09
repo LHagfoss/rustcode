@@ -24,7 +24,7 @@ use super::protocol::{
 };
 
 /// The live sharing registration an owner holds for its session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SessionRegistration {
     pub session_id: String,
     pub registration_epoch: u64,

@@ -2,9 +2,9 @@
 //!
 //! The gateway foundation understands only handshake frames. Once a device is
 //! authenticated, each text frame it sends is handed, unparsed, to a
-//! [`FrameRouter`]. The session registry and routing half of issue #1909
-//! implements this trait; until then [`NoSessionsRouter`] answers every frame
-//! with a typed `not_implemented` error.
+//! [`FrameRouter`]. [`super::hub::SessionHub`] is the router of a real
+//! gateway; [`NoSessionsRouter`] is a stub that answers every frame with a
+//! typed `not_implemented` error.
 
 use super::handshake::{ErrorCode, HandshakeResponse};
 use std::sync::{Arc, Mutex};
@@ -82,6 +82,13 @@ impl FrameSink {
             }
             Err(mpsc::error::TrySendError::Closed(_)) => Err(SinkError::Closed),
         }
+    }
+
+    /// Frames that can still be queued before [`FrameSink::send`] overflows.
+    /// A router that has a backlog for the device checks this and waits
+    /// instead of pushing the device over its limit.
+    pub fn free_slots(&self) -> usize {
+        self.queue.capacity()
     }
 
     /// Whether the connection has been told to close.

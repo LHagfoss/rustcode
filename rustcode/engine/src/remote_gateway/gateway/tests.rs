@@ -84,6 +84,7 @@ impl Harness {
                 plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
                 port: 0,
                 router: router.clone(),
+                sessions: None,
                 limits,
             },
         )
@@ -671,6 +672,7 @@ async fn single_instance_stop_and_cleanup() {
             plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
             port: 0,
             router: Arc::new(NoSessionsRouter),
+            sessions: None,
             limits: Limits::default(),
         },
     )
@@ -712,6 +714,7 @@ async fn single_instance_stop_and_cleanup() {
             plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
             port: 0,
             router: Arc::new(NoSessionsRouter),
+            sessions: None,
             limits: Limits::default(),
         };
         match Gateway::bind(&lifecycle, config).await {
@@ -755,6 +758,7 @@ async fn pairing_details_use_the_advertised_address_not_the_bind_address() {
             plan: plan_listen("127.0.0.1", Some("workstation.netbird.test"), &[]).unwrap(),
             port: 0,
             router: Arc::new(NoSessionsRouter),
+            sessions: None,
             limits: Limits::default(),
         },
     )
@@ -780,4 +784,86 @@ async fn pairing_details_use_the_advertised_address_not_the_bind_address() {
 
     shutdown.cancel();
     bounded(task).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn websocket_pings_keep_an_otherwise_silent_connection_open() {
+    let limits = Limits {
+        ping_interval: Duration::from_millis(50),
+        idle_timeout: Duration::from_millis(200),
+        ..Limits::default()
+    };
+    let harness = Harness::start_with(limits, RecordingRouter::default()).await;
+    let (mut client, _, _) = harness.paired_device("phone").await;
+    // The device sends no text frame for five idle limits, only pings, and
+    // does not read either, so it answers none of the gateway's own pings.
+    for _ in 0..20 {
+        bounded(client.socket.send(Message::Ping(Default::default())))
+            .await
+            .expect("ping");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    client.send(json!({"type": "still here"})).await;
+    let answer = client.next_json().await;
+    assert_eq!(answer["code"], "not_implemented", "{answer}");
+    assert_eq!(harness.status().await.connections.len(), 1);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_long_configuration_path_still_gets_working_sockets() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let deep = dir.path().join("x".repeat(70)).join("y".repeat(70));
+    assert!(deep.join("remote/control.sock").as_os_str().len() > 104);
+    let lifecycle = RemoteLifecycle::new(&deep);
+    let gateway = Gateway::bind(
+        &lifecycle,
+        GatewayConfig {
+            plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
+            port: 0,
+            router: Arc::new(NoSessionsRouter),
+            sessions: None,
+            limits: Limits::default(),
+        },
+    )
+    .await
+    .expect("the gateway binds although the path does not fit a socket address");
+    let addr = gateway.local_addr();
+    let shutdown = gateway.shutdown_token();
+    let task = tokio::spawn(gateway.run());
+
+    // The registration stays with the configuration and records where the
+    // sockets went; both are private and owned by this user.
+    let registration = GatewayRegistration::read(&lifecycle.registration_path()).unwrap();
+    assert!(lifecycle.registration_path().starts_with(&deep));
+    assert_eq!(registration.socket_path, lifecycle.socket_path());
+    assert_eq!(
+        registration.owner_socket_path,
+        Some(lifecycle.owner_socket_path())
+    );
+    for socket in [lifecycle.socket_path(), lifecycle.owner_socket_path()] {
+        assert!(!socket.starts_with(&deep), "{}", socket.display());
+        assert_eq!(
+            fs::metadata(&socket).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(socket.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+    // The control socket works: status, pairing, a device, stop.
+    let offer = bounded(lifecycle.pair()).await.unwrap();
+    let paired = Client::pair(addr, "code", offer.code.expose()).await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+    assert!(bounded(lifecycle.status()).await.unwrap().is_some());
+    shutdown.cancel();
+    bounded(task).await.unwrap().unwrap();
+    assert!(!lifecycle.socket_path().exists());
+    assert!(!lifecycle.owner_socket_path().exists());
+    let _ = fs::remove_dir_all(lifecycle.socket_path().parent().unwrap());
 }

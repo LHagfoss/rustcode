@@ -1,0 +1,42 @@
+{
+  "$defs": {
+    "Secret": {
+      "description": "A pairing credential, manual code or device token. Serializes as a plain\nstring; `Debug` never prints the value, so it cannot reach logs or error\nstrings through a derived impl.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What the QR code encodes. Compact JSON; see [`qr_payload`].",
+  "properties": {
+    "address": {
+      "description": "`host:port` of the WebSocket listener, never an unspecified address.",
+      "type": "string"
+    },
+    "credential": {
+      "$ref": "#/$defs/Secret"
+    },
+    "gateway_id": {
+      "type": "string"
+    },
+    "host_name": {
+      "description": "The host's own name, for display; cut to keep the code scannable.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "protocol_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "address",
+    "gateway_id",
+    "credential"
+  ],
+  "title": "QrPayload",
+  "type": "object"
+}

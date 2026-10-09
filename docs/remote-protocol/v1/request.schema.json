@@ -296,6 +296,13 @@
         "gateway_id": {
           "type": "string"
         },
+        "instance_id": {
+          "description": "The `instance_id` the cursor was obtained under, as the handshake and\nthe `attached`/`resumed` results report it. A cursor from another\ngateway instance is never replayed. When absent the gateway decides\nfrom the sequence alone, which also refuses a cursor that predates a\nrestart.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "last_sequence": {
           "description": "Sequence of the last event the client applied.",
           "format": "uint64",

@@ -1,14 +1,19 @@
 # Mobile (remote only)
 
-The proposed next stage is documented in
+Sharing a running terminal session with a paired device is implemented by the
+remote gateway and `/remote`; **[remote.md](remote.md) is the guide**: how to
+start the gateway, configure a NetBird or LAN address, pair, check status, stop
+sharing and revoke a device. The wire contract the iOS app is built against is
+[remote-protocol/README.md](remote-protocol/README.md), and the design behind
+both is
 [`Live terminal sessions from an iOS client`](architecture/mobile-remote-plan.md).
-That plan covers `/remote`, a multi-session gateway, pairing, WebSocket and a
-native iOS app in its own repository. It is a proposal; the transport below describes
-the currently implemented behavior.
+The app itself lives in its own repository.
 
-The first piece of that plan exists as a gateway foundation, described in
-[remote.md](remote.md): `rustcode remote serve`, device pairing and
-revocation. It shares no sessions yet and does not change `rustcode serve`.
+Plain LAN traffic to the gateway is authenticated but not encrypted; NetBird is
+the recommended way to reach it from a phone.
+
+The rest of this page describes the older experimental `rustcode serve`
+transport, which is separate from the gateway and unchanged.
 
 Decision: the phone never links Rust and never embeds the agent loop. Mobile
 is a remote control for a PC or Mac that already runs RustCode. There is no
@@ -83,5 +88,5 @@ A typical round-trip: `auth` → `ready` + snapshot → `list_sessions` →
 snapshot → `submit` → snapshot/turn stream → (`approve` with the batch id
 from `approval_batch_requested`, or `cancel`) → snapshots confirm.
 
-Any thin client, including the iOS app planned in its own repository, can
-build against this without touching the Rust workspace.
+Any thin client can build against this without touching the Rust workspace.
+The iOS app does not use this transport; it uses the remote gateway.

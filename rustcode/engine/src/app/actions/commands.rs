@@ -556,7 +556,7 @@ pub fn build_help_text() -> String {
                 ("/stop", "Stop all running tasks"),
                 (
                     "/remote",
-                    "Share this session (status|off); experimental, no gateway yet",
+                    "Share this session with a paired device (status|off)",
                 ),
                 ("/changelog", "Show recent changelog updates"),
             ],

@@ -188,6 +188,43 @@ fn inline_markup_spans(value: &str, base: Style) -> Vec<Span<'static>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn qr_rows_keep_their_cells_and_explicit_colours() {
+        let content = "Scan this code:\n\n\u{2060}    \n\u{2060} ▀▄█\n\u{2060}    \n\naddress  10.0.0.2:17879\n";
+        let lines = render_panel_content(content, 60);
+        let code: Vec<&Line<'_>> = lines
+            .iter()
+            .filter(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.style.bg == Some(Color::Indexed(231)))
+            })
+            .collect();
+        let text: Vec<String> = code
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        // Blank quiet-zone rows survive, nothing is reflowed or trimmed.
+        assert_eq!(text, ["    ", " ▀▄█", "    "]);
+        for line in code {
+            assert_eq!(line.spans[0].style.fg, Some(Color::Indexed(16)));
+            assert_eq!(line.spans[0].style.bg, Some(Color::Indexed(231)));
+        }
+
+        let narrow = render_panel_content(content, 3);
+        let narrow: String = narrow
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect();
+        assert!(narrow.contains("needs 4 columns"), "{narrow}");
+        assert!(!narrow.contains('▀'));
+    }
+
     use super::*;
     use crate::ui::tests::THEME_TEST_LOCK;
 
@@ -630,7 +667,15 @@ pub(in crate::ui) fn render_panel_content(content: &str, width: usize) -> Vec<Li
     let mut lines = Vec::new();
     let mut prose = String::new();
     let mut rows: Vec<PanelRow<'_>> = Vec::new();
+    let mut code: Vec<&str> = Vec::new();
     for line in content.lines() {
+        if let Some(row) = line.strip_prefix(QR_ROW_MARK) {
+            flush_panel_prose(&mut lines, &mut prose, width);
+            flush_panel_rows(&mut lines, &mut rows, width);
+            code.push(row);
+            continue;
+        }
+        flush_qr_rows(&mut lines, &mut code, width);
         match split_panel_row(line) {
             Some(row) => {
                 flush_panel_prose(&mut lines, &mut prose, width);
@@ -645,7 +690,40 @@ pub(in crate::ui) fn render_panel_content(content: &str, width: usize) -> Vec<Li
     }
     flush_panel_prose(&mut lines, &mut prose, width);
     flush_panel_rows(&mut lines, &mut rows, width);
+    flush_qr_rows(&mut lines, &mut code, width);
     lines
+}
+
+/// Prefix of a QR code row in panel text: the zero-width mark the engine's
+/// pairing text puts in front of each row of half blocks.
+const QR_ROW_MARK: char = '\u{2060}';
+
+/// Render a run of QR code rows. A scanner needs dark modules on a light
+/// ground with an intact quiet zone, and no theme guarantees either, so the
+/// rows are painted black on white from the fixed 256-colour cube and are
+/// never wrapped or reflowed. A panel too narrow for the code says so instead
+/// of drawing something that cannot be scanned.
+fn flush_qr_rows(lines: &mut Vec<Line<'static>>, code: &mut Vec<&str>, width: usize) {
+    let Some(columns) = code.iter().map(|row| row.width()).max() else {
+        return;
+    };
+    if columns > width {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "(The QR code needs {columns} columns. Widen the terminal, or pair with the address and code.)"
+            ),
+            Style::default().fg(COLOR_TEXT()),
+        )));
+    } else {
+        let style = Style::default()
+            .fg(Color::Indexed(16))
+            .bg(Color::Indexed(231));
+        lines.extend(
+            code.iter()
+                .map(|row| Line::from(Span::styled((*row).to_owned(), style))),
+        );
+    }
+    code.clear();
 }
 
 fn flush_panel_prose(lines: &mut Vec<Line<'static>>, prose: &mut String, width: usize) {

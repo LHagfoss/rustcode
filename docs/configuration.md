@@ -122,6 +122,24 @@ byte budget. If a complete server toolset cannot fit either limit, that
 reservation is rejected for the request; the rejection and omitted tool names
 are recorded in `mcp.native_schema_selection`.
 
+## Remote gateway address
+
+`/remote` starts the [remote gateway](remote.md) when none is running. Where
+that gateway listens comes from the `[remote]` section:
+
+```toml
+[remote]
+bind = "100.92.13.44"                # address to listen on; default 127.0.0.1
+port = 17879                         # optional; default 17879
+advertise = "mac.netbird.cloud"      # optional; what devices dial, if not `bind`
+```
+
+Everything unset means loopback, which a phone cannot reach; `/remote` then
+explains what to set. The section is read from the user configuration only: a
+project file cannot choose the interface your sessions are exposed on. A
+gateway you start yourself with `rustcode remote serve --bind …` takes its
+address from the command line and ignores this section.
+
 ## Project configuration
 
 Create a project-local override with:

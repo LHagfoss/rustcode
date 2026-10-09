@@ -146,6 +146,24 @@ fn default_loop_detector_abort() -> usize {
     DEFAULT_LOOP_DETECTOR_ABORT
 }
 
+/// Where `/remote` starts the remote gateway when none is running, under
+/// `[remote]` in config.toml. Everything unset means loopback on the default
+/// port, which a phone cannot reach. A checked-out project config must not
+/// decide which network interface exposes the user's sessions; only the user
+/// config may.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteConfig {
+    /// Address the gateway binds, as `rustcode remote serve --bind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<String>,
+    /// TCP port, as `--port`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// Address devices dial when it differs from `bind`, as `--advertise`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advertise: Option<String>,
+}
+
 /// Loop-guard budgets, configurable under `[loop_guard]` in config.toml.
 /// `evidence_recovery_streak` arms evidence-based recovery after that many
 /// corroborated (same tool or same failure class) no-progress observations;
@@ -1218,6 +1236,9 @@ pub struct AppConfig {
     /// Loop-guard budgets (`[loop_guard]` in config.toml). User config only.
     #[serde(default)]
     pub loop_guard: LoopGuardConfig,
+    /// Remote gateway address (`[remote]` in config.toml). User config only.
+    #[serde(default)]
+    pub remote: RemoteConfig,
     #[serde(default)]
     pub last_active_session_id: Option<String>,
     #[serde(default)]
@@ -1433,6 +1454,8 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     loop_guard: Option<LoopGuardConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    remote: Option<RemoteConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     last_active_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mcp_servers: Option<Vec<McpServerConfig>>,
@@ -1592,6 +1615,7 @@ impl Default for AppConfig {
             subagent_concurrency_limit: DEFAULT_SUBAGENT_CONCURRENCY_LIMIT,
             delegation_enabled: true,
             loop_guard: LoopGuardConfig::default(),
+            remote: RemoteConfig::default(),
             vision_model: Some("gemini-3.6-flash".to_string()),
             last_active_session_id: None,
             mcp_servers: vec![McpServerConfig {
@@ -1992,6 +2016,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
         delegation_enabled: Some(config.delegation_enabled),
         loop_guard: Some(config.loop_guard),
+        remote: (config.remote != RemoteConfig::default()).then(|| config.remote.clone()),
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
         approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
@@ -2091,6 +2116,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(loop_guard) = file.loop_guard {
         config.loop_guard = loop_guard;
     }
+    if let Some(remote) = file.remote {
+        config.remote = remote;
+    }
     if let Some(session_id) = file.last_active_session_id {
         config.last_active_session_id = Some(session_id);
     }
@@ -2178,6 +2206,8 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Loop-guard budgets are user safety decisions, mirroring command
     // permissions: a project file must not disable recovery guards.
     file.loop_guard = None;
+    // Which interface exposes the user's sessions is the user's decision.
+    file.remote = None;
     // Delegation is an explicit user-level capability; checked-out project
     // config must not enable it when the user has disabled it.
     file.delegation_enabled = None;
@@ -2295,6 +2325,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         subagent_concurrency_limit: None,
         delegation_enabled: None,
         loop_guard: None,
+        remote: None,
         last_active_session_id: None,
         mcp_servers: None,
         approved_command_prefixes: None,

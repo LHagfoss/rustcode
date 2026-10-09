@@ -1,22 +1,25 @@
-//! Remote gateway foundation (issue #1909, first half).
+//! The remote gateway (issue #1909).
 //!
 //! A separate host process with one explicitly configured WebSocket listener
-//! for paired devices and one private control socket for the local CLI. It
-//! pairs devices, authenticates them and holds their connections; it never
-//! executes agent turns and shares no session yet. Session registry, routing,
-//! receipts and replay plug in behind [`router::FrameRouter`].
+//! for paired devices and two private local sockets: a control socket for
+//! the CLI and an owner socket on which terminals register the sessions they
+//! share. It pairs devices, authenticates them, keeps the live registry of
+//! shared sessions ([`hub`]) and routes each operation to the terminal that
+//! owns the session. It never executes agent turns.
 //!
-//! This tree is transport and trust only. The versioned remote protocol
-//! (issue #1907: envelope, session operations, schema) lives in its own
-//! `remote` module; the handshake frames in [`handshake`] are the one piece
-//! of wire format defined here and are meant to move into that envelope.
+//! The session operations and their schema live in the `remote` module; the
+//! handshake frames in [`handshake`] are defined here and committed as part
+//! of the same versioned contract.
 //!
 //! The existing `rustcode serve` transport (`crate::serve`) is unrelated and
 //! unchanged.
 
 pub mod address;
 pub mod handshake;
+pub mod hub;
+pub mod owner_ipc;
 pub mod pairing;
+pub mod qr;
 pub mod router;
 
 #[cfg(unix)]
@@ -30,7 +33,12 @@ pub mod gateway;
 #[cfg(unix)]
 pub mod lifecycle;
 #[cfg(unix)]
+pub mod owner_client;
+#[cfg(unix)]
 mod transport;
+
+#[cfg(all(test, unix))]
+mod e2e_tests;
 
 /// Default TCP port of the gateway's WebSocket listener.
 pub const DEFAULT_PORT: u16 = 17879;
