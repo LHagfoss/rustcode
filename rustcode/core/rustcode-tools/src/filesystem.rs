@@ -1628,9 +1628,17 @@ pub fn write_to_file_with_context(
     crate::with_context(context, || write_to_file_tool(args))
 }
 
-/// Maximum payload accepted by one resumable file-write call. This keeps the
+/// Maximum payload accepted by one `write_file_chunk` call. This keeps the
 /// JSON argument bounded while allowing normal source files to be assembled in
 /// a small number of tool calls.
+///
+/// Why 16 KiB: textual-protocol providers dropped the stream part-way through
+/// single writes of 14 to 22 KiB (`response_body_decode`; #1151, #1161), so
+/// no call reached the executor and the whole file had to be generated again.
+/// A bounded chunk caps what one such interruption can lose. The value is a
+/// streaming convenience, not a safety limit, so it no longer rejects a
+/// complete `write_to_file` (#1886): that call has already been paid for, and
+/// a cut-off one is detected by its incomplete arguments, never by its size.
 pub const MAX_FILE_CHUNK_BYTES: usize = 16 * 1024;
 
 fn sha256_hex(bytes: &[u8]) -> String {

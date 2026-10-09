@@ -42,6 +42,48 @@ fn should_apply_loop_recovery(
     !completion_requested && (has_evidence_recovery || (output_abort && !round_had_meaningful))
 }
 
+/// The system notice for a round that did not run every call, or `None` when
+/// every unexecuted call was rejected by validation: each of those is already
+/// answered by its own tool result.
+fn unexecuted_calls_notice(
+    requested_calls: usize,
+    executed_calls: usize,
+    queued: &[usize],
+    reissue: &[usize],
+    closed: &[usize],
+    describe: impl Fn(&[usize]) -> String,
+) -> Option<String> {
+    if queued.is_empty() && reissue.is_empty() && closed.is_empty() {
+        return None;
+    }
+    let mut notice = format!(
+        "[The model emitted {requested_calls} tool calls. {executed_calls} were executed this round."
+    );
+    if !queued.is_empty() {
+        notice.push_str(&format!(
+            " The scheduler held {} over the per-response workspace-change limit and queued them for automatic execution in a later round ({}); do not reissue them, their real results arrive without another request from you.",
+            queued.len(),
+            describe(queued),
+        ));
+    }
+    if !reissue.is_empty() {
+        notice.push_str(&format!(
+            " The harness did not schedule {} call(s) ({}); reissue them only after reviewing the real results.",
+            reissue.len(),
+            describe(reissue),
+        ));
+    }
+    if !closed.is_empty() {
+        notice.push_str(&format!(
+            " The remaining {} call(s) ({}) were not executed: review the real results above.",
+            closed.len(),
+            describe(closed),
+        ));
+    }
+    notice.push(']');
+    Some(notice)
+}
+
 /// Write targets that do not exist yet, so a successful write can be recorded
 /// as a creation rather than a change to an existing file.
 fn absent_write_targets(
@@ -794,14 +836,16 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         } else {
             String::new()
         };
+        // The reason is already the tool result above; repeating it here
+        // reported one rejection twice (#1886).
         s.history.push(ChatMessage::new(
-                    "system",
-                    format!(
-                        "[Tool call rejected before execution: {reason}] Emit one corrected tool call. {}{}",
-                        mutation_batch_guidance(&scheduling_policy),
-                        repeat_guidance
-                    ),
-                ));
+            "system",
+            format!(
+                "[Tool call rejected before execution: see the tool result above] Emit one corrected tool call. {}{}",
+                mutation_batch_guidance(&scheduling_policy),
+                repeat_guidance
+            ),
+        ));
         crate::config::save_session_history(&s.active_session_id, &s.history);
         s.clear_current_response();
         s.status = AppStatus::Streaming;
@@ -1964,39 +2008,26 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
+                // A call rejected by validation already carries its reason
+                // as its own tool result, so it is not reported again (#1886).
                 let closed = (0..tool_calls.len())
                     .filter(|index| {
-                        !selected_call_indices.contains(index) && !scheduled.queued.contains(index)
+                        !selected_call_indices.contains(index)
+                            && !scheduled.queued.contains(index)
+                            && validation_errors[*index].is_none()
                     })
                     .collect::<Vec<_>>();
-                let mut notice = format!(
-                    "[The model emitted {requested_calls} tool calls. {} were executed this round.",
-                    selected_call_indices.len()
-                );
-                if !scheduled.queued.is_empty() {
-                    notice.push_str(&format!(
-                        " The scheduler held {} over the per-response workspace-change limit and queued them for automatic execution in a later round ({}); do not reissue them, their real results arrive without another request from you.",
-                        scheduled.queued.len(),
-                        describe(&scheduled.queued),
-                    ));
+                if let Some(notice) = unexecuted_calls_notice(
+                    requested_calls,
+                    selected_call_indices.len(),
+                    &scheduled.queued,
+                    &scheduled.reissue,
+                    &closed,
+                    describe,
+                ) {
+                    dbg_log!("Deferred tool-call diagnostic: {notice}");
+                    s.history.push(ChatMessage::new("system", notice));
                 }
-                if !scheduled.reissue.is_empty() {
-                    notice.push_str(&format!(
-                        " The harness did not schedule {} call(s) ({}); reissue them only after reviewing the real results.",
-                        scheduled.reissue.len(),
-                        describe(&scheduled.reissue),
-                    ));
-                }
-                if !closed.is_empty() {
-                    notice.push_str(&format!(
-                        " The remaining {} call(s) ({}) were not executed: review the real results above.",
-                        closed.len(),
-                        describe(&closed),
-                    ));
-                }
-                notice.push(']');
-                dbg_log!("Deferred tool-call diagnostic: {notice}");
-                s.history.push(ChatMessage::new("system", notice));
                 // Deferred calls never adopt their speculative projections;
                 // drop them so they cannot linger under an active group (#1495).
                 s.clear_speculative_live_tool_calls();
@@ -2555,6 +2586,25 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_validation_rejected_call_is_reported_only_by_its_tool_result() {
+        let describe = |indices: &[usize]| format!("{indices:?}");
+        // Session 01a11ffc (#1886): two calls, the edit ran, the write was
+        // rejected by validation and answered by its own tool result.
+        assert_eq!(
+            super::unexecuted_calls_notice(2, 1, &[], &[], &[], describe),
+            None
+        );
+
+        let notice = super::unexecuted_calls_notice(3, 1, &[], &[2], &[2], describe)
+            .expect("an unscheduled call still needs the notice");
+        assert!(
+            notice.contains("did not schedule 1 call(s) ([2])"),
+            "{notice}"
+        );
+        assert!(notice.contains("The remaining 1 call(s) ([2])"), "{notice}");
+    }
+
     use super::super::{GroundedArtifactEvidence, TurnContext};
     use super::{
         append_finalized_tool_batch, apply_round_stagnation, batch_invalidates_read_recovery,

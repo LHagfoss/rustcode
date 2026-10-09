@@ -927,7 +927,9 @@ fn normalize_responses_event(
 }
 
 const RECOVERY_MAX_TOKENS: u32 = 1024;
-const MAX_NATIVE_TOOL_ARGUMENT_BYTES: usize = 40 * 1024;
+/// Hard limit on one streamed tool call's JSON arguments. The write_to_file
+/// spec states it, so the model sees it before generating a large file.
+pub(crate) const MAX_NATIVE_TOOL_ARGUMENT_BYTES: usize = 40 * 1024;
 const MAX_INVALID_ARGUMENT_PREVIEW_BYTES: usize = 1024;
 const MAX_PROVIDER_TRACE_EVENTS: usize = 256;
 const MAX_PROVIDER_TRACE_BYTES: usize = 64 * 1024;
