@@ -170,7 +170,7 @@ pub(super) fn format_pi_tool_action(
             .and_then(|v| v.as_str())
             .map(|v| rustcode_core::activity::sanitize_tool_parameter(v, 100))
             .unwrap_or_default(),
-        "spawn_agent" => "agent task".to_owned(),
+        "spawn_agent" => spawn_agent_target(args, None),
         "send_agent" => "agent message".to_owned(),
         "wait_agent" | "cancel_agent" => args
             .get("id")
@@ -214,6 +214,46 @@ pub(super) fn format_pi_tool_action(
     };
 
     (action_label, target_arg)
+}
+
+/// What a `spawn_agent` row says: the child's name once it exists, its role
+/// when one was asked for, what it was asked to do, its model, and the state
+/// the spawn left it in. `result` is the tool's JSON receipt; without one
+/// (the call is still running, or failed) the row is built from the call.
+pub(super) fn spawn_agent_target(args: &serde_json::Value, result: Option<&str>) -> String {
+    let receipt = result
+        .and_then(|result| serde_json::from_str::<serde_json::Value>(result.trim()).ok())
+        .filter(|receipt| receipt.get("agent_id").is_some());
+    let text = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(|value| value.as_str())
+            .map(|value| rustcode_core::activity::sanitize_tool_parameter(value, 40))
+            .filter(|value| !value.is_empty())
+    };
+    let field = |key: &str| {
+        text(receipt.as_ref().and_then(|receipt| receipt.get(key))).or_else(|| text(args.get(key)))
+    };
+    let task = args
+        .get("task")
+        .and_then(|value| value.as_str())
+        .and_then(|task| task.lines().find(|line| !line.trim().is_empty()))
+        .map(|line| rustcode_core::activity::sanitize_tool_parameter(line.trim(), 48))
+        .filter(|task| !task.is_empty());
+    let parts = [
+        field("nickname"),
+        field("agent_type").filter(|role| role != "default"),
+        task,
+        field("model"),
+        receipt
+            .as_ref()
+            .and_then(|receipt| text(receipt.get("status"))),
+    ];
+    let target = parts.into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    if target.is_empty() {
+        "agent task".to_owned()
+    } else {
+        target
+    }
 }
 
 pub(super) fn format_generic_tool_args(args: &serde_json::Value) -> String {
@@ -524,11 +564,18 @@ pub(super) fn tool_result_action(
         let question = replace_emoji_shortcodes(&ask_question_text(&args));
         return ("Asked".to_owned(), format!("{question} → {answer}"));
     }
-    format_pi_tool_action(
-        tool_name,
-        &tool_call_arguments(state, message_index, tool_name),
-        state.home_path(),
-    )
+    let args = tool_call_arguments(state, message_index, tool_name);
+    let (action, target) = format_pi_tool_action(tool_name, &args, state.home_path());
+    if tool_name == "spawn_agent" {
+        // The receipt names the child and the model it resolved to.
+        let result = state
+            .active_history()
+            .get(message_index)
+            .and_then(|message| message.content.split_once(": "))
+            .map(|(_, result)| result);
+        return (action, spawn_agent_target(&args, result));
+    }
+    (action, target)
 }
 
 pub(super) fn tool_result_status(

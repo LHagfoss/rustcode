@@ -1335,8 +1335,9 @@ pub fn tool_capabilities(name: &str) -> &'static [ToolCapability] {
     }
     // Agent tools live outside `TOOLS`; keep their capabilities here.
     match name {
-        "spawn_agent" | "send_agent" | "set_goal" => &[AgentDelegation, SessionState],
-        "todo_write" => &[SessionState],
+        "spawn_agent" | "send_agent" => &[AgentDelegation, SessionState],
+        // Session control, not delegation: neither starts or steers an agent.
+        "set_goal" | "todo_write" => &[SessionState],
         _ => &[],
     }
 }

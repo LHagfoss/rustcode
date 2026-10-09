@@ -63,9 +63,7 @@ fn absent_write_targets(
 fn tool_changes_workspace(name: &str, arguments: Option<&serde_json::Value>) -> bool {
     if name == "spawn_agent" {
         return arguments
-            .and_then(|arguments| arguments.get("write_access"))
-            .and_then(serde_json::Value::as_bool)
-            == Some(true);
+            .is_some_and(crate::app::subagent_context::AgentRole::spawn_requests_write);
     }
     is_mutating_tool(name)
 }
@@ -2557,6 +2555,15 @@ mod tests {
         assert!(tool_changes_workspace(
             "spawn_agent",
             Some(&serde_json::json!({"write_access": true}))
+        ));
+        // A role that presets write access counts the same as asking for it.
+        assert!(tool_changes_workspace(
+            "spawn_agent",
+            Some(&serde_json::json!({"agent_type": "worker"}))
+        ));
+        assert!(!tool_changes_workspace(
+            "spawn_agent",
+            Some(&serde_json::json!({"agent_type": "explorer"}))
         ));
         assert!(tool_changes_workspace("write_to_file", None));
     }

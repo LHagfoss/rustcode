@@ -24,6 +24,75 @@ impl ContextInheritance {
     }
 }
 
+/// The role a child is spawned with (`agent_type`). A role is a preset over
+/// the existing spawn arguments: it selects `write_access`, and everything
+/// `write_access` requires still applies.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRole {
+    /// Read-only unless `write_access` is passed explicitly.
+    #[default]
+    Default,
+    /// Read-only investigation; never writes.
+    Explorer,
+    /// Implementation; presets `write_access`.
+    Worker,
+}
+
+impl AgentRole {
+    pub(crate) const NAMES: [&'static str; 3] = ["default", "explorer", "worker"];
+
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "default" => Ok(Self::Default),
+            "explorer" => Ok(Self::Explorer),
+            "worker" => Ok(Self::Worker),
+            _ => Err(format!(
+                "unknown agent_type '{value}'. Available agent types: {}",
+                Self::NAMES.join(", ")
+            )),
+        }
+    }
+
+    /// The `write_access` this role spawns with, given the explicit argument.
+    /// A contradiction is an error rather than one side silently winning.
+    pub(crate) fn write_access(self, explicit: Option<bool>) -> Result<bool, String> {
+        match (self, explicit) {
+            (Self::Default, explicit) => Ok(explicit.unwrap_or(false)),
+            (Self::Explorer, Some(true)) => Err(
+                "agent_type explorer is read-only; use agent_type worker for write_access".into(),
+            ),
+            (Self::Explorer, _) => Ok(false),
+            (Self::Worker, Some(false)) => Err(
+                "agent_type worker writes; use agent_type explorer for a read-only child".into(),
+            ),
+            (Self::Worker, _) => Ok(true),
+        }
+    }
+
+    /// Whether `spawn_agent` arguments ask for a child that may write, by
+    /// `write_access` or by a role that presets it.
+    pub(crate) fn spawn_requests_write(args: &serde_json::Value) -> bool {
+        args.get("write_access")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+            || args.get("agent_type").and_then(serde_json::Value::as_str) == Some("worker")
+    }
+
+    /// What the child is told about its role.
+    pub(crate) fn instructions(self) -> &'static str {
+        match self {
+            Self::Default => "",
+            Self::Explorer => {
+                " Role: explorer. Investigate and report findings with file paths and evidence; do not change anything."
+            }
+            Self::Worker => {
+                " Role: worker. Implement the task inside allowed_paths, verify it, and report what changed."
+            }
+        }
+    }
+}
+
 pub(crate) fn inherit_context(
     parent: &[ChatMessage],
     task: &str,

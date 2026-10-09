@@ -659,6 +659,7 @@ impl SubagentController {
             depth,
             root_id,
             context_inheritance: Default::default(),
+            agent_type: Default::default(),
             mailbox: VecDeque::new(),
             created_at_ms: now_ms(),
             queued_at_ms: now_ms(),

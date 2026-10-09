@@ -270,8 +270,11 @@ pub(crate) async fn run_subagent(
                 .find(|agent| agent.id == agent_id)
                 .map(|agent| {
                     format!(
-                        "Delegation contract: write_access={}, allowed_paths={:?}, verification_command={:?}.",
-                        agent.write_access, agent.allowed_paths, agent.verification_command
+                        "Delegation contract: write_access={}, allowed_paths={:?}, verification_command={:?}.{}",
+                        agent.write_access,
+                        agent.allowed_paths,
+                        agent.verification_command,
+                        agent.agent_type.instructions()
                     )
                 })
                 .unwrap_or_else(|| "Delegation contract unavailable; remain read-only.".to_string())
@@ -949,7 +952,7 @@ async fn handle_agent_tool_for_parent(
             }
             let agents = s.subagents.iter().filter(|agent| name != "inspect_agent" || Some(agent.id) == id).map(|agent| {
                 let transcript = if name == "inspect_agent" { agent.history.iter().rev().take(8).map(|message| serde_json::json!({"role":message.role,"content":message.content.chars().take(768).collect::<String>()})).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>() } else { Vec::new() };
-                serde_json::json!({"id":agent.id,"parent_id":agent.parent_id,"root_id":agent.root_id,"depth":agent.depth,"name":agent.name,"task":agent.task.chars().take(256).collect::<String>(),"status":agent.status,"model":agent.model.as_deref().unwrap_or(&s.model_name),"context_inheritance":agent.context_inheritance,"elapsed_ms":agent.finished_at_ms.unwrap_or_else(crate::app::subagent_controller::now_ms).saturating_sub(agent.created_at_ms),"pending_messages":agent.mailbox.len(),"performance":agent.performance,"transcript_tail":transcript,"completion":agent.completion})
+                serde_json::json!({"id":agent.id,"parent_id":agent.parent_id,"root_id":agent.root_id,"depth":agent.depth,"name":agent.name,"agent_type":agent.agent_type,"task":agent.task.chars().take(256).collect::<String>(),"status":agent.status,"model":agent.model.as_deref().unwrap_or(&s.model_name),"context_inheritance":agent.context_inheritance,"elapsed_ms":agent.finished_at_ms.unwrap_or_else(crate::app::subagent_controller::now_ms).saturating_sub(agent.created_at_ms),"pending_messages":agent.mailbox.len(),"performance":agent.performance,"transcript_tail":transcript,"completion":agent.completion})
             }).collect::<Vec<_>>();
             crate::tools::ToolExecutionOutput::success(
                 serde_json::json!({"agents":agents}).to_string(),
@@ -998,10 +1001,23 @@ async fn handle_agent_tool_for_parent(
                     ));
                 }
             }
-            let write_access = args
-                .get("write_access")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false);
+            // A role only presets `write_access`; the checks below apply to
+            // a worker exactly as they do to an explicit `write_access`.
+            let (agent_type, write_access) = match args
+                .get("agent_type")
+                .and_then(|value| value.as_str())
+                .map(crate::app::subagent_context::AgentRole::parse)
+                .transpose()
+                .and_then(|role| {
+                    let role = role.unwrap_or_default();
+                    role.write_access(args.get("write_access").and_then(|value| value.as_bool()))
+                        .map(|write_access| (role, write_access))
+                }) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    return crate::tools::ToolExecutionOutput::failure(format!("error: {error}"));
+                }
+            };
             let allowed_paths = args
                 .get("allowed_paths")
                 .and_then(|value| value.as_array())
@@ -1041,7 +1057,7 @@ async fn handle_agent_tool_for_parent(
                 .as_deref()
                 .unwrap_or("none")
                 .to_string();
-            let (agent_id, supervisor, owner_session_id) = {
+            let (agent_id, supervisor, owner_session_id, child_model) = {
                 let mut s = state.lock().await;
                 let owner_session_id = s.active_session_id.clone();
                 if s.subagents.len() >= 64 {
@@ -1177,12 +1193,13 @@ async fn handle_agent_tool_for_parent(
                 if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == id) {
                     agent.history = Arc::new(inherited);
                     agent.context_inheritance = strategy;
+                    agent.agent_type = agent_type;
                     agent.status = crate::app::SubAgentStatus::Queued;
                 }
                 crate::app::subagent_persistence::save(&s);
                 crate::logger::operational_event(
                     "subagent.spawn",
-                    serde_json::json!({"agent_id":id,"session_id":owner_session_id,"parent_id":parent_id,"context_inheritance":strategy,"inherited_messages":s.subagents.last().map(|agent|agent.history.len()).unwrap_or(0)}),
+                    serde_json::json!({"agent_id":id,"session_id":owner_session_id,"parent_id":parent_id,"agent_type":agent_type,"context_inheritance":strategy,"inherited_messages":s.subagents.last().map(|agent|agent.history.len()).unwrap_or(0)}),
                 );
                 let brief: String = task.chars().take(60).collect();
                 agent_notice(
@@ -1192,7 +1209,18 @@ async fn handle_agent_tool_for_parent(
                         verification_label
                     ),
                 );
-                (id, s.subagent_supervisor.clone(), owner_session_id)
+                let child_model = s
+                    .subagents
+                    .iter()
+                    .find(|agent| agent.id == id)
+                    .and_then(|agent| agent.model.clone())
+                    .unwrap_or_else(|| s.model_name.clone());
+                (
+                    id,
+                    s.subagent_supervisor.clone(),
+                    owner_session_id,
+                    child_model,
+                )
             };
             if let Err(error) = launch_subagent_turn(
                 client,
@@ -1211,9 +1239,26 @@ async fn handle_agent_tool_for_parent(
                 "subagent.spawn.finish",
                 serde_json::json!({"agent_id":agent_id,"spawn_us":crate::benchmark::elapsed_us(spawn_started)}),
             );
-            crate::tools::ToolExecutionOutput::success(format!(
-                "subagent {agent_id} started; use wait_agent to receive its terminal result"
-            ))
+            // The id is what every other agent tool takes; the nickname is the
+            // name the child goes by in notices and the agent picker.
+            let status = state
+                .lock()
+                .await
+                .subagents
+                .iter()
+                .find(|agent| agent.id == agent_id)
+                .map(|agent| agent.status)
+                .unwrap_or(crate::app::SubAgentStatus::Queued);
+            crate::tools::ToolExecutionOutput::success(
+                serde_json::json!({
+                    "agent_id": agent_id,
+                    "nickname": format!("agent-{agent_id}"),
+                    "agent_type": agent_type,
+                    "model": child_model,
+                    "status": status,
+                })
+                .to_string(),
+            )
         }
         "send_agent" | "send_message" | "followup_task" => {
             if parent_id.is_none() && !state.lock().await.delegation_active {
@@ -1253,6 +1298,35 @@ async fn handle_agent_tool_for_parent(
                     "message queued for main agent at its next safe boundary".into(),
                 );
             }
+            let interrupt = args
+                .get("interrupt")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if interrupt && name == "send_message" {
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: send_message only queues; use followup_task with interrupt".into(),
+                );
+            }
+            // Checked before the turn is stopped, so a message that cannot be
+            // delivered never costs the child its work.
+            if interrupt && message.len() > 8192 {
+                return crate::tools::ToolExecutionOutput::failure(format!(
+                    "error: {}",
+                    crate::app::SubagentError::MailboxFull(crate::app::SubagentId::from_raw(id))
+                ));
+            }
+            let interrupted = if interrupt {
+                match interrupt_subagent_turn(state, cancel_token, id, parent_id).await {
+                    Ok(interrupted) => interrupted,
+                    Err(error) => {
+                        return crate::tools::ToolExecutionOutput::failure(format!(
+                            "error: {error}"
+                        ));
+                    }
+                }
+            } else {
+                false
+            };
             let (supervisor, owner_session_id) = {
                 let mut s = state.lock().await;
                 let Some(task) = s
@@ -1330,9 +1404,13 @@ async fn handle_agent_tool_for_parent(
                     "error: unable to start subagent {id} follow-up: {error}"
                 ));
             }
-            crate::tools::ToolExecutionOutput::success(format!(
-                "subagent {id} follow-up started; use wait_agent for its terminal result"
-            ))
+            crate::tools::ToolExecutionOutput::success(if interrupted {
+                format!(
+                    "subagent {id} interrupted and redirected; use wait_agent for its terminal result"
+                )
+            } else {
+                format!("subagent {id} follow-up started; use wait_agent for its terminal result")
+            })
         }
         "wait_agent" => {
             if parent_id.is_none() && !state.lock().await.delegation_active {
@@ -1675,6 +1753,75 @@ async fn handle_agent_tool_for_parent(
             "error: unknown agent tool '{name}'"
         )),
     }
+}
+
+/// Stop a child's running turn so a follow-up can redirect it, and return
+/// once that turn has cleaned up. Children it started are cancelled with it,
+/// as they are with any parent turn. A child that is idle or still queued is
+/// left alone (`Ok(false)`): the ordinary follow-up already reaches it before
+/// its next request.
+async fn interrupt_subagent_turn(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    id: u32,
+    caller: Option<u32>,
+) -> Result<bool, String> {
+    let target = crate::app::SubagentId::from_raw(id);
+    let supervisor = {
+        let s = state.lock().await;
+        // Stopping an ancestor would stop the caller that waits for it.
+        let mut ancestor = caller;
+        while let Some(candidate) = ancestor {
+            if candidate == id {
+                return Err("an agent cannot interrupt itself or an ancestor".into());
+            }
+            ancestor = s
+                .subagents
+                .iter()
+                .find(|agent| agent.id == candidate)
+                .and_then(|agent| agent.parent_id);
+        }
+        let running = s
+            .subagents
+            .iter()
+            .any(|agent| agent.id == id && agent.status != crate::app::SubAgentStatus::Queued);
+        if !running || !s.subagent_supervisor.is_active(target) {
+            return Ok(false);
+        }
+        s.subagent_supervisor.clone()
+    };
+    if supervisor.cancel(target).is_err() {
+        return Ok(false);
+    }
+    let completion = tokio::select! {
+        result = supervisor.wait(target) => result.map_err(|error| error.to_string())?,
+        _ = cancel_token.cancelled() => {
+            return Err(crate::app::SubagentError::WaitCancelled(target).to_string());
+        }
+    };
+    // The turn finished by itself first; its result stands and the follow-up
+    // proceeds as it would for any finished child.
+    if completion.status != crate::app::SubAgentStatus::Cancelled {
+        return Ok(false);
+    }
+    let mut s = state.lock().await;
+    // The caller asked for this stop, so it is neither news for the root nor
+    // a result the child should read back before its new instructions.
+    supervisor.mark_completion_delivered(id);
+    if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == id)
+        && agent
+            .history
+            .last()
+            .is_some_and(|last| last.role == "system" && last.content == completion.output)
+    {
+        Arc::make_mut(&mut agent.history).pop();
+    }
+    let _ = crate::app::SubagentController.set_status(
+        &mut s,
+        target,
+        crate::app::SubAgentStatus::Interrupted,
+    );
+    Ok(true)
 }
 
 fn is_read_only_subagent_call(call: &crate::tools::ToolCall) -> bool {
@@ -2155,7 +2302,19 @@ mod tests {
         )
         .await;
         assert!(spawned.success);
-        assert!(spawned.content.contains("subagent 1 started"));
+        // The receipt is JSON: the id every other agent tool takes, the name
+        // the child goes by, and what it was started as.
+        let receipt: serde_json::Value = serde_json::from_str(&spawned.content).unwrap();
+        assert_eq!(
+            receipt,
+            serde_json::json!({
+                "agent_id": 1,
+                "nickname": "agent-1",
+                "agent_type": "default",
+                "model": "subagent-test-model",
+                "status": "queued",
+            })
+        );
         tokio::time::timeout(std::time::Duration::from_secs(5), accepted)
             .await
             .unwrap()
@@ -2182,6 +2341,238 @@ mod tests {
         assert!(waited.success, "{}", waited.content);
         assert_eq!(waited.content, replayed.content);
         assert!(waited.content.contains("child finished"));
+    }
+
+    #[tokio::test]
+    async fn wait_agent_with_ids_returns_the_child_that_finishes_first() {
+        let mut s = AppState::new();
+        s.delegation_active = true;
+        let controller = crate::app::SubagentController;
+        let slow = controller.spawn(&mut s, "slow", None, None, false, Vec::new(), None, None);
+        let fast = controller.spawn(&mut s, "fast", None, None, false, Vec::new(), None, None);
+        let supervisor = s.subagent_supervisor.clone();
+        let parent = tokio_util::sync::CancellationToken::new();
+        supervisor
+            .spawn(slow, parent.clone(), std::future::pending())
+            .unwrap();
+        supervisor
+            .spawn(fast, parent.clone(), async { Ok("fast result".to_owned()) })
+            .unwrap();
+        let state = Arc::new(Mutex::new(s));
+
+        let waited = handle_agent_tool(
+            &reqwest::Client::new(),
+            &state,
+            &parent,
+            "wait_agent",
+            // Longer than the old five-minute ceiling; it returns on the first result.
+            &serde_json::json!({"ids": [slow.raw(), fast.raw()], "timeout_ms": 900_000}),
+        )
+        .await;
+        assert!(waited.success, "{}", waited.content);
+        assert!(
+            waited
+                .content
+                .starts_with(&format!("subagent {} completed", fast.raw()))
+        );
+        assert!(waited.content.contains("fast result"));
+        assert!(supervisor.is_active(slow));
+
+        // `id` alone still names a single target.
+        let single = handle_agent_tool(
+            &reqwest::Client::new(),
+            &state,
+            &parent,
+            "wait_agent",
+            &serde_json::json!({"id": fast.raw()}),
+        )
+        .await;
+        assert_eq!(single.content, waited.content);
+        supervisor.shutdown_and_wait().await;
+    }
+
+    #[tokio::test]
+    async fn spawn_roles_preset_write_access_without_bypassing_its_checks() {
+        use crate::app::subagent_context::AgentRole;
+
+        assert_eq!(AgentRole::Default.write_access(None), Ok(false));
+        assert_eq!(AgentRole::Default.write_access(Some(true)), Ok(true));
+        assert_eq!(AgentRole::Explorer.write_access(Some(false)), Ok(false));
+        assert_eq!(AgentRole::Worker.write_access(None), Ok(true));
+        assert!(AgentRole::Explorer.write_access(Some(true)).is_err());
+        assert!(AgentRole::Worker.write_access(Some(false)).is_err());
+
+        let (url, accepted, release) = gated_subagent_server().await;
+        let state = delegated_test_state(url).await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let spawn = |args: serde_json::Value, parent: Option<u32>| {
+            let state = Arc::clone(&state);
+            let cancel = cancel.clone();
+            async move {
+                handle_agent_tool_for_parent(
+                    &reqwest::Client::new(),
+                    &state,
+                    &cancel,
+                    "spawn_agent",
+                    &args,
+                    parent,
+                )
+                .await
+            }
+        };
+
+        let unknown = spawn(
+            serde_json::json!({"task": "t", "agent_type": "reviewer"}),
+            None,
+        )
+        .await;
+        assert!(!unknown.success);
+        assert!(unknown.content.contains("unknown agent_type 'reviewer'"));
+        assert!(unknown.content.contains("default, explorer, worker"));
+
+        let contradiction = spawn(
+            serde_json::json!({"task": "t", "agent_type": "explorer", "write_access": true, "allowed_paths": ["src/"]}),
+            None,
+        )
+        .await;
+        assert!(!contradiction.success);
+        assert!(contradiction.content.contains("explorer is read-only"));
+
+        // A worker is `write_access` by another name: the same contract applies.
+        let unscoped = spawn(
+            serde_json::json!({"task": "t", "agent_type": "worker"}),
+            None,
+        )
+        .await;
+        assert!(!unscoped.success);
+        assert!(unscoped.content.contains("allowed_paths"));
+        assert!(state.lock().await.subagents.is_empty());
+
+        let explorer = spawn(
+            serde_json::json!({"task": "look", "agent_type": "explorer"}),
+            None,
+        )
+        .await;
+        assert!(explorer.success, "{}", explorer.content);
+        let receipt: serde_json::Value = serde_json::from_str(&explorer.content).unwrap();
+        assert_eq!(receipt["agent_type"], "explorer");
+        tokio::time::timeout(std::time::Duration::from_secs(5), accepted)
+            .await
+            .unwrap()
+            .unwrap();
+        {
+            let s = state.lock().await;
+            assert_eq!(s.subagents[0].agent_type, AgentRole::Explorer);
+            assert!(!s.subagents[0].write_access);
+        }
+
+        // Nested delegation stays read-only whichever way write access is asked for.
+        let nested = spawn(
+            serde_json::json!({"task": "t", "agent_type": "worker", "allowed_paths": ["src/"]}),
+            Some(1),
+        )
+        .await;
+        assert!(!nested.success);
+        assert!(nested.content.contains("nested delegation is read-only"));
+        assert_eq!(state.lock().await.subagents.len(), 1);
+
+        let supervisor = state.lock().await.subagent_supervisor.clone();
+        supervisor.shutdown_and_wait().await;
+        let _ = release.send(());
+    }
+
+    #[tokio::test]
+    async fn followup_with_interrupt_stops_the_running_turn_and_redirects_the_child() {
+        let (url, accepted, release) = gated_subagent_server().await;
+        let state = delegated_test_state(url).await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let call = |name: &'static str, args: serde_json::Value, parent: Option<u32>| {
+            let state = Arc::clone(&state);
+            let cancel = cancel.clone();
+            async move {
+                handle_agent_tool_for_parent(
+                    &reqwest::Client::new(),
+                    &state,
+                    &cancel,
+                    name,
+                    &args,
+                    parent,
+                )
+                .await
+            }
+        };
+        call(
+            "spawn_agent",
+            serde_json::json!({"task": "old direction"}),
+            None,
+        )
+        .await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), accepted)
+            .await
+            .unwrap()
+            .unwrap();
+        let supervisor = state.lock().await.subagent_supervisor.clone();
+
+        // Queue-only messages cannot interrupt, and an agent cannot stop itself.
+        let queue_only = call(
+            "send_message",
+            serde_json::json!({"id": 1, "message": "note", "interrupt": true}),
+            None,
+        )
+        .await;
+        assert!(!queue_only.success);
+        let own_turn = call(
+            "followup_task",
+            serde_json::json!({"id": 1, "message": "note", "interrupt": true}),
+            Some(1),
+        )
+        .await;
+        assert!(!own_turn.success);
+        assert!(own_turn.content.contains("itself or an ancestor"));
+        assert_eq!(
+            state.lock().await.subagents[0].status,
+            crate::app::SubAgentStatus::Running
+        );
+
+        let redirected = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            call(
+                "followup_task",
+                serde_json::json!({"id": 1, "message": "new direction", "interrupt": true}),
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(redirected.success, "{}", redirected.content);
+        assert!(redirected.content.contains("interrupted and redirected"));
+        {
+            let s = state.lock().await;
+            let agent = &s.subagents[0];
+            // A new turn is under way with the redirect as its instruction,
+            // not queued behind the one that was stopped.
+            assert!(agent.active_turn);
+            assert!(agent.mailbox.is_empty());
+            assert!(agent.completion.is_none());
+            assert!(matches!(
+                agent.status,
+                crate::app::SubAgentStatus::Queued | crate::app::SubAgentStatus::Running
+            ));
+            assert_eq!(
+                agent
+                    .history
+                    .iter()
+                    .map(|message| (message.role.as_str(), message.content.as_str()))
+                    .collect::<Vec<_>>(),
+                [("user", "old direction"), ("user", "new direction")]
+            );
+        }
+        assert!(supervisor.is_active(crate::app::SubagentId::from_raw(1)));
+        // The stop was asked for; the root is not told its child was cancelled.
+        assert!(supervisor.root_messages().is_empty());
+
+        supervisor.shutdown_and_wait().await;
+        let _ = release.send(());
     }
 
     #[tokio::test]

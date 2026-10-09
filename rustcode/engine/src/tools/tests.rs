@@ -3374,6 +3374,94 @@ fn subagent_id_schemas_accept_numeric_strings_and_main_message_id() {
 }
 
 #[test]
+fn agent_schemas_advertise_roles_interrupt_and_hour_long_waits() {
+    let spawn = super::registered_tool_schema("spawn_agent").unwrap();
+    assert_eq!(
+        spawn["properties"]["agent_type"]["enum"],
+        serde_json::json!(["default", "explorer", "worker"])
+    );
+    let native = native_tools_schema(true);
+    let advertised = |tool: &str, property: &str| {
+        native
+            .iter()
+            .find(|schema| schema["function"]["name"] == tool)
+            .is_some_and(|schema| {
+                !schema["function"]["parameters"]["properties"][property].is_null()
+            })
+    };
+    assert!(advertised("spawn_agent", "agent_type"));
+
+    for tool_name in ["followup_task", "send_agent"] {
+        let schema = super::registered_tool_schema(tool_name).unwrap();
+        validate_value_against_schema(
+            &serde_json::json!({"id": "1", "message": "redirect", "interrupt": true}),
+            &schema,
+            "$",
+            true,
+        )
+        .unwrap_or_else(|error| panic!("{tool_name} rejected interrupt: {error}"));
+        assert!(advertised(tool_name, "interrupt"), "{tool_name}");
+    }
+    // Queue-only delivery has nothing to interrupt.
+    assert!(!advertised("send_message", "interrupt"));
+
+    let wait = super::registered_tool_schema("wait_agent").unwrap();
+    for (timeout_ms, accepted) in [(3_600_000_u64, true), (3_600_001, false)] {
+        assert_eq!(
+            validate_value_against_schema(
+                &serde_json::json!({"ids": [1, 2], "timeout_ms": timeout_ms}),
+                &wait,
+                "$",
+                true,
+            )
+            .is_ok(),
+            accepted,
+            "{timeout_ms}"
+        );
+    }
+}
+
+#[test]
+fn agent_tool_count_follows_the_delegation_capability() {
+    use ToolCapability::AgentDelegation;
+    let build = crate::config::AgentMode::Build;
+    let policy = ToolSchemaPolicy::root(true);
+
+    // Every delegation tool the request advertises, wherever it is defined.
+    let delegation = native_tools_schema(true)
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .filter(|name| tool_capabilities(name).contains(&AgentDelegation))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    for name in ["spawn_agent", "send_agent", "wait_agent", "followup_task"] {
+        assert!(delegation.iter().any(|tool| tool == name), "{name}");
+    }
+    assert_eq!(agent_tool_count(policy, build), delegation.len());
+
+    // These two used to be the count's other half; they delegate nothing.
+    for name in ["set_goal", "todo_write"] {
+        assert!(
+            !tool_capabilities(name).contains(&AgentDelegation),
+            "{name}"
+        );
+        assert!(!delegation.iter().any(|tool| tool == name), "{name}");
+    }
+
+    assert_eq!(agent_tool_count(ToolSchemaPolicy::root(false), build), 0);
+    assert_eq!(agent_tool_count(policy, crate::config::AgentMode::Plan), 0);
+
+    // Delegation tools in `TOOLS` are already part of `builtin`; the total
+    // counts each advertised tool once.
+    let surface = textual_tool_surface(policy, build);
+    assert_eq!(surface.agent, delegation.len());
+    assert_eq!(
+        surface.total(),
+        surface.builtin + surface.mcp + super::schema::AGENT_TOOL_SPECS.len()
+    );
+}
+
+#[test]
 fn validation_rejects_unknown_duplicate_and_mixed_calls() {
     let valid = ToolCall {
         name: "grep".to_string(),

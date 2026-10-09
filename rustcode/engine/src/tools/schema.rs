@@ -111,13 +111,13 @@ fn maybe_pause_native_schema_test_gate(messages: &[Value]) {
 pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     (
         "spawn_agent",
-        "Start an asynchronous read-only subagent and return its id. Delegate a self-contained task whose result you need but whose intermediate steps you do not: a broad search, an independent investigation, or one of several tasks that can run in parallel. Do the work yourself when it is a few tool calls, and never delegate the step you are blocked on and then wait for it. Give each child a complete brief: it sees none of this conversation unless context_inheritance says otherwise. Children that write must have disjoint allowed_paths. Keep working after spawning; a finished child reports back on its own, and wait_agent is for when you have nothing else to do. Write access, allowed paths, and verification must be explicit.",
-        r#"{"task": "task description", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test", "workspace_mode": "shared", "base_sha": "origin/main"}"#,
+        "Start an asynchronous read-only subagent and return JSON with its agent_id. Delegate a self-contained task whose result you need but whose intermediate steps you do not: a broad search, an independent investigation, or one of several tasks that can run in parallel. Do the work yourself when it is a few tool calls, and never delegate the step you are blocked on and then wait for it. Give each child a complete brief: it sees none of this conversation unless context_inheritance says otherwise. Children that write must have disjoint allowed_paths. Keep working after spawning; a finished child reports back on its own, and wait_agent is for when you have nothing else to do. Write access, allowed paths, and verification must be explicit. agent_type picks a role: explorer is read-only investigation, worker presets write_access and still needs allowed_paths, default is read-only unless write_access is passed.",
+        r#"{"task": "task description", "agent_type": "explorer", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test", "workspace_mode": "shared", "base_sha": "origin/main"}"#,
     ),
     (
         "send_agent",
-        "Follow up an idle subagent or queue a message for an active child at its next safe boundary.",
-        r#"{"id": "subagent id", "message": "message text"}"#,
+        "Follow up an idle subagent or queue a message for an active child at its next safe boundary. With interrupt, stop an active child's turn and redirect it now.",
+        r#"{"id": "subagent id", "message": "message text", "interrupt": false}"#,
     ),
     (
         "set_goal",
@@ -151,12 +151,16 @@ pub struct ToolSchemaPolicy {
 pub(crate) struct ToolSurface {
     pub(crate) builtin: usize,
     pub(crate) mcp: usize,
+    /// Tools with `ToolCapability::AgentDelegation`. Those that live in
+    /// `TOOLS` are also part of `builtin`, so this is not a term of `total`.
     pub(crate) agent: usize,
+    /// Tools advertised from outside the `TOOLS` table.
+    pub(crate) outside_table: usize,
 }
 
 impl ToolSurface {
     pub(crate) const fn total(self) -> usize {
-        self.builtin + self.mcp + self.agent
+        self.builtin + self.mcp + self.outside_table
     }
 }
 
@@ -689,10 +693,37 @@ pub(crate) fn textual_tool_surface(
         mcp: usize::from(policy.include_mcp_tools && agent_mode != crate::config::AgentMode::Plan)
             * collect_mcp_tools().len(),
         agent: agent_tool_count(policy, agent_mode),
+        outside_table: outside_table_tool_count(policy, agent_mode),
     }
 }
 
+/// Delegation tools a request advertises: every tool carrying
+/// `ToolCapability::AgentDelegation`, whether it lives in `TOOLS` or in
+/// `AGENT_TOOL_SPECS`. `set_goal` and `todo_write` are not delegation.
 pub(crate) fn agent_tool_count(
+    policy: ToolSchemaPolicy,
+    agent_mode: crate::config::AgentMode,
+) -> usize {
+    if !policy.include_agent_tools || agent_mode == crate::config::AgentMode::Plan {
+        return 0;
+    }
+    TOOLS
+        .iter()
+        .filter(|tool| {
+            tool.capabilities.contains(&ToolCapability::AgentDelegation)
+                && text_builtin_is_advertised(tool, policy, agent_mode)
+        })
+        .count()
+        + AGENT_TOOL_SPECS
+            .iter()
+            .filter(|(name, _, _)| {
+                super::tool_capabilities(name).contains(&ToolCapability::AgentDelegation)
+            })
+            .count()
+}
+
+/// Tools advertised from `AGENT_TOOL_SPECS`, which `builtin` does not count.
+pub(crate) fn outside_table_tool_count(
     policy: ToolSchemaPolicy,
     agent_mode: crate::config::AgentMode,
 ) -> usize {
@@ -2000,10 +2031,10 @@ pub(super) fn schema_for_tool(name: &str) -> Value {
 pub(super) fn schema_for_agent_tool(name: &str) -> Value {
     match name {
         "spawn_agent" => {
-            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"model":{"type":"string","description":"Model profile name for the child. Defaults to the parent's model."},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"model":{"type":"string","description":"Model profile name for the child. Defaults to the parent's model."},"agent_type":{"type":"string","enum":crate::app::subagent_context::AgentRole::NAMES,"default":"default","description":"Role preset: explorer is read-only, worker presets write_access (allowed_paths still required), default follows write_access."},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
         }
         "send_agent" => {
-            serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"}},"required":["id","message"]})
+            serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"},"interrupt":super::misc::interrupt_schema()},"required":["id","message"]})
         }
         "set_goal" => {
             serde_json::json!({"type":"object","properties":{"goal":{"type":"string"}},"required":["goal"]})
@@ -2227,8 +2258,8 @@ Call `list_mcp_tools` for the live MCP server and tool names instead of guessing
         }
     }
     if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
-        p.push_str("- spawn_agent | Args: {\"task\":\"task description\",\"context_inheritance\":\"minimal|evidence|recent|fork\",\"evidence\":\"selected facts\"} | Start a fresh child; default minimal. Writes require explicit write_access, allowed_paths and verification.\n");
-        p.push_str("- send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Follow up an idle subagent or steer an active child at its next safe boundary.\n");
+        p.push_str("- spawn_agent | Args: {\"task\":\"task description\",\"context_inheritance\":\"minimal|evidence|recent|fork\",\"evidence\":\"selected facts\"} | Start a fresh child; default minimal. Optional agent_type explorer|worker|default. Writes require explicit write_access or agent_type worker, plus allowed_paths and verification. Returns JSON with agent_id.\n");
+        p.push_str("- send_agent | Args: {\"id\": subagent_id, \"message\": \"message\", \"interrupt\": false} | Follow up an idle subagent or steer an active child at its next safe boundary; interrupt stops its current turn and redirects it now.\n");
         if policy.profile == ToolSchemaProfile::Coding {
             p.push_str("- set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n");
             p.push_str("- todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n");
