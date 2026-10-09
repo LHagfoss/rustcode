@@ -186,3 +186,87 @@ fn queued_prompt_after_idle_has_no_stale_clocks_to_trip_on() {
     state.orchestrator_running = false;
     assert!(state.check_stall_watchdog(false, Instant::now()).is_none());
 }
+
+fn past_the_limit() -> Duration {
+    Duration::from_secs(super::STALL_WATCHDOG_TIMEOUT_SECS + 60)
+}
+
+#[tokio::test]
+async fn answering_a_long_pending_question_is_not_a_stall() {
+    // Session 01a11ffc: a question open for 17 minutes, then the watchdog
+    // reset the live turn 16 ms after the answer (#1885).
+    let mut state = stale_active_state();
+    let mut tracker = super::super::StreamTracker::new();
+    tracker.last_update = Instant::now() - past_the_limit();
+    state.stream_tracker = Some(tracker);
+    state.orchestrator_running = true;
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let question = tokio::spawn({
+        let state = std::sync::Arc::clone(&state);
+        async move {
+            let args = serde_json::json!({ "question": "Continue?", "options": ["Yes", "No"] });
+            crate::network::tool_exec::ask_user_question(&state, &cancel, &args).await
+        }
+    });
+    let answer = loop {
+        if let Some(answer) = state.lock().await.question_response.take() {
+            break answer;
+        }
+        tokio::task::yield_now().await;
+    };
+
+    // Pending: no amount of waiting on the user is a stall.
+    {
+        let s = state.lock().await;
+        assert!(s.check_stall_watchdog(false, Instant::now()).is_none());
+        assert!(
+            s.check_stall_watchdog(false, Instant::now() + past_the_limit())
+                .is_none()
+        );
+    }
+
+    answer.send("User selected: Yes".to_owned()).unwrap();
+    let (output, _) = question.await.unwrap();
+    assert!(output.success);
+
+    // Answered: the turn is Streaming again with a turn start and a stream
+    // older than the limit, and nothing running yet.
+    let s = state.lock().await;
+    assert_eq!(s.status, AppStatus::Streaming);
+    assert!(s.pending_question.is_none());
+    assert!(s.running_tools.is_empty());
+    assert!(
+        s.check_stall_watchdog(false, Instant::now()).is_none(),
+        "the answer is progress; the turn must not be reset"
+    );
+    // #1226: a turn that then stays silent for the whole limit is still dead.
+    assert!(
+        s.check_stall_watchdog(false, Instant::now() + past_the_limit())
+            .is_some()
+    );
+}
+
+#[test]
+fn a_pending_approval_is_not_a_stall() {
+    let mut state = stale_active_state();
+    state.pending_tool_confirmation = Some(Vec::new());
+    assert!(state.check_stall_watchdog(false, Instant::now()).is_none());
+}
+
+#[test]
+fn recent_turn_progress_suppresses_the_watchdog_until_it_goes_stale() {
+    // A tool that ran past the limit and just finished: old turn start, old
+    // stream, nothing running, next request not sent yet.
+    let mut state = stale_active_state();
+    state.orchestrator_running = true;
+    state.note_turn_progress();
+    assert!(state.check_stall_watchdog(false, Instant::now()).is_none());
+
+    state.turn_progress_at = Some(Instant::now() - past_the_limit());
+    let recovery = state
+        .check_stall_watchdog(false, Instant::now())
+        .expect("a turn silent past the limit after its last progress is dead");
+    assert!(recovery.reset_orchestrator);
+}

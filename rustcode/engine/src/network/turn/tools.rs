@@ -1039,6 +1039,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 s.pending_tool_confirmation = None;
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
+                s.note_turn_progress();
                 let mut msg = ChatMessage::new("assistant", &ctx.response.final_content)
                     .with_tool_calls(call_refs.clone());
                 msg.response_time_ms = Some(turn_response_time_ms);

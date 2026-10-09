@@ -256,6 +256,7 @@ pub(crate) async fn ask_user_question(
         let mut s = state.lock().await;
         let pending_changed = s.pending_question.take().is_some();
         s.question_response = None;
+        s.note_turn_progress();
         s.pending_question_queue.clear();
         s.pending_question_done.clear();
         let status_changed = if s.status == AppStatus::AwaitingQuestion {
@@ -519,6 +520,9 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let mut s = state.lock().await;
                 if let Some(pos) = s.running_tools.iter().position(|t| t == &tool_name) {
                     s.running_tools.remove(pos);
+                    // The watchdog stops being suppressed by this tool here,
+                    // so its finish has to count as progress in the same lock.
+                    s.note_turn_progress();
                 }
             });
         }
@@ -955,6 +959,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             let status_changed = s.status != AppStatus::Streaming;
             s.status = AppStatus::Streaming;
             s.stream_tracker = Some(StreamTracker::new());
+            s.note_turn_progress();
             if !confirmation_transition_redrawn && (pending_changed || status_changed) {
                 s.request_redraw();
             }
