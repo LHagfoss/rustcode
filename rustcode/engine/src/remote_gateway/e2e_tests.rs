@@ -491,6 +491,32 @@ impl View {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_remote_off_preserves_the_reason_with_gateway_status_in_flight() {
+    let host = Host::start().await;
+    let connector = host.connector();
+    let (mut phone, _) = Phone::pair(&host, "Teardown phone").await;
+    for cycle in 0..20 {
+        let mut terminal = Terminal::share(&connector, "session-off-race").await;
+        terminal.registered().await;
+        let attached = phone
+            .request(
+                Some(&terminal.registration),
+                json!({"type": "attach_session"}),
+            )
+            .await;
+        assert_eq!(attached["result"]["type"], "attached");
+        // Attaching queues a gateway status to the owner. Disable sharing
+        // immediately, while both directions of the owner socket are busy.
+        terminal.off().await;
+        let closed = phone.event("session_closed").await;
+        assert_eq!(
+            closed["event"]["reason"], "sharing_disabled",
+            "cycle {cycle}: {closed}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_paired_device_drives_a_shared_session_end_to_end() {
     let host = Host::start().await;
     let connector = host.connector();
