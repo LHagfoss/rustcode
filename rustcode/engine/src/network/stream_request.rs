@@ -618,6 +618,91 @@ pub(crate) fn select_request_profile(
     Ok(matches.first().map(|profile| (*profile).clone()))
 }
 
+/// Fingerprint and size of each leading unit of a request, in the order a
+/// provider reads them for prefix caching: the tool schemas, then every input
+/// item or message.
+fn request_prefix_units(payload: &serde_json::Value) -> Vec<(u64, usize, String)> {
+    use std::hash::{Hash, Hasher};
+    let unit = |kind: String, value: &serde_json::Value| {
+        let text = value.to_string();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut hasher);
+        (hasher.finish(), text.len(), kind)
+    };
+    let mut units = Vec::new();
+    if let Some(tools) = payload.get("tools") {
+        units.push(unit("tools".to_owned(), tools));
+    }
+    let items = payload
+        .get("input")
+        .or_else(|| payload.get("messages"))
+        .and_then(serde_json::Value::as_array);
+    for item in items.into_iter().flatten() {
+        let kind = item
+            .get("type")
+            .or_else(|| item.get("role"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("item");
+        units.push(unit(kind.to_owned(), item));
+    }
+    units
+}
+
+/// Compare a request with the previous one sent for the same session and
+/// report how far they agree from the start. A provider can only serve the
+/// shared part from its prompt cache, so `shared_bytes` against the cached
+/// tokens it reports shows whether a miss comes from the request changing or
+/// from the provider. Only sizes, kinds and positions are recorded.
+fn request_prefix_report(session_id: &str, payload: &serde_json::Value) -> serde_json::Value {
+    static PREVIOUS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, Vec<(u64, usize, String)>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    const TRACKED_SESSIONS: usize = 16;
+
+    let units = request_prefix_units(payload);
+    let mut tracked = PREVIOUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if tracked.len() >= TRACKED_SESSIONS && !tracked.contains_key(session_id) {
+        tracked.clear();
+    }
+    let previous = tracked.insert(session_id.to_owned(), units.clone());
+    drop(tracked);
+    request_prefix_comparison(previous.as_deref(), &units)
+}
+
+fn request_prefix_comparison(
+    previous: Option<&[(u64, usize, String)]>,
+    units: &[(u64, usize, String)],
+) -> serde_json::Value {
+    let bytes = |units: &[(u64, usize, String)]| units.iter().map(|unit| unit.1).sum::<usize>();
+    let Some(previous) = previous else {
+        return serde_json::json!({"units": units.len(), "bytes": bytes(units), "previous_units": null});
+    };
+    let shared = previous
+        .iter()
+        .zip(units)
+        .take_while(|(before, now)| before.0 == now.0)
+        .count();
+    serde_json::json!({
+        "units": units.len(),
+        "bytes": bytes(units),
+        "previous_units": previous.len(),
+        "previous_bytes": bytes(previous),
+        "shared_units": shared,
+        "shared_bytes": bytes(&units[..shared]),
+        // The first unit that differs, as it was in the previous request and
+        // as it is now. Absent when the previous request is a full prefix.
+        "first_changed": previous.get(shared).map(|before| serde_json::json!({
+            "index": shared,
+            "previous_kind": before.2,
+            "previous_bytes": before.1,
+            "kind": units.get(shared).map(|now| now.2.as_str()),
+            "bytes": units.get(shared).map(|now| now.1),
+        })),
+    })
+}
+
 fn chatgpt_stream_payload(
     model: &str,
     messages: &[serde_json::Value],
@@ -4740,6 +4825,13 @@ async fn stream_request_with_timeouts(
         crate::provider_auth::github_copilot::request_headers(&payload, expected_session_id)
     });
     let request_start_time = std::time::Instant::now();
+    // The side of a prompt-cache miss cannot be told from token counts alone:
+    // record how much of this request repeats the previous one's leading items.
+    request_event!(
+        "provider.request_prefix",
+        request_prefix_report(&request_session_id, &payload),
+    );
+
     drop(payload);
     let tool_schema_tokens = tool_schema_tokens_for_protocol(
         tool_protocol,
@@ -5937,4 +6029,55 @@ async fn stream_request_with_timeouts(
         buf.content.len()
     );
     Ok(finish_reason)
+}
+
+#[cfg(test)]
+mod request_prefix_tests {
+    use super::{request_prefix_comparison, request_prefix_units};
+    use serde_json::json;
+
+    #[test]
+    fn a_request_that_extends_the_previous_one_shares_all_but_its_changed_tail() {
+        let first = json!({"input": [
+            {"role": "developer", "content": "rules"},
+            {"type": "additional_tools", "tools": [{"name": "read_file"}]},
+            {"role": "user", "content": "hello"},
+            {"role": "user", "content": "<rustcode_context>one"},
+        ]});
+        let second = json!({"input": [
+            {"role": "developer", "content": "rules"},
+            {"type": "additional_tools", "tools": [{"name": "read_file"}]},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "<rustcode_context>two"},
+        ]});
+        let (before, now) = (request_prefix_units(&first), request_prefix_units(&second));
+
+        let cold = request_prefix_comparison(None, &before);
+        assert_eq!(cold["units"], 4);
+        assert!(cold["previous_units"].is_null());
+
+        let report = request_prefix_comparison(Some(&before), &now);
+        assert_eq!(report["shared_units"], 3);
+        assert_eq!(report["previous_units"], 4);
+        assert_eq!(report["first_changed"]["index"], 3);
+        assert_eq!(report["first_changed"]["previous_kind"], "user");
+        assert_eq!(report["first_changed"]["kind"], "assistant");
+        let shared: usize = now[..3].iter().map(|unit| unit.1).sum();
+        assert_eq!(report["shared_bytes"], shared);
+
+        // A changed tool list is caught as the very first unit.
+        let retooled = json!({"tools": [{"name": "grep"}], "messages": [{"role": "user", "content": "hello"}]});
+        let original = json!({"tools": [{"name": "read_file"}], "messages": [{"role": "user", "content": "hello"}]});
+        let report = request_prefix_comparison(
+            Some(&request_prefix_units(&original)),
+            &request_prefix_units(&retooled),
+        );
+        assert_eq!(report["shared_units"], 0);
+        assert_eq!(report["first_changed"]["previous_kind"], "tools");
+
+        let identical = request_prefix_comparison(Some(&before), &before);
+        assert_eq!(identical["shared_units"], 4);
+        assert!(identical["first_changed"].is_null());
+    }
 }
