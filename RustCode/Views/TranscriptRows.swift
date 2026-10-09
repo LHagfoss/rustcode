@@ -18,7 +18,11 @@ struct TranscriptRow: View {
             Text(text)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
+                .contextMenu {
+                    Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }
+                }
         }
     }
 }
@@ -28,10 +32,11 @@ private struct UserMessage: View {
 
     var body: some View {
         Text(text)
-            .textSelection(.enabled)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(.fill.tertiary, in: .rect(cornerRadius: 20))
+            .contentShape(.contextMenuPreview, .rect(cornerRadius: 20))
+            .contextMenu { TextActions(text: text) }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
             .accessibilityLabel("You: \(text)")
@@ -44,10 +49,13 @@ private struct AssistantMessage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             MarkdownText(text: assistant.text)
-                .textSelection(.enabled)
             if assistant.isStreaming {
                 StreamingIndicator()
             }
+        }
+        .contentShape(.contextMenuPreview, .rect(cornerRadius: 12))
+        .contextMenu {
+            TextActions(text: assistant.text, readableText: MarkdownText.plainText(assistant.text))
         }
         .accessibilityElement(children: .combine)
     }
@@ -65,56 +73,78 @@ struct StreamingIndicator: View {
 
 private struct ToolRow: View {
     let tool: ToolCall
-    @State private var isExpanded = false
+    @State private var isExpanded = LaunchOptions.current.expandsTools
 
     private var hasDetail: Bool { tool.input != nil || tool.output != nil }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
-            } label: {
-                HStack(spacing: 10) {
-                    statusIcon
-                        .frame(width: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(tool.name)
-                            .font(.subheadline.weight(.medium))
-                        Text(tool.summary)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+        Group {
+            if hasDetail {
+                DisclosureGroup(isExpanded: $isExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let input = tool.input {
+                            detail("Input", input)
+                        }
+                        if let output = tool.output {
+                            detail(tool.isOutputTruncated ? "Output (truncated)" : "Output", output)
+                        }
                     }
-                    Spacer(minLength: 8)
-                    if hasDetail {
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    }
+                    .padding(.top, 12)
+                } label: {
+                    label
                 }
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .disabled(!hasDetail)
-            .accessibilityLabel("Tool \(tool.name), \(statusDescription). \(tool.summary)")
-            .accessibilityHint(hasDetail ? (isExpanded ? "Collapses the details" : "Expands the details") : "")
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 10) {
-                    if let input = tool.input {
-                        detail("Input", input)
-                    }
-                    if let output = tool.output {
-                        detail(tool.isOutputTruncated ? "Output (truncated)" : "Output", output)
-                    }
-                }
-                .padding(.top, 12)
+                .disclosureGroupStyle(ToolDisclosureStyle())
+            } else {
+                label
             }
         }
         .padding(12)
         .background(.fill.quaternary, in: .rect(cornerRadius: 14))
+        .contentShape(.contextMenuPreview, .rect(cornerRadius: 14))
+        .contextMenu {
+            Button("Copy Summary", systemImage: "doc.on.doc") {
+                Clipboard.copy(tool.summary)
+            }
+            if let input = tool.input {
+                Button("Copy Input", systemImage: "arrow.down.doc") {
+                    Clipboard.copy(input)
+                }
+            }
+            if let output = tool.output {
+                Button("Copy Output", systemImage: "arrow.up.doc") {
+                    Clipboard.copy(output)
+                }
+            }
+            if hasDetail {
+                Divider()
+                Button(
+                    isExpanded ? "Collapse" : "Expand",
+                    systemImage: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical"
+                ) {
+                    withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
+                }
+            }
+        }
+    }
+
+    private var label: some View {
+        HStack(spacing: 10) {
+            statusIcon
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tool.name)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(tool.summary)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Tool \(tool.name), \(statusDescription). \(tool.summary)")
     }
 
     private func detail(_ title: String, _ text: String) -> some View {
@@ -125,10 +155,12 @@ private struct ToolRow: View {
             ScrollView(.horizontal) {
                 Text(text)
                     .font(.caption.monospaced())
+                    .foregroundStyle(.primary)
                     .textSelection(.enabled)
             }
             .scrollIndicators(.hidden)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -148,6 +180,34 @@ private struct ToolRow: View {
         case .running: "running"
         case .succeeded: "succeeded"
         case .failed: "failed"
+        }
+    }
+}
+
+/// The system disclosure row, with a quiet chevron instead of a tinted one.
+private struct ToolDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { configuration.isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    configuration.label
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(configuration.isExpanded ? "Collapses the details" : "Expands the details")
+
+            if configuration.isExpanded {
+                configuration.content
+            }
         }
     }
 }
@@ -185,6 +245,17 @@ struct SubagentRow: View {
         }
         .padding(12)
         .background(.fill.quaternary, in: .rect(cornerRadius: 14))
+        .contentShape(.contextMenuPreview, .rect(cornerRadius: 14))
+        .contextMenu {
+            Button("Copy Task", systemImage: "doc.on.doc") {
+                Clipboard.copy(subagent.task)
+            }
+            if let detail = subagent.detail {
+                Button("Copy Details", systemImage: "doc.on.doc") {
+                    Clipboard.copy(detail)
+                }
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Sub-agent \(subagent.name), \(statusDescription). \(subagent.task)")
     }

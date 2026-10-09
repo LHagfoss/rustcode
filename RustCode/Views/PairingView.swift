@@ -85,7 +85,7 @@ struct PairingView: View {
                 Label("Scan Pairing Code", systemImage: "qrcode.viewfinder")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .brandProminentButtonStyle()
             .controlSize(.large)
             .disabled(isPairing)
         }
@@ -128,7 +128,7 @@ struct PairingView: View {
             } else if let parsedAddress {
                 Label(parsedAddress.protection.explanation, systemImage: parsedAddress.protection.symbolName)
                     .font(.footnote)
-                    .foregroundStyle(parsedAddress.protection.isEncrypted ? Color.secondary : Color.orange)
+                    .foregroundStyle(parsedAddress.protection.isEncrypted ? Color.secondary : Color.attention)
             }
 
             Button(action: pairManually) {
@@ -138,7 +138,7 @@ struct PairingView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .secondaryButtonStyle()
             .controlSize(.large)
             .disabled(isPairing || address.isEmpty || (code.isEmpty && !address.hasPrefix("{")))
 

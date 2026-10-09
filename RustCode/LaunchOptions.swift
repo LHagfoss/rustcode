@@ -6,10 +6,26 @@ import RustCodeRemote
 /// - `-demo`: start in demo mode instead of the pairing screen.
 /// - `-demoSession approval|question|idle`: open that demo session straight away.
 /// - `-demoSheet`: present the session's pending question or approval once it appears.
+///
+/// Debug builds only, for screenshots of states the Simulator cannot be driven into:
+/// - `-demoFocusComposer`: focus the message field, which brings up the keyboard.
+/// - `-demoDraft <text>`: start with that text in the message field.
+/// - `-demoSelectText`: present the Select Text sheet for the first message.
+/// - `-demoExpandTools`: show tool rows expanded.
+/// - `-demoSettings`: present Settings.
+/// - `-demoSelectOption`: select the first option of a presented question.
 struct LaunchOptions {
+    static let current = LaunchOptions(arguments: ProcessInfo.processInfo.arguments)
+
     var startsDemo = false
     var demoSessionID: String?
     var presentsAttention = false
+    var focusesComposer = false
+    var composerDraft: String?
+    var presentsSelectText = false
+    var expandsTools = false
+    var presentsSettings = false
+    var selectsFirstOption = false
 
     init(arguments: [String]) {
         startsDemo = arguments.contains("-demo")
@@ -22,5 +38,15 @@ struct LaunchOptions {
             default: nil
             }
         }
+        #if DEBUG
+        focusesComposer = arguments.contains("-demoFocusComposer")
+        presentsSelectText = arguments.contains("-demoSelectText")
+        expandsTools = arguments.contains("-demoExpandTools")
+        presentsSettings = arguments.contains("-demoSettings")
+        selectsFirstOption = arguments.contains("-demoSelectOption")
+        if let index = arguments.firstIndex(of: "-demoDraft"), arguments.indices.contains(index + 1) {
+            composerDraft = arguments[index + 1]
+        }
+        #endif
     }
 }

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SessionsView: View {
     @Environment(RemoteStore.self) private var store
-    @State private var showsSettings = false
+    @State private var showsSettings = LaunchOptions.current.presentsSettings
     var presentsAttentionOnLaunch = false
 
     var body: some View {
@@ -29,6 +29,15 @@ struct SessionsView: View {
 private struct SessionSidebar: View {
     @Environment(RemoteStore.self) private var store
     @Binding var showsSettings: Bool
+    @State private var query = ""
+
+    private var sessions: [SessionSummary] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return store.sessions }
+        return store.sessions.filter { session in
+            [session.title, session.workspace, session.model].contains { $0.localizedStandardContains(query) }
+        }
+    }
 
     private var selection: Binding<String?> {
         Binding(get: { store.selectedSessionID }, set: { store.select($0) })
@@ -37,12 +46,20 @@ private struct SessionSidebar: View {
     var body: some View {
         List(selection: selection) {
             Section {
-                ForEach(store.sessions) { session in
+                ForEach(sessions) { session in
                     SessionRow(session: session, badge: store.badges.badge(for: session))
                         .tag(session.id)
+                        .contextMenu {
+                            Button("Copy Title", systemImage: "doc.on.doc") {
+                                Clipboard.copy(session.title)
+                            }
+                            Button("Copy Workspace Path", systemImage: "folder") {
+                                Clipboard.copy(session.workspace)
+                            }
+                        }
                 }
             } footer: {
-                if !store.sessions.isEmpty {
+                if !sessions.isEmpty {
                     Text("Sessions appear here while they are shared with /\u{2060}remote and their terminal stays open.")
                 }
             }
@@ -50,8 +67,11 @@ private struct SessionSidebar: View {
         .overlay {
             if store.sessions.isEmpty {
                 emptyState
+            } else if sessions.isEmpty {
+                ContentUnavailableView.search(text: query)
             }
         }
+        .searchable(text: $query, prompt: "Search sessions")
         .navigationTitle("Sessions")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -60,7 +80,7 @@ private struct SessionSidebar: View {
                 }
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .floatingBottomBar {
             ConnectionStatusBar()
         }
     }
@@ -114,9 +134,9 @@ private struct SessionRow: View {
     private var indicator: some View {
         switch badge {
         case .approval:
-            Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
+            Image(systemName: "hand.raised.fill").foregroundStyle(.attention)
         case .question:
-            Image(systemName: "questionmark.bubble.fill").foregroundStyle(.orange)
+            Image(systemName: "questionmark.bubble.fill").foregroundStyle(.attention)
         case .completed:
             Circle().fill(.tint).frame(width: 10, height: 10)
         case nil:
@@ -166,7 +186,7 @@ struct ConnectionStatusBar: View {
                 if store.canRetry {
                     Button("Retry") { store.retryNow() }
                         .font(.footnote.weight(.semibold))
-                        .buttonStyle(.bordered)
+                        .secondaryButtonStyle()
                         .buttonBorderShape(.capsule)
                         .controlSize(.small)
                         .accessibilityLabel("Retry connection now")
@@ -175,7 +195,9 @@ struct ConnectionStatusBar: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity)
-            .background(.bar)
+            .glassSurface(in: .rect(cornerRadius: 22))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .accessibilityElement(children: .contain)
         }
     }

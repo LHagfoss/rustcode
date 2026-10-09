@@ -76,6 +76,15 @@ struct QuestionSheet: View {
                     }
                 }
             }
+            #if DEBUG
+            .onAppear {
+                if LaunchOptions.current.selectsFirstOption, let first = question.options.first {
+                    selection = [first.id]
+                }
+            }
+            #endif
+            .sensoryFeedback(.selection, trigger: selection)
+            .sensoryFeedback(.success, trigger: isSubmitting) { _, isSubmitting in isSubmitting }
             .navigationTitle("Question")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -125,6 +134,7 @@ struct ApprovalSheet: View {
     let initial: PendingApproval
 
     @State private var isSubmitting = false
+    @State private var decision: ApprovalDecision?
 
     private var approval: PendingApproval {
         if let current = store.attached?.pendingApproval, current.batchID == batchID { return current }
@@ -164,28 +174,35 @@ struct ApprovalSheet: View {
                 }
                 .padding(20)
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            .floatingBottomBar {
                 HStack(spacing: 12) {
                     Button(role: .destructive) {
                         resolve(.deny)
                     } label: {
                         Text("Deny").frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
+                    .secondaryButtonStyle()
+                    .tint(.red)
 
                     Button {
                         resolve(.approve)
                     } label: {
                         Text("Approve").frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .brandProminentButtonStyle()
                     .disabled(!approval.canBeResolved)
                 }
                 .controlSize(.large)
                 .disabled(isSubmitting)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
-                .background(.bar)
+            }
+            .sensoryFeedback(trigger: decision) { _, decision in
+                switch decision {
+                case .approve: .success
+                case .deny: .warning
+                default: nil
+                }
             }
             .task { await store.loadApprovalDetails() }
             .navigationTitle(approval.items.count == 1 ? "Approval" : "\(approval.items.count) Approvals")
@@ -212,12 +229,12 @@ struct ApprovalSheet: View {
                     || (item.detailTotalBytes ?? 0) > RemoteStore.maximumApprovalDetailBytes {
             Label("This is only the beginning of the action and the rest cannot be shown here. Review it in the terminal; from here it can only be denied.", systemImage: "exclamationmark.triangle")
                 .font(.footnote)
-                .foregroundStyle(.orange)
+                .foregroundStyle(.attention)
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 Label("Only the beginning has loaded. Approving needs the full action.", systemImage: "exclamationmark.triangle")
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.attention)
                 Button("Load Again") {
                     Task { await store.loadApprovalDetails() }
                 }
@@ -227,6 +244,7 @@ struct ApprovalSheet: View {
     }
 
     private func resolve(_ decision: ApprovalDecision) {
+        self.decision = decision
         isSubmitting = true
         Task {
             await store.resolve(approval, decision: decision)

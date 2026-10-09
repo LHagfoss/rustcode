@@ -4,6 +4,7 @@ import SwiftUI
 struct TranscriptView: View {
     @Environment(RemoteStore.self) private var store
     @State private var sheet: AttentionSheet?
+    @State private var selectable: SelectableText?
     @State private var hasAutoPresented = false
     var presentsAttentionOnAppear = false
 
@@ -24,9 +25,14 @@ struct TranscriptView: View {
         }
         .navigationTitle(store.selectedSession?.title ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomBar
+        .toolbar {
+            if let session = store.selectedSession {
+                ToolbarItem(placement: .topBarTrailing) {
+                    sessionMenu(session)
+                }
+            }
         }
+        .environment(\.selectText, SelectTextAction { selectable = SelectableText(text: $0) })
         .sheet(item: $sheet) { sheet in
             switch sheet {
             case .question(let question):
@@ -35,9 +41,38 @@ struct TranscriptView: View {
                 ApprovalSheet(batchID: approval.batchID, initial: approval)
             }
         }
+        .sheet(item: $selectable) { selectable in
+            SelectTextSheet(text: selectable.text)
+        }
         .onChange(of: store.attached?.pendingQuestion?.id) { reconcileSheet() }
         .onChange(of: store.attached?.pendingApproval?.batchID) { reconcileSheet() }
         .onAppear { reconcileSheet() }
+        #if DEBUG
+        .task(id: store.attached?.items.isEmpty) {
+            guard LaunchOptions.current.presentsSelectText, selectable == nil else { return }
+            let text = store.attached?.items.lazy.compactMap { item -> String? in
+                if case .assistant(let assistant) = item.content { assistant.text } else { nil }
+            }.first
+            if let text { selectable = SelectableText(text: MarkdownText.plainText(text)) }
+        }
+        #endif
+    }
+
+    private func sessionMenu(_ session: SessionSummary) -> some View {
+        Menu {
+            Section("\(session.workspace) · \(session.model)") {
+                if let snapshot = store.attached, !snapshot.items.isEmpty {
+                    ShareLink(item: snapshot.plainText(title: session.title)) {
+                        Label("Share Transcript", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Button("Copy Workspace Path", systemImage: "folder") {
+                    Clipboard.copy(session.workspace)
+                }
+            }
+        } label: {
+            Label("Session", systemImage: "ellipsis")
+        }
     }
 
     private func transcript(_ snapshot: SessionSnapshot) -> some View {
@@ -54,6 +89,9 @@ struct TranscriptView: View {
                         }
                     }
                     .font(.footnote.weight(.medium))
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
                     .frame(maxWidth: .infinity)
                     .disabled(store.isLoadingHistory)
                 }
@@ -76,17 +114,23 @@ struct TranscriptView: View {
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .defaultScrollAnchor(.top, for: .alignment)
         .scrollDismissesKeyboard(.interactively)
+        .floatingBottomBar {
+            composerDock
+        }
     }
 
-    private var bottomBar: some View {
-        VStack(spacing: 0) {
-            if let snapshot = store.attached {
-                VStack(spacing: 8) {
+    /// The composer and whatever is waiting on the user, floating over the transcript as
+    /// one group of glass.
+    @ViewBuilder
+    private var composerDock: some View {
+        if let snapshot = store.attached {
+            GlassGroup(spacing: 8) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(store.visibleRequests) { request in
                         RequestStatusRow(request: request)
                     }
                     if let approval = snapshot.pendingApproval {
-                        AttentionBanner(
+                        AttentionAccessory(
                             symbol: "hand.raised.fill",
                             title: "Approval needed",
                             detail: approval.items.first?.title ?? "Review the action",
@@ -94,27 +138,25 @@ struct TranscriptView: View {
                         ) { sheet = .approval(approval) }
                     }
                     if let question = snapshot.pendingQuestion {
-                        AttentionBanner(
+                        AttentionAccessory(
                             symbol: "questionmark.bubble.fill",
                             title: "Question",
                             detail: question.prompt,
                             action: "Answer"
                         ) { sheet = .question(question) }
                     }
+                    ComposerBar(
+                        isRunning: snapshot.isRunning,
+                        canSteer: snapshot.canSteer,
+                        isEnabled: store.connection == .connected
+                    )
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, snapshot.pendingApproval != nil || snapshot.pendingQuestion != nil || !store.visibleRequests.isEmpty ? 10 : 0)
-
-                ComposerBar(
-                    isRunning: snapshot.isRunning,
-                    canSteer: snapshot.canSteer,
-                    isEnabled: store.connection == .connected
-                )
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: 760)
-        .frame(maxWidth: .infinity)
-        .background(.bar)
     }
 
     /// A turn is running but nothing on screen shows it: no streaming text, no running tool
@@ -177,6 +219,9 @@ private struct SessionActivityView: View {
                         detail: "Background task · \(task.elapsed.formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated)))",
                         monospaced: true
                     )
+                    .contextMenu {
+                        Button("Copy Command", systemImage: "doc.on.doc") { Clipboard.copy(task.command) }
+                    }
                 }
                 ForEach(Array(snapshot.pendingPrompts.enumerated()), id: \.offset) { _, prompt in
                     activityRow(
@@ -185,6 +230,9 @@ private struct SessionActivityView: View {
                         detail: prompt.kind == .steer ? "Steering, waiting for the turn" : "Queued for the next turn",
                         monospaced: false
                     )
+                    .contextMenu {
+                        Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(prompt.text) }
+                    }
                 }
                 if snapshot.omitted.total > 0 {
                     Text("\(snapshot.omitted.total) more not shown here. See the terminal for the full list.")
@@ -213,6 +261,7 @@ private struct SessionActivityView: View {
         }
         .padding(12)
         .background(.fill.quaternary, in: .rect(cornerRadius: 14))
+        .contentShape(.contextMenuPreview, .rect(cornerRadius: 14))
         .accessibilityElement(children: .combine)
     }
 }
@@ -229,88 +278,19 @@ enum AttentionSheet: Identifiable {
     }
 }
 
-private struct AttentionBanner: View {
-    let symbol: String
-    let title: String
-    let detail: String
-    let action: String
-    let perform: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.title3)
-                .foregroundStyle(.orange)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Text(detail)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            Button(action, action: perform)
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .accessibilityLabel("\(action): \(title)")
-        }
-        .padding(12)
-        .background(.fill.quaternary, in: .rect(cornerRadius: 16))
-    }
-}
-
-/// A request whose outcome is not known to be applied. An uncertain one is never sent
-/// again automatically: the user checks its status or dismisses it.
-private struct RequestStatusRow: View {
-    @Environment(RemoteStore.self) private var store
-    let request: TrackedRequest
-
-    var body: some View {
-        HStack(spacing: 10) {
-            if request.phase == .sending {
-                ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: "questionmark.circle")
-                    .foregroundStyle(.orange)
-                    .accessibilityHidden(true)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.footnote.weight(.semibold))
-                if let text = request.text {
-                    Text(text)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: 8)
-            if request.isUncertain {
-                Button("Check") {
-                    Task { await store.checkStatus(of: request.id) }
-                }
-                .accessibilityLabel("Check whether the request was applied")
-                Button("Dismiss", systemImage: "xmark") {
-                    store.dismissRequest(request.id)
-                }
-                .labelStyle(.iconOnly)
+extension SessionSnapshot {
+    /// The transcript as plain text, for sharing.
+    func plainText(title: String) -> String {
+        var parts = [title]
+        for item in items {
+            switch item.content {
+            case .user(let text): parts.append("You:\n\(text)")
+            case .assistant(let assistant): parts.append(assistant.text)
+            case .tool(let tool): parts.append("[\(tool.name)] \(tool.summary)")
+            case .subagent(let subagent): parts.append("[\(subagent.name)] \(subagent.task)")
+            case .notice(let text): parts.append(text)
             }
         }
-        .font(.footnote)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.fill.quaternary, in: .rect(cornerRadius: 12))
-    }
-
-    private var title: String {
-        switch request.phase {
-        case .sending: "Sending…"
-        case .settled(.received): "Delivered, waiting for the session"
-        case .settled(.unknown): "Not confirmed. Check the transcript before sending again."
-        case .notSent(let reason): reason
-        case .settled: "Sent"
-        }
+        return parts.joined(separator: "\n\n")
     }
 }
