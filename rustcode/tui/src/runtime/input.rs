@@ -696,11 +696,11 @@ pub(super) async fn handle_app_event(
     } = ctx;
     match app_event {
         AppEvent::ApprovalDecision(decision) => {
-            apply_approval_decision(&app_state, current_cancel_token, decision).await;
+            remote::apply_terminal_approval(app_state, current_cancel_token, decision).await;
             *needs_redraw = true;
         }
         AppEvent::AnswerQuestion(answer) => {
-            apply_question_answer(&app_state, current_cancel_token, answer).await;
+            remote::apply_terminal_answer(app_state, current_cancel_token, answer).await;
             *needs_redraw = true;
         }
         AppEvent::UpdateDecision(decision) => {

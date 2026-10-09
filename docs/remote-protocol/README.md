@@ -7,6 +7,12 @@ the transport that carries these frames (gateway, WebSocket, pairing, `/remote`)
 does not exist yet. The experimental `rustcode serve` protocol described in
 [`mobile.md`](../mobile.md) is separate and unchanged.
 
+The terminal already has `/remote`, `/remote status` and `/remote off`, and the
+session owner's half of the bridge behind them. They are experimental and the
+gateway is not connected yet: `/remote` reports that no gateway is available
+and shares nothing. `rustcode/engine/src/remote/owner.rs` documents the link
+the gateway's local IPC client will implement.
+
 The Rust types in `rustcode/engine/src/remote/protocol.rs` are the source of
 truth. Everything under `v1/` is generated from them:
 

@@ -48,7 +48,7 @@ impl AppRuntime {
                 Ok(AppRunControl::Continue)
             }
             AppEvent::ApprovalDecision(decision) => {
-                rustcode::controller::apply_approval_decision(
+                super::remote::apply_terminal_approval(
                     &self.app_state,
                     &mut self.current_cancel_token,
                     decision,
@@ -57,7 +57,7 @@ impl AppRuntime {
                 Ok(AppRunControl::Continue)
             }
             AppEvent::AnswerQuestion(answer) => {
-                rustcode::controller::apply_question_answer(
+                super::remote::apply_terminal_answer(
                     &self.app_state,
                     &mut self.current_cancel_token,
                     answer,

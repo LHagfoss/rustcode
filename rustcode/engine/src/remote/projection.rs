@@ -212,6 +212,23 @@ fn pending_approval_actions(state: &AppState) -> Option<(&str, Vec<ApprovalActio
     Some((batch_id, actions))
 }
 
+/// The question a client may answer now, with its identity.
+pub(super) fn project_pending_question(state: &AppState) -> Option<RemoteQuestion> {
+    state
+        .pending_question
+        .as_ref()
+        .map(|question| project_question(state, question))
+}
+
+/// The approval batch a client may resolve now, with its identity.
+pub(super) fn project_pending_approval(
+    state: &AppState,
+    limits: &ProjectionLimits,
+) -> Option<RemoteApprovalBatch> {
+    pending_approval_actions(state)
+        .map(|(batch_id, actions)| project_approval_actions(batch_id, &actions, limits))
+}
+
 fn project_subagent(agent: &SubAgent, limits: &ProjectionLimits) -> RemoteSubagent {
     RemoteSubagent {
         id: agent.id,
@@ -371,12 +388,8 @@ pub fn project_snapshot(
         transcript: project_messages(state, &revision, first..state.history.len(), limits),
         history_cursor: history_cursor(&revision, first),
         history_revision: revision,
-        pending_question: state
-            .pending_question
-            .as_ref()
-            .map(|question| project_question(state, question)),
-        pending_approval: pending_approval_actions(state)
-            .map(|(batch_id, actions)| project_approval_actions(batch_id, &actions, limits)),
+        pending_question: project_pending_question(state),
+        pending_approval: project_pending_approval(state, limits),
         pending_prompts: cap(
             pending_prompts,
             limits.list_items,
@@ -576,12 +589,8 @@ pub fn project_event(
             }]
         }
         // The event carries no identity; the pending question does.
-        AgentUiEvent::QuestionRequested { .. } => state
-            .pending_question
-            .as_ref()
-            .map(|question| RemoteEvent::QuestionRequested {
-                question: project_question(state, question),
-            })
+        AgentUiEvent::QuestionRequested { .. } => project_pending_question(state)
+            .map(|question| RemoteEvent::QuestionRequested { question })
             .into_iter()
             .collect(),
         AgentUiEvent::TurnFinished { .. } => vec![RemoteEvent::TurnFinished {

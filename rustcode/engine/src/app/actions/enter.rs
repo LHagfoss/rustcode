@@ -367,6 +367,12 @@ async fn handle_enter_inner(
                 // never adds to history (issue #1222).
                 crate::controller::show_tasks_panel(&mut s);
             }
+            // Sharing is opened and closed by the event loop that owns the
+            // session; it picks the command up and reports the outcome.
+            "/remote" => match crate::remote::owner::SharingCommand::parse(&tokens[1..]) {
+                Ok(command) => s.remote_command = Some(command),
+                Err(usage) => s.show_command_panel("Remote", usage),
+            },
             "/stop" => {
                 let text = stop_background_terminals(&s.active_session_id);
                 s.history.push(ChatMessage::new("system", text));
