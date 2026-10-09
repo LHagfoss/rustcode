@@ -259,6 +259,14 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
     match TOOLS.iter().find(|t| t.name == name) {
         Some(tool) => match (tool.handler)(args) {
             Ok(out) => ToolExecutionOutput::success(out),
+            // A refused note is the caller's to reword, not a harness fault.
+            Err(e) if name == "remember" && crate::memory::is_refusal(&e) => {
+                ToolExecutionOutput::failure_with_kind(
+                    as_error_message(&e),
+                    ToolErrorKind::Validation,
+                    false,
+                )
+            }
             Err(e) => ToolExecutionOutput::failure(as_error_message(&e)),
         },
         None => {
@@ -315,6 +323,19 @@ pub fn needs_confirmation(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::mcp_result_content;
+
+    #[test]
+    fn refused_memory_note_is_a_validation_error() {
+        // Refused before anything is read or written, so no store is touched.
+        let output = super::execute_with_metadata(
+            "remember",
+            &serde_json::json!({"key": "api_key", "value": "0a1b2c3d4e5f"}),
+        );
+        assert!(!output.success);
+        assert_eq!(output.error_kind, Some(super::ToolErrorKind::Validation));
+        assert!(output.content.contains("(rule: credential assignment)"));
+        assert!(!output.content.contains("0a1b2c3d4e5f"));
+    }
 
     #[test]
     fn structured_only_mcp_results_reach_the_model() {
