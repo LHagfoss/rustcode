@@ -397,10 +397,18 @@ pub enum RemoteEvent {
     TurnStarted {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timing: Option<RemoteTurnTiming>,
         prompt: BoundedText,
     },
     TextDelta {
         text: String,
+        /// Optional current logical-turn work and assistant-segment thought timing.
+        /// An empty text carries a clock update without appending content.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timing: Option<RemoteTurnTiming>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thought_time_ms: Option<u64>,
     },
     ToolStarted {
         tool: RemoteTool,
@@ -431,10 +439,14 @@ pub enum RemoteEvent {
     TurnFinished {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timing: Option<RemoteTurnTiming>,
     },
     TurnCancelled {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timing: Option<RemoteTurnTiming>,
     },
     /// Replaces all client state for the session.
     Snapshot {
@@ -560,6 +572,9 @@ pub struct RemoteSnapshot {
     /// `session.activity` is already `running`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<RemoteTurn>,
+    /// Latest terminal logical turn, including turns with no assistant answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn: Option<RemoteTurnTiming>,
     /// Transcript tail, oldest first.
     pub transcript: Vec<RemoteMessage>,
     /// Identifies the transcript the message IDs and cursors refer to.
@@ -594,6 +609,34 @@ pub struct RemoteTurn {
     pub live_response: BoundedText,
     pub tools: Vec<RemoteTool>,
     pub can_steer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<RemoteTurnTiming>,
+    /// Aggregate across thinking blocks in the current assistant segment only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_time_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteTurnTiming {
+    pub turn_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    /// Authoritative monotonic work time; excludes user waits and gaps between runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_work_ms: Option<u64>,
+    /// Absent while active or suspended. A failed turn uses `turn_finished` too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<RemoteTurnOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteTurnOutcome {
+    Completed,
+    Cancelled,
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -659,6 +702,15 @@ pub struct RemoteMessage {
     pub tool: Option<RemoteMessageTool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_time_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_time_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    /// Correlation and footer for this message's logical turn, repeated across phases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<RemoteTurnTiming>,
 }
 
 /// Set on a tool-result message.

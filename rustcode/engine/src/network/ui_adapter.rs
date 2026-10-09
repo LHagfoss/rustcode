@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 pub enum AgentUiEvent {
     PromptStarted {
         prompt: String,
+        timing: Option<crate::app::TurnTiming>,
     },
     SubagentUpdated {
         id: u32,
@@ -47,9 +48,11 @@ pub enum AgentUiEvent {
     TurnFinished {
         content: String,
         completed: bool,
+        timing: Option<crate::app::TurnTiming>,
     },
     Cancelled {
         completed_tool_ids: Vec<String>,
+        timing: Option<crate::app::TurnTiming>,
     },
     #[cfg(test)]
     Error {
@@ -118,12 +121,14 @@ pub fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
             Some(AgentUiEvent::TurnFinished {
                 content: String::new(),
                 completed: true,
+                timing: None,
             })
         }
         AgentEvent::Finished(FinishReason::ToolCalls | FinishReason::Unknown(_)) => None,
         AgentEvent::Finished(FinishReason::Cancelled) | AgentEvent::Cancelled => {
             Some(AgentUiEvent::Cancelled {
                 completed_tool_ids: Vec::new(),
+                timing: None,
             })
         }
         AgentEvent::Finished(FinishReason::Error(message)) | AgentEvent::Error(message) => {
@@ -524,7 +529,8 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
     turn_session_id: String,
     suppress_synthetic_background_completion: bool,
 ) -> super::TurnContext {
-    sender.send(AgentUiEvent::PromptStarted { prompt });
+    let timing = state.lock().await.active_turn_timing.clone();
+    sender.send(AgentUiEvent::PromptStarted { prompt, timing });
     let starting_history_len = state.lock().await.history.len();
     let mut turn = Box::pin(super::turn_engine::run_agent_turn_with_context_for_session(
         client,
@@ -547,11 +553,13 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
     if cancel_token.is_cancelled() {
         sender.send(AgentUiEvent::Cancelled {
             completed_tool_ids: Vec::new(),
+            timing: context.lifecycle.turn_timing.clone(),
         });
     } else {
         sender.send(AgentUiEvent::TurnFinished {
             content: context.response.final_content.clone(),
             completed: context.lifecycle.task_completed,
+            timing: context.lifecycle.turn_timing.clone(),
         });
     }
     context

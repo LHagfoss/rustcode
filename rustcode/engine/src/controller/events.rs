@@ -218,7 +218,7 @@ pub(crate) fn from_agent_ui_event(
     use crate::network::ui_adapter::AgentUiEvent;
 
     let updates = match event {
-        AgentUiEvent::PromptStarted { prompt } => {
+        AgentUiEvent::PromptStarted { prompt, .. } => {
             vec![ControllerUpdate::Turn(TurnUpdate::PromptStarted(prompt))]
         }
         AgentUiEvent::TextDelta { text } => {

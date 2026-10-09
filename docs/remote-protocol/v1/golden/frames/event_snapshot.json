@@ -23,7 +23,36 @@
       },
       "sequence": 424,
       "generation": 1,
+      "last_turn": {
+        "turn_id": "turn:previous",
+        "started_at": "2026-10-09T18:40:00+02:00",
+        "ended_at": "2026-10-09T18:40:32+02:00",
+        "elapsed_work_ms": 32000,
+        "outcome": "completed"
+      },
       "transcript": [
+        {
+          "message_id": "m59",
+          "role": "assistant",
+          "content": {
+            "text": "<think>Check both paths</think>Done",
+            "truncated": false,
+            "offset": 0,
+            "total_bytes": 35,
+            "content_id": "message:h2:59"
+          },
+          "timestamp": "2026-10-09T18:40:25+02:00",
+          "response_time_ms": 12000,
+          "thought_time_ms": 4000,
+          "completed_at": "2026-10-09T18:40:32+02:00",
+          "turn": {
+            "turn_id": "turn:previous",
+            "started_at": "2026-10-09T18:40:00+02:00",
+            "ended_at": "2026-10-09T18:40:32+02:00",
+            "elapsed_work_ms": 32000,
+            "outcome": "completed"
+          }
+        },
         {
           "message_id": "m60",
           "role": "user",
@@ -34,7 +63,7 @@
             "total_bytes": 30,
             "content_id": "message:h2:60"
           },
-          "timestamp": "2026-10-09T08:14:02Z"
+          "timestamp": "2026-10-09T18:41:00+02:00"
         },
         {
           "message_id": "m61",
@@ -52,7 +81,7 @@
             "success": false,
             "pending": false
           },
-          "timestamp": "2026-10-09T08:14:31Z"
+          "timestamp": "2026-10-09T18:41:10+02:00"
         }
       ],
       "history_revision": "h2",

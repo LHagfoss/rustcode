@@ -256,6 +256,31 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
             message.completed_at = Some(chrono::Local::now().to_rfc3339());
         }
     }
+    // Publish and persist logical-turn timing before enter_idle clears the
+    // monotonic clock. A resumed segment is not a completed logical turn.
+    let outcome =
+        if cancel_token.is_cancelled() || matches!(stop_reason, lifecycle::StopReason::Cancelled) {
+            Some(crate::app::TurnOutcome::Cancelled)
+        } else if ctx.budget.continuation_pending
+            || matches!(stop_reason, lifecycle::StopReason::BackgroundPending)
+        {
+            None
+        } else if ctx.lifecycle.task_completed
+            && matches!(
+                stop_reason,
+                lifecycle::StopReason::Completed | lifecycle::StopReason::CompletedWithWarning(_)
+            )
+        {
+            Some(crate::app::TurnOutcome::Completed)
+        } else {
+            Some(crate::app::TurnOutcome::Failed)
+        };
+    ctx.lifecycle.turn_timing = s.freeze_turn_timing(outcome);
+    ctx.lifecycle.prior_run_duration = s
+        .current_turn_started_at
+        .map_or(ctx.lifecycle.prior_run_duration, |started| {
+            started.elapsed()
+        });
     let active_id = s.active_session_id.clone();
     let persistence_started = std::time::Instant::now();
     crate::config::save_session_history(&active_id, &s.history);

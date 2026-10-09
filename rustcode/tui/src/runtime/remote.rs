@@ -540,6 +540,10 @@ mod tests {
 
     impl FakeProvider {
         async fn start(held: bool) -> Self {
+            Self::start_mode(held, false).await
+        }
+
+        async fn start_mode(held: bool, failed: bool) -> Self {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("bind local provider");
@@ -553,7 +557,7 @@ mod tests {
             tokio::spawn(async move {
                 while let Ok((socket, _)) = listener.accept().await {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    tokio::spawn(serve_stream(socket, released.clone()));
+                    tokio::spawn(serve_stream(socket, released.clone(), failed));
                 }
             });
             Self {
@@ -592,6 +596,7 @@ mod tests {
     async fn serve_stream(
         mut socket: tokio::net::TcpStream,
         mut released: tokio::sync::watch::Receiver<bool>,
+        failed: bool,
     ) {
         let mut request = Vec::new();
         let mut buffer = [0_u8; 4_096];
@@ -620,6 +625,11 @@ mod tests {
             if request.len() >= header_end + 4 + content_length {
                 break;
             }
+        }
+        if failed {
+            let body = r#"{"error":{"message":"test provider failure"}}"#;
+            let _ = socket.write_all(format!("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            return;
         }
         let first = format!(
             "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{PROVIDER_TEXT}\"}}}}]}}\n\n"
@@ -1095,15 +1105,51 @@ mod tests {
         assert!(
             !published
                 .iter()
-                .any(|(_, event)| matches!(event, RemoteEvent::TextDelta { .. })),
+                .any(|(_, event)| matches!(event, RemoteEvent::TextDelta { text, .. } if !text.is_empty())),
             "unexpected text after the snapshot: {published:?}"
         );
+        let Some((
+            _,
+            RemoteEvent::TurnFinished {
+                turn_id: Some(ended_id),
+                timing: Some(timing),
+            },
+        )) = published.last()
+        else {
+            panic!("missing terminal timing: {published:?}");
+        };
+        assert_eq!(ended_id, &turn_id);
+        assert_eq!(timing.turn_id, turn_id);
         assert_eq!(
-            published.last().map(|(_, event)| event),
-            Some(&RemoteEvent::TurnFinished {
-                turn_id: Some(turn_id)
-            })
+            timing.outcome,
+            Some(rustcode::remote::protocol::RemoteTurnOutcome::Completed)
         );
+        assert!(
+            timing.elapsed_work_ms.is_some()
+                && timing.started_at.is_some()
+                && timing.ended_at.is_some()
+        );
+        let registration = runtime.remote.registration().cloned().unwrap();
+        let history = send(
+            &mut runtime,
+            &link,
+            &registration,
+            RemoteOperation::GetHistory {
+                cursor: None,
+                limit: 40,
+            },
+        )
+        .await;
+        let RemoteResult::History(page) = history.result else {
+            panic!("history response")
+        };
+        let assistant = page
+            .messages
+            .iter()
+            .find(|message| message.role == "assistant")
+            .unwrap();
+        assert_eq!(assistant.turn.as_ref(), Some(timing));
+        assert!(assistant.response_time_ms.is_some());
         for (index, (sequence, _)) in published.iter().enumerate() {
             assert_eq!(*sequence, index as u64 + 1);
         }
@@ -1175,7 +1221,7 @@ mod tests {
         if started == 1 {
             assert!(matches!(
                 published.first(),
-                Some((_, RemoteEvent::TurnStarted { turn_id: Some(_), prompt })) if prompt.text == "from the phone"
+                Some((_, RemoteEvent::TurnStarted { turn_id: Some(_), prompt, timing: Some(_), })) if prompt.text == "from the phone"
             ));
         } else {
             assert!(started == 0 && announced_by_snapshot, "{published:?}");
@@ -1190,7 +1236,12 @@ mod tests {
                     }
                 }
                 OwnerMessage::Event(frame) => {
-                    if let RemoteEvent::TextDelta { text: delta } = &frame.event {
+                    if let RemoteEvent::TextDelta {
+                        text: delta,
+                        timing: None,
+                        thought_time_ms: None,
+                    } = &frame.event
+                    {
                         text.push_str(delta);
                     }
                 }
@@ -1210,6 +1261,39 @@ mod tests {
             1
         );
         assert_eq!(draft_of(&state), before);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_provider_failure_retains_authoritative_terminal_timing() {
+        let provider = FakeProvider::start_mode(false, true).await;
+        let (mut runtime, gateway) = shared_runtime(provider.state(), 64);
+        let (_, mut link, _) = share(&mut runtime, &gateway).await;
+        enter(&mut runtime, "fail this turn").await;
+        let mut received = Vec::new();
+        publish_until(&mut runtime, &mut link, &mut received, turn_ended).await;
+        let failed = events(&received)
+            .into_iter()
+            .find_map(|(_, event)| match event {
+                RemoteEvent::TurnFinished {
+                    timing: Some(timing),
+                    ..
+                } => Some(timing),
+                _ => None,
+            })
+            .expect("failed turn exports its timing");
+        assert_eq!(
+            failed.outcome,
+            Some(rustcode::remote::protocol::RemoteTurnOutcome::Failed)
+        );
+        assert!(failed.ended_at.is_some() && failed.elapsed_work_ms.is_some());
+        let state = runtime.app_state().await;
+        assert!(state.active_turn_id.is_none());
+        assert!(state.history.iter().any(|message| {
+            message.turn.as_ref().is_some_and(|turn| {
+                turn.turn_id == failed.turn_id
+                    && turn.outcome == Some(rustcode::app::TurnOutcome::Failed)
+            })
+        }));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1341,8 +1425,10 @@ mod tests {
         let mut received = Vec::new();
         publish_until(&mut runtime, &mut link, &mut received, |messages| {
             events(messages).iter().any(|(_, event)| {
-                matches!(event, RemoteEvent::TurnCancelled { turn_id } if turn_id.as_deref() == Some(first.as_str()))
-            })
+                matches!(event, RemoteEvent::TurnCancelled { turn_id , ..} if turn_id.as_deref() == Some(first.as_str()))
+            }) || messages.iter().any(|message| matches!(message,
+                OwnerMessage::Snapshot { snapshot, .. } if snapshot.last_turn.as_ref().is_some_and(|turn|
+                    turn.turn_id == first && turn.outcome == Some(rustcode::remote::protocol::RemoteTurnOutcome::Cancelled))))
         })
         .await;
         {

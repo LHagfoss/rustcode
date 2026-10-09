@@ -327,12 +327,38 @@ impl ToolResultRecord {
     }
 }
 
+/// Authoritative timing for a logical turn, shared by all its transcript phases.
+/// Work is measured by the engine's monotonic clock, never timestamp subtraction.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnTiming {
+    pub turn_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_work_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<TurnOutcome>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
 /// A durable conversation message. The diff and file preview fields are
 /// intentionally ephemeral and retain their historical serde behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Correlates assistant/tool phases and retains the footer on history reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<TurnTiming>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<TokenUsage>,
     #[serde(default = "current_timestamp")]
@@ -375,6 +401,7 @@ impl ChatMessage {
         Self {
             role: role.into(),
             content: content.into(),
+            turn: None,
             token_usage: None,
             timestamp: current_timestamp(),
             response_time_ms: None,
@@ -479,9 +506,44 @@ pub struct History {
     messages: Arc<Vec<ChatMessage>>,
     revision: u64,
     last_rewrite_revision: u64,
+    /// Ephemeral attribution scope; never assigned when loading old messages.
+    turn: Option<TurnTiming>,
 }
 
 impl History {
+    pub fn set_turn(&mut self, turn: Option<TurnTiming>) {
+        self.turn = turn;
+    }
+
+    /// Update only messages already attributed to this logical turn.
+    pub fn update_turn(&mut self, turn: &TurnTiming) {
+        let mut changed = false;
+        let mut in_turn = false;
+        for message in Arc::make_mut(&mut self.messages).iter_mut() {
+            if message
+                .turn
+                .as_ref()
+                .is_some_and(|old| old.turn_id == turn.turn_id)
+            {
+                in_turn = true;
+            } else if message.turn.is_some() || message.role == "user" {
+                in_turn = false;
+            }
+            if message
+                .turn
+                .as_ref()
+                .is_some_and(|old| old.turn_id == turn.turn_id)
+                && message.turn.as_ref() != Some(turn)
+                || (in_turn && message.turn.is_none() && !message.conversation_recap)
+            {
+                message.turn = Some(turn.clone());
+                changed = true;
+            }
+        }
+        if changed {
+            self.bump_rewrite();
+        }
+    }
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -523,7 +585,10 @@ impl History {
         self.last_rewrite_revision = self.revision;
     }
 
-    pub fn push(&mut self, message: ChatMessage) {
+    pub fn push(&mut self, mut message: ChatMessage) {
+        if message.turn.is_none() && !message.conversation_recap {
+            message.turn = self.turn.clone();
+        }
         Arc::make_mut(&mut self.messages).push(message);
         self.bump();
     }
@@ -567,6 +632,7 @@ impl From<Vec<ChatMessage>> for History {
             messages: Arc::new(messages),
             revision: 0,
             last_rewrite_revision: 0,
+            turn: None,
         }
     }
 }
@@ -596,7 +662,13 @@ impl std::ops::DerefMut for History {
 impl Extend<ChatMessage> for History {
     fn extend<T: IntoIterator<Item = ChatMessage>>(&mut self, iter: T) {
         let before = self.messages.len();
-        Arc::make_mut(&mut self.messages).extend(iter);
+        let turn = self.turn.clone();
+        Arc::make_mut(&mut self.messages).extend(iter.into_iter().map(|mut message| {
+            if message.turn.is_none() && !message.conversation_recap {
+                message.turn = turn.clone();
+            }
+            message
+        }));
         if self.messages.len() != before {
             self.bump();
         }

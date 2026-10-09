@@ -448,6 +448,8 @@ pub async fn cancel_turn_for_turn(
     if state.active_turn_id.as_deref() != Some(expected_turn_id) {
         return false;
     }
+    state.freeze_turn_timing(Some(crate::app::TurnOutcome::Cancelled));
+    crate::config::save_session_history(&state.active_session_id, &state.history);
     state.active_turn_id = None;
     cancel_token.cancel();
     true

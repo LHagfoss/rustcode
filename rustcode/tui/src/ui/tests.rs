@@ -1293,6 +1293,7 @@ fn context_and_settings_panels_survive_controller_tool_events_and_completion() {
             AgentUiEvent::TurnFinished {
                 content: "Done".to_owned(),
                 completed: true,
+                timing: None,
             },
         ] {
             transcript.apply_agent_event(&event);

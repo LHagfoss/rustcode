@@ -197,6 +197,7 @@ pub struct MetricsState {
 }
 
 pub struct LifecycleState {
+    pub turn_timing: Option<crate::app::TurnTiming>,
     pub turn_machine: events::TurnMachine,
     pub task_completed: bool,
     pub turn_started_at: Instant,
@@ -215,6 +216,8 @@ pub struct LifecycleState {
 pub struct SegmentCheckpoint {
     pub schema_version: u32,
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_timing: Option<crate::app::TurnTiming>,
     pub continuation_pending: bool,
     pub background_pending: bool,
     pub tool_rounds: usize,
@@ -352,6 +355,7 @@ impl TurnContext {
                 provider_429s: 0,
             },
             lifecycle: LifecycleState {
+                turn_timing: None,
                 turn_machine: events::TurnMachine::new(),
                 task_completed: false,
                 turn_started_at: Instant::now(),
@@ -404,6 +408,7 @@ impl TurnContext {
         SegmentCheckpoint {
             schema_version: SegmentCheckpoint::SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            turn_timing: self.lifecycle.turn_timing.clone(),
             continuation_pending,
             background_pending,
             tool_rounds: self.budget.tool_rounds,
@@ -438,6 +443,13 @@ impl TurnContext {
             return false;
         }
         self.budget.tool_rounds = checkpoint.tool_rounds;
+        self.lifecycle.turn_timing = checkpoint.turn_timing.clone();
+        self.lifecycle.prior_run_duration = checkpoint
+            .turn_timing
+            .as_ref()
+            .and_then(|turn| turn.elapsed_work_ms)
+            .map(std::time::Duration::from_millis)
+            .unwrap_or_default();
         self.budget.max_tool_rounds = checkpoint.max_tool_rounds;
         self.budget.max_total_tool_rounds = checkpoint.max_total_tool_rounds;
         self.budget.segment_start_round = checkpoint.segment_start_round;

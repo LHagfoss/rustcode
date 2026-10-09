@@ -13,6 +13,7 @@
 //! pending approval. The remaining events (tools, subagents) are keyed by an
 //! ID and only ever restate what a snapshot already holds.
 
+use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hasher};
 
 use crate::app::AppState;
@@ -21,8 +22,9 @@ use crate::controller::AgentUiEvent;
 use super::ops::SessionRegistration;
 use super::owner::OwnerMessage;
 use super::projection::{
-    ProjectionContext, ProjectionLimits, bound_text, project_event, project_pending_approval,
-    project_pending_question, project_session_info, project_snapshot,
+    ProjectionContext, ProjectionLimits, bound_text, project_active_timing, project_ended_timing,
+    project_event, project_live_thought_time, project_pending_approval, project_pending_question,
+    project_session_info, project_snapshot, project_turn_timing,
 };
 use super::protocol::{
     OwnerHealth, REMOTE_PROTOCOL_VERSION, RemoteEvent, RemoteEventFrame, RemoteSessionInfo,
@@ -137,6 +139,8 @@ pub struct SessionPublisher {
     /// The outbound queue overflowed; nothing is sent until a resync.
     lagging: bool,
     snapshot_due: Option<Option<ResyncReason>>,
+    live_clock: Option<(String, Option<u64>, Option<u64>)>,
+    snapshot_terminal_turns: HashSet<String>,
 }
 
 fn pending_batch_id(state: &AppState) -> Option<&str> {
@@ -174,6 +178,8 @@ impl SessionPublisher {
             unannounced: Unannounced::of(state),
             lagging: false,
             snapshot_due: None,
+            live_clock: None,
+            snapshot_terminal_turns: HashSet::new(),
         };
         let OwnerMessage::Snapshot { snapshot, .. } = publisher.snapshot(state, None) else {
             unreachable!("snapshot() builds a snapshot message");
@@ -263,6 +269,22 @@ impl SessionPublisher {
             &self.limits,
         );
         self.announced_turn = state.active_turn_id.clone();
+        self.snapshot_terminal_turns = state
+            .history
+            .iter()
+            .filter_map(|message| message.turn.as_ref())
+            .filter(|turn| turn.outcome.is_some())
+            .map(|turn| turn.turn_id.clone())
+            .collect();
+        self.live_clock = snapshot.turn.as_ref().and_then(|turn| {
+            turn.timing.as_ref().map(|timing| {
+                (
+                    timing.turn_id.clone(),
+                    timing.elapsed_work_ms.map(|ms| ms / 1000),
+                    turn.thought_time_ms.map(|ms| ms / 1000),
+                )
+            })
+        });
         self.response = ResponseCursor::at(state);
         self.question_id = snapshot
             .pending_question
@@ -288,8 +310,25 @@ impl SessionPublisher {
         let mut messages = Vec::new();
         for event in std::mem::take(&mut self.observed) {
             match event {
-                AgentUiEvent::PromptStarted { prompt } => {
-                    self.open_turn = state.active_turn_id.clone();
+                AgentUiEvent::PromptStarted { prompt, timing } => {
+                    if timing
+                        .as_ref()
+                        .is_some_and(|turn| self.snapshot_terminal_turns.contains(&turn.turn_id))
+                    {
+                        continue;
+                    }
+                    self.open_turn = timing
+                        .as_ref()
+                        .map(|turn| turn.turn_id.clone())
+                        .or_else(|| state.active_turn_id.clone());
+                    if timing.is_some()
+                        && self.announced_turn.is_some()
+                        && self.announced_turn == state.active_turn_id
+                        && self.open_turn != state.active_turn_id
+                    {
+                        self.request_snapshot();
+                        continue;
+                    }
                     match &self.open_turn {
                         // A snapshot already announced this turn.
                         Some(turn_id) if self.announced_turn.as_ref() == Some(turn_id) => {}
@@ -298,6 +337,7 @@ impl SessionPublisher {
                             self.response = ResponseCursor::default();
                             let started = RemoteEvent::TurnStarted {
                                 turn_id: Some(turn_id.clone()),
+                                timing: timing.as_ref().map(project_turn_timing),
                                 prompt: bound_text(&prompt, self.limits.text_bytes, None),
                             };
                             messages.push(self.event(started));
@@ -306,24 +346,49 @@ impl SessionPublisher {
                         None => self.request_snapshot(),
                     }
                 }
-                AgentUiEvent::TurnFinished { content, .. } => {
-                    if let Some(turn_id) = self.end_of_announced_turn() {
+                AgentUiEvent::TurnFinished {
+                    content, timing, ..
+                } => {
+                    let authoritative = timing.is_some();
+                    let timing = timing.as_ref().map(project_turn_timing).or_else(|| {
+                        self.open_turn
+                            .as_ref()
+                            .and_then(|id| project_ended_timing(state, id))
+                    });
+                    if timing.as_ref().is_some_and(|turn| {
+                        turn.outcome.is_none() && (authoritative || turn.elapsed_work_ms.is_some())
+                    }) {
+                        self.request_snapshot();
+                        continue;
+                    }
+                    if let Some(turn_id) = self.end_of_announced_turn_with_timing(timing.as_ref()) {
                         let rest = self.response.finish(&content);
                         if rest.len() > self.limits.live_response_bytes {
                             self.request_snapshot();
                         } else if !rest.is_empty() {
                             let text = rest.to_owned();
-                            messages.push(self.event(RemoteEvent::TextDelta { text }));
+                            messages.push(self.event(RemoteEvent::TextDelta {
+                                text,
+                                timing: None,
+                                thought_time_ms: None,
+                            }));
                         }
                         messages.push(self.event(RemoteEvent::TurnFinished {
+                            timing: timing.filter(|turn| turn.outcome.is_some()),
                             turn_id: Some(turn_id),
                         }));
                         self.unannounced.history_len = state.history.len();
                     }
                 }
-                AgentUiEvent::Cancelled { .. } => {
-                    if let Some(turn_id) = self.end_of_announced_turn() {
+                AgentUiEvent::Cancelled { timing, .. } => {
+                    let timing = timing.as_ref().map(project_turn_timing).or_else(|| {
+                        self.open_turn
+                            .as_ref()
+                            .and_then(|id| project_ended_timing(state, id))
+                    });
+                    if let Some(turn_id) = self.end_of_announced_turn_with_timing(timing.as_ref()) {
                         messages.push(self.event(RemoteEvent::TurnCancelled {
+                            timing: timing.filter(|turn| turn.outcome.is_some()),
                             turn_id: Some(turn_id),
                         }));
                         self.unannounced.history_len = state.history.len();
@@ -346,9 +411,40 @@ impl SessionPublisher {
                 Some(text) if text.len() > self.limits.live_response_bytes => {
                     self.request_snapshot();
                 }
-                Some(text) => messages.push(self.event(RemoteEvent::TextDelta { text })),
+                Some(text) => messages.push(
+                    self.event(RemoteEvent::TextDelta {
+                        text,
+                        timing: project_active_timing(state)
+                            .filter(|timing| timing.elapsed_work_ms.is_some()),
+                        thought_time_ms: project_live_thought_time(state),
+                    }),
+                ),
                 None => {}
             }
+        }
+
+        if self.announced_turn.is_some() && state.active_turn_id == self.announced_turn {
+            let timing = project_active_timing(state);
+            let thought = project_live_thought_time(state);
+            if let Some(timing) = timing.filter(|timing| timing.elapsed_work_ms.is_some()) {
+                // Clock-only updates once per displayed second, still within
+                // the normal sequenced event stream and replay ring.
+                let clock = (
+                    timing.turn_id.clone(),
+                    timing.elapsed_work_ms.map(|ms| ms / 1000),
+                    thought.map(|ms| ms / 1000),
+                );
+                if self.live_clock.as_ref() != Some(&clock) {
+                    self.live_clock = Some(clock);
+                    messages.push(self.event(RemoteEvent::TextDelta {
+                        text: String::new(),
+                        timing: Some(timing),
+                        thought_time_ms: thought,
+                    }));
+                }
+            }
+        } else {
+            self.live_clock = None;
         }
 
         let question_id = state.pending_question.as_ref().map(|q| q.id.as_str());
@@ -406,6 +502,20 @@ impl SessionPublisher {
     /// The announced turn, if the turn that just ended in the event stream is
     /// that one. An end that belongs to a turn a snapshot has since replaced
     /// is not published.
+    fn end_of_announced_turn_with_timing(
+        &mut self,
+        timing: Option<&super::protocol::RemoteTurnTiming>,
+    ) -> Option<String> {
+        if let Some(timing) = timing.filter(|timing| timing.outcome.is_some()) {
+            if self.announced_turn.as_deref() != Some(timing.turn_id.as_str()) {
+                return None;
+            }
+            self.open_turn = None;
+            return self.announced_turn.take();
+        }
+        self.end_of_announced_turn()
+    }
+
     fn end_of_announced_turn(&mut self) -> Option<String> {
         let ended = self.open_turn.take()?;
         if self.announced_turn.as_ref() == Some(&ended) {
@@ -423,6 +533,152 @@ mod tests {
     use crate::remote::protocol::{RemoteSnapshot, SessionActivity};
 
     const SESSION: &str = "publisher-session";
+
+    #[test]
+    fn terminal_timing_is_retained_for_live_events_late_attach_and_history() {
+        for outcome in [
+            crate::app::TurnOutcome::Completed,
+            crate::app::TurnOutcome::Cancelled,
+            crate::app::TurnOutcome::Failed,
+        ] {
+            let mut state = shared_state();
+            let (mut publisher, _) = register(&state);
+            state.current_turn_started_at =
+                Some(std::time::Instant::now() - std::time::Duration::from_secs(32));
+            let id = state.begin_turn_identity();
+            state.history.push(ChatMessage::new("user", "work"));
+            publisher.observe(&AgentUiEvent::PromptStarted {
+                prompt: "work".to_owned(),
+                timing: state.active_turn_timing.clone(),
+            });
+            publisher.publish(&state, true);
+            let timing = state.freeze_turn_timing(Some(outcome)).unwrap();
+            state.enter_idle();
+            state.end_turn_identity(&id);
+            let event = if outcome == crate::app::TurnOutcome::Cancelled {
+                AgentUiEvent::Cancelled {
+                    completed_tool_ids: Vec::new(),
+                    timing: Some(timing.clone()),
+                }
+            } else {
+                AgentUiEvent::TurnFinished {
+                    content: String::new(),
+                    completed: outcome == crate::app::TurnOutcome::Completed,
+                    timing: Some(timing.clone()),
+                }
+            };
+            publisher.observe(&event);
+            let sent = publisher.publish(&state, true);
+            let terminal = events(&sent)
+                .into_iter()
+                .find_map(|(_, event)| match event {
+                    RemoteEvent::TurnFinished { timing, .. }
+                    | RemoteEvent::TurnCancelled { timing, .. } => timing,
+                    _ => None,
+                })
+                .expect("live terminal timing");
+            assert_eq!(terminal, project_turn_timing(&timing));
+            let (_, late) = register(&state);
+            assert_eq!(late.last_turn.as_ref(), Some(&terminal));
+            assert!(late.turn.is_none());
+            let history = super::super::projection::project_history_page(
+                &state,
+                &ProjectionLimits::default(),
+                None,
+                40,
+            )
+            .unwrap();
+            assert_eq!(history.messages[0].turn.as_ref(), Some(&terminal));
+            // A snapshot is an exact cut, even if delayed events contain IDs.
+            let (mut reconnected, _) = register(&state);
+            reconnected.observe(&AgentUiEvent::PromptStarted {
+                prompt: "work".to_owned(),
+                timing: Some(timing),
+            });
+            reconnected.observe(&event);
+            assert!(events(&reconnected.publish(&state, true)).is_empty());
+        }
+    }
+
+    #[test]
+    fn live_thought_clock_updates_are_sequenced_and_unknown_timing_is_absent() {
+        let mut state = shared_state();
+        let (mut publisher, _) = register(&state);
+        state.current_turn_started_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(12));
+        state.begin_turn_identity();
+        state.current_thought_time_ms = 2000;
+        state.current_thought_started_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        publisher.observe(&AgentUiEvent::PromptStarted {
+            prompt: "think".to_owned(),
+            timing: state.active_turn_timing.clone(),
+        });
+        let sent = publisher.publish(&state, true);
+        let projected = events(&sent);
+        let (_, clock) = projected
+            .iter()
+            .find(|(_, event)| {
+                matches!(
+                    event,
+                    RemoteEvent::TextDelta {
+                        timing: Some(_),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let RemoteEvent::TextDelta {
+            timing: Some(timing),
+            thought_time_ms: Some(thought),
+            ..
+        } = clock
+        else {
+            panic!("clock update")
+        };
+        assert!((12000..13000).contains(&timing.elapsed_work_ms.unwrap()));
+        assert!((4000..5000).contains(thought));
+        assert!(projected.windows(2).all(|pair| pair[1].0 == pair[0].0 + 1));
+        assert!(events(&publisher.publish(&state, true)).is_empty());
+        state.current_thought_time_ms = 0;
+        state.current_thought_started_at = None;
+        state.clear_current_response();
+        let snapshot = project_snapshot(
+            &state,
+            &SessionPublisher::context(publisher.registration(), publisher.sequence(), &state),
+            &ProjectionLimits::default(),
+        );
+        assert_eq!(snapshot.turn.as_ref().unwrap().thought_time_ms, None);
+    }
+
+    #[test]
+    fn a_legacy_continuation_with_unknown_work_is_not_finished_when_suspended() {
+        let mut state = shared_state();
+        let (mut publisher, _) = register(&state);
+        state.current_turn_started_at = Some(std::time::Instant::now());
+        state.begin_turn_identity();
+        let mut legacy = state.active_turn_timing.clone().unwrap();
+        legacy.started_at = None;
+        state.resume_turn_identity(legacy.clone());
+        publisher.observe(&AgentUiEvent::PromptStarted {
+            prompt: "resume".to_owned(),
+            timing: Some(legacy.clone()),
+        });
+        publisher.publish(&state, true);
+        state.freeze_turn_timing(None);
+        state.enter_idle();
+        state.end_turn_identity(&legacy.turn_id);
+        publisher.observe(&AgentUiEvent::TurnFinished {
+            content: String::new(),
+            completed: false,
+            timing: Some(legacy),
+        });
+        assert!(
+            !events(&publisher.publish(&state, true))
+                .iter()
+                .any(|(_, event)| matches!(event, RemoteEvent::TurnFinished { .. }))
+        );
+    }
 
     fn shared_state() -> AppState {
         let mut state = AppState::new();
@@ -467,6 +723,7 @@ mod tests {
         state.status = AppStatus::Streaming;
         publisher.observe(&AgentUiEvent::PromptStarted {
             prompt: "do it".to_owned(),
+            timing: None,
         });
         turn_id
     }
@@ -496,12 +753,15 @@ mod tests {
                     RemoteEvent::TurnStarted {
                         turn_id: Some(turn_id.clone()),
                         prompt: bound_text("do it", 64, None),
+                        timing: None,
                     }
                 ),
                 (
                     2,
                     RemoteEvent::TextDelta {
-                        text: "Hel".to_owned()
+                        text: "Hel".to_owned(),
+                        timing: None,
+                        thought_time_ms: None,
                     }
                 ),
             ]
@@ -511,7 +771,9 @@ mod tests {
             [(
                 3,
                 RemoteEvent::TextDelta {
-                    text: "lo".to_owned()
+                    text: "lo".to_owned(),
+                    timing: None,
+                    thought_time_ms: None,
                 }
             )]
         );
@@ -536,7 +798,7 @@ mod tests {
         let delivered: String = events(&published)
             .into_iter()
             .filter_map(|(_, event)| match event {
-                RemoteEvent::TextDelta { text } => Some(text),
+                RemoteEvent::TextDelta { text, .. } => Some(text),
                 _ => None,
             })
             .collect();
@@ -552,7 +814,9 @@ mod tests {
             [(
                 snapshot.sequence + 1,
                 RemoteEvent::TextDelta {
-                    text: "ghi".to_owned()
+                    text: "ghi".to_owned(),
+                    timing: None,
+                    thought_time_ms: None,
                 }
             )]
         );
@@ -574,6 +838,7 @@ mod tests {
         publisher.observe(&AgentUiEvent::TurnFinished {
             content: "partial answer".to_owned(),
             completed: true,
+            timing: None,
         });
         let finished = events(&publisher.publish(&state, true));
         assert_eq!(
@@ -583,10 +848,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 RemoteEvent::TextDelta {
-                    text: " answer".to_owned()
+                    text: " answer".to_owned(),
+                    timing: None,
+                    thought_time_ms: None,
                 },
                 RemoteEvent::TurnFinished {
-                    turn_id: Some(turn_id)
+                    turn_id: Some(turn_id),
+                    timing: None,
                 },
             ]
         );
@@ -615,6 +883,7 @@ mod tests {
         publisher.observe(&AgentUiEvent::TurnFinished {
             content: "so far, and more.".to_owned(),
             completed: true,
+            timing: None,
         });
         let ended: Vec<RemoteEvent> = events(&publisher.publish(&state, true))
             .into_iter()
@@ -626,10 +895,13 @@ mod tests {
             ended,
             [
                 RemoteEvent::TextDelta {
-                    text: ", and more.".to_owned()
+                    text: ", and more.".to_owned(),
+                    timing: None,
+                    thought_time_ms: None,
                 },
                 RemoteEvent::TurnFinished {
-                    turn_id: Some(turn_id)
+                    turn_id: Some(turn_id),
+                    timing: None,
                 },
             ]
         );
@@ -654,9 +926,11 @@ mod tests {
         publisher.observe(&AgentUiEvent::TurnFinished {
             content: String::new(),
             completed: true,
+            timing: None,
         });
         publisher.observe(&AgentUiEvent::PromptStarted {
             prompt: "next".to_owned(),
+            timing: None,
         });
         assert!(events(&publisher.publish(&state, true)).is_empty());
 
@@ -664,12 +938,14 @@ mod tests {
         state.enter_idle();
         publisher.observe(&AgentUiEvent::Cancelled {
             completed_tool_ids: Vec::new(),
+            timing: None,
         });
         let ended = events(&publisher.publish(&state, true));
         assert_eq!(
             ended.last().map(|(_, event)| event),
             Some(&RemoteEvent::TurnCancelled {
-                turn_id: Some(second)
+                turn_id: Some(second),
+                timing: None,
             })
         );
     }
@@ -744,7 +1020,9 @@ mod tests {
             [(
                 snapshot.sequence + 1,
                 RemoteEvent::TextDelta {
-                    text: " four".to_owned()
+                    text: " four".to_owned(),
+                    timing: None,
+                    thought_time_ms: None,
                 }
             )]
         );

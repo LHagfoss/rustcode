@@ -174,7 +174,8 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             s.session_title_tool_available = is_first_prompt;
             let max_tool_rounds = s.config.max_tool_rounds;
             let max_total_tool_rounds = s.config.max_total_tool_rounds;
-            let turn_context = take_turn_context_for_queued_prompt(
+            let had_saved_turn = s.background_turn_context.is_some();
+            let mut turn_context = take_turn_context_for_queued_prompt(
                 &mut s,
                 is_wakeup,
                 is_promoted_steer,
@@ -182,7 +183,21 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
                 max_total_tool_rounds,
             );
             let turn_session_id = s.active_session_id.clone();
-            let turn_id = s.begin_turn_identity();
+            let turn_id =
+                if is_wakeup && let Some(timing) = turn_context.lifecycle.turn_timing.clone() {
+                    s.resume_turn_identity(timing)
+                } else {
+                    s.begin_turn_identity()
+                };
+            if is_wakeup && had_saved_turn && turn_context.lifecycle.turn_timing.is_none() {
+                // An old sidecar has no authoritative original start/work.
+                // Give its continuation an identity without fabricating totals.
+                if let Some(mut timing) = s.active_turn_timing.clone() {
+                    timing.started_at = None;
+                    s.resume_turn_identity(timing);
+                }
+            }
+            turn_context.lifecycle.turn_timing = s.active_turn_timing.clone();
             configure_turn_steerability(
                 &mut s,
                 &turn_session_id,
@@ -667,7 +682,7 @@ mod enter_event_tests {
             while let Some(event) = receiver.recv().await {
                 received_events.push(format!("{event:?}"));
                 match event {
-                    AgentUiEvent::PromptStarted { prompt } if prompt == "say hello" => {
+                    AgentUiEvent::PromptStarted { prompt, .. } if prompt == "say hello" => {
                         saw_prompt = true
                     }
                     AgentUiEvent::TextDelta { text } => text_deltas.push_str(&text),

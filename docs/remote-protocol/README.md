@@ -397,6 +397,9 @@ lives. Receipts survive a gateway restart; they do not survive the terminal.
 
 ## Identity
 
+For TUI label mappings, live/historical timing examples and app controls, see
+[Building the app UI from the TUI's data](APP-UI.md).
+
 A command that acts on something the user saw must name it, and the name is
 checked by the terminal under the same lock that performs the change:
 
@@ -406,8 +409,9 @@ checked by the terminal under the same lock that performs the change:
 | `answer_question` | `question_id` | `snapshot.pending_question`, `question_requested` |
 | `resolve_approval` | `batch_id` | `snapshot.pending_approval`, `approval_requested` |
 
-Every ID is issued once per process and never reused. A turn ID names one
-prompt run; the next queued prompt has a new one. Each question in a chain has
+New turn IDs are durable UUID based identities for one logical turn, retained
+through harness/background resumes. The next user prompt has a new one.
+Question and approval IDs are issued once per process. Each question in a chain has
 its own ID. The first valid answer wins: a second device, or the terminal,
 answering the same question or batch afterwards receives `stale_question` or
 `stale_approval`.
@@ -427,8 +431,10 @@ in full before the batch is resolved.
 These are limits of the current shapes, listed so a client does not have to
 discover them:
 
-- `text_delta` names no target item: it always extends the response of the
-  running turn (`turn_started` … `turn_finished`).
+- `text_delta` has no durable target message ID. Its optional `timing.turn_id`
+  correlates the logical turn; its text extends the active response segment.
+  Empty text can update timing only. A failed logical turn also uses
+  `turn_finished`, distinguished by `timing.outcome`.
 - Items a client builds from events have no `message_id`; the IDs appear with
   the next snapshot or history page. Match by position after a turn ends, or
   re-read the tail.

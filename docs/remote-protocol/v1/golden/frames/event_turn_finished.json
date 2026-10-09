@@ -7,6 +7,13 @@
   "generation": 1,
   "event": {
     "type": "turn_finished",
-    "turn_id": "turn:48213:12"
+    "turn_id": "turn:48213:12",
+    "timing": {
+      "turn_id": "turn:48213:12",
+      "started_at": "2026-10-09T18:41:00+02:00",
+      "ended_at": "2026-10-09T18:42:00+02:00",
+      "elapsed_work_ms": 32000,
+      "outcome": "completed"
+    }
   }
 }

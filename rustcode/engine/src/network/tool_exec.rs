@@ -236,16 +236,17 @@ pub(crate) async fn ask_user_question(
         .collect::<Vec<_>>();
 
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    let start_wait = std::time::Instant::now();
     {
         let mut s = state.lock().await;
         s.begin_question_chain(questions);
         s.question_response = Some(tx);
         s.status = AppStatus::AwaitingQuestion;
+        s.begin_user_wait(start_wait);
         s.request_redraw();
     }
     let _ = crate::notifications::notify_pending_confirmation("ask_question");
 
-    let start_wait = std::time::Instant::now();
     let answer = tokio::select! {
         _ = cancel_token.cancelled() => None,
         res = rx => res.ok(),
@@ -762,6 +763,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             }
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<crate::app::ToolConfirmationResponse>();
+        let start_wait = std::time::Instant::now();
         {
             let mut s = state.lock().await;
             s.modal_scroll_row = 0;
@@ -792,11 +794,11 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             s.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
             s.tool_confirmation_response = Some(tx);
             s.status = AppStatus::AwaitingToolConfirmation;
+            s.begin_user_wait(start_wait);
             s.request_redraw();
         }
         let _ = crate::notifications::notify_pending_confirmation(name);
         dbg_log!("Awaiting user confirmation for '{}'", name);
-        let start_wait = std::time::Instant::now();
         let rx_res = rx.await;
         user_wait_dur = start_wait.elapsed();
         state.lock().await.exclude_user_wait(user_wait_dur);
