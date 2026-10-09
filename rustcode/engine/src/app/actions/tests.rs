@@ -283,7 +283,7 @@ fn background_terminal_commands_list_and_stop_the_active_session_only() {
     let task_id = "actions-background-task".to_string();
     let other_task_id = "actions-background-other-task".to_string();
     let long_command = if cfg!(target_os = "windows") {
-        "ping -n 30 127.0.0.1 > NUL"
+        "Start-Sleep -Seconds 30"
     } else {
         "sleep 30"
     };

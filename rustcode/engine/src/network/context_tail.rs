@@ -28,7 +28,7 @@ pub(crate) fn build_volatile_context_block(
     context_window: u32,
 ) -> String {
     let now = chrono::Local::now();
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "(unknown)".to_string());
+    let shell = runtime_shell(rustcode_command::host_shell(), std::env::var("SHELL").ok());
 
     // Working directory and platform are stable workspace identity and are
     // rendered by the environment fragment. Keeping them out of this block
@@ -55,6 +55,15 @@ pub(crate) fn build_volatile_context_block(
         b.push_str(&format!("- Model quota remaining: {q:.1}%\n"));
     }
     b
+}
+
+/// Name the shell `run_command` uses. Windows has no `$SHELL`, and the model
+/// needs to know which PowerShell (or `cmd.exe`) will parse its commands.
+fn runtime_shell(kind: rustcode_command::ShellKind, shell_variable: Option<String>) -> String {
+    match kind.prompt_summary() {
+        Some(summary) => summary.to_owned(),
+        None => shell_variable.unwrap_or_else(|| "(unknown)".to_string()),
+    }
 }
 
 pub(crate) fn format_read_file_context_entry(
@@ -235,6 +244,25 @@ fn compact_objective(text: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn runtime_shell_reports_the_login_shell_on_posix_and_the_real_shell_on_windows() {
+        use rustcode_command::ShellKind;
+
+        assert_eq!(
+            runtime_shell(ShellKind::Posix, Some("/bin/zsh".to_owned())),
+            "/bin/zsh"
+        );
+        assert_eq!(runtime_shell(ShellKind::Posix, None), "(unknown)");
+        // A `$SHELL` inherited from Git Bash must not mask the shell in use.
+        let shell = runtime_shell(
+            ShellKind::WindowsPowerShell,
+            Some("/usr/bin/bash".to_owned()),
+        );
+        assert!(shell.starts_with("Windows PowerShell 5.1"), "{shell}");
+        assert!(runtime_shell(ShellKind::Pwsh, None).starts_with("PowerShell 7"));
+        assert!(runtime_shell(ShellKind::Cmd, None).starts_with("cmd.exe"));
+    }
 
     fn usage(
         prompt_tokens: u32,

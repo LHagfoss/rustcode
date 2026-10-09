@@ -804,6 +804,47 @@ fn without_null_redirects(command: &str) -> String {
 }
 
 pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
+    command_confirmation_scope_in(rustcode_command::host_shell(), command)
+}
+
+/// The classification below reads `command` as POSIX sh. A shell that
+/// tokenizes it differently can run something the parser took for quoted text
+/// (PowerShell also accepts typographic quotes, `cmd.exe` ignores single
+/// quotes), so there a command is read-only only when it also contains nothing
+/// the two shells could disagree on.
+fn command_confirmation_scope_in(
+    shell: rustcode_command::ShellKind,
+    command: &str,
+) -> Option<String> {
+    let scope = posix_command_confirmation_scope(command);
+    if scope.is_none() && !shell_reads_command_like_posix(shell, command) {
+        return Some("command not verifiable as read-only in this shell".to_string());
+    }
+    scope
+}
+
+fn shell_reads_command_like_posix(shell: rustcode_command::ShellKind, command: &str) -> bool {
+    match shell {
+        rustcode_command::ShellKind::Posix => true,
+        // Bare words, switches, forward-slash paths and command separators
+        // mean the same in PowerShell; quotes, escapes, expansions and any
+        // non-ASCII character do not.
+        rustcode_command::ShellKind::Pwsh | rustcode_command::ShellKind::WindowsPowerShell => {
+            command.chars().all(|character| {
+                character.is_ascii_alphanumeric()
+                    || matches!(
+                        character,
+                        ' ' | '\n' | '-' | '_' | '.' | '/' | ':' | '=' | '|' | ';' | '&'
+                    )
+            })
+        }
+        // `cmd.exe` runs programs from the working directory first and gives
+        // several inspection names (`date`, `sort /o`) a mutating meaning.
+        rustcode_command::ShellKind::Cmd => false,
+    }
+}
+
+fn posix_command_confirmation_scope(command: &str) -> Option<String> {
     // Strip `/dev/null` sinks and fd duplications first so `|`/`&` inside
     // them (`2>&1`) don't split phantom segments below.
     let scannable = without_null_redirects(command);
@@ -2461,6 +2502,98 @@ mod disk_scan_tests {
             "echo hi; { rm -rf x; }",
         ] {
             assert!(command_confirmation_scope(command).is_some(), "{command}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod shell_dialect_tests {
+    use super::{command_confirmation_scope_in, posix_command_confirmation_scope};
+    use rustcode_command::ShellKind::{Cmd, Posix, Pwsh, WindowsPowerShell};
+
+    #[test]
+    fn posix_classification_is_unchanged() {
+        for command in [
+            "git status --short",
+            "cat 'my file.txt' | head -n 3",
+            "rg \"fn main\" src 2>/dev/null",
+            "rm -rf build",
+            "echo hi > out.txt",
+        ] {
+            assert_eq!(
+                command_confirmation_scope_in(Posix, command),
+                posix_command_confirmation_scope(command),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn powershell_auto_approves_only_plain_read_only_commands() {
+        for shell in [Pwsh, WindowsPowerShell] {
+            for command in [
+                "git status --short",
+                "git log --oneline -n 5 | sort",
+                "git status && git diff --stat",
+                "ls src/ui; cat Cargo.toml",
+                "rg -n TODO src",
+            ] {
+                assert_eq!(
+                    command_confirmation_scope_in(shell, command),
+                    None,
+                    "{command}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn powershell_text_that_sh_would_read_differently_needs_confirmation() {
+        // Each of these is read-only to the POSIX parser, which sees one
+        // quoted argument where PowerShell sees a second, mutating statement
+        // (typographic quotes delimit strings; a backtick escapes a quote).
+        for command in [
+            "echo \u{201c}'\u{201d} ; Remove-Item -Recurse src ; echo \u{201c}'\u{201d}",
+            "echo \u{2018}\"\u{2019} ; Remove-Item -Recurse src ; echo \u{2018}\"\u{2019}",
+            "cat 'notes.txt'",
+            "ls \"C:/Program Files\"",
+        ] {
+            assert_eq!(posix_command_confirmation_scope(command), None, "{command}");
+            for shell in [Pwsh, WindowsPowerShell] {
+                assert!(
+                    command_confirmation_scope_in(shell, command).is_some(),
+                    "{command}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mutating_powershell_commands_need_confirmation() {
+        for shell in [Pwsh, WindowsPowerShell, Cmd] {
+            for command in [
+                "Remove-Item -Recurse -Force src",
+                "Set-Content -Path a.txt -Value x",
+                "git status; Remove-Item a.txt",
+                "ls | Out-File listing.txt",
+                "del /s /q src",
+                "git push",
+            ] {
+                assert!(
+                    command_confirmation_scope_in(shell, command).is_some(),
+                    "{command}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cmd_never_auto_approves() {
+        for command in ["git status", "echo 'a & del /q src'", "date 01-01-2020"] {
+            assert!(
+                command_confirmation_scope_in(Cmd, command).is_some(),
+                "{command}"
+            );
         }
     }
 }

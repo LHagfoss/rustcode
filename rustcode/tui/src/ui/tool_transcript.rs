@@ -55,7 +55,9 @@ pub(super) fn format_pi_tool_action(
         "list_directory" | "list_dir" | "listdir" | "glob" => "ListDir".to_string(),
         "grep" | "grep_search" | "grepsearch" => "Search".to_string(),
         "find_symbol" | "findsymbol" | "codebase_symbol" | "codebasesymbol" => "Symbol".to_string(),
-        "run_command" | "runcommand" | "execute_command" | "bash" => "Bash".to_string(),
+        "run_command" | "runcommand" | "execute_command" | "bash" => {
+            rustcode_command::shell_label().to_string()
+        }
         "search_web" | "searchweb" | "codebase_search" | "codebasesearch" => "Search".to_string(),
         "get_project_map" | "getprojectmap" => "ProjectMap".to_string(),
         "manage_task" | "managetask" => "ManageTask".to_string(),

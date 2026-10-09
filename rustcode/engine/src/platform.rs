@@ -12,7 +12,12 @@ use std::path::{Path, PathBuf};
 /// with the former network-owned helper.
 pub(crate) fn augmented_path() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
-    augmented_path_from(&home, std::env::var("PATH").ok().as_deref(), false)
+    augmented_path_from(
+        &home,
+        std::env::var("PATH").ok().as_deref(),
+        false,
+        cfg!(target_os = "windows"),
+    )
 }
 
 /// Return the compiler-check variant of the search path.  Compiler checks have
@@ -21,10 +26,25 @@ pub(crate) fn augmented_path() -> String {
 /// the tool-facing path helper.
 pub(crate) fn compiler_augmented_path() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
-    augmented_path_from(&home, std::env::var("PATH").ok().as_deref(), true)
+    augmented_path_from(
+        &home,
+        std::env::var("PATH").ok().as_deref(),
+        true,
+        cfg!(target_os = "windows"),
+    )
 }
 
-fn augmented_path_from(home: &str, existing: Option<&str>, compiler_dirs: bool) -> String {
+fn augmented_path_from(
+    home: &str,
+    existing: Option<&str>,
+    compiler_dirs: bool,
+    windows: bool,
+) -> String {
+    // The directories below are POSIX locations joined with `:`. Prepending
+    // them to a `;`-separated Windows PATH fuses its first entry into them.
+    if windows {
+        return existing.unwrap_or_default().to_owned();
+    }
     let mut dirs = vec![format!("{home}/.cargo/bin")];
     if compiler_dirs {
         dirs.push(format!("{home}/.bun/bin"));
@@ -81,12 +101,24 @@ mod tests {
     #[test]
     fn path_variants_preserve_tool_and_compiler_contracts() {
         assert_eq!(
-            augmented_path_from("/home/test", Some("/custom/bin:/usr/bin"), false),
+            augmented_path_from("/home/test", Some("/custom/bin:/usr/bin"), false, false),
             "/home/test/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/custom/bin:/usr/bin"
         );
         assert_eq!(
-            augmented_path_from("/home/test", Some("/custom/bin:/usr/bin"), true),
+            augmented_path_from("/home/test", Some("/custom/bin:/usr/bin"), true, false),
             "/home/test/.cargo/bin:/home/test/.bun/bin:/home/test/.nvm/versions/node/current/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/custom/bin"
         );
+    }
+
+    #[test]
+    fn windows_path_is_passed_through_untouched() {
+        let path = r"C:\Windows\System32;C:\Program Files\Git\cmd";
+        for compiler_dirs in [false, true] {
+            assert_eq!(
+                augmented_path_from(r"C:\Users\test", Some(path), compiler_dirs, true),
+                path
+            );
+        }
+        assert_eq!(augmented_path_from("", None, false, true), "");
     }
 }

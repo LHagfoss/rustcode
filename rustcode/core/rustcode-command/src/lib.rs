@@ -13,6 +13,13 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod shell;
+
+pub use shell::{
+    ShellArguments, ShellKind, command_length_error, detached_command, host_shell,
+    powershell_script, select_windows_shell, shell_arguments, shell_label,
+};
+
 /// Maximum bytes retained for each output stream.
 pub const MAX_OUTPUT_BYTES: usize = 100_000;
 const CAPTURE_HEAD_BYTES: usize = MAX_OUTPUT_BYTES * 3 / 10;
@@ -165,8 +172,18 @@ fn shell_command(command: &str) -> Command {
 
 #[cfg(target_os = "windows")]
 fn shell_command(command: &str) -> Command {
-    let mut cmd = Command::new("cmd");
-    cmd.args(["/C", command]);
+    use std::os::windows::process::CommandExt;
+
+    let (kind, program) = shell::windows_shell();
+    let mut cmd = Command::new(program);
+    match shell_arguments(*kind, command) {
+        ShellArguments::Escaped(arguments) => {
+            cmd.args(arguments);
+        }
+        ShellArguments::Raw(tail) => {
+            cmd.raw_arg(tail);
+        }
+    }
     cmd
 }
 
@@ -326,6 +343,10 @@ fn run_command_internal(
             "sandboxed shell refuses explicit startup environment variable '{}'; command was not run",
             name.to_string_lossy()
         ));
+    }
+
+    if let Some(error) = command_length_error(host_shell(), &request.command) {
+        return Err(error);
     }
 
     let mut child = command
