@@ -4450,6 +4450,113 @@ fn write_and_edit_render_the_same_diff_body_when_collapsed_and_expanded() {
 }
 
 #[test]
+fn expanded_file_diff_rows_are_adjacent_at_every_verbosity() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let long = "word ".repeat(30);
+    // One removed row, a real blank added row, and one row long enough to wrap.
+    let diff = format!(
+        "--- a/notes.md\n+++ b/notes.md\n@@ -98,3 +98,4 @@\n context\n-old line\n+new line\n+\n+{long}\n context after\n"
+    );
+    for verbosity in [Verbosity::Low, Verbosity::High] {
+        let mut state = RenderState::new();
+        state.verbosity = verbosity;
+        state.history.push(
+            ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "write_to_file".to_owned(),
+                arguments: r#"{"path":"notes.md","content":"new line"}"#.to_owned(),
+            }]),
+        );
+        state.history.push(
+            ChatMessage::new("tool", "write_to_file: wrote 'notes.md'")
+                .answering(Some("call-1".to_owned()))
+                .with_diff(Some(diff.clone()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: "write_to_file".to_owned(),
+                    success: true,
+                    changed_paths: vec!["notes.md".to_owned()],
+                    ..Default::default()
+                }),
+        );
+        state.expanded_thoughts.insert(1);
+
+        let width = 80;
+        let lines = super::render_committed_tool_result_group(&state, &[1], width, false);
+        let rows: Vec<String> = lines[2..].iter().map(|line| line.to_string()).collect();
+        let body: Vec<&str> = rows
+            .iter()
+            .map(|row| row.strip_prefix("  │ ").expect("spine").trim_end())
+            .collect();
+        assert_eq!(
+            body,
+            [
+                " 98  context",
+                " 99 -old line",
+                " 99 +new line",
+                "100 +",
+                "101 +word word word word word word word word word word word word word word",
+                "     word word word word word word word word word word word word word word",
+                "     word word",
+                "102  context after",
+            ],
+            "{rows:#?}"
+        );
+        // Every row is a full-width band that fits the terminal: a row one
+        // cell too wide wraps its padding onto a row of its own.
+        for line in &lines[2..] {
+            assert_eq!(line.width(), usize::from(width), "{rows:#?}");
+        }
+    }
+}
+
+#[test]
+fn expanded_synthesized_write_preview_has_no_rows_between_its_lines() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "write_to_file".to_owned(),
+            arguments: r#"{"path":"notes.md","content":"a\n\nb\nc\nd\ne\nf\n"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            "write_to_file: wrote 'notes.md' (7 lines, 13 bytes)",
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "write_to_file".to_owned(),
+            success: true,
+            changed_paths: vec!["notes.md".to_owned()],
+            ..Default::default()
+        }),
+    );
+    state.expanded_thoughts.insert(1);
+
+    let rows: Vec<String> = super::render_committed_tool_result_group(&state, &[1], 80, false)[2..]
+        .iter()
+        .map(|line| line.to_string().trim_end().to_owned())
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            "  │     1 + a",
+            "  │     2 +",
+            "  │     3 + b",
+            "  │     4 + c",
+            "  │     5 + d",
+            "  │     6 + e",
+            "  │     7 + f",
+        ]
+    );
+}
+
+#[test]
 fn high_verbosity_shows_the_file_diff_once_opened() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
