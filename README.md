@@ -341,3 +341,60 @@ Two honest limits of that measurement:
 
 Because ATS does not restrict where a `ws://` connection may go, the app itself is what
 tells you when an address is neither local nor NetBird.
+
+## GitHub releases
+
+Pull requests run the remote package tests, device-helper fixture tests and a
+Simulator build on macOS. After merging a version/build update, a matching
+`v<VERSION>` tag on `main` runs the release workflow. It publishes a Simulator
+app, an unsigned iOS archive and `SHA256SUMS`. Personal signing profiles never
+enter those public artifacts; use the local development build below for your
+registered iPhone.
+
+## Build a local iPhone release
+
+Keep personal signing settings in the ignored `Config/Local.xcconfig`. With an
+existing Xcode development identity and provisioning profile, run:
+
+```sh
+Scripts/build-ios-release.sh
+```
+
+The helper reads the actual Release version/build settings and creates
+`build/releases/v<VERSION>/RustCode.xcarchive`. Its installable app is inside
+`Products/Applications/RustCode.app`. This directory is ignored by Git. The helper
+verifies the app metadata and signature, stores a SHA256 source fingerprint,
+preserves a previous archive when rebuilding, and uses cached signing without
+updating Apple provisioning or installing anything.
+
+This is a locally signed development archive for the devices included in its
+profile. Keep it local: it contains personal signing/provisioning metadata.
+Public unsigned or Simulator release artifacts support inspection and Simulator
+testing; they cannot be installed directly on a physical iPhone. These helpers
+do not provide App Store or TestFlight distribution.
+
+## Install on your iPhone when ready
+
+Connect and unlock the iPhone, trust this Mac, and enable Developer Mode. Run:
+
+```sh
+cd ~/code/rustcode_app && Scripts/install-on-iphone.sh
+```
+
+The helper selects the single connected, paired physical iPhone, reuses the
+local archive only when its version, build, bundle, signature and source
+fingerprint match, otherwise builds it, then installs over the existing app and
+launches it. It does not uninstall the app, so existing app data and pairing are
+retained.
+
+The fingerprint covers app sources/assets, the Xcode project, remote package
+sources/manifest, and shared and local build configuration. Local signing values
+are hashed without printing their contents. Generated builds, user Xcode state,
+documentation and tests are excluded. Editing app source triggers a rebuild even
+if the version and build number have not changed.
+
+If several phones are connected, choose one with
+`Scripts/install-on-iphone.sh --device 'YOUR IPHONE NAME OR ID'`. Add `--no-launch`
+to install without opening the app. The phone must be included in the cached
+development profile. If signing fails, configure it in Xcode first; these helpers
+do not register devices or request provisioning changes automatically.
