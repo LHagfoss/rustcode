@@ -22,6 +22,51 @@ const SUDO_LONG_OPTS_WITH_VALUE: &[&str] = &[
     "role",
 ];
 
+/// Recognizes `#` comments while a splitter walks a command. The shell drops
+/// a comment up to the end of its line, quotes included, so a quote opened
+/// inside one must not swallow the lines after it: `echo a #'` followed by
+/// `touch x #'` is two commands, not one quoted argument.
+struct CommentScanner {
+    /// The next character would begin a word.
+    word_start: bool,
+    in_comment: bool,
+}
+
+impl Default for CommentScanner {
+    fn default() -> Self {
+        Self {
+            word_start: true,
+            in_comment: false,
+        }
+    }
+}
+
+impl CommentScanner {
+    /// Whether `character` is comment text the splitter must ignore.
+    /// `protected` is true inside quotes or directly after a backslash.
+    fn skips(&mut self, character: char, protected: bool) -> bool {
+        if self.in_comment {
+            // The newline ends the comment and still separates commands.
+            self.in_comment = character != '\n';
+            self.word_start = !self.in_comment;
+            return self.in_comment;
+        }
+        if protected {
+            self.word_start = false;
+            return false;
+        }
+        if character == '#' && self.word_start {
+            self.in_comment = true;
+            return true;
+        }
+        // A quote or backslash continues or begins a word, so `a'b'#c` and
+        // `\#` are not comments.
+        self.word_start = character.is_whitespace()
+            || matches!(character, ';' | '|' | '&' | '(' | ')' | '<' | '>');
+        false
+    }
+}
+
 /// Conservatively split shell text at boundaries that may introduce another
 /// command. This is intentionally not a complete shell parser; quoted text is
 /// kept intact so operators inside read-only query arguments are not mistaken
@@ -31,8 +76,12 @@ fn split_command_segments(cmd: &str) -> Vec<String> {
     let mut current = String::new();
     let mut quote = None;
     let mut escaped = false;
+    let mut comment = CommentScanner::default();
     let mut chars = cmd.chars().peekable();
     while let Some(ch) = chars.next() {
+        if comment.skips(ch, escaped || quote.is_some()) {
+            continue;
+        }
         if escaped {
             current.push(ch);
             escaped = false;
@@ -78,7 +127,11 @@ fn split_deny_command_segments(command: &str) -> Vec<(String, bool)> {
     let mut quote = None;
     let mut escaped = false;
     let mut follows_pipe = false;
+    let mut comment = CommentScanner::default();
     for character in command.chars() {
+        if comment.skips(character, escaped || quote.is_some()) {
+            continue;
+        }
         if escaped {
             current.push(character);
             escaped = false;
@@ -2616,4 +2669,42 @@ pub(crate) fn reject_broad_git_stage(cmd: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::{command_confirmation_scope, split_command_segments, split_deny_command_segments};
+
+    #[test]
+    fn a_quote_inside_a_comment_does_not_hide_the_next_line() {
+        // sh drops `#'` to the end of the line and runs `touch x`. Read as one
+        // quoted argument to `echo`, the whole command was auto-approved.
+        for command in [
+            "echo a #'\ntouch x #'",
+            "echo a #\"\nrm -rf build #\"",
+            "#'\ntouch x #'",
+            "ls;#'\ntouch x #'",
+        ] {
+            assert!(command_confirmation_scope(command).is_some(), "{command:?}");
+            assert!(
+                split_deny_command_segments(command)
+                    .iter()
+                    .any(|(segment, _)| segment.trim_start().starts_with("touch")
+                        || segment.trim_start().starts_with("rm")),
+                "deny rules must see the hidden command in {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_comment_is_dropped_and_a_hash_inside_a_word_is_kept() {
+        assert_eq!(command_confirmation_scope("git status # ; touch x"), None);
+        assert_eq!(command_confirmation_scope("git status # 'unbalanced"), None);
+        assert_eq!(
+            split_command_segments("echo a#b 'c #d' e\\#f # tail"),
+            ["echo a#b 'c #d' e\\#f "]
+        );
+        assert_eq!(command_confirmation_scope("rg 'TODO #1' src"), None);
+        assert_eq!(command_confirmation_scope("rg -n '#include' src"), None);
+    }
 }
