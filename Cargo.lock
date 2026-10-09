@@ -7194,7 +7194,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -7259,7 +7259,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode-app"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "gpui-kit",
  "rustcode",
@@ -7269,14 +7269,14 @@ dependencies = [
 
 [[package]]
 name = "rustcode-command"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "rustcode-core"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "chrono",
  "serde",
@@ -7285,18 +7285,18 @@ dependencies = [
 
 [[package]]
 name = "rustcode-lifecycle"
-version = "0.63.0"
+version = "0.64.0"
 
 [[package]]
 name = "rustcode-loop-detect"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "rustcode-session"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "chrono",
  "rustcode-core",
@@ -7307,14 +7307,14 @@ dependencies = [
 
 [[package]]
 name = "rustcode-tasks"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "rustcode-command",
 ]
 
 [[package]]
 name = "rustcode-tool-protocol"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "regex",
  "rustcode-core",
@@ -7323,7 +7323,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode-tools"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "rustcode-core",
  "serde_json",
@@ -7334,7 +7334,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode-tui"
-version = "0.63.0"
+version = "0.64.0"
 dependencies = [
  "chrono",
  "clap",
