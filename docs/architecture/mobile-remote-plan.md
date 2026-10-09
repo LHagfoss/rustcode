@@ -1,4 +1,4 @@
-# Live terminal sessions from an Expo client
+# Live terminal sessions from an iOS client
 
 Status: proposed implementation plan; this document adds no remote runtime.
 Reviewed against main commit `39cbac19c0eb0c97dbbc7ff886985708ebc70c6b`.
@@ -8,14 +8,15 @@ Reviewed against main commit `39cbac19c0eb0c97dbbc7ff886985708ebc70c6b`.
 Run `/remote` in an existing terminal session, pair an iPhone over NetBird or
 the same LAN, select that session in a sidebar, watch its live output and
 continue it from the phone. Multiple explicitly shared terminal sessions on
-one host appear in the same list. The user will build the app UI; this work
-provides the Rust communication layer and a reusable Expo-compatible client.
+one host appear in the same list. The app is a native SwiftUI app in its own
+private repository, outside this one; this repository provides the Rust
+communication layer and the wire contract the app is built against.
 
 For this proposed v1, the terminal process owns execution and must remain
 open. Phone disconnects do not cancel work. Terminal exit removes its live
 session; persisted history remains subject to the existing session store.
 Daemon-owned execution that survives terminal exit is a separate milestone.
-Confirm this ownership choice before implementing that larger lifecycle.
+This ownership choice is confirmed for v1 (2026-10-09).
 
 Background push notifications, automatic sharing of every session, public
 internet exposure and a finished mobile interface are outside v1. Foreground
@@ -39,7 +40,7 @@ All paths below are relative to the repository root.
 | `rustcode/tui/src/runtime/input.rs` | Composer submission invokes `handle_enter_with_ui_events`; approval/question events use shared controller helpers. Remote input needs an explicit operation that preserves the terminal draft. |
 | `rustcode/tui/src/runtime/events.rs` | `AppEvent::SubmitPrompt` must not be assumed to submit a turn: the test handler only edits the composer. Add a distinct validated remote command path. |
 | `rustcode/engine/src/daemon/lifecycle.rs` | Reuse the design of single-instance locking, private registration and process birth identity. Keep remote service registration separate from scheduled jobs. |
-| `docs/mobile.md` | Describes the current raw-TCP MVP and its 1 MiB full-snapshot limit. Link this proposal without implying WebSocket or Expo support is already shipped. |
+| `docs/mobile.md` | Describes the current raw-TCP MVP and its 1 MiB full-snapshot limit. Link this proposal without implying WebSocket or app support is already shipped. |
 
 ## Architecture
 
@@ -50,7 +51,7 @@ updates and receives commands. The gateway never executes agent turns.
 
 ```mermaid
 flowchart TD
-    P["Expo client"] -->|"Authenticated WebSocket"| G["Remote gateway"]
+    P["iOS app"] -->|"Authenticated WebSocket"| G["Remote gateway"]
     G -->|"Private local socket"| A["TUI bridge A"]
     G -->|"Private local socket"| B["TUI bridge B"]
     A -->|"Runtime commands and updates"| R["Existing session A"]
@@ -112,9 +113,11 @@ device revocation removes access to every shared session on that host.
 
 Use JSON text frames over WebSocket for mobile; private local IPC may reuse
 bounded newline framing. Keep the existing `ServeRequest` protocol unchanged.
-Use Rust wire definitions as the source of truth for generated TypeScript
-types, JSON schemas and runtime validation. Select the generator after checking
-the repository dependency policy; CI must detect generated-contract drift.
+Use Rust wire definitions as the source of truth. This repository commits
+the JSON Schema generated from them, with golden example frames, under
+`docs/remote-protocol/`; the app repository builds its `Codable` types against
+that schema and decodes the golden frames in its tests. Select the generator
+after checking the repository dependency policy; CI must detect schema drift.
 
 Every command carries `protocol_version`, `request_id` and device identity
 derived from authentication. Session commands also carry `session_id` and
@@ -184,28 +187,41 @@ dropped or allowed to terminate an otherwise healthy session. Approval details
 must be fully fetched before resolving that batch; incomplete previews cannot
 serve as the reviewed action. Rate-limit/coalesce deltas without changing text.
 
-## Expo-compatible client package
+## iOS app
 
-Add `packages/remote-protocol` for generated types and validators and
-`packages/remote-client` for transport/state handling. Keep React optional;
-provide an external store compatible with `useSyncExternalStore`, with a
-React adapter as a separate entry point. Add a minimal Expo example only after
-the Rust attach path passes integration tests; no finished UI is required.
+The app lives in a separate private repository (`rustcode_app`), is written in
+Swift with SwiftUI, targets iPhone, and is built and installed from Xcode. It
+needs no paid Apple developer account; a free account re-signs every seven
+days. Nothing in this repository depends on it.
 
-Expose `pair`, `connect`, `disconnect`, session-list subscription, `attach`,
-`detach`, `getHistory`, `submit`, `steer`, `queue`, `cancel`, `answerQuestion`,
-`resolveApproval` and `getRequestStatus`. Inject WebSocket creation, credential
-storage and foreground/background lifecycle adapters for portable testing.
+Structure it as a local Swift package, `RustCodeRemote`, holding the protocol
+types, transport and state, with the SwiftUI app on top, so the package is
+tested without a simulator. Use `URLSessionWebSocketTask` behind a protocol so
+tests inject a fake socket, the Keychain for the device token, and the camera
+for the pairing QR with manual address-plus-code entry as the fallback.
+
+The package exposes `pair`, `connect`, `disconnect`, session-list
+subscription, `attach`, `detach`, `getHistory`, `submit`, `steer`, `queue`,
+`cancel`, `answerQuestion`, `resolveApproval` and `getRequestStatus`.
 
 State includes connection/pairing errors, live sessions, attached snapshots,
 streaming text, tools, subagents, background tasks, pending attention and
-request receipts. Match the server's schema; reject malformed frames. Use
-exponential backoff with jitter, a bounded retry ceiling and manual retry.
-Foregrounding triggers authenticated reconnect and cursor/snapshot resync.
-Backgrounding may suspend sockets; promise no background execution or push.
-Client IDs remain stable for unresolved requests. Revoke/unauthorized stops
-reconnection until a new pairing, and disconnect scrubs cached host data when
-requested. Do not require a paid Apple developer account for the client package.
+request receipts. Reject frames that do not match the schema. Use exponential
+backoff with jitter, a bounded retry ceiling and manual retry. Foregrounding
+triggers authenticated reconnect and cursor/snapshot resync. Backgrounding
+suspends the socket; promise no background execution or push. Request IDs stay
+stable for unresolved requests. Revoke/unauthorized stops reconnection until a
+new pairing, and unpairing removes the token and cached host data.
+
+iOS specifics: declare `NSLocalNetworkUsageDescription`, and allow plain
+`ws://` only through a scoped App Transport Security exception. A NetBird
+address is not a local-network address to iOS, so the exception must cover it
+explicitly; state in the app that a plain LAN connection is not encrypted.
+
+Interface: a session sidebar (`NavigationSplitView`), a transcript with
+streaming text and collapsible tool rows, a bottom composer, and native sheets
+for approvals and questions. System materials, SF Symbols, Dynamic Type,
+automatic light and dark.
 
 ## Delivery sequence
 
@@ -219,12 +235,13 @@ requested. Do not require a paid Apple developer account for the client package.
 3. **Gateway:** add single-instance lifecycle, private local IPC, WebSocket,
    live registry, pairing/revocation, receipts, snapshot/replay and paging.
    Retire registrations on disconnect or session identity changes.
-4. **Client package:** generated contract, runtime validation, store, actions,
-   secure-storage adapter and foreground reconnect. Update CI path matching
-   and add package type-check/test/contract-drift jobs.
+4. **App (separate repository):** `RustCodeRemote` package against the
+   committed schema, then pairing, session list, transcript, composer and
+   attention sheets. It can start against a fake socket fed with the golden
+   frames as soon as step 1 lands.
 5. **Integration and phone smoke test:** attach to two running TUIs, continue
    one from iPhone, inspect attention/subagents, and exercise reconnect/off.
-   Document actual LAN/NetBird setup and supported client installation flow.
+   Document actual LAN/NetBird setup and how the app is built and installed.
 
 Each step can be a separate commit in one implementation PR. Merge only when
 the first complete vertical slice works; placeholders must not be advertised
@@ -246,11 +263,11 @@ terminal-independent sessions without changing the client-facing identity rules.
 | Slow client / overflowing bridge queue | Bounded memory and explicit backpressure/resync; TUI render and execution continue. |
 | Pairing failure / expiry / replay | No session data leaks before auth; attempt limits apply across sockets; used credentials cannot pair again. |
 | Off / revoke / new terminal session | Session removed immediately; queued stale commands rejected; new identity is private until explicitly enabled. |
-| Foreground after socket suspension | Expo resyncs selected session and list, preserving uncertain receipts without automatic mutation replay. |
+| Foreground after socket suspension | The app resyncs selected session and list, preserving uncertain receipts without automatic mutation replay. |
 
 Run the repository-required `cargo check --workspace --tests`,
 `cargo test --workspace` and `cargo fmt --all -- --check` for implementation.
-Also run the frontend seam guard, generated-contract drift checks and client
-type-check/tests. Use a fake provider for deterministic command/stream tests,
+Also run the frontend seam guard and the schema drift check; the app
+repository runs its own build and tests. Use a fake provider for deterministic command/stream tests,
 bounded-time socket tests for reconnect and revocation, and an actual iPhone
 for the final LAN/NetBird smoke test. Record unavailable platform checks clearly.
