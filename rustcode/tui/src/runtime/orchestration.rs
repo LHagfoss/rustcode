@@ -26,6 +26,7 @@ impl AppRuntime {
             agent_ui_event_receiver,
             task_subscriptions,
             demo_state,
+            remote,
         } = self;
         let mut terminal_runtime = terminal_runtime
             .ok_or_else(|| Box::<dyn Error>::from("interactive terminal is unavailable"))?;
@@ -44,6 +45,7 @@ impl AppRuntime {
         let mut agent_ui_event_receiver = agent_ui_event_receiver;
         let mut task_subscriptions = task_subscriptions;
         let mut demo_state = demo_state;
+        let mut remote = remote;
         let update_exit;
         let mut last_progress_sent = std::time::Instant::now();
         let mut consecutive_skipped_frames = 0u32;
@@ -251,7 +253,7 @@ impl AppRuntime {
                 needs_redraw = true;
             }
 
-            let (response_active, background_redraw) = {
+            let (response_active, background_redraw, remote_command) = {
                 let mut s = app_state.lock().await;
                 let background_active = rustcode::tools::has_background_tasks(&s.active_session_id);
                 s.clear_expired_transient_notice();
@@ -260,6 +262,7 @@ impl AppRuntime {
                 (
                     s.status_state().is_active() || s.orchestrator_running || background_active,
                     s.take_redraw_request(),
+                    s.remote_command.take(),
                 )
             };
             needs_redraw |= background_redraw;
@@ -269,10 +272,27 @@ impl AppRuntime {
                         rustcode::app::events::Overlay::ToolConfirmation,
                     ));
                 }
+                remote.observe(&agent_event);
                 transcript_state.apply_agent_event(&agent_event);
                 frame_requester.schedule_frame();
                 needs_redraw = true;
             }
+            // Remote commands and publication run here, on the loop's own
+            // task and after this iteration's state changes, whether or not a
+            // frame is drawn.
+            remote
+                .tick(
+                    remote_command,
+                    remote::RemotePump {
+                        app_state: &app_state,
+                        client: &client,
+                        cancel_token: &mut current_cancel_token,
+                        agent_ui_event_sender: &agent_ui_event_sender,
+                        terminal_input_idle: app_event_receiver.is_empty(),
+                        needs_redraw: &mut needs_redraw,
+                    },
+                )
+                .await;
             if response_active {
                 frame_requester.schedule_frame();
             }
@@ -449,6 +469,7 @@ impl AppRuntime {
             }
         }
 
+        remote.close(rustcode::remote::SessionCloseReason::OwnerExited);
         let supervisor = app_state.lock().await.subagent_supervisor.clone();
         supervisor.shutdown_and_wait().await;
         let mut exit_summary = {

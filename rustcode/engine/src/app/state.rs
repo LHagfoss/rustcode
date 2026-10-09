@@ -196,6 +196,9 @@ pub struct AppState {
     pub update_prompt_index: usize,
     pub dismissed_update_version: Option<rustcode_core::update::Version>,
     pub update_requested: bool,
+    /// A `/remote` command waiting for the frontend that owns this session;
+    /// only the terminal's event loop can open or close the sharing link.
+    pub remote_command: Option<crate::remote::owner::SharingCommand>,
 
     pub active_suggestion_index: Option<usize>,
     /// Completion token explicitly dismissed with Esc. It remains suppressed
@@ -1321,6 +1324,7 @@ impl AppState {
             update_prompt_index: 0,
             dismissed_update_version: None,
             update_requested: false,
+            remote_command: None,
             active_suggestion_index: None,
             dismissed_completion: None,
             show_model_picker: false,

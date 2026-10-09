@@ -154,6 +154,48 @@ pub async fn apply_session_mutation(
     }
 }
 
+/// Answer a read that only the owner can serve (`get_history`,
+/// `get_content`) from the state it holds. Pure: the owner calls it under its
+/// state lock and replies after releasing it.
+pub fn read_session(
+    state: &AppState,
+    registration: &SessionRegistration,
+    request: &RemoteRequest,
+    limits: &super::projection::ProjectionLimits,
+) -> Result<RemoteResult, RemoteError> {
+    if request.protocol_version != REMOTE_PROTOCOL_VERSION {
+        return Err(RemoteError::incompatible_version(u64::from(
+            request.protocol_version,
+        )));
+    }
+    if request.session_id.as_deref() != Some(registration.session_id.as_str())
+        || request.registration_epoch != Some(registration.registration_epoch)
+        || state.active_session_id != registration.session_id
+    {
+        return Err(stale_session());
+    }
+    match &request.operation {
+        RemoteOperation::GetHistory { cursor, limit } => {
+            super::projection::project_history_page(state, limits, cursor.as_deref(), *limit)
+                .map(RemoteResult::History)
+        }
+        RemoteOperation::GetContent {
+            content_id,
+            offset,
+            max_bytes,
+        } => {
+            let content = super::projection::resolve_content(state, content_id)
+                .ok_or_else(|| error(RemoteErrorCode::NotFound, "no such content"))?;
+            super::projection::content_chunk(content_id, &content, *offset, *max_bytes, limits)
+                .map(RemoteResult::Content)
+        }
+        _ => Err(error(
+            RemoteErrorCode::UnsupportedOperation,
+            "the session owner does not answer this operation",
+        )),
+    }
+}
+
 fn stale_session() -> RemoteError {
     error(
         RemoteErrorCode::StaleSession,
@@ -650,6 +692,48 @@ mod tests {
         let state = state.lock().await;
         assert_eq!(state.pending_steers[0].text, "change course");
         assert_eq!(state.pending_queue, ["afterwards"]);
+    }
+
+    #[test]
+    fn owner_reads_are_bound_to_the_registration() {
+        let mut state = shared_state();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "hello"));
+        let limits = crate::remote::ProjectionLimits::default();
+        let history = request(RemoteOperation::GetHistory {
+            cursor: None,
+            limit: 10,
+        });
+        let Ok(RemoteResult::History(page)) =
+            read_session(&state, &registration(), &history, &limits)
+        else {
+            panic!("the owner serves its own transcript");
+        };
+        assert_eq!(page.messages.len(), 1);
+
+        let content = request(RemoteOperation::GetContent {
+            content_id: "message:missing:0".to_owned(),
+            offset: 0,
+            max_bytes: 16,
+        });
+        let missing = read_session(&state, &registration(), &content, &limits);
+        assert_eq!(missing.unwrap_err().code, RemoteErrorCode::NotFound);
+
+        let attach = request(RemoteOperation::AttachSession { resume: None });
+        let unsupported = read_session(&state, &registration(), &attach, &limits);
+        assert_eq!(
+            unsupported.unwrap_err().code,
+            RemoteErrorCode::UnsupportedOperation
+        );
+
+        let mut old_epoch = history.clone();
+        old_epoch.registration_epoch = Some(6);
+        let stale = read_session(&state, &registration(), &old_epoch, &limits);
+        assert_eq!(stale.unwrap_err().code, RemoteErrorCode::StaleSession);
+        state.active_session_id = "replacement".to_owned();
+        let stale = read_session(&state, &registration(), &history, &limits);
+        assert_eq!(stale.unwrap_err().code, RemoteErrorCode::StaleSession);
     }
 
     #[tokio::test]

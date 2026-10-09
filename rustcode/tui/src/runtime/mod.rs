@@ -34,6 +34,7 @@ mod composer;
 pub(crate) mod events;
 mod input;
 mod orchestration;
+mod remote;
 mod render;
 mod sessions;
 mod terminal;
@@ -97,6 +98,8 @@ pub(crate) struct AppRuntime {
     task_subscriptions: HashMap<String, rustcode_tasks::TaskSubscription>,
     /// TUI-only immutable view shown by `/test`; never installed in AppState.
     demo_state: Option<ui::DemoState>,
+    /// `/remote`: the sharing registration of the session on screen, if any.
+    remote: remote::RemoteBridge,
 }
 
 #[derive(Debug)]
@@ -154,6 +157,7 @@ impl AppRuntime {
             agent_ui_event_receiver,
             task_subscriptions: HashMap::new(),
             demo_state: None,
+            remote: remote::RemoteBridge::new(),
         })
     }
 
@@ -185,6 +189,7 @@ impl AppRuntime {
             agent_ui_event_receiver,
             task_subscriptions: HashMap::new(),
             demo_state: None,
+            remote: remote::RemoteBridge::new(),
         }
     }
 

@@ -40,18 +40,46 @@ pub async fn handle_escape(
     cancel_token: &mut tokio_util::sync::CancellationToken,
 ) {
     let mut s = state.lock().await;
-    let active_session_id = s.active_session_id.clone();
-    let had_active_turn = s.status == AppStatus::Streaming || s.orchestrator_running;
     let had_draft = !s.input_buffer.is_empty();
-    s.promote_pending_steers_to_queue(&active_session_id);
     s.clear_ctrl_c_exit_arming();
     s.reset_suggestion_cycle();
     s.input_buffer.clear();
     s.cursor_position = 0;
+    if stop_active_turn(&mut s, cancel_token) {
+        s.set_transient_notice("Turn stopped");
+    } else if had_draft {
+        s.set_transient_notice("Draft cleared");
+    }
+}
+
+/// Stop the running turn for a cancel that did not come from the composer (a
+/// remote client): the Esc cleanup without touching the terminal's draft.
+pub async fn stop_turn_keeping_draft(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut tokio_util::sync::CancellationToken,
+) {
+    let mut s = state.lock().await;
+    if stop_active_turn(&mut s, cancel_token) {
+        s.set_transient_notice("Turn stopped from a remote device");
+    }
+}
+
+/// Cancel the active turn and clear what it left behind. Returns whether a
+/// turn was running.
+fn stop_active_turn(
+    s: &mut AppState,
+    cancel_token: &mut tokio_util::sync::CancellationToken,
+) -> bool {
+    let active_session_id = s.active_session_id.clone();
+    let had_active_turn = s.status == AppStatus::Streaming || s.orchestrator_running;
+    s.promote_pending_steers_to_queue(&active_session_id);
 
     cancel_token.cancel();
     *cancel_token = tokio_util::sync::CancellationToken::new();
     s.clear_active_turn_projection();
+    // The stopped turn can no longer be named: a cancel that still carries
+    // its identity must be stale, not cancel the token that replaced it.
+    s.active_turn_id = None;
 
     if s.status == AppStatus::Streaming || s.orchestrator_running {
         s.enter_idle();
@@ -70,11 +98,7 @@ pub async fn handle_escape(
     }
     s.background_turn_context = None;
     s.clear_deferred_tool_calls();
-    if had_active_turn {
-        s.set_transient_notice("Turn stopped");
-    } else if had_draft {
-        s.set_transient_notice("Draft cleared");
-    }
+    had_active_turn
 }
 
 /// Arm the exit confirmation on the first Ctrl+C and exit on the second.

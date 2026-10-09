@@ -181,6 +181,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show current session ID, token budget, and active model",
     },
     CommandInfo {
+        name: "/remote",
+        desc: "Share this session with a paired device (status|off); experimental, gateway not yet connected",
+    },
+    CommandInfo {
         name: "/skills",
         desc: "Show available skills and their locations",
     },
