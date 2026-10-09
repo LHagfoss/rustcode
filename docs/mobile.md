@@ -1,9 +1,9 @@
 # Mobile (remote only)
 
 The proposed next stage is documented in
-[`Live terminal sessions from an Expo client`](architecture/mobile-remote-plan.md).
-That plan covers `/remote`, a multi-session gateway, pairing, WebSocket and an
-Expo-compatible client package. It is a proposal; the transport below describes
+[`Live terminal sessions from an iOS client`](architecture/mobile-remote-plan.md).
+That plan covers `/remote`, a multi-session gateway, pairing, WebSocket and a
+native iOS app in its own repository. It is a proposal; the transport below describes
 the currently implemented behavior.
 
 Decision: the phone never links Rust and never embeds the agent loop. Mobile
@@ -79,6 +79,5 @@ A typical round-trip: `auth` → `ready` + snapshot → `list_sessions` →
 snapshot → `submit` → snapshot/turn stream → (`approve` with the batch id
 from `approval_batch_requested`, or `cancel`) → snapshots confirm.
 
-Any thin client — including a future Expo app under `apps/` with generated
-types under `packages/` — can build against this without touching the Rust
-workspace.
+Any thin client, including the iOS app planned in its own repository, can
+build against this without touching the Rust workspace.
