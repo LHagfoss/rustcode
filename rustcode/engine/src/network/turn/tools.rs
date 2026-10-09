@@ -1093,6 +1093,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 s.history.push(msg);
                 ctx.response.final_content_persisted = true;
                 crate::config::save_session_history(&s.active_session_id, &s.history);
+                // An approval prompt for the batch waited on the user, not on
+                // the harness (#1891).
+                let approval_wait = std::mem::take(&mut s.approval_wait);
+                ctx.lifecycle.user_wait_duration += approval_wait;
+                ctx.performance.user_wait_us += crate::benchmark::duration_us(approval_wait);
             }
 
             let transition = if approved {
@@ -1116,6 +1121,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // progress evidence. The other calls are closed below, never
             // silently dropped or described as if they ran.
             let tools_started = std::time::Instant::now();
+            let user_wait_before = ctx.lifecycle.user_wait_duration;
             let workspace_root = {
                 let mut s = state.lock().await;
                 // Rows of calls that finish stay listed until the batch is
@@ -1146,11 +1152,18 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             {
                 ctx.performance.parallel_groups += 1;
             }
-            ctx.performance.tool_wall_us += crate::benchmark::elapsed_us(tools_started);
-            ctx.performance.tool_work_us += results
-                .iter()
-                .map(|result| result.metadata.execution_us)
-                .sum::<u64>();
+            ctx.performance.record_tool_batch(
+                crate::benchmark::elapsed_us(tools_started),
+                results
+                    .iter()
+                    .map(|result| result.metadata.execution_us)
+                    .sum::<u64>(),
+                crate::benchmark::duration_us(
+                    ctx.lifecycle
+                        .user_wait_duration
+                        .saturating_sub(user_wait_before),
+                ),
+            );
             ctx.performance.replayed_reads += results
                 .iter()
                 .filter(|result| result.metadata.replayed)

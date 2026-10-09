@@ -98,7 +98,9 @@ mod tests {
 }
 
 /// Provider-neutral timings in microseconds. Tool work can overlap; only the
-/// elapsed batch wall time is subtracted when deriving harness overhead.
+/// elapsed batch wall time is subtracted when deriving harness overhead. Time
+/// a question or approval waited on the user is `user_wait_us`: it is part of
+/// `wall_us` and of no other field.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct TurnPerformance {
@@ -110,6 +112,7 @@ pub struct TurnPerformance {
     pub ttft_us: Option<u64>,
     pub tool_wall_us: u64,
     pub tool_work_us: u64,
+    pub user_wait_us: u64,
     pub persistence_enqueue_us: u64,
     pub context_bytes: usize,
     pub requests: usize,
@@ -129,6 +132,16 @@ impl TurnPerformance {
         self.wall_us
             .saturating_sub(self.model_us)
             .saturating_sub(self.tool_wall_us)
+            .saturating_sub(self.user_wait_us)
+    }
+    /// Record one executed tool batch: `batch_us` is its elapsed wall time,
+    /// `work_us` the summed per-call execution time, and `user_wait_us` the
+    /// part of the batch spent waiting on the user (an `ask_question` answer
+    /// or a per-call approval), which is not tool time (#1891).
+    pub(crate) fn record_tool_batch(&mut self, batch_us: u64, work_us: u64, user_wait_us: u64) {
+        self.tool_wall_us += batch_us.saturating_sub(user_wait_us);
+        self.tool_work_us += work_us;
+        self.user_wait_us += user_wait_us;
     }
     pub fn report(&self) -> String {
         let metric = |value: Option<u64>| {
@@ -137,13 +150,14 @@ impl TurnPerformance {
                 .unwrap_or_else(|| "unavailable".into())
         };
         format!(
-            "Turn: {:.2}s; completed={}\nModel: {:.2}ms; TTFT: {} us\nTools: {:.2}ms wall / {:.2}ms work\nHarness: {:.2}ms\n  Context: {:.2}ms; schema: {:.2}ms; serialization: {:.2}ms\n  Persistence enqueue: {:.2}ms\nInput: {}; output: {}; cached input: {}\nRequests: {}; rounds: {}; calls: {}; recoveries: {}\nRead replays: {}; parallel groups: {}; context: {} bytes",
+            "Turn: {:.2}s; completed={}\nModel: {:.2}ms; TTFT: {} us\nTools: {:.2}ms wall / {:.2}ms work\nUser wait: {:.2}ms\nHarness: {:.2}ms\n  Context: {:.2}ms; schema: {:.2}ms; serialization: {:.2}ms\n  Persistence enqueue: {:.2}ms\nInput: {}; output: {}; cached input: {}\nRequests: {}; rounds: {}; calls: {}; recoveries: {}\nRead replays: {}; parallel groups: {}; context: {} bytes",
             self.wall_us as f64 / 1e6,
             self.completed,
             self.model_us as f64 / 1000.,
             metric(self.ttft_us),
             self.tool_wall_us as f64 / 1000.,
             self.tool_work_us as f64 / 1000.,
+            self.user_wait_us as f64 / 1000.,
             self.harness_us() as f64 / 1000.,
             self.context_us as f64 / 1000.,
             self.schema_us as f64 / 1000.,
@@ -164,7 +178,11 @@ impl TurnPerformance {
 }
 
 pub(crate) fn elapsed_us(start: std::time::Instant) -> u64 {
-    start.elapsed().as_micros().min(u64::MAX as u128) as u64
+    duration_us(start.elapsed())
+}
+
+pub(crate) fn duration_us(duration: std::time::Duration) -> u64 {
+    duration.as_micros().min(u64::MAX as u128) as u64
 }
 
 #[cfg(test)]
@@ -183,6 +201,29 @@ mod performance_tests {
         let value = serde_json::to_value(&p).unwrap();
         assert!(value["ttft_us"].is_null());
         assert!(p.report().contains("Harness"));
+    }
+    #[test]
+    fn user_wait_is_reported_apart_from_tool_and_harness_time() {
+        // Session 01a11ffc: a 1,014 s question inside a batch of sub-second
+        // tools was reported as 1,014 s of tool time (#1891).
+        let mut p = TurnPerformance {
+            wall_us: 1_020_000_000,
+            model_us: 4_000_000,
+            ..Default::default()
+        };
+        p.record_tool_batch(1_014_500_000, 400_000, 1_014_000_000);
+        p.record_tool_batch(300_000, 300_000, 0);
+        assert_eq!(p.user_wait_us, 1_014_000_000);
+        assert_eq!(p.tool_wall_us, 800_000);
+        assert_eq!(p.tool_work_us, 700_000);
+        assert_eq!(p.harness_us(), 1_200_000);
+        assert!(p.report().contains("User wait: 1014000.00ms"));
+        let value = serde_json::to_value(&p).unwrap();
+        assert_eq!(value["user_wait_us"], 1_014_000_000u64);
+        // Reports written before the field existed still load.
+        let old: TurnPerformance =
+            serde_json::from_str(r#"{"wall_us":5,"tool_wall_us":2}"#).unwrap();
+        assert_eq!(old.user_wait_us, 0);
     }
     #[test]
     fn unavailable_cache_usage_stays_unknown() {

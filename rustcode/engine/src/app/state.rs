@@ -247,7 +247,8 @@ pub struct AppState {
     /// When the turn in progress started: the user's submission, moved back
     /// by the time earlier runs of the same turn took when the harness
     /// resumed it. Unlike `generation_start_time` it does not restart with
-    /// each run, so its elapsed time is the turn's total.
+    /// each run, so its elapsed time is the turn's total. Time the turn
+    /// waited on the user is taken out of it (`exclude_user_wait`).
     pub current_turn_started_at: Option<std::time::Instant>,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     /// Complete serialized arguments for the pending confirmation actions.
@@ -260,6 +261,9 @@ pub struct AppState {
     pub tool_confirmation_selected: usize,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<ToolConfirmationResponse>>,
+    /// How long batch approval prompts were open since the turn last
+    /// collected it into its user-wait total (`turn.performance`).
+    pub(crate) approval_wait: std::time::Duration,
 
     /// Active interactive `ask_question` prompt and the channel that delivers the
     /// user's selection back to the awaiting tool call.
@@ -482,6 +486,15 @@ impl AppState {
         self.orchestrator_generation = self.orchestrator_generation.wrapping_add(1);
         self.orchestrator_owner = None;
         self.orchestrator_running = false;
+    }
+
+    /// Take time spent waiting on the user (an open question or approval)
+    /// out of the turn clock: the `Working` row and `Worked for` report how
+    /// long the agent worked, not how long the user took to answer (#1891).
+    pub(crate) fn exclude_user_wait(&mut self, wait: std::time::Duration) {
+        if let Some(started) = self.current_turn_started_at {
+            self.current_turn_started_at = Some((started + wait).min(std::time::Instant::now()));
+        }
     }
 
     pub fn enter_idle(&mut self) {
@@ -1321,6 +1334,7 @@ impl AppState {
             modal_scroll_row: 0,
             tool_confirmation_selected: 0,
             tool_confirmation_response: None,
+            approval_wait: std::time::Duration::ZERO,
             pending_question: None,
             question_response: None,
             pending_question_queue: Vec::new(),
