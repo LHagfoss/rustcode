@@ -2027,11 +2027,7 @@ mod tests {
         // failed status, not a manager-level thread failure.
         let manager = manager(FakeTerminator::succeeding());
         let events = manager.subscribe();
-        let request = test_request(if cfg!(target_os = "windows") {
-            "exit /b 7"
-        } else {
-            "exit 7"
-        });
+        let request = test_request("exit 7");
         let handle = manager.spawn(TaskSpec::new("a", request)).unwrap();
         assert!(
             matches!(events.recv().unwrap(), TaskEvent::Started { id, .. } if id == *handle.id())

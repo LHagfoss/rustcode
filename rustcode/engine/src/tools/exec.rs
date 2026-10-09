@@ -245,9 +245,25 @@ fn run_command_schema() -> Value {
     })
 }
 
+/// Sent on every request and part of the cached prompt prefix: the POSIX text
+/// must stay byte-for-byte stable.
+const POSIX_RUN_COMMAND_DESCRIPTION: &str = "Run one shell command; returns stdout, stderr and exit code. Pipelines fail if any stage fails; timeout defaults to 120s; interactive sudo is disabled. Prefer view_file over cat/sed/head for file reads. The OS sandbox (none on Windows) fails closed and a denied command reports which permission to request: network_access=true or filesystem_write_path (an existing absolute directory, outside the workspace in restricted modes) grants it for this command only, with confirmation unless YOLO is on. background=true runs a blocking job and resumes you on completion (notify_on_complete=false: no turn). detached=true starts a long-lived server or watcher, returns a task ID at once and stays silent unless notify_on_complete=true. Use manage_task for logs, wait and kill; never poll. For external jobs run the provider's blocking watch command once with background=true. A command containing '&' is treated as detached unless the script waits on or kills its own jobs; never add '&' with detached=true. Git: branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills. Never `git rebase`, `git reset --hard` or force-push in the active checkout, or discard uncommitted work. Branch there with `git switch -c`; `git worktree add` under /tmp only when it is genuinely required (concurrent or unrelated dirty work), then `git worktree remove`, `git worktree prune`, `git branch -d`. End on the original branch after `git pull --ff-only`.";
+
+/// Windows runs commands through PowerShell (see `rustcode_command::ShellKind`),
+/// so the model is told to write PowerShell and where it differs from sh.
+const WINDOWS_RUN_COMMAND_DESCRIPTION: &str = "Run one PowerShell command; returns stdout, stderr and the exit code of its last statement. The shell is PowerShell 7 (pwsh) when installed, else Windows PowerShell 5.1; the `Shell` line of the runtime context says which (if it says cmd.exe, write cmd syntax instead). Write PowerShell, not POSIX sh: chain with `;` (`&&` and `||` exist only in PowerShell 7); no heredocs, create files with write_to_file; set variables with `$env:NAME = 'value'`; run a quoted path with `& 'C:\\dir with spaces\\tool.exe'`; `/` and `\\` both separate paths; discard output with `> $null`; in 5.1 `curl` and `wget` are aliases, so call `curl.exe`; when a `.ps1` shim is blocked by execution policy call the `.cmd` one (`npm.cmd`). stderr is already captured, so omit `2>&1`. Timeout defaults to 120s; the session is non-interactive. Prefer view_file, grep, glob and list_directory over Get-Content, Select-String and Get-ChildItem. There is no OS sandbox on Windows. background=true runs a blocking job and resumes you on completion (notify_on_complete=false: no turn). detached=true starts a long-lived server or watcher, returns a task ID at once and stays silent unless notify_on_complete=true. Use manage_task for logs, wait and kill; never poll. For external jobs run the provider's blocking watch command once with background=true. Git: branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills. Never `git rebase`, `git reset --hard` or force-push in the active checkout, or discard uncommitted work. Branch there with `git switch -c`; `git worktree add` under `$env:TEMP` only when it is genuinely required (concurrent or unrelated dirty work), then `git worktree remove`, `git worktree prune`, `git branch -d`. End on the original branch after `git pull --ff-only`.";
+
+const fn run_command_description(windows: bool) -> &'static str {
+    if windows {
+        WINDOWS_RUN_COMMAND_DESCRIPTION
+    } else {
+        POSIX_RUN_COMMAND_DESCRIPTION
+    }
+}
+
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one shell command; returns stdout, stderr and exit code. Pipelines fail if any stage fails; timeout defaults to 120s; interactive sudo is disabled. Prefer view_file over cat/sed/head for file reads. The OS sandbox (none on Windows) fails closed and a denied command reports which permission to request: network_access=true or filesystem_write_path (an existing absolute directory, outside the workspace in restricted modes) grants it for this command only, with confirmation unless YOLO is on. background=true runs a blocking job and resumes you on completion (notify_on_complete=false: no turn). detached=true starts a long-lived server or watcher, returns a task ID at once and stays silent unless notify_on_complete=true. Use manage_task for logs, wait and kill; never poll. For external jobs run the provider's blocking watch command once with background=true. A command containing '&' is treated as detached unless the script waits on or kills its own jobs; never add '&' with detached=true. Git: branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills. Never `git rebase`, `git reset --hard` or force-push in the active checkout, or discard uncommitted work. Branch there with `git switch -c`; `git worktree add` under /tmp only when it is genuinely required (concurrent or unrelated dirty work), then `git worktree remove`, `git worktree prune`, `git branch -d`. End on the original branch after `git pull --ff-only`.",
+    description: run_command_description(cfg!(target_os = "windows")),
     arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "notify_on_complete": "optional bool; defaults false for detached and true for background", "network_access": "optional bool requesting one-shot network access; requires confirmation unless YOLO is enabled", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; requires confirmation unless YOLO is enabled"}"#,
     handler: run_command,
     requires_confirmation: true,
@@ -327,9 +343,10 @@ pub(crate) fn has_shell_background_operator(command: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn has_shell_background_operator(_command: &str) -> bool {
-    // `cmd.exe` uses `&` as a command separator rather than as a portable
-    // background operator. Detached callers should use detached=true without
-    // adding shell syntax.
+    // PowerShell's `&` is the call operator (`& 'C:\tool.exe'`) and `cmd.exe`
+    // uses it as a command separator; neither is a portable background
+    // operator. Detached callers should use detached=true without adding
+    // shell syntax.
     false
 }
 
@@ -394,22 +411,14 @@ fn command_manages_own_background_jobs(_command: &str) -> bool {
 
 /// Keep a detached shell alive for its background children while ensuring no
 /// child inherits RustCode's output pipes. The shell remains the process-group
-/// leader, so the task manager can still terminate the complete group.
-#[cfg(not(target_os = "windows"))]
+/// leader (the process-tree root on Windows), so the task manager can still
+/// terminate everything it started.
 fn detached_shell_command(command: &str, has_background_operator: bool) -> String {
-    if has_background_operator {
-        format!("{{ {command}; wait; }} </dev/null >/dev/null 2>&1")
-    } else {
-        format!("{{ {command}; }} </dev/null >/dev/null 2>&1")
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn detached_shell_command(command: &str, _has_background_operator: bool) -> String {
-    // Keep cmd.exe alive for the process-tree terminator when a caller uses
-    // an explicit detached mode. The model-facing contract does not require
-    // Windows callers to embed `&`.
-    format!("({command}) <nul >nul 2>&1")
+    rustcode_command::detached_command(
+        rustcode_command::host_shell(),
+        command,
+        has_background_operator,
+    )
 }
 
 pub fn run_command(args: &Value) -> Result<String, String> {
@@ -1550,6 +1559,38 @@ mod tests {
         run_command_output_with_progress, task_event_to_tool_output, wait_for_background_tasks,
     };
 
+    #[test]
+    fn run_command_description_matches_the_shell_of_each_platform() {
+        use super::{RUN_COMMAND, run_command_description};
+
+        let posix = run_command_description(false);
+        assert!(posix.starts_with("Run one shell command; returns stdout, stderr and exit code."));
+        assert!(posix.contains("`git worktree add` under /tmp only"));
+        assert!(!posix.contains("PowerShell"));
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(RUN_COMMAND.description, posix);
+
+        let windows = run_command_description(true);
+        assert!(windows.starts_with("Run one PowerShell command;"));
+        for fact in [
+            "PowerShell 7 (pwsh)",
+            "Windows PowerShell 5.1",
+            "chain with `;`",
+            "no heredocs",
+            "$env:NAME = 'value'",
+            "`curl.exe`",
+            "view_file, grep, glob and list_directory",
+            "under `$env:TEMP`",
+        ] {
+            assert!(windows.contains(fact), "missing {fact:?}");
+        }
+        // Nothing POSIX-only may leak into the Windows guidance.
+        for posix_only in ["/tmp", "Pipelines fail", "containing '&'", "cat/sed/head"] {
+            assert!(!windows.contains(posix_only), "leaked {posix_only:?}");
+        }
+        assert_eq!(RUN_COMMAND.name, "run_command");
+    }
+
     #[cfg(unix)]
     #[test]
     fn background_termination_kills_the_command_process_group() {
@@ -1908,7 +1949,7 @@ mod tests {
         let session_a = manager.subscribe_session("root-session-a");
         let session_b = manager.subscribe_session("root-session-b");
         let hold_open = if cfg!(target_os = "windows") {
-            "ping -n 2 127.0.0.1 > nul"
+            "Start-Sleep -Seconds 1"
         } else {
             "sleep 1"
         };
@@ -2084,7 +2125,7 @@ mod tests {
             task_id,
             owner,
             if cfg!(target_os = "windows") {
-                "ping -n 30 127.0.0.1 > NUL"
+                "Start-Sleep -Seconds 30"
             } else {
                 "sleep 30"
             },
@@ -2138,7 +2179,7 @@ mod tests {
             task_id,
             session,
             if cfg!(target_os = "windows") {
-                "ping -n 3 127.0.0.1 > NUL"
+                "Start-Sleep -Seconds 2"
             } else {
                 "sleep 2"
             },
@@ -2167,7 +2208,7 @@ mod tests {
             task_id,
             session,
             if cfg!(target_os = "windows") {
-                "ping -n 30 127.0.0.1 > NUL"
+                "Start-Sleep -Seconds 30"
             } else {
                 "sleep 30"
             },

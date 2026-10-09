@@ -192,7 +192,7 @@ pub(crate) fn demo_state(mut view: RenderState) -> DemoState {
         "demo-call-running",
         None,
         "run_command",
-        "Bash",
+        rustcode::controller::shell_label(),
         "cargo test --workspace",
     );
     let mut queued = LiveToolCall::new(

@@ -58,6 +58,8 @@ pub use input::{
     spinner_frame_index, summarize_tool_call,
 };
 pub use render_state::{RenderState, SubAgentView, render_state};
+/// Name of the shell `run_command` uses on this host, for labelling its calls.
+pub use rustcode_command::shell_label;
 pub use snapshot::{
     ApprovalAction, ApprovalBatchPrompt, ApprovalDecision, ApprovalPrompt, Command,
     ControllerHandle, ControllerSnapshot, DraftSubmitMode, McpEditState, ModelChoice,

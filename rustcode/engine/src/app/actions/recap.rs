@@ -478,7 +478,7 @@ mod tests {
             "automatic-recap-background-guard",
             &session_id,
             if cfg!(target_os = "windows") {
-                "ping -n 30 127.0.0.1 > NUL"
+                "Start-Sleep -Seconds 30"
             } else {
                 "sleep 30"
             },
