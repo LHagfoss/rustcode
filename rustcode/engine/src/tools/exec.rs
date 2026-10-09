@@ -729,6 +729,13 @@ fn run_command_output_inner(
         inherited_fds: sandboxed.inherited_fds,
     };
 
+    let sandbox_context = CommandSandboxContext {
+        mode: sandbox_mode,
+        network_access: sandbox_mode.allows_network() || one_shot_network_access,
+        writable_roots: &writable_roots,
+        one_shot_writable_roots: &one_shot_writable_roots,
+    };
+
     if run_in_bg {
         let session_id = get_active_session_id().unwrap_or_default();
         let cmd_str = command_str.to_string();
@@ -751,11 +758,20 @@ fn run_command_output_inner(
         let task_spec = call_id
             .map(|call_id| task_spec.clone().with_call_id(call_id))
             .unwrap_or(task_spec);
+        let output_log = task_spec.output_log.clone();
         let start_barrier = call_id
             .filter(|_| crate::acp::is_acp_session(&session_id))
             .map(|call_id| register_background_start(&session_id, call_id));
         let has_start_barrier = start_barrier.is_some();
-        let spawn_result = if let Some(barrier) = start_barrier {
+        // A background job also holds its terminal event behind a barrier, so
+        // one that finishes within the grace period can be returned below
+        // without a completion notice following it.
+        let inline_barrier = if detached {
+            None
+        } else {
+            Some(start_barrier.clone().unwrap_or_default())
+        };
+        let spawn_result = if let Some(barrier) = start_barrier.or(inline_barrier.clone()) {
             task_manager.spawn_with_id_and_start_barrier(task_id.clone(), task_spec, barrier)
         } else {
             task_manager.spawn_with_id(task_id.clone(), task_spec)
@@ -798,6 +814,27 @@ fn run_command_output_inner(
                     ..Default::default()
                 }),
             });
+        }
+
+        if let Some(barrier) = inline_barrier {
+            let finished =
+                finished_within_grace(task_manager, &session_id, &task_id, cancel_token.as_ref());
+            if let Some(output) = finished
+                && barrier.discard()
+            {
+                // Consumed here: forget the task so nothing reports it again.
+                task_manager.take_completion(&session_id, &task_id);
+                if has_start_barrier && let Some(call_id) = call_id {
+                    release_background_start(call_id);
+                }
+                if let Some(path) = output_log {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Ok(foreground_command_output(&output, &sandbox_context));
+            }
+            if !has_start_barrier {
+                barrier.release();
+            }
         }
 
         return Ok(super::ToolExecutionOutput {
@@ -865,9 +902,36 @@ fn run_command_output_inner(
     });
     let output =
         rustcode_command::run_with_timeout_cancellable(&command_request, progress, cancellation)?;
+    let result = foreground_command_output(&output, &sandbox_context);
+    if result.success
+        && !result.truncated
+        && !verification_cancel
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    {
+        if let Some(identity) = verification_identity {
+            crate::network::compiler::record_verification(identity, result.content.clone());
+        }
+    }
+    Ok(result)
+}
+
+/// What a failed command's sandbox attribution note needs to know.
+struct CommandSandboxContext<'a> {
+    mode: crate::config::SandboxMode,
+    network_access: bool,
+    writable_roots: &'a [std::path::PathBuf],
+    one_shot_writable_roots: &'a [std::path::PathBuf],
+}
+
+/// Render a finished command as the `run_command` result the model reads.
+fn foreground_command_output(
+    output: &rustcode_command::CommandOutput,
+    sandbox: &CommandSandboxContext<'_>,
+) -> super::ToolExecutionOutput {
     let exit_code = output.exit_code.unwrap_or(-1);
 
-    let command_status = command_result_metadata(&output);
+    let command_status = command_result_metadata(output);
     let mut result = String::new();
     result.push_str(&format!(
         "{}\nexit code: {exit_code}\n",
@@ -901,36 +965,26 @@ fn run_command_output_inner(
     // dead VPN. Name the restriction the active mode actually enforces so the
     // model sees effective grants rather than only configured defaults.
     // Trusted and unsupported platforms are unwrapped, so they get no attribution.
-    if failed && !sandbox_mode.is_trusted() && cfg!(any(target_os = "linux", target_os = "macos")) {
+    if failed && !sandbox.mode.is_trusted() && cfg!(any(target_os = "linux", target_os = "macos")) {
         let observed = format!("{stdout}\n{stderr}");
         let denial = sandbox::classify_denial(&observed);
         // Roots the launcher actually used, so the note can name them.
         let roots = effective_writable_roots(
-            &writable_roots,
-            &one_shot_writable_roots,
-            sandbox_mode.allows_workspace_write(),
+            sandbox.writable_roots,
+            sandbox.one_shot_writable_roots,
+            sandbox.mode.allows_workspace_write(),
         );
         result.push('\n');
         result.push_str(&sandbox::failure_attribution(
-            sandbox_mode,
-            sandbox_mode.allows_network() || one_shot_network_access,
+            sandbox.mode,
+            sandbox.network_access,
             true,
             denial,
             &roots,
         ));
         result.push('\n');
     }
-    if !failed
-        && !truncated
-        && !verification_cancel
-            .as_ref()
-            .is_some_and(|token| token.is_cancelled())
-    {
-        if let Some(identity) = verification_identity {
-            crate::network::compiler::record_verification(identity, result.trim_end().to_string());
-        }
-    }
-    Ok(super::ToolExecutionOutput {
+    super::ToolExecutionOutput {
         content: result.trim_end().to_string(),
         success: !failed,
         pending: false,
@@ -946,7 +1000,7 @@ fn run_command_output_inner(
         error_kind: failed.then_some(super::ToolErrorKind::CommandFailed),
         retryable: false,
         command_status: Some(command_status),
-    })
+    }
 }
 
 /// The directories a sandboxed command could write to, mirroring what the
@@ -1020,6 +1074,35 @@ fn pr_creation_guard_output(command: &str, base: &str) -> super::ToolExecutionOu
             exit_code: Some(2),
             ..Default::default()
         }),
+    }
+}
+
+/// How long a `background=true` start waits for the command to finish before
+/// handing back a task ID. Quick commands sent to the background otherwise
+/// cost a second model request just to read their result.
+const BACKGROUND_INLINE_GRACE: Duration = Duration::from_millis(1500);
+
+/// The output of a background task that exited on its own within the grace
+/// period. Cancelled or unspawnable tasks, and a cancelled tool call, report
+/// through the ordinary background path instead.
+fn finished_within_grace(
+    manager: &TaskManager,
+    session_id: &str,
+    task_id: &str,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Option<rustcode_command::CommandOutput> {
+    let deadline = std::time::Instant::now() + BACKGROUND_INLINE_GRACE;
+    loop {
+        if cancel_token.is_some_and(|token| token.is_cancelled()) {
+            return None;
+        }
+        if let Some(completion) = manager.completion(session_id, task_id) {
+            return completion.output;
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -1341,6 +1424,39 @@ fn format_wait_result(task_id: &str, event: TaskEvent) -> String {
     }
 }
 
+/// Task IDs named by `task_id` and `task_ids` together, in order and without
+/// duplicates. An empty or blank field counts as absent, so an empty
+/// `task_ids` sent alongside a valid `task_id` cannot hide it.
+fn requested_task_ids(args: &Value) -> Vec<String> {
+    let mut ids = Vec::<String>::new();
+    let listed = args.get("task_ids").and_then(Value::as_array);
+    for id in args
+        .get("task_id")
+        .into_iter()
+        .chain(listed.into_iter().flatten())
+        .filter_map(Value::as_str)
+        .map(str::trim)
+    {
+        if !id.is_empty() && !ids.iter().any(|known| known == id) {
+            ids.push(id.to_owned());
+        }
+    }
+    ids
+}
+
+/// The one task a single-task action names, through either field.
+fn single_task_id(args: &Value, action: &str) -> Result<String, String> {
+    let mut ids = requested_task_ids(args);
+    match ids.len() {
+        0 => Err(format!("missing 'task_id' argument for {action} action")),
+        1 => Ok(ids.remove(0)),
+        _ => Err(format!(
+            "'{action}' takes one task; pass a single 'task_id' (got {})",
+            ids.join(", ")
+        )),
+    }
+}
+
 pub fn manage_task_tool(args: &Value) -> Result<String, String> {
     let action = args
         .get("action")
@@ -1377,10 +1493,8 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
             Ok(out.trim_end().to_string())
         }
         "status" => {
-            let task_id = args
-                .get("task_id")
-                .and_then(|t| t.as_str())
-                .ok_or("missing 'task_id' argument for status action")?;
+            let task_id = single_task_id(args, "status")?;
+            let task_id = task_id.as_str();
 
             if let Some(info) = tasks.iter().find(|info| info.id.as_str() == task_id) {
                 let elapsed = info.started_at.elapsed().as_secs();
@@ -1405,10 +1519,8 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
             }
         }
         "logs" => {
-            let task_id = args
-                .get("task_id")
-                .and_then(|t| t.as_str())
-                .ok_or("missing 'task_id' argument for logs action")?;
+            let task_id = single_task_id(args, "logs")?;
+            let task_id = task_id.as_str();
             let path = tasks
                 .iter()
                 .find(|task| task.id.as_str() == task_id)
@@ -1449,29 +1561,15 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
             Ok(format!("{prefix}{excerpt}{capture_note}"))
         }
         "kill" => {
-            let task_id = args
-                .get("task_id")
-                .and_then(|t| t.as_str())
-                .ok_or("missing 'task_id' argument for kill action")?;
+            let task_id = single_task_id(args, "kill")?;
 
-            cancel_result_message(task_id, manager.cancel_in_session(&session_id, task_id))
+            cancel_result_message(&task_id, manager.cancel_in_session(&session_id, &task_id))
         }
         "wait" => {
-            let task_ids = args
-                .get("task_ids")
-                .and_then(Value::as_array)
-                .map(|ids| {
-                    ids.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>()
-                })
-                .or_else(|| {
-                    args.get("task_id")
-                        .and_then(Value::as_str)
-                        .map(|id| vec![id.to_owned()])
-                })
-                .ok_or("missing 'task_id' or 'task_ids' argument for wait action")?;
+            let task_ids = requested_task_ids(args);
+            if task_ids.is_empty() {
+                return Err("missing 'task_id' or 'task_ids' argument for wait action".to_owned());
+            }
             Ok(wait_for_background_tasks(
                 manager,
                 &session_id,
@@ -2454,7 +2552,7 @@ mod tests {
         if !sandbox::runtime_tests_available() {
             return;
         }
-        let command = "sleep 1; printf background-output";
+        let command = "sleep 3; printf background-output";
         let output = run_command_output(&serde_json::json!({
             "command": command,
             "background": true,
@@ -2681,7 +2779,7 @@ mod tests {
         if !sandbox::runtime_tests_available() {
             return;
         }
-        let command = "sleep 1";
+        let command = "sleep 3";
         let output = run_command_output(&serde_json::json!({
             "command": command,
             "background": true,
@@ -2690,6 +2788,199 @@ mod tests {
 
         assert!(output.pending, "command was forced synchronous: {command}");
         assert_eq!(output.command.as_deref(), Some(command));
+    }
+
+    fn unique_session(prefix: &str) -> String {
+        format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    fn next_terminal_event(
+        events: &rustcode_tasks::TaskSubscription,
+        timeout: std::time::Duration,
+    ) -> Option<rustcode_tasks::TaskEvent> {
+        let deadline = std::time::Instant::now() + timeout;
+        while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match events.recv_timeout(remaining) {
+                Ok(event) if event.is_terminal() => return Some(event),
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        None
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fast_background_command_returns_its_foreground_result_without_a_notification() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
+        let session_id = unique_session("inline-background-test");
+        super::super::set_active_session_id(Some(session_id.clone()));
+        let events = super::background_task_manager().subscribe_session(session_id.clone());
+        let command = "sleep 0.2; printf inline-output; printf inline-error >&2; exit 3";
+        let foreground = run_command_output(&serde_json::json!({ "command": command }))
+            .expect("foreground command should run");
+        let output = run_command_output(&serde_json::json!({
+            "command": command,
+            "background": true,
+            "notify_on_complete": true,
+        }))
+        .expect("background command should run");
+        let snapshots = super::super::background_task_snapshots(&session_id);
+        let completions = super::super::recent_background_task_completions(&session_id);
+        let late_event = next_terminal_event(&events, std::time::Duration::from_millis(400));
+        super::super::set_active_session_id(None);
+
+        assert!(
+            output.content.contains("inline-output"),
+            "{}",
+            output.content
+        );
+        assert!(
+            output.content.contains("inline-error"),
+            "{}",
+            output.content
+        );
+        assert!(!output.content.contains("Task ID"), "{}", output.content);
+        assert_eq!(output.content, foreground.content);
+        assert_eq!(output.exit_code, Some(3));
+        assert_eq!(output.success, foreground.success);
+        assert_eq!(output.error_kind, foreground.error_kind);
+        assert_eq!(output.command, foreground.command);
+        assert!(!output.pending);
+        assert!(snapshots.is_empty(), "task still listed: {snapshots:?}");
+        assert!(
+            completions.is_empty(),
+            "completion retained: {completions:?}"
+        );
+        assert!(late_event.is_none(), "notified anyway: {late_event:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn slow_background_command_still_returns_a_task_id_and_notifies() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
+        let session_id = unique_session("slow-background-test");
+        super::super::set_active_session_id(Some(session_id.clone()));
+        let events = super::background_task_manager().subscribe_session(session_id.clone());
+        let started = std::time::Instant::now();
+        let output = run_command_output(&serde_json::json!({
+            "command": "sleep 3; printf slow-output",
+            "background": true,
+        }))
+        .expect("background command should start");
+        let waited = started.elapsed();
+        let event = next_terminal_event(&events, std::time::Duration::from_secs(20));
+        super::super::set_active_session_id(None);
+
+        assert!(output.pending);
+        assert!(
+            output
+                .content
+                .contains("Task started in background. Task ID: ")
+        );
+        assert!(
+            waited >= super::BACKGROUND_INLINE_GRACE,
+            "returned before the grace period: {waited:?}"
+        );
+        let event = event.expect("slow task should publish its completion");
+        assert!(output.content.contains(event.task_id().as_str()));
+        assert_eq!(event.notify_on_complete(), Some(true));
+        let (_, _, result) = task_event_to_tool_output(event).expect("finished output");
+        assert!(result.content.contains("slow-output"), "{}", result.content);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_command_returns_at_once_even_when_it_finishes_quickly() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
+        let session_id = unique_session("detached-grace-test");
+        super::super::set_active_session_id(Some(session_id.clone()));
+        let events = super::background_task_manager().subscribe_session(session_id.clone());
+        let started = std::time::Instant::now();
+        let output = run_command_output(&serde_json::json!({
+            "command": "sleep 0.5; printf detached-output",
+            "detached": true,
+            "notify_on_complete": true,
+        }))
+        .expect("detached command should start");
+        let waited = started.elapsed();
+        let event = next_terminal_event(&events, std::time::Duration::from_secs(20));
+        super::super::set_active_session_id(None);
+
+        assert!(output.content.contains("Detached task started"));
+        assert!(
+            waited < std::time::Duration::from_millis(450),
+            "detached start waited for the command: {waited:?}"
+        );
+        let event = event.expect("detached task should still publish its completion");
+        assert!(output.content.contains(event.task_id().as_str()));
+    }
+
+    #[test]
+    fn task_id_arguments_merge_both_fields_and_ignore_empty_ones() {
+        use super::{requested_task_ids, single_task_id};
+        let ids = |args: serde_json::Value| requested_task_ids(&args);
+        assert_eq!(
+            ids(serde_json::json!({ "task_id": "a", "task_ids": [] })),
+            ["a"]
+        );
+        assert_eq!(
+            ids(serde_json::json!({ "task_ids": ["a", "b"] })),
+            ["a", "b"]
+        );
+        assert_eq!(
+            ids(serde_json::json!({ "task_id": "b", "task_ids": ["a", "b", "a", "", 7] })),
+            ["b", "a"]
+        );
+        assert!(ids(serde_json::json!({ "task_id": " ", "task_ids": [""] })).is_empty());
+        assert!(ids(serde_json::json!({ "task_id": null, "task_ids": null })).is_empty());
+
+        assert_eq!(
+            single_task_id(
+                &serde_json::json!({ "task_id": "", "task_ids": ["a"] }),
+                "logs"
+            ),
+            Ok("a".to_owned())
+        );
+        assert_eq!(
+            single_task_id(
+                &serde_json::json!({ "task_id": "a", "task_ids": ["a"] }),
+                "kill"
+            ),
+            Ok("a".to_owned())
+        );
+        assert!(single_task_id(&serde_json::json!({ "task_ids": [] }), "status").is_err());
+        assert!(single_task_id(&serde_json::json!({ "task_ids": ["a", "b"] }), "kill").is_err());
+    }
+
+    #[test]
+    fn wait_uses_task_id_when_task_ids_is_empty() {
+        let result = manage_task_tool(&serde_json::json!({
+            "action": "wait",
+            "task_id": "task-id-shadow-test",
+            "task_ids": [],
+            "timeout_ms": 1000,
+        }))
+        .expect("wait should accept the single task_id");
+        assert!(
+            result.contains("task-id-shadow-test") && !result.contains("No task IDs"),
+            "{result}"
+        );
+        assert!(
+            manage_task_tool(&serde_json::json!({ "action": "wait", "task_ids": [] })).is_err()
+        );
     }
 
     #[test]
