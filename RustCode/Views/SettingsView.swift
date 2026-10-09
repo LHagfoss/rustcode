@@ -48,7 +48,7 @@ struct SettingsView: View {
                         }
                     } footer: {
                         if !store.isDemo {
-                            Text("Removes the device token from the keychain. To also revoke it on the host, run “rustcode remote revoke” there.")
+                            Text("Removes the device token from the keychain. To also revoke it on the host, run “rustcode remote revoke \(store.host?.device.id.prefix(8) ?? "<device>")” there.")
                         }
                     }
                 }
@@ -58,7 +58,7 @@ struct SettingsView: View {
                 } header: {
                     Text("About")
                 } footer: {
-                    Text("RustCode Remote controls sessions you share with /remote from a RustCode terminal. Sessions keep running on your Mac; closing this app never cancels work. This build cannot reach a real host yet: the RustCode gateway and its wire protocol are still in development.")
+                    Text("RustCode Remote controls sessions you share with /remote from a RustCode terminal. Sessions keep running on your Mac; closing this app never cancels work. The gateway currently pairs and authenticates devices; sharing sessions through it is still in development on the RustCode side.")
                 }
             }
             .navigationTitle("Settings")

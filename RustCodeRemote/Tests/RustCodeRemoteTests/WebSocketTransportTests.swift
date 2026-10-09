@@ -95,3 +95,75 @@ private final class EchoServer: Sendable {
         }
     }
 }
+
+/// Accepts one TCP connection and hands back the bytes of the HTTP upgrade request.
+private final class UpgradeRequestRecorder: Sendable {
+    private let listener: NWListener
+    private let requests: AsyncStream<String>
+    private let captured: AsyncStream<String>.Continuation
+
+    init() throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        (requests, captured) = AsyncStream.makeStream(of: String.self)
+    }
+
+    func start() async throws -> UInt16 {
+        let resumed = Mutex(false)
+        return try await withCheckedThrowingContinuation { continuation in
+            listener.stateUpdateHandler = { [listener] state in
+                let result: Result<UInt16, any Error>
+                switch state {
+                case .ready: result = .success(listener.port?.rawValue ?? 0)
+                case .failed(let error): result = .failure(error)
+                default: return
+                }
+                let isFirst = resumed.withLock { done in
+                    defer { done = true }
+                    return !done
+                }
+                if isFirst { continuation.resume(with: result) }
+            }
+            listener.newConnectionHandler = { [captured] connection in
+                connection.start(queue: .global())
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { data, _, _, _ in
+                    captured.yield(String(decoding: data ?? Data(), as: UTF8.self))
+                    connection.cancel()
+                }
+            }
+            listener.start(queue: .global())
+        }
+    }
+
+    func firstRequest() async -> String {
+        for await request in requests { return request }
+        return ""
+    }
+
+    func stop() {
+        listener.cancel()
+    }
+}
+
+@Suite struct UpgradeRequestTests {
+    /// The gateway answers 403 to any upgrade that carries an `Origin` header, so that a web
+    /// page cannot reach it. A native client must not send one.
+    @Test func theUpgradeRequestCarriesNoOriginHeader() async throws {
+        let recorder = try UpgradeRequestRecorder()
+        let port = try await recorder.start()
+        defer { recorder.stop() }
+
+        let endpoint = try WireCodec().endpoint(for: HostAddress(host: "127.0.0.1", port: Int(port)))
+        let transport = URLSessionWebSocketTransport()
+        // The recorder never completes the handshake, so connecting fails; only the request matters.
+        try? await transport.connect(to: endpoint.url, headers: endpoint.headers)
+        await transport.close()
+
+        let request = await recorder.firstRequest()
+        let headers = request.split(whereSeparator: \.isNewline).map { $0.lowercased() }
+        #expect(headers.first?.hasPrefix("get / http/1.1") == true)
+        #expect(headers.contains { $0.hasPrefix("upgrade: websocket") })
+        #expect(!headers.contains { $0.hasPrefix("origin:") }, "URLSession sent an Origin header: \(request)")
+    }
+}

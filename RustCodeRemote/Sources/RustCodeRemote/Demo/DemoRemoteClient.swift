@@ -43,7 +43,7 @@ public actor DemoRemoteClient: RemoteClient {
             host: PairedHost(
                 gatewayID: "demo-gateway",
                 name: "Demo Mac",
-                address: HostAddress(host: "demo.local", port: 7878),
+                address: HostAddress(host: "demo.local", port: 17879),
                 device: DeviceIdentity(id: "demo-device", name: deviceName),
                 pairedAt: Date()
             ),
@@ -51,8 +51,10 @@ public actor DemoRemoteClient: RemoteClient {
         )
     }
 
-    public func connect(using credential: StoredCredential) async throws {
+    @discardableResult
+    public func connect(using credential: StoredCredential) async throws -> ConnectionIdentity {
         isConnected = true
+        return ConnectionIdentity(gatewayID: "demo-gateway", instanceID: "demo-instance")
     }
 
     public func disconnect() async {
@@ -107,6 +109,30 @@ public actor DemoRemoteClient: RemoteClient {
         }
         sessions[session.sessionID]?.state.prepend(HistoryPage(items: current.olderHistory, nextCursor: nil))
         return HistoryPage(items: current.olderHistory, nextCursor: nil)
+    }
+
+    public func getContent(
+        _ contentID: String,
+        in session: SessionRef,
+        offset: UInt64,
+        maxBytes: Int
+    ) async throws -> ContentChunk {
+        guard isConnected else { throw RemoteError.notConnected }
+        guard contentID == Self.testApprovalContentID else {
+            throw RemoteError.rejected(.other(code: "not_found", message: "That content is no longer available."))
+        }
+        // Served in small chunks so that fetching is visibly a process.
+        let bytes = Array(Self.testApprovalDetail.utf8)
+        let start = min(Int(offset), bytes.count)
+        let end = min(start + min(maxBytes, 48), bytes.count)
+        _ = await pause(6)
+        return ContentChunk(
+            contentID: contentID,
+            offset: UInt64(start),
+            text: String(decoding: bytes[start..<end], as: UTF8.self),
+            totalBytes: UInt64(bytes.count),
+            nextOffset: end < bytes.count ? UInt64(end) : nil
+        )
     }
 
     // MARK: Mutations
@@ -444,6 +470,12 @@ public actor DemoRemoteClient: RemoteClient {
 
     // MARK: Seed data
 
+    private static let testApprovalContentID = "approval:batch-demo-1:0"
+    private static let testApprovalDetail =
+        "cargo test -p engine reconnect\n\nWorking directory: ~/code/rustcode\nSandbox: workspace write, no network"
+
+    /// Arrives as a preview only, like a long action from a real host: the rest has to be
+    /// fetched before the batch can be approved.
     private static let testApproval = PendingApproval(
         batchID: "batch-demo-1",
         items: [
@@ -451,7 +483,11 @@ public actor DemoRemoteClient: RemoteClient {
                 id: "approval-demo-1",
                 toolName: "run_command",
                 title: "Run a shell command",
-                detail: "cargo test -p engine reconnect\n\nWorking directory: ~/code/rustcode\nSandbox: workspace write, no network"
+                risk: "This action requires your approval before it can continue.",
+                detail: String(testApprovalDetail.prefix(22)),
+                isDetailComplete: false,
+                detailContentID: testApprovalContentID,
+                detailTotalBytes: UInt64(testApprovalDetail.utf8.count)
             )
         ]
     )
@@ -495,6 +531,9 @@ public actor DemoRemoteClient: RemoteClient {
                 session: backoffRef,
                 items: backoffItems,
                 activeTurnID: "turn-backoff-1",
+                backgroundTasks: [
+                    BackgroundTask(id: "task-1", command: "cargo watch -x check", elapsed: .seconds(93))
+                ],
                 sequence: UInt64(backoffItems.count)
             )
         )
@@ -522,6 +561,7 @@ public actor DemoRemoteClient: RemoteClient {
         ]
         let question = PendingQuestion(
             id: "question-demo-1",
+            header: "Storage",
             prompt: "How should the session store page its history?",
             options: [
                 PendingQuestion.Option(

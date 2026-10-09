@@ -152,7 +152,7 @@ private struct ToolRow: View {
     }
 }
 
-private struct SubagentRow: View {
+struct SubagentRow: View {
     let subagent: SubagentSummary
 
     var body: some View {
@@ -191,9 +191,12 @@ private struct SubagentRow: View {
 
     private var statusDescription: String {
         switch subagent.status {
+        case .queued: "queued"
         case .running: "running"
+        case .interrupted: "interrupted"
         case .completed: "completed"
         case .failed: "failed"
+        case .cancelled: "cancelled"
         }
     }
 }

@@ -43,7 +43,7 @@ func waitUntil(timeout: Duration = .seconds(5), _ condition: @MainActor () async
 /// A codec for tests only. Its line format has nothing to do with the real protocol; it
 /// exists so the client's plumbing can be exercised end to end over a fake socket.
 ///
-/// Outgoing: `<request id>|<operation>`.
+/// Outgoing: `<request id>|<operation>`; the handshake uses the request ID `handshake`.
 /// Incoming: `reply|<id>|<kind>[|<arg>]`, `sessions|<count>`, `update|<session>|<sequence>|<text>`,
 /// `resync|<session>`, `closing|unauthorized`.
 struct LineCodec: RemoteCodec {
@@ -51,7 +51,8 @@ struct LineCodec: RemoteCodec {
 
     func pairingTarget(for request: PairingRequest) throws -> PairingTarget {
         switch request {
-        case .manual(let address, let code): PairingTarget(address: address, credential: .shortCode(code))
+        case .manual(let address, let code):
+            PairingTarget(address: address, credential: .shortCode(code), expectedGatewayID: code == "QR" ? "expected-gateway" : nil)
         case .scanned: throw RemoteError.pairingFailed("not a pairing code")
         }
     }
@@ -65,9 +66,11 @@ struct LineCodec: RemoteCodec {
         case .pair: "pair"
         case .authenticate: "authenticate"
         case .subscribeSessions: "subscribe"
-        case .attachSession: "attach"
+        case .attachSession(_, let resume):
+            resume.map { "attach:\($0.gatewayID)@\($0.lastSequence)" } ?? "attach"
         case .detachSession: "detach"
         case .getHistory: "history"
+        case .getContent: "content"
         case .submitPrompt: "submit"
         case .steer: "steer"
         case .queue: "queue"
@@ -93,7 +96,14 @@ struct LineCodec: RemoteCodec {
         case "resync" where parts.count == 2:
             return .resyncRequired(SessionRef(sessionID: parts[1], registrationEpoch: 1))
         case "closing":
-            return .closing(.unauthorized)
+            return .gatewayFailure(GatewayFailure(error: .unauthorized, closesConnection: true))
+        case "gateway-error" where parts.count == 2:
+            return .gatewayFailure(GatewayFailure(
+                error: parts[1] == "not_implemented" ? .notImplemented : .transport(parts[1]),
+                closesConnection: parts[1] == "shutting_down"
+            ))
+        case "future":
+            return .unknown("future")
         default:
             throw RemoteError.invalidFrame(frame)
         }
@@ -105,10 +115,20 @@ struct LineCodec: RemoteCodec {
 
     private func reply(_ parts: [String]) throws -> RemoteReply {
         switch (parts[0], parts.count > 1 ? parts[1] : "") {
-        case ("paired", _): .paired(makeCredential(token: "fresh-token"))
-        case ("authenticated", _): .authenticated
+        case ("paired", let gateway): .handshake(.paired(PairingGrant(
+            identity: ConnectionIdentity(gatewayID: gateway.isEmpty ? "gateway" : gateway, instanceID: "instance-1"),
+            device: DeviceIdentity(id: "device", name: "Phone"),
+            deviceToken: "fresh-token"
+        )))
+        case ("authenticated", let gateway): .handshake(.authenticated(
+            ConnectionIdentity(gatewayID: gateway.isEmpty ? "gateway" : gateway, instanceID: "instance-1")
+        ))
         case ("sessions", let count): .sessions(sessions(count))
-        case ("attached", _): .attached(.snapshot(SessionSnapshot(session: Self.session, sequence: 10)))
+        case ("attached", _): .attached(.snapshot(SessionSnapshot(session: Self.session, sequence: 10)), gatewayID: "gw-1")
+        case ("resumed", _): .attached(.resumed, gatewayID: "gw-1")
+        case ("content", let text): .content(ContentChunk(contentID: "c", offset: 0, text: text, totalBytes: 1, nextOffset: nil))
+        case ("receipt-unknown", _): .failure(.outcomeUnknown)
+        case ("mystery", _): .unknown("mystery")
         case ("detached", _): .detached
         case ("receipt", "received"): .receipt(.received)
         case ("receipt", "applied"): .receipt(.applied)
@@ -127,6 +147,6 @@ func scriptedResponder(_ replies: [String: [String]]) -> ScriptedTransport.Respo
         let parts = frame.split(separator: "|", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return [] }
         let operation = parts[1].split(separator: ":").first.map(String.init) ?? parts[1]
-        return (replies[operation] ?? []).map { $0.hasPrefix("!") ? String($0.dropFirst()) : "reply|\(parts[0])|\($0)" }
+        return (replies[parts[1]] ?? replies[operation] ?? []).map { $0.hasPrefix("!") ? String($0.dropFirst()) : "reply|\(parts[0])|\($0)" }
     }
 }

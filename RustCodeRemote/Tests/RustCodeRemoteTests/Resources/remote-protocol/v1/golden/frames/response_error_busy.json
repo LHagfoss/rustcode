@@ -1,0 +1,11 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-0100",
+  "receipt": "rejected",
+  "result": {
+    "type": "error",
+    "code": "busy",
+    "message": "the session is running a turn; steer or queue instead"
+  }
+}

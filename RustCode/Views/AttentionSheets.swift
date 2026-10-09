@@ -21,10 +21,17 @@ struct QuestionSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Text(question.prompt)
-                        .font(.headline)
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 4, bottom: 8, trailing: 4))
+                    VStack(alignment: .leading, spacing: 6) {
+                        if !question.header.isEmpty || question.chainLength > 1 {
+                            Text(caption)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(question.prompt)
+                            .font(.headline)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 4, bottom: 8, trailing: 4))
                 }
                 Section {
                     ForEach(question.options) { option in
@@ -57,9 +64,15 @@ struct QuestionSheet: View {
                     }
                 }
                 if question.allowsFreeText {
-                    Section("Or answer in your own words") {
+                    Section {
                         TextField("Your answer", text: $freeText, axis: .vertical)
                             .lineLimit(1...5)
+                    } header: {
+                        Text("Or answer in your own words")
+                    } footer: {
+                        if !freeText.isEmpty, !selection.isEmpty {
+                            Text("Your own answer is sent instead of the selected option.")
+                        }
                     }
                 }
             }
@@ -76,6 +89,11 @@ struct QuestionSheet: View {
             }
         }
         .presentationDetents([.large])
+    }
+
+    private var caption: String {
+        let position = question.chainLength > 1 ? "Question \(question.position) of \(question.chainLength)" : ""
+        return [question.header, position].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     private func toggle(_ id: String) {
@@ -102,9 +120,16 @@ struct QuestionSheet: View {
 struct ApprovalSheet: View {
     @Environment(RemoteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    let approval: PendingApproval
+    let batchID: String
+    /// What was pending when the sheet opened; the store's copy replaces it as details load.
+    let initial: PendingApproval
 
     @State private var isSubmitting = false
+
+    private var approval: PendingApproval {
+        if let current = store.attached?.pendingApproval, current.batchID == batchID { return current }
+        return initial
+    }
 
     var body: some View {
         NavigationStack {
@@ -117,6 +142,11 @@ struct ApprovalSheet: View {
                             Text(item.toolName)
                                 .font(.footnote.monospaced())
                                 .foregroundStyle(.secondary)
+                            if !item.risk.isEmpty {
+                                Text(item.risk)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                             Text(item.detail)
                                 .font(.callout.monospaced())
                                 .textSelection(.enabled)
@@ -124,9 +154,7 @@ struct ApprovalSheet: View {
                                 .padding(12)
                                 .background(.fill.quaternary, in: .rect(cornerRadius: 12))
                             if !item.isDetailComplete {
-                                Label("Only a preview has loaded. The full action is needed before it can be approved.", systemImage: "exclamationmark.triangle")
-                                    .font(.footnote)
-                                    .foregroundStyle(.orange)
+                                incompleteNote(for: item)
                             }
                         }
                     }
@@ -159,6 +187,7 @@ struct ApprovalSheet: View {
                 .padding(.vertical, 12)
                 .background(.bar)
             }
+            .task { await store.loadApprovalDetails() }
             .navigationTitle(approval.items.count == 1 ? "Approval" : "\(approval.items.count) Approvals")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -168,6 +197,33 @@ struct ApprovalSheet: View {
             }
         }
         .presentationDetents([.large])
+    }
+
+    @ViewBuilder
+    private func incompleteNote(for item: PendingApproval.Item) -> some View {
+        if store.isLoadingApprovalDetails {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Loading the full action…")
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } else if item.detailContentID == nil
+                    || (item.detailTotalBytes ?? 0) > RemoteStore.maximumApprovalDetailBytes {
+            Label("This is only the beginning of the action and the rest cannot be shown here. Review it in the terminal; from here it can only be denied.", systemImage: "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Only the beginning has loaded. Approving needs the full action.", systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                Button("Load Again") {
+                    Task { await store.loadApprovalDetails() }
+                }
+                .font(.footnote.weight(.semibold))
+            }
+        }
     }
 
     private func resolve(_ decision: ApprovalDecision) {

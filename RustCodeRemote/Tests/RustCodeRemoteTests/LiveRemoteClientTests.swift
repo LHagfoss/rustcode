@@ -22,7 +22,7 @@ import Testing
         #expect(await transport.connectedURL == URL(string: "ws://192.168.1.20:7878/test"))
         let sent = await transport.sent
         #expect(sent.count == 1)
-        #expect(sent[0].hasSuffix("|authenticate"))
+        #expect(sent[0] == "handshake|authenticate")
         // The token travels in a frame the codec builds, never in the URL.
         #expect(await transport.connectedURL?.absoluteString.contains("token") == false)
     }
@@ -225,6 +225,116 @@ import Testing
             for try await _ in stream {}
         }
         #expect(await transport.isClosed)
+    }
+
+    @Test func aHostWithAnotherIdentityIsNotTrusted() async {
+        let (client, transport) = makeClient(["authenticate": ["authenticated|someone-else"]])
+        await #expect(throws: RemoteError.hostIdentityChanged) {
+            try await client.connect(using: makeCredential())
+        }
+        #expect(await transport.isClosed)
+    }
+
+    @Test func pairingRefusesAHostOtherThanTheOneTheCodeNamed() async {
+        let (client, _) = makeClient(["pair": ["paired|impostor"]])
+        do {
+            _ = try await client.pair(.manual(address: HostAddress(host: "10.0.0.2", port: 17879), code: "QR"), deviceName: "Phone")
+            Issue.record("pairing should have failed")
+        } catch {
+            guard case RemoteError.pairingFailed = error else {
+                Issue.record("unexpected error \(error)")
+                return
+            }
+        }
+    }
+
+    @Test func connectReportsTheGatewayInstance() async throws {
+        let (client, _) = makeClient(["authenticate": ["authenticated"]])
+        let identity = try await client.connect(using: makeCredential())
+        #expect(identity == ConnectionIdentity(gatewayID: "gateway", instanceID: "instance-1"))
+    }
+
+    @Test func aGatewayThatSharesNothingYetIsConnectedWithNoSessions() async throws {
+        let (client, transport) = makeClient([
+            "authenticate": ["authenticated"],
+            "subscribe": ["!gateway-error|not_implemented"],
+        ])
+        try await client.connect(using: makeCredential())
+        let stream = try await client.subscribeSessions()
+        var iterator = stream.makeAsyncIterator()
+        #expect(try await iterator.next() == [])
+        #expect(await transport.isClosed == false)
+    }
+
+    @Test func anUncorrelatedErrorAnswersTheOldestRequest() async throws {
+        let (client, _) = makeClient(["authenticate": ["authenticated"], "history": ["!gateway-error|boom"]])
+        try await client.connect(using: makeCredential())
+        await #expect(throws: RemoteError.transport("boom")) {
+            _ = try await client.getHistory(ref, before: HistoryCursor("c"), limit: 10)
+        }
+    }
+
+    @Test func anErrorThatClosesTheConnectionFailsEverything() async throws {
+        let (client, transport) = makeClient(["authenticate": ["authenticated"], "subscribe": ["sessions|1"]])
+        try await client.connect(using: makeCredential())
+        let stream = try await client.subscribeSessions()
+        await transport.push("gateway-error|shutting_down")
+        await #expect(throws: RemoteError.transport("shutting_down")) {
+            for try await _ in stream {}
+        }
+        #expect(await transport.isClosed)
+    }
+
+    @Test func framesOfAnUnknownKindAreIgnored() async throws {
+        let (client, transport) = makeClient([
+            "authenticate": ["authenticated"],
+            "subscribe": ["!future|whatever", "sessions|2"],
+        ])
+        try await client.connect(using: makeCredential())
+        let stream = try await client.subscribeSessions()
+        var iterator = stream.makeAsyncIterator()
+        #expect(try await iterator.next()?.count == 2)
+        #expect(await transport.isClosed == false)
+    }
+
+    @Test func anUnknownResultFailsOnlyThatRequest() async throws {
+        let (client, transport) = makeClient(["authenticate": ["authenticated"], "history": ["mystery"]])
+        try await client.connect(using: makeCredential())
+        await #expect(throws: RemoteError.invalidFrame("unexpected reply")) {
+            _ = try await client.getHistory(ref, before: HistoryCursor("c"), limit: 10)
+        }
+        #expect(await transport.isClosed == false)
+    }
+
+    @Test func aReplayNamesTheGatewayTheSessionWasAttachedUnder() async throws {
+        let (client, transport) = makeClient([
+            "authenticate": ["authenticated"],
+            "attach": ["attached"],
+            "attach:gw-1@12": ["resumed"],
+        ])
+        try await client.connect(using: makeCredential())
+        // Nothing to resume from yet: the first attach cannot name a gateway.
+        _ = try await client.attach(ref, resumeAfter: 5)
+        let second = try await client.attach(ref, resumeAfter: 12)
+        #expect(second.start == .resumed)
+        let sent = await transport.sent
+        #expect(sent[1].hasSuffix("|attach"))
+        #expect(sent[2].hasSuffix("|attach:gw-1@12"))
+    }
+
+    @Test func anUnknownOutcomeIsAnUnknownReceiptNotAnError() async throws {
+        let (client, _) = makeClient(["authenticate": ["authenticated"], "submit": ["receipt-unknown"]])
+        try await client.connect(using: makeCredential())
+        let receipt = try await client.submit("hello", to: ref, requestID: RequestID("req-9"))
+        #expect(receipt.state == .unknown)
+    }
+
+    @Test func contentIsFetchedInChunks() async throws {
+        let (client, transport) = makeClient(["authenticate": ["authenticated"], "content": ["content|hello"]])
+        try await client.connect(using: makeCredential())
+        let chunk = try await client.getContent("c", in: ref, offset: 0, maxBytes: 1024)
+        #expect(chunk.text == "hello")
+        #expect(await transport.sent.last?.hasSuffix("|content") == true)
     }
 
     @Test func thePlaceholderCodecRefusesEverything() async {

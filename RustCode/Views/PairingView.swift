@@ -54,11 +54,11 @@ struct PairingView: View {
 
     private var header: some View {
         VStack(spacing: 12) {
-            Image(systemName: "terminal.fill")
-                .font(.system(size: 40, weight: .semibold))
-                .foregroundStyle(.tint)
-                .frame(width: 84, height: 84)
-                .background(.tint.opacity(0.14), in: .rect(cornerRadius: 22))
+            Image(.logo)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 92, height: 92)
+                .clipShape(.rect(cornerRadius: 22))
                 .accessibilityHidden(true)
             Text("RustCode Remote")
                 .font(.largeTitle.bold())
@@ -72,7 +72,7 @@ struct PairingView: View {
     private var scanSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label {
-                Text("Run **/remote** in a RustCode session on your Mac, then scan the code it shows.")
+                Text("Run **rustcode remote pair** on your Mac, then scan the code it shows or enter the address and code.")
             } icon: {
                 Image(systemName: "1.circle.fill").foregroundStyle(.tint)
             }
@@ -98,7 +98,7 @@ struct PairingView: View {
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 0) {
-                TextField("Address, for example 192.168.1.20:7878", text: $address)
+                TextField("Address, for example 192.168.1.20:17879", text: $address)
                     .textContentType(.URL)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
@@ -109,8 +109,8 @@ struct PairingView: View {
                     .padding(14)
                     .accessibilityLabel("Host address and port")
                 Divider().padding(.leading, 14)
-                TextField("Pairing code", text: $code)
-                    .textInputAutocapitalization(.characters)
+                TextField("Pairing code, for example 1234-5678", text: $code)
+                    .keyboardType(.numbersAndPunctuation)
                     .autocorrectionDisabled()
                     .font(code.isEmpty ? .body : .body.monospaced())
                     .submitLabel(.go)
@@ -140,7 +140,11 @@ struct PairingView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .disabled(isPairing || address.isEmpty || code.isEmpty)
+            .disabled(isPairing || address.isEmpty || (code.isEmpty && !address.hasPrefix("{")))
+
+            Text("You can also paste the QR payload that the terminal prints into the address field.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .onChange(of: address) { addressError = nil }
     }
@@ -162,6 +166,13 @@ struct PairingView: View {
 
     private func pairManually() {
         store.clearPairingError()
+        // The terminal prints the QR payload as text; pasting it works like scanning it.
+        let pasted = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        if pasted.hasPrefix("{") {
+            focus = nil
+            Task { await store.pair(.scanned(pasted), deviceName: UIDevice.current.name) }
+            return
+        }
         do {
             let parsed = try HostAddress.parse(address)
             let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -170,8 +181,8 @@ struct PairingView: View {
             Task { await store.pair(.manual(address: parsed, code: code), deviceName: UIDevice.current.name) }
         } catch {
             addressError = switch error {
-            case .empty: "Enter the address shown by /remote."
-            case .missingPort: "Include the port, for example 192.168.1.20:7878."
+            case .empty: "Enter the address shown by rustcode remote pair."
+            case .missingPort: "Include the port, for example 192.168.1.20:17879."
             case .invalidPort: "The port has to be a number between 1 and 65535."
             case .invalidHost: "That does not look like a host address."
             }

@@ -10,10 +10,19 @@ public actor URLSessionWebSocketTransport: RemoteTransport {
     private let maximumMessageSize: Int
     private var task: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
+    private var keepAliveTask: Task<Void, Never>?
+    private let keepAliveInterval: Duration
 
     /// - Parameter maximumMessageSize: frames above this size fail the connection. The protocol
     ///   bounds every frame, so this is a guard, not a limit the host is expected to reach.
-    public init(configuration: URLSessionConfiguration = .ephemeral, maximumMessageSize: Int = 4 * 1024 * 1024) {
+    /// - Parameter keepAliveInterval: how often to ping. The gateway drops a connection it
+    ///   has not heard from for 90 seconds, and an idle phone sends nothing else.
+    public init(
+        configuration: URLSessionConfiguration = .ephemeral,
+        maximumMessageSize: Int = 4 * 1024 * 1024,
+        keepAliveInterval: Duration = .seconds(25)
+    ) {
+        self.keepAliveInterval = keepAliveInterval
         configuration.waitsForConnectivity = false
         configuration.timeoutIntervalForRequest = 15
         self.session = URLSession(configuration: configuration)
@@ -40,6 +49,15 @@ public actor URLSessionWebSocketTransport: RemoteTransport {
             task.cancel(with: .abnormalClosure, reason: nil)
             continuation.finish(throwing: error)
             throw error
+        }
+
+        keepAliveTask = Task { [keepAliveInterval] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: keepAliveInterval)
+                guard !Task.isCancelled else { return }
+                // A failed ping also fails the receive loop, which reports the error.
+                try? await Self.ping(task)
+            }
         }
 
         receiveTask = Task { [continuation] in
@@ -72,6 +90,7 @@ public actor URLSessionWebSocketTransport: RemoteTransport {
 
     public func close() async {
         receiveTask?.cancel()
+        keepAliveTask?.cancel()
         task?.cancel(with: .normalClosure, reason: nil)
         session.invalidateAndCancel()
         continuation.finish()

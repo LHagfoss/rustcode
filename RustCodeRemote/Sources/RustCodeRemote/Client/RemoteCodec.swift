@@ -2,21 +2,21 @@ import Foundation
 
 // The wire boundary.
 //
-// Everything on this side of `RemoteCodec` is expressed in domain types. The JSON shape of
-// remote protocol v1 (envelope, field names, error codes, the pairing QR layout, the
-// WebSocket path and how the device token is presented) belongs to a `RemoteCodec`
-// implementation built against the schema and golden frames in the RustCode repository.
-// That implementation and its `Codable` DTOs go in `Sources/RustCodeRemote/Wire/`; nothing
-// outside this file's types has to change when it lands.
+// Everything on this side of `RemoteCodec` is expressed in domain types. The JSON shapes of
+// remote protocol v1 and of the gateway handshake live in `Sources/RustCodeRemote/Wire/`,
+// behind `WireCodec`. Nothing outside this file's types knows about them.
 
-/// The operations of remote protocol v1, in domain terms.
+/// The operations of remote protocol v1 and the two handshake requests, in domain terms.
 public enum RemoteCommand: Sendable, Equatable {
+    /// First frame of a pairing connection. Answered by `.handshake(.paired)`.
     case pair(credential: PairingCredential, deviceName: String)
+    /// First frame of every other connection. Answered by `.handshake(.authenticated)`.
     case authenticate(device: DeviceIdentity, deviceToken: String)
     case subscribeSessions
-    case attachSession(SessionRef, resumeAfter: UInt64?)
+    case attachSession(SessionRef, resume: ResumeCursor?)
     case detachSession(SessionRef)
     case getHistory(SessionRef, before: HistoryCursor, limit: Int)
+    case getContent(SessionRef, contentID: String, offset: UInt64, maxBytes: Int)
     case submitPrompt(SessionRef, text: String)
     case steer(SessionRef, text: String)
     case queue(SessionRef, text: String)
@@ -24,6 +24,25 @@ public enum RemoteCommand: Sendable, Equatable {
     case answerQuestion(SessionRef, questionID: String, answer: QuestionAnswer)
     case resolveApproval(SessionRef, batchID: String, decision: ApprovalDecision)
     case getRequestStatus(SessionRef, target: RequestID)
+
+    public var isHandshake: Bool {
+        switch self {
+        case .pair, .authenticate: true
+        default: false
+        }
+    }
+}
+
+/// Where a replay should continue. The gateway ID is the one the host reported when the
+/// session was attached; a cursor from another gateway is worthless.
+public struct ResumeCursor: Sendable, Equatable {
+    public var gatewayID: String
+    public var lastSequence: UInt64
+
+    public init(gatewayID: String, lastSequence: UInt64) {
+        self.gatewayID = gatewayID
+        self.lastSequence = lastSequence
+    }
 }
 
 public enum PairingCredential: Sendable, Equatable {
@@ -37,10 +56,13 @@ public enum PairingCredential: Sendable, Equatable {
 public struct PairingTarget: Sendable, Equatable {
     public var address: HostAddress
     public var credential: PairingCredential
+    /// The gateway the QR code named. The host that answers must be that one.
+    public var expectedGatewayID: String?
 
-    public init(address: HostAddress, credential: PairingCredential) {
+    public init(address: HostAddress, credential: PairingCredential, expectedGatewayID: String? = nil) {
         self.address = address
         self.credential = credential
+        self.expectedGatewayID = expectedGatewayID
     }
 }
 
@@ -55,28 +77,54 @@ public struct ConnectionEndpoint: Sendable, Equatable {
     }
 }
 
+public enum HandshakeReply: Sendable, Equatable {
+    case paired(PairingGrant)
+    case authenticated(ConnectionIdentity)
+}
+
 /// What the host answers to one command.
 public enum RemoteReply: Sendable, Equatable {
-    case paired(StoredCredential)
-    case authenticated
+    case handshake(HandshakeReply)
     case sessions([SessionSummary])
-    case attached(SessionAttachment.Start)
+    /// `gatewayID` is what a later resume cursor for this session has to name.
+    case attached(SessionAttachment.Start, gatewayID: String)
     case detached
     case history(HistoryPage)
+    case content(ContentChunk)
     /// A mutation's receipt, or the answer to `getRequestStatus`. A `received` receipt may be
     /// followed by a final one for the same request.
     case receipt(ReceiptState)
     case failure(RemoteError)
+    /// A result this version of the app does not know.
+    case unknown(String)
+}
+
+/// An error frame that names no request. During the handshake it answers the first frame;
+/// afterwards it answers the oldest request still waiting, or announces that the gateway
+/// is closing the connection.
+public struct GatewayFailure: Sendable, Equatable {
+    public var error: RemoteError
+    /// The gateway closes the connection after sending this.
+    public var closesConnection: Bool
+
+    public init(error: RemoteError, closesConnection: Bool) {
+        self.error = error
+        self.closesConnection = closesConnection
+    }
 }
 
 /// One decoded incoming frame.
 public enum RemoteMessage: Sendable, Equatable {
     case reply(requestID: RequestID, RemoteReply)
+    case handshake(HandshakeReply)
+    case gatewayFailure(GatewayFailure)
     case sessionsChanged([SessionSummary])
     case sessionUpdate(SessionUpdate)
     case resyncRequired(SessionRef)
-    /// The host is ending the connection, for example after revoking this device.
-    case closing(RemoteError)
+    /// The session's registration ended; `reason` is ready to show.
+    case sessionClosed(SessionRef, reason: String)
+    /// A well-formed frame of a kind this version does not know. Ignored.
+    case unknown(String)
 }
 
 public protocol RemoteCodec: Sendable {
@@ -91,8 +139,8 @@ public protocol RemoteCodec: Sendable {
     func decode(_ frame: String) throws -> RemoteMessage
 }
 
-/// Placeholder until the schema-backed codec exists. Every use fails with
-/// `RemoteError.codecUnavailable`, which the app shows as "not available in this build".
+/// A codec that refuses everything with `RemoteError.codecUnavailable`, for a build or a
+/// test that must not talk to a host. The app uses `WireCodec`.
 public struct UnavailableRemoteCodec: RemoteCodec {
     public init() {}
 

@@ -4,6 +4,8 @@ import SwiftUI
 struct ComposerBar: View {
     @Environment(RemoteStore.self) private var store
     let isRunning: Bool
+    /// Whether the running turn accepts steering.
+    var canSteer = true
     let isEnabled: Bool
 
     @State private var text = ""
@@ -39,8 +41,10 @@ struct ComposerBar: View {
                     Button("Queue for Next Turn", systemImage: "text.line.last.and.arrowtriangle.forward") {
                         send(.queue)
                     }
-                    Button("Steer Running Turn", systemImage: "arrow.triangle.turn.up.right.diamond") {
-                        send(.steer)
+                    if canSteer {
+                        Button("Steer Running Turn", systemImage: "arrow.triangle.turn.up.right.diamond") {
+                            send(.steer)
+                        }
                     }
                 } label: {
                     sendIcon

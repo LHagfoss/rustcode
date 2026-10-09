@@ -20,6 +20,9 @@ public struct RequestID: Hashable, Sendable, CustomStringConvertible {
 public enum RemoteRejection: Sendable, Equatable {
     /// Prompt submission is idle-only and the session is running.
     case busy
+    /// Steering or queueing needs a running turn and there is none.
+    case notRunning
+    case invalidAnswer
     case staleQuestion
     case staleApproval
     case staleTurn

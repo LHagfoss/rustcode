@@ -1,0 +1,149 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-0003",
+  "result": {
+    "type": "attached",
+    "gateway_id": "gw-8e1f4b7a",
+    "snapshot": {
+      "session": {
+        "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+        "registration_epoch": 3,
+        "title": "Fix the failing parser tests",
+        "workspace": "/Users/dev/code/parser",
+        "model": "gpt-5.5",
+        "activity": "awaiting_approval",
+        "attention": {
+          "approval": true,
+          "question": false
+        },
+        "health": "live"
+      },
+      "sequence": 412,
+      "generation": 1,
+      "turn": {
+        "turn_id": "turn:48213:12",
+        "live_response": {
+          "text": "The failure comes from the tokenizer, not the parser.",
+          "truncated": true,
+          "offset": 40960,
+          "total_bytes": 41013,
+          "content_id": "response:turn:48213:12"
+        },
+        "tools": [
+          {
+            "id": "call_Jq3",
+            "name": "view_file",
+            "detail": "src/parser.rs (lines 1-80)",
+            "state": "running"
+          }
+        ],
+        "can_steer": false
+      },
+      "transcript": [
+        {
+          "message_id": "m60",
+          "role": "user",
+          "content": {
+            "text": "Why does the parser test fail?",
+            "truncated": false,
+            "offset": 0,
+            "total_bytes": 30,
+            "content_id": "message:h2:60"
+          },
+          "timestamp": "2026-10-09T08:14:02Z"
+        },
+        {
+          "message_id": "m61",
+          "role": "tool",
+          "content": {
+            "text": "running 42 tests\ntest parse_empty ... ok\n",
+            "truncated": true,
+            "offset": 0,
+            "total_bytes": 9120,
+            "content_id": "message:h2:61"
+          },
+          "tool": {
+            "name": "run_command",
+            "detail": "cargo test parser",
+            "success": false,
+            "pending": false
+          },
+          "timestamp": "2026-10-09T08:14:31Z"
+        }
+      ],
+      "history_revision": "h2",
+      "history_cursor": "60@h2",
+      "pending_approval": {
+        "batch_id": "controller:48213:7",
+        "actions": [
+          {
+            "tool_name": "run_command",
+            "summary": "run_command · cargo test --workspace",
+            "risk": "This action requires your approval before it can continue.",
+            "details": {
+              "text": "{\"command\":\"cargo test --workspace\"}",
+              "truncated": false,
+              "offset": 0,
+              "total_bytes": 36,
+              "content_id": "approval:controller:48213:7:0"
+            }
+          },
+          {
+            "tool_name": "write_to_file",
+            "summary": "write_to_file · src/parser.rs",
+            "risk": "This action requires your approval before it can continue.",
+            "details": {
+              "text": "{\"path\":\"src/parser.rs\",\"content\":\"use std::collections::HashMap;\\n",
+              "truncated": true,
+              "offset": 0,
+              "total_bytes": 48211,
+              "content_id": "approval:controller:48213:7:1"
+            }
+          }
+        ]
+      },
+      "pending_prompts": [
+        {
+          "kind": "queue",
+          "text": {
+            "text": "Then open a pull request",
+            "truncated": false,
+            "offset": 0,
+            "total_bytes": 24
+          }
+        }
+      ],
+      "subagents": [
+        {
+          "id": 2,
+          "name": "explorer",
+          "task": {
+            "text": "Find every caller of parse_expression",
+            "truncated": false,
+            "offset": 0,
+            "total_bytes": 37
+          },
+          "model": "gpt-5.5-mini",
+          "status": "running",
+          "active_turn": true,
+          "depth": 1,
+          "message_count": 6
+        }
+      ],
+      "background_tasks": [
+        {
+          "id": "task-3",
+          "command": "cargo watch -x check",
+          "elapsed_ms": 93400
+        }
+      ],
+      "omitted": {
+        "tools": 0,
+        "subagents": 0,
+        "pending_prompts": 0,
+        "background_tasks": 0
+      }
+    }
+  }
+}

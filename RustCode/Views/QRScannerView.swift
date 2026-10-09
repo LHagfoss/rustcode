@@ -27,7 +27,7 @@ struct QRScannerSheet: View {
                     QRScanner(onScan: onScan)
                         .ignoresSafeArea(edges: .bottom)
                         .overlay(alignment: .bottom) {
-                            Text("Point the camera at the code shown by /remote")
+                            Text("Point the camera at the pairing QR code")
                                 .font(.subheadline)
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)

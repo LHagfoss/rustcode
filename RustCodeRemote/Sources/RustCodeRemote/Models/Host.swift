@@ -153,6 +153,31 @@ public struct DeviceIdentity: Hashable, Sendable, Codable {
     }
 }
 
+/// Who answered the handshake. `gatewayID` is stable for a host; `instanceID` changes every
+/// time the gateway starts, which invalidates event cursors from before.
+public struct ConnectionIdentity: Hashable, Sendable {
+    public var gatewayID: String
+    public var instanceID: String
+
+    public init(gatewayID: String, instanceID: String) {
+        self.gatewayID = gatewayID
+        self.instanceID = instanceID
+    }
+}
+
+/// What a successful pairing hands out. The token is shown exactly once.
+public struct PairingGrant: Hashable, Sendable {
+    public var identity: ConnectionIdentity
+    public var device: DeviceIdentity
+    public var deviceToken: String
+
+    public init(identity: ConnectionIdentity, device: DeviceIdentity, deviceToken: String) {
+        self.identity = identity
+        self.device = device
+        self.deviceToken = deviceToken
+    }
+}
+
 public struct StoredCredential: Hashable, Sendable, Codable {
     public var host: PairedHost
     public var deviceToken: String

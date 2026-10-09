@@ -31,9 +31,10 @@ public protocol RemoteClient: Sendable {
     /// Exchanges a pairing credential for a device token. Does not leave a connection open.
     func pair(_ request: PairingRequest, deviceName: String) async throws -> StoredCredential
 
-    /// Opens an authenticated connection. Throws `RemoteError.unauthorized` when the token
-    /// was revoked.
-    func connect(using credential: StoredCredential) async throws
+    /// Opens an authenticated connection and reports who answered. Throws
+    /// `RemoteError.unauthorized` when the token was revoked.
+    @discardableResult
+    func connect(using credential: StoredCredential) async throws -> ConnectionIdentity
     func disconnect() async
 
     /// The live shared sessions of the host: the current list first, then every change.
@@ -46,6 +47,15 @@ public protocol RemoteClient: Sendable {
     func detach(_ session: SessionRef) async
 
     func getHistory(_ session: SessionRef, before cursor: HistoryCursor, limit: Int) async throws -> HistoryPage
+
+    /// One chunk of content that another frame carried only in part, for example the full
+    /// detail of an approval.
+    func getContent(
+        _ contentID: String,
+        in session: SessionRef,
+        offset: UInt64,
+        maxBytes: Int
+    ) async throws -> ContentChunk
 
     /// Idle-only. Rejected with `.busy` while a turn is running.
     func submit(_ text: String, to session: SessionRef, requestID: RequestID) async throws -> RequestReceipt

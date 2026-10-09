@@ -32,7 +32,7 @@ struct TranscriptView: View {
             case .question(let question):
                 QuestionSheet(question: question)
             case .approval(let approval):
-                ApprovalSheet(approval: approval)
+                ApprovalSheet(batchID: approval.batchID, initial: approval)
             }
         }
         .onChange(of: store.attached?.pendingQuestion?.id) { reconcileSheet() }
@@ -63,6 +63,7 @@ struct TranscriptView: View {
                 if isThinking(snapshot) {
                     StreamingIndicator()
                 }
+                SessionActivityView(snapshot: snapshot)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
@@ -104,7 +105,11 @@ struct TranscriptView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, snapshot.pendingApproval != nil || snapshot.pendingQuestion != nil || !store.visibleRequests.isEmpty ? 10 : 0)
 
-                ComposerBar(isRunning: snapshot.isRunning, isEnabled: store.connection == .connected)
+                ComposerBar(
+                    isRunning: snapshot.isRunning,
+                    canSteer: snapshot.canSteer,
+                    isEnabled: store.connection == .connected
+                )
             }
         }
         .frame(maxWidth: 760)
@@ -143,6 +148,72 @@ struct TranscriptView: View {
             hasAutoPresented = true
             sheet = .question(question)
         }
+    }
+}
+
+/// What the session is doing besides the conversation: sub-agents, background commands and
+/// prompts it is holding. Only a snapshot carries the last two, so they are as fresh as the
+/// last time the session was loaded.
+private struct SessionActivityView: View {
+    let snapshot: SessionSnapshot
+
+    private var isEmpty: Bool {
+        snapshot.subagents.isEmpty && snapshot.backgroundTasks.isEmpty && snapshot.pendingPrompts.isEmpty
+            && snapshot.omitted.total == 0
+    }
+
+    var body: some View {
+        if !isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(snapshot.subagents) { item in
+                    if case .subagent(let subagent) = item.content {
+                        SubagentRow(subagent: subagent)
+                    }
+                }
+                ForEach(snapshot.backgroundTasks) { task in
+                    activityRow(
+                        symbol: "gearshape.2",
+                        title: task.command,
+                        detail: "Background task · \(task.elapsed.formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated)))",
+                        monospaced: true
+                    )
+                }
+                ForEach(Array(snapshot.pendingPrompts.enumerated()), id: \.offset) { _, prompt in
+                    activityRow(
+                        symbol: prompt.kind == .steer ? "arrow.triangle.turn.up.right.diamond" : "text.line.last.and.arrowtriangle.forward",
+                        title: prompt.text,
+                        detail: prompt.kind == .steer ? "Steering, waiting for the turn" : "Queued for the next turn",
+                        monospaced: false
+                    )
+                }
+                if snapshot.omitted.total > 0 {
+                    Text("\(snapshot.omitted.total) more not shown here. See the terminal for the full list.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func activityRow(symbol: String, title: String, detail: String, monospaced: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+                .frame(width: 22)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(monospaced ? .footnote.monospaced() : .footnote)
+                    .lineLimit(2)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(.fill.quaternary, in: .rect(cornerRadius: 14))
+        .accessibilityElement(children: .combine)
     }
 }
 

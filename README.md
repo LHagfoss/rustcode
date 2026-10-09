@@ -11,23 +11,48 @@ keyboard for it; closing the app never cancels work.
 
 ## Status
 
-**The app cannot reach a real RustCode host yet.** The RustCode gateway (WebSocket,
-pairing, the wire protocol) is still being built, and its JSON schema is not final. This
-repository contains everything that does not depend on the exact wire shapes:
+The app speaks the real protocol, and the RustCode side is not finished yet.
 
-- the full UI, running against a simulated host in **demo mode**;
-- the domain model, the state store, reconnect policy and receipt handling;
-- the connection plumbing over `URLSessionWebSocketTask`, tested against a scripted
-  socket and a loopback WebSocket server.
+- **Pairing and authentication work against a real gateway.** The app pairs with
+  `rustcode remote serve` by QR payload or by address and code, stores the device token in
+  the Keychain, authenticates with it on every later connection, and goes back to the
+  pairing screen when the device is revoked. This is checked by an integration test that
+  drives a real gateway over loopback (see [Tests](#tests)).
+- **No session can be shared yet.** The gateway that exists today (RustCode PR #1912) is a
+  foundation: it answers everything after the handshake with `not_implemented`. The app
+  shows that as connected with an empty session list. The `/remote` command and session
+  routing are still being built in RustCode.
+- **The session protocol is implemented against its contract, not against a host.**
+  Requests, responses and events are encoded and decoded from the JSON Schemas and the 56
+  golden frames published in the RustCode repository. No host produces those frames over
+  a socket yet, so the path from a live session to the transcript has only been exercised
+  with the golden frames and the in-app demo host.
+- **Demo mode** shows the whole interface against a simulated host, without a Mac.
 
-What is missing is the codec that translates between protocol frames and the domain
-types (see [Where the wire codec plugs in](#where-the-wire-codec-plugs-in)). Until it
-lands, "Pair" and "Scan Pairing Code" end with "Connecting to a real host is not available
-in this build yet."
+## Pair with a host
+
+On the Mac (a RustCode build that has `remote serve`):
+
+```sh
+rustcode remote serve --bind <address> --advertise <address>   # default: loopback, port 17879
+rustcode remote pair
+```
+
+`remote pair` prints an address, an eight-digit code and a QR payload. In the app either:
+
+- type the address (`192.168.1.20:17879`) and the code, or
+- paste the QR payload (the `{"protocol_version":1,…}` line) into the address field, or
+- scan it, once something draws it as a QR code. The terminal prints the payload as text
+  only; the scanner accepts a QR code that encodes exactly that text.
+
+A challenge lasts two minutes and works once. After too many wrong attempts the host locks
+pairing for a few minutes and the app says for how long. `rustcode remote devices` lists
+paired devices and `rustcode remote revoke <device>` removes one.
 
 ## Requirements
 
-- A Mac with Xcode 26 or later (the project was built with Xcode 26.6, Swift 6.3).
+- A Mac with Xcode 26 or later. The app icon is an Icon Composer file, which older Xcode
+  versions cannot build. Built and tested with Xcode 27.0 (Swift 6.4); Xcode 26.6 also builds it.
 - An iPhone or iPad on iOS 18 or later, and a cable for the first install.
 - An Apple ID. A free one is enough; no paid developer membership is needed, and the app
   uses no capability that would require one (no push, no iCloud, no associated domains).
@@ -79,7 +104,9 @@ the app (`DemoRemoteClient`); nothing leaves the device and nothing is stored. I
 three sessions:
 
 - **Add reconnect backoff** streams text, runs two tools, then asks for approval to run
-  a command. Approve or deny it and the turn continues accordingly.
+  a command. The action arrives as a preview and the sheet fetches the rest before
+  Approve unlocks, as it would for a long action from a real host. Approve or deny it and
+  the turn continues accordingly.
 - **Page the session store** is waiting on a question with three options.
 - **Draft release notes** is idle, with a sub-agent row, a tool row, formatted text and
   one page of earlier history. Send it a message to see a turn; send another while it
@@ -112,18 +139,23 @@ RustCode/                  The SwiftUI app.
   RustCodeApp.swift        Entry point; wires the store, scene phase and launch arguments.
   Views/                   Pairing, QR scanner, session sidebar, transcript, composer,
                            question and approval sheets, settings.
-  Info.plist               Camera, local-network and App Transport Security keys.
+  AppIcon.icon             RustCode's icon (Icon Composer), copied from the RustCode repository.
+  Assets.xcassets          Accent color and the logo shown on the pairing screen.
+  Info.plist               App Transport Security. The usage descriptions are build settings.
 RustCodeRemote/            Local Swift package, no dependencies, iOS 18 / macOS 15.
   Sources/RustCodeRemote/
     Models/                Host, session, transcript, attention, receipts, errors.
     Transport/             RemoteTransport, URLSessionWebSocketTransport, ScriptedTransport.
     Credentials/           CredentialStore, Keychain and in-memory implementations.
     Client/                RemoteClient, LiveRemoteClient, RemoteCodec (the wire boundary).
+    Wire/                  Codable DTOs for the protocol and the handshake, and WireCodec.
     Store/                 RemoteStore (@Observable), reconnect policy, attention badges.
     Demo/                  DemoRemoteClient.
     Presentation/          MarkdownBlock.
   Tests/RustCodeRemoteTests/
-docs/screenshots/          Simulator screenshots of the pairing screen and the demo.
+    Resources/remote-protocol/   The contract: schemas, golden frames, SOURCE.txt.
+Scripts/sync-protocol.sh   Refreshes the contract from a RustCode checkout.
+docs/screenshots/          Simulator screenshots of the pairing screen, the demo and the icon.
 ```
 
 ### Tests
@@ -134,6 +166,32 @@ The package builds and tests on the Mac, without a simulator:
 cd RustCodeRemote
 swift test
 ```
+
+That includes the contract tests: every golden request and frame is decoded, encoded
+again and compared as JSON (the round trip RustCode's own tests run), every golden file
+has to be covered, and the tags and enum values the DTOs know are compared with what the
+schemas allow, so a change on the RustCode side shows up as a failing test here. The
+Keychain store is tested against the login keychain of the Mac running the tests.
+
+To pick up a new version of the contract:
+
+```sh
+Scripts/sync-protocol.sh /path/to/rustcode            # reads origin/main
+Scripts/sync-protocol.sh /path/to/rustcode some-ref
+```
+
+It copies the schemas and golden frames from that commit into the test resources and
+records the commit in `Resources/remote-protocol/SOURCE.txt`.
+
+The integration tests need a real gateway and are skipped unless you name one:
+
+```sh
+RUSTCODE_GATEWAY_BIN=/path/to/rustcode swift test --filter GatewayIntegrationTests
+```
+
+They start `rustcode remote serve` on loopback in a temporary configuration directory and
+pair by QR payload and by code, authenticate, check the empty session list, revoke the
+device and watch the connection close, restart the gateway, and trip the pairing rate limit.
 
 The app:
 
@@ -146,7 +204,7 @@ xcodebuild -project RustCode.xcodeproj -scheme RustCode \
 way has no keychain access and reports a keychain error at launch. To run it in the
 Simulator, build without that flag (or just press Run in Xcode).
 
-## Where the wire codec plugs in
+## The wire boundary
 
 Views talk only to `RemoteStore`. The store talks only to the `RemoteClient` protocol.
 `LiveRemoteClient` implements that protocol on top of two things it is given:
@@ -154,16 +212,20 @@ Views talk only to `RemoteStore`. The store talks only to the `RemoteClient` pro
 - a `RemoteTransport` (text frames over a WebSocket), and
 - a `RemoteCodec`, declared in `RustCodeRemote/Sources/RustCodeRemote/Client/RemoteCodec.swift`.
 
-`RemoteCodec` is the boundary. It turns a `RemoteCommand` into a frame, a frame into a
-`RemoteMessage`, a scanned QR payload or a typed address and code into a `PairingTarget`,
-and a host address into the WebSocket URL and headers. Every type on the app's side of it
-is a domain type with no knowledge of JSON.
+`WireCodec` (`Sources/RustCodeRemote/Wire/`) is the codec for remote protocol v1 and the
+gateway's handshake frames. The `Wire…` types mirror the JSON exactly; `WireCodec` maps
+them to and from the domain types, and nothing else in the package or the app sees them.
 
-Today the app is constructed with `UnavailableRemoteCodec`, which fails every call with
-`RemoteError.codecUnavailable`. The next step is a schema-backed implementation with its
-`Codable` DTOs in `RustCodeRemote/Sources/RustCodeRemote/Wire/`, built against the JSON
-Schema and golden frames that the RustCode repository will publish under
-`docs/remote-protocol/`, and one changed line in `RustCode/RustCodeApp.swift`.
+A newer host must not break an older app. A frame kind, operation, result, event, error
+code or enum value this build does not know decodes to an explicit unknown instead of
+failing: an unknown frame is ignored, an unknown result fails only its own request, and an
+unknown event still takes its place in the sequence so the events after it apply. A frame
+that is not valid protocol at all drops the connection, and reconnecting resynchronises
+from a snapshot.
+
+The handshake frames (`pair`, `authenticate`, `paired`, `authenticated`, `error`) are
+provisional on the RustCode side and are expected to move into the versioned envelope. That
+change is contained in `Wire/WireHandshake.swift` and `WireCodec`.
 
 ## Network security
 
@@ -187,7 +249,8 @@ Settings.
 ### App Transport Security
 
 `Info.plist` sets `NSAppTransportSecurity > NSAllowsLocalNetworking = YES` and nothing
-else. In particular it does **not** set `NSAllowsArbitraryLoads`.
+else. The gateway refuses any WebSocket upgrade that carries an `Origin` header;
+`URLSessionWebSocketTask` does not send one, and a test checks that. In particular it does **not** set `NSAllowsArbitraryLoads`.
 
 iOS cannot scope an ATS exception to an IP range (`NSExceptionDomains` takes domain
 names only), and to iOS a NetBird address is not a "local" address, so the open question

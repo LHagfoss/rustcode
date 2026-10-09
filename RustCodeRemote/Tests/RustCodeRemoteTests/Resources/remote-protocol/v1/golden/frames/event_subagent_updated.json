@@ -1,0 +1,26 @@
+{
+  "kind": "event",
+  "protocol_version": 1,
+  "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+  "registration_epoch": 3,
+  "sequence": 417,
+  "generation": 1,
+  "event": {
+    "type": "subagent_updated",
+    "subagent": {
+      "id": 2,
+      "name": "explorer",
+      "task": {
+        "text": "Find every caller of parse_expression",
+        "truncated": false,
+        "offset": 0,
+        "total_bytes": 37
+      },
+      "model": "gpt-5.5-mini",
+      "status": "running",
+      "active_turn": true,
+      "depth": 1,
+      "message_count": 6
+    }
+  }
+}

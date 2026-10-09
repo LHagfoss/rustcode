@@ -1,0 +1,25 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-0001",
+  "result": {
+    "type": "sessions",
+    "gateway_id": "gw-8e1f4b7a",
+    "sessions": [
+      {
+        "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+        "registration_epoch": 3,
+        "title": "Fix the failing parser tests",
+        "workspace": "/Users/dev/code/parser",
+        "model": "gpt-5.5",
+        "activity": "awaiting_approval",
+        "attention": {
+          "approval": true,
+          "question": false
+        },
+        "health": "live"
+      }
+    ],
+    "subscribed": false
+  }
+}

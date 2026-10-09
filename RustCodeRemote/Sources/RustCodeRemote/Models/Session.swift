@@ -131,9 +131,12 @@ public struct ToolCall: Hashable, Sendable {
 
 public struct SubagentSummary: Hashable, Sendable {
     public enum Status: Sendable, Equatable {
+        case queued
         case running
+        case interrupted
         case completed
         case failed
+        case cancelled
     }
 
     public var name: String
@@ -165,23 +168,34 @@ public struct PendingQuestion: Identifiable, Hashable, Sendable {
     }
 
     public var id: String
+    /// Short topic label, shown above the prompt. May be empty.
+    public var header: String
     public var prompt: String
     public var options: [Option]
     public var allowsMultipleSelection: Bool
     public var allowsFreeText: Bool
+    /// 1-based position within a chain of questions asked together.
+    public var position: Int
+    public var chainLength: Int
 
     public init(
         id: String,
+        header: String = "",
         prompt: String,
         options: [Option],
         allowsMultipleSelection: Bool = false,
-        allowsFreeText: Bool = false
+        allowsFreeText: Bool = false,
+        position: Int = 1,
+        chainLength: Int = 1
     ) {
         self.id = id
+        self.header = header
         self.prompt = prompt
         self.options = options
         self.allowsMultipleSelection = allowsMultipleSelection
         self.allowsFreeText = allowsFreeText
+        self.position = position
+        self.chainLength = chainLength
     }
 }
 
@@ -205,16 +219,34 @@ public struct PendingApproval: Identifiable, Hashable, Sendable {
         public var id: String
         public var toolName: String
         public var title: String
+        /// The host's note on why this needs approval. May be empty.
+        public var risk: String
         public var detail: String
         /// False while `detail` is only a bounded preview. A preview is not the reviewed action.
         public var isDetailComplete: Bool
+        /// Names the full detail for `getContent`. Nil when the rest cannot be fetched, in
+        /// which case a truncated item can be denied but never approved from here.
+        public var detailContentID: String?
+        public var detailTotalBytes: UInt64?
 
-        public init(id: String, toolName: String, title: String, detail: String, isDetailComplete: Bool = true) {
+        public init(
+            id: String,
+            toolName: String,
+            title: String,
+            risk: String = "",
+            detail: String,
+            isDetailComplete: Bool = true,
+            detailContentID: String? = nil,
+            detailTotalBytes: UInt64? = nil
+        ) {
             self.id = id
             self.toolName = toolName
             self.title = title
+            self.risk = risk
             self.detail = detail
             self.isDetailComplete = isDetailComplete
+            self.detailContentID = detailContentID
+            self.detailTotalBytes = detailTotalBytes
         }
     }
 
@@ -235,6 +267,72 @@ public struct PendingApproval: Identifiable, Hashable, Sendable {
 public enum ApprovalDecision: Sendable, Equatable {
     case approve
     case deny
+}
+
+// MARK: - Turn activity
+
+/// A command the session left running in the background.
+public struct BackgroundTask: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var command: String
+    public var elapsed: Duration
+
+    public init(id: String, command: String, elapsed: Duration) {
+        self.id = id
+        self.command = command
+        self.elapsed = elapsed
+    }
+}
+
+/// A prompt the session holds until it can act on it.
+public struct PendingPrompt: Hashable, Sendable {
+    public enum Kind: Sendable, Equatable {
+        case steer
+        case queue
+    }
+
+    public var kind: Kind
+    public var text: String
+
+    public init(kind: Kind, text: String) {
+        self.kind = kind
+        self.text = text
+    }
+}
+
+/// Entries the host left out of a snapshot's lists to keep the frame bounded.
+public struct OmittedCounts: Hashable, Sendable {
+    public var tools: Int
+    public var subagents: Int
+    public var pendingPrompts: Int
+    public var backgroundTasks: Int
+
+    public init(tools: Int = 0, subagents: Int = 0, pendingPrompts: Int = 0, backgroundTasks: Int = 0) {
+        self.tools = tools
+        self.subagents = subagents
+        self.pendingPrompts = pendingPrompts
+        self.backgroundTasks = backgroundTasks
+    }
+
+    public var total: Int { tools + subagents + pendingPrompts + backgroundTasks }
+}
+
+/// One piece of content that was truncated in another frame.
+public struct ContentChunk: Sendable, Equatable {
+    public var contentID: String
+    public var offset: UInt64
+    public var text: String
+    public var totalBytes: UInt64
+    /// Nil at the end of the content.
+    public var nextOffset: UInt64?
+
+    public init(contentID: String, offset: UInt64, text: String, totalBytes: UInt64, nextOffset: UInt64?) {
+        self.contentID = contentID
+        self.offset = offset
+        self.text = text
+        self.totalBytes = totalBytes
+        self.nextOffset = nextOffset
+    }
 }
 
 // MARK: - History

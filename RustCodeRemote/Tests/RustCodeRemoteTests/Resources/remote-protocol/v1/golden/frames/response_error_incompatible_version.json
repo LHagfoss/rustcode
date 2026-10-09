@@ -1,0 +1,13 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-0100",
+  "result": {
+    "type": "error",
+    "code": "incompatible_version",
+    "message": "protocol version 2 is not supported; this host speaks version 1",
+    "supported_versions": [
+      1
+    ]
+  }
+}

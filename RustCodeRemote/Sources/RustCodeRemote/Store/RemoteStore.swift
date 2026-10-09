@@ -43,6 +43,8 @@ public final class RemoteStore {
     /// Snapshot of the selected session, kept current by applying its updates.
     public private(set) var attached: SessionSnapshot?
     public private(set) var isLoadingHistory = false
+    /// True while the full detail of the pending approval is being fetched.
+    public private(set) var isLoadingApprovalDetails = false
 
     public private(set) var badges = AttentionBadges()
     public private(set) var receipts = ReceiptLedger()
@@ -61,6 +63,14 @@ public final class RemoteStore {
     @ObservationIgnored private var credential: StoredCredential?
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
     @ObservationIgnored private var attachTask: Task<Void, Never>?
+    /// The gateway instance the attached snapshot came from. Cursors do not survive a restart.
+    @ObservationIgnored private var snapshotInstanceID: String?
+    @ObservationIgnored private var currentInstanceID: String?
+
+    /// Above this size the detail of an approval is not pulled onto the phone; the action
+    /// has to be reviewed in the terminal.
+    public static let maximumApprovalDetailBytes: UInt64 = 2 * 1024 * 1024
+    private static let contentChunkBytes = 128 * 1024
 
     public init(
         client: any RemoteClient,
@@ -216,6 +226,48 @@ public final class RemoteStore {
         }
     }
 
+    /// Fetches the full detail of every action in the pending approval that arrived only as
+    /// a preview. Approving stays locked until this has succeeded: a preview is not the action.
+    public func loadApprovalDetails() async {
+        guard !isLoadingApprovalDetails, let snapshot = attached, let approval = snapshot.pendingApproval,
+              !approval.canBeResolved else { return }
+        isLoadingApprovalDetails = true
+        defer { isLoadingApprovalDetails = false }
+        let session = snapshot.session
+
+        for item in approval.items where !item.isDetailComplete {
+            guard let contentID = item.detailContentID else { continue }
+            if let total = item.detailTotalBytes, total > Self.maximumApprovalDetailBytes { continue }
+            do {
+                var text = ""
+                var offset: UInt64 = 0
+                while true {
+                    let chunk = try await client.getContent(
+                        contentID,
+                        in: session,
+                        offset: offset,
+                        maxBytes: Self.contentChunkBytes
+                    )
+                    text += chunk.text
+                    guard UInt64(text.utf8.count) <= Self.maximumApprovalDetailBytes else { return }
+                    // A host that does not advance would loop forever; treat it as incomplete.
+                    guard let next = chunk.nextOffset else { break }
+                    guard next > offset else { return }
+                    offset = next
+                }
+                // Only if the same batch is still the one waiting.
+                guard attached?.session == session, attached?.pendingApproval?.batchID == approval.batchID,
+                      let index = attached?.pendingApproval?.items.firstIndex(where: { $0.id == item.id })
+                else { return }
+                attached?.pendingApproval?.items[index].detail = text
+                attached?.pendingApproval?.items[index].isDetailComplete = true
+            } catch {
+                notice = error.localizedDescription
+                return
+            }
+        }
+    }
+
     // MARK: Mutations
 
     /// Sends text to the attached session.
@@ -263,7 +315,9 @@ public final class RemoteStore {
     @discardableResult
     public func resolve(_ approval: PendingApproval, decision: ApprovalDecision) async -> Bool {
         guard let session = attached?.session else { return false }
-        guard decision == .deny || approval.canBeResolved else {
+        // What counts is the store's copy: it is the one whose details were fetched.
+        let current = attached?.pendingApproval?.batchID == approval.batchID ? attached?.pendingApproval : nil
+        guard decision == .deny || (current ?? approval).canBeResolved else {
             notice = "The full details of this action have not loaded yet."
             return false
         }
@@ -306,6 +360,8 @@ public final class RemoteStore {
         sessions = []
         selectedSessionID = nil
         attached = nil
+        snapshotInstanceID = nil
+        currentInstanceID = nil
         badges.removeAll()
         receipts.removeAll()
     }
@@ -325,8 +381,9 @@ public final class RemoteStore {
         var reconnect = ReconnectState(policy: backoff)
         while !Task.isCancelled {
             do {
-                try await client.connect(using: credential)
+                let identity = try await client.connect(using: credential)
                 try Task.checkCancellation()
+                currentInstanceID = identity.instanceID
                 let lists = try await client.subscribeSessions()
                 try Task.checkCancellation()
                 connection = .connected
@@ -362,6 +419,11 @@ public final class RemoteStore {
                     connection = .offline(reason: reason)
                     return
                 case .retry(let attempt, let delay):
+                    // A locked-out host says when it will listen again; knocking earlier is useless.
+                    var delay = delay
+                    if case .rateLimited(let retryAfter?) = failure, retryAfter > delay {
+                        delay = retryAfter
+                    }
                     connection = .waitingToRetry(attempt: attempt, delay: delay, reason: reason)
                     do {
                         try await sleep(delay)
@@ -426,13 +488,17 @@ public final class RemoteStore {
         var resyncs = 0
         while !Task.isCancelled, connection == .connected, selectedSessionID == sessionID, resyncs < 5,
               let ref = sessions.first(where: { $0.id == sessionID })?.ref {
-            let resumeAfter = !wantsSnapshot && attached?.session == ref ? attached?.sequence : nil
+            // A replay is only worth asking for from the gateway instance that issued the
+            // sequence numbers; after a restart they mean nothing.
+            let canResume = !wantsSnapshot && attached?.session == ref && snapshotInstanceID == currentInstanceID
+            let resumeAfter = canResume ? attached?.sequence : nil
             do {
                 let attachment = try await client.attach(ref, resumeAfter: resumeAfter)
                 guard !Task.isCancelled, selectedSessionID == sessionID else { return }
                 switch attachment.start {
                 case .snapshot(let snapshot):
                     attached = snapshot
+                    snapshotInstanceID = currentInstanceID
                 case .resumed:
                     guard attached?.session == ref else {
                         wantsSnapshot = true
@@ -454,6 +520,12 @@ public final class RemoteStore {
                 await client.detach(ref)
             } catch RemoteError.resyncRequired {
                 // Fall through and attach again for a fresh snapshot.
+            } catch RemoteError.sessionClosed(let reason) {
+                guard !Task.isCancelled, selectedSessionID == sessionID else { return }
+                attached = nil
+                selectedSessionID = nil
+                notice = reason
+                return
             } catch {
                 return
             }

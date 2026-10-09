@@ -11,6 +11,11 @@ private actor StubClient: RemoteClient {
     var sessions: [SessionSummary] = [makeSession("s1")]
     /// Sequences of the updates each successive attach delivers after its snapshot.
     var attachScripts: [[UInt64]] = []
+    /// Instance IDs reported by successive connects; the last one repeats.
+    var instanceIDs: [String] = ["instance-1"]
+    var snapshot: SessionSnapshot?
+    var contentChunks: [String] = []
+    private(set) var contentCalls: [UInt64] = []
 
     private(set) var connectCalls = 0
     private(set) var submitCalls: [RequestID] = []
@@ -18,11 +23,19 @@ private actor StubClient: RemoteClient {
     private(set) var attachCalls: [UInt64?] = []
     private(set) var disconnectCalls = 0
     private var listContinuation: AsyncThrowingStream<[SessionSummary], any Error>.Continuation?
+    private var updates: AsyncThrowingStream<SessionUpdate, any Error>.Continuation?
 
     func set(connectResults: [Result<Void, RemoteError>]) { self.connectResults = connectResults }
     func set(submitResult: Result<ReceiptState, RemoteError>) { self.submitResult = submitResult }
     func set(statusResult: Result<ReceiptState, RemoteError>) { self.statusResult = statusResult }
     func set(attachScripts: [[UInt64]]) { self.attachScripts = attachScripts }
+    func set(instanceIDs: [String]) { self.instanceIDs = instanceIDs }
+    func set(snapshot: SessionSnapshot) { self.snapshot = snapshot }
+    func set(contentChunks: [String]) { self.contentChunks = contentChunks }
+
+    func closeSession(_ reason: String) {
+        updates?.finish(throwing: RemoteError.sessionClosed(reason))
+    }
 
     func publish(_ sessions: [SessionSummary]) {
         self.sessions = sessions
@@ -35,15 +48,28 @@ private actor StubClient: RemoteClient {
     }
 
     func pair(_ request: PairingRequest, deviceName: String) async throws -> StoredCredential {
-        if case .scanned = request { throw RemoteError.pairingFailed("expired") }
+        if case .scanned(let text) = request {
+            throw text == "locked" ? RemoteError.rateLimited(retryAfter: .seconds(240)) : RemoteError.pairingFailed("expired")
+        }
         return makeCredential()
     }
 
-    func connect(using credential: StoredCredential) async throws {
+    @discardableResult
+    func connect(using credential: StoredCredential) async throws -> ConnectionIdentity {
         connectCalls += 1
         if !connectResults.isEmpty {
             try connectResults.removeFirst().get()
         }
+        let instance = instanceIDs.count > 1 ? instanceIDs.removeFirst() : instanceIDs[0]
+        return ConnectionIdentity(gatewayID: "gateway", instanceID: instance)
+    }
+
+    func getContent(_ contentID: String, in session: SessionRef, offset: UInt64, maxBytes: Int) async throws -> ContentChunk {
+        contentCalls.append(offset)
+        guard !contentChunks.isEmpty else { throw RemoteError.timeout }
+        let text = contentChunks.removeFirst()
+        let next = contentChunks.isEmpty ? nil : offset + UInt64(text.utf8.count)
+        return ContentChunk(contentID: contentID, offset: offset, text: text, totalBytes: 0, nextOffset: next)
     }
 
     func disconnect() async {
@@ -66,7 +92,11 @@ private actor StubClient: RemoteClient {
         for sequence in script {
             continuation.yield(update(session, sequence, .assistantDelta(itemID: "a", text: "\(sequence) ")))
         }
-        return SessionAttachment(start: .snapshot(SessionSnapshot(session: session, sequence: 10)), updates: stream)
+        updates = continuation
+        return SessionAttachment(
+            start: .snapshot(snapshot ?? SessionSnapshot(session: session, sequence: 10)),
+            updates: stream
+        )
     }
 
     func detach(_ session: SessionRef) async {}
@@ -333,6 +363,122 @@ private final class DelayLog: Sendable {
         #expect(store.badges.unseenCompletions.isEmpty)
     }
 
+    @Test func aGatewayRestartAsksForASnapshotInsteadOfAReplay() async {
+        let client = StubClient()
+        await client.set(instanceIDs: ["instance-1", "instance-2"])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+
+        await client.dropConnection(.connectionClosed)
+        #expect(await waitUntil { await client.attachCalls.count == 2 })
+        // Same session and epoch, but the sequence numbers came from the previous instance.
+        #expect(await client.attachCalls == [nil, nil])
+    }
+
+    @Test func aClosedSessionIsDeselectedWithItsReason() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+
+        await client.closeSession("Sharing was turned off for this session.")
+        #expect(await waitUntil { store.selectedSessionID == nil })
+        #expect(store.attached == nil)
+        #expect(store.notice == "Sharing was turned off for this session.")
+    }
+
+    // MARK: Approval details
+
+    private func truncatedApproval(contentID: String? = "content-1", totalBytes: UInt64 = 20) -> PendingApproval {
+        PendingApproval(batchID: "b1", items: [
+            .init(id: "b1#0", toolName: "run", title: "Run", detail: "complete"),
+            .init(
+                id: "b1#1",
+                toolName: "write",
+                title: "Write",
+                detail: "first",
+                isDetailComplete: false,
+                detailContentID: contentID,
+                detailTotalBytes: totalBytes
+            ),
+        ])
+    }
+
+    private func storeAttached(to approval: PendingApproval, client: StubClient) async -> RemoteStore {
+        let ref = SessionRef(sessionID: "s1", registrationEpoch: 1)
+        await client.set(snapshot: SessionSnapshot(session: ref, pendingApproval: approval, sequence: 10))
+        let store = makeStore(client)
+        store.bootstrap()
+        _ = await waitUntil { store.connection == .connected }
+        store.select("s1")
+        _ = await waitUntil { store.attached != nil }
+        return store
+    }
+
+    @Test func approvingUnlocksOnlyAfterTheFullDetailIsFetched() async {
+        let client = StubClient()
+        await client.set(contentChunks: ["first ", "second ", "third"])
+        let approval = truncatedApproval()
+        let store = await storeAttached(to: approval, client: client)
+
+        #expect(await store.resolve(approval, decision: .approve) == false)
+        #expect(store.notice != nil)
+
+        await store.loadApprovalDetails()
+        let item = store.attached?.pendingApproval?.items[1]
+        #expect(item?.detail == "first second third")
+        #expect(item?.isDetailComplete == true)
+        // Fetched from the start, following the host's offsets.
+        #expect(await client.contentCalls == [0, 6, 13])
+        #expect(await store.resolve(approval, decision: .approve))
+    }
+
+    @Test func aFailedFetchKeepsApprovingLockedButDenyingWorks() async {
+        let client = StubClient()
+        let approval = truncatedApproval()
+        let store = await storeAttached(to: approval, client: client)
+
+        await store.loadApprovalDetails()
+        #expect(store.attached?.pendingApproval?.canBeResolved == false)
+        #expect(store.isLoadingApprovalDetails == false)
+        #expect(await store.resolve(approval, decision: .approve) == false)
+        #expect(await store.resolve(approval, decision: .deny))
+    }
+
+    @Test func detailThatCannotBeFetchedOrIsTooLargeStaysLocked() async {
+        for approval in [
+            truncatedApproval(contentID: nil),
+            truncatedApproval(totalBytes: RemoteStore.maximumApprovalDetailBytes + 1),
+        ] {
+            let client = StubClient()
+            await client.set(contentChunks: ["everything"])
+            let store = await storeAttached(to: approval, client: client)
+            await store.loadApprovalDetails()
+            #expect(store.attached?.pendingApproval?.canBeResolved == false)
+            #expect(await client.contentCalls.isEmpty)
+        }
+    }
+
+    @Test func aLockedOutHostReportsWhenPairingCanBeTriedAgain() async {
+        let store = makeStore(StubClient(), credentials: InMemoryCredentialStore())
+        await store.pair(.scanned("locked"), deviceName: "Phone")
+        #expect(store.pairing == .failed("Too many failed attempts. Try again in 4 minutes."))
+    }
+
+    @Test func aRateLimitedReconnectWaitsForTheHostsDeadline() async {
+        let client = StubClient()
+        await client.set(connectResults: [.failure(.rateLimited(retryAfter: .seconds(240))), .success(())])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(delays.values == [.seconds(240)])
+    }
+
     // MARK: Receipts
 
     @Test func aLostReplyLeavesTheRequestUncertainAndIsNeverResent() async {
@@ -432,7 +578,16 @@ private final class DelayLog: Sendable {
         }
         #expect(tools.map(\.status) == [.succeeded, .succeeded])
 
-        #expect(await store.resolve(approval, decision: .approve))
+        // The demo host sends the action as a preview: approving is locked until it is whole.
+        #expect(!approval.canBeResolved)
+        #expect(await store.resolve(approval, decision: .approve) == false)
+        #expect(store.attached?.pendingApproval != nil)
+        await store.loadApprovalDetails()
+        #expect(store.attached?.pendingApproval?.canBeResolved == true)
+        #expect(store.attached?.pendingApproval?.items.first?.detail.hasSuffix("no network") == true)
+
+        let reviewed = store.attached!.pendingApproval!
+        #expect(await store.resolve(reviewed, decision: .approve))
         #expect(await waitUntil { store.attached?.isRunning == false })
         #expect(store.attached?.pendingApproval == nil)
         #expect(store.attached?.items.contains { item in
@@ -441,7 +596,7 @@ private final class DelayLog: Sendable {
         #expect(store.receipts.requests.isEmpty)
 
         // The batch is gone: resolving it again is stale.
-        #expect(await store.resolve(approval, decision: .approve) == false)
+        #expect(await store.resolve(reviewed, decision: .approve) == false)
         #expect(store.notice == RemoteRejection.staleApproval.message)
     }
 

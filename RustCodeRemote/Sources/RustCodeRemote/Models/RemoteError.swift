@@ -14,6 +14,16 @@ public enum RemoteError: Error, Sendable, Equatable {
     /// Updates were lost or the cursor is no longer valid; attach again for a fresh snapshot.
     case resyncRequired
     case pairingFailed(String)
+    /// Too many failed attempts on the host. Nothing is accepted until the time has passed.
+    case rateLimited(retryAfter: Duration?)
+    /// The owner could not say whether a mutation was applied. Never resend on that basis.
+    case outcomeUnknown
+    /// The session's registration ended; the associated value says why.
+    case sessionClosed(String)
+    /// The host at the stored address is not the gateway this device paired with.
+    case hostIdentityChanged
+    /// The gateway accepted the connection but does not route sessions yet.
+    case notImplemented
     case transport(String)
     case rejected(RemoteRejection)
 
@@ -28,10 +38,20 @@ extension RemoteError: LocalizedError {
         case .unauthorized: "This device is no longer authorized. Pair it again from the terminal."
         case .incompatibleProtocol: "The host speaks a protocol version this app does not support."
         case .invalidFrame(let detail): "The host sent data this app could not understand (\(detail))."
-        case .codecUnavailable: "Connecting to a real host is not available in this build yet. Try the demo."
+        case .codecUnavailable: "Connecting to a real host is not available in this build."
         case .timeout: "The host did not answer in time."
         case .resyncRequired: "The session has to be reloaded."
         case .pairingFailed(let detail): "Pairing failed: \(detail)"
+        case .rateLimited(let retryAfter):
+            if let retryAfter {
+                "Too many failed attempts. Try again in \(retryAfter.formatted(.units(allowed: [.minutes, .seconds], width: .wide)))."
+            } else {
+                "Too many failed attempts. Try again later."
+            }
+        case .outcomeUnknown: "The host could not confirm the request."
+        case .sessionClosed(let reason): reason
+        case .hostIdentityChanged: "The host at this address is not the one this device was paired with. Pair again."
+        case .notImplemented: "This host does not share sessions yet."
         case .transport(let detail): detail
         case .rejected(let rejection): rejection.message
         }
@@ -42,6 +62,8 @@ extension RemoteRejection {
     public var message: String {
         switch self {
         case .busy: "The session is busy. Queue the message or wait for the turn to finish."
+        case .notRunning: "There is no running turn any more. Send the message again to start one."
+        case .invalidAnswer: "That answer does not match the question."
         case .staleQuestion: "That question was already answered."
         case .staleApproval: "That approval was already resolved."
         case .staleTurn: "That turn has already ended."

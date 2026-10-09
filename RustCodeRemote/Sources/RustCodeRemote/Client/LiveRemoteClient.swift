@@ -21,6 +21,11 @@ public actor LiveRemoteClient: RemoteClient {
     private var generation = 0
 
     private var waiters: [RequestID: Waiter] = [:]
+    /// Requests in the order they were sent. An error frame that names no request answers
+    /// the oldest one.
+    private var waitingOrder: [RequestID] = []
+    /// The gateway ID each attached session was last served under; a resume cursor names it.
+    private var replayGateways: [SessionRef: String] = [:]
     /// Mutations in flight; a `received` receipt for these is not the final answer.
     private var mutations: Set<RequestID> = []
     private var receivedOnly: Set<RequestID> = []
@@ -43,23 +48,46 @@ public actor LiveRemoteClient: RemoteClient {
         let target = try codec.pairingTarget(for: request)
         try await open(target.address)
         do {
-            let reply = try await self.request(.pair(credential: target.credential, deviceName: deviceName))
+            let reply = try await self.request(
+                .pair(credential: target.credential, deviceName: deviceName),
+                id: Self.handshakeID
+            )
+            // Pairing leaves the connection authenticated, but the app connects afresh with
+            // the stored token, which also proves the token works.
             await teardown(with: .connectionClosed)
-            guard case .paired(let credential) = reply else { throw Self.unexpected(reply) }
-            return credential
+            guard case .handshake(.paired(let grant)) = reply else { throw Self.unexpected(reply) }
+            if let expected = target.expectedGatewayID, expected != grant.identity.gatewayID {
+                throw RemoteError.pairingFailed("the host that answered is not the one the code was made for")
+            }
+            return StoredCredential(
+                host: PairedHost(
+                    gatewayID: grant.identity.gatewayID,
+                    name: target.address.host,
+                    address: target.address,
+                    device: grant.device,
+                    pairedAt: Date()
+                ),
+                deviceToken: grant.deviceToken
+            )
         } catch {
             await teardown(with: .connectionClosed)
             throw error
         }
     }
 
-    public func connect(using credential: StoredCredential) async throws {
+    @discardableResult
+    public func connect(using credential: StoredCredential) async throws -> ConnectionIdentity {
         try await open(credential.host.address)
         do {
             let reply = try await request(
-                .authenticate(device: credential.host.device, deviceToken: credential.deviceToken)
+                .authenticate(device: credential.host.device, deviceToken: credential.deviceToken),
+                id: Self.handshakeID
             )
-            guard case .authenticated = reply else { throw Self.unexpected(reply) }
+            guard case .handshake(.authenticated(let identity)) = reply else { throw Self.unexpected(reply) }
+            guard identity.gatewayID == credential.host.gatewayID else {
+                throw RemoteError.hostIdentityChanged
+            }
+            return identity
         } catch {
             await teardown(with: .connectionClosed)
             throw error
@@ -82,6 +110,11 @@ public actor LiveRemoteClient: RemoteClient {
             let reply = try await request(.subscribeSessions)
             guard case .sessions = reply else { throw Self.unexpected(reply) }
             return stream
+        } catch RemoteError.notImplemented {
+            // A gateway that does not route sessions yet: connected, nothing shared. The
+            // stream stays open and ends with the connection.
+            continuation.yield([])
+            return stream
         } catch {
             continuation.finish()
             sessionsContinuation = nil
@@ -93,9 +126,14 @@ public actor LiveRemoteClient: RemoteClient {
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: SessionUpdate.self)
         updateContinuations[session]?.finish()
         updateContinuations[session] = continuation
+        // A replay needs the gateway the cursor came from; without it, ask for a snapshot.
+        let resume = resumeAfter.flatMap { sequence in
+            replayGateways[session].map { ResumeCursor(gatewayID: $0, lastSequence: sequence) }
+        }
         do {
-            let reply = try await request(.attachSession(session, resumeAfter: resumeAfter))
-            guard case .attached(let start) = reply else { throw Self.unexpected(reply) }
+            let reply = try await request(.attachSession(session, resume: resume))
+            guard case .attached(let start, let gatewayID) = reply else { throw Self.unexpected(reply) }
+            replayGateways[session] = gatewayID
             return SessionAttachment(start: start, updates: stream)
         } catch {
             continuation.finish()
@@ -113,6 +151,19 @@ public actor LiveRemoteClient: RemoteClient {
         let reply = try await request(.getHistory(session, before: cursor, limit: limit))
         guard case .history(let page) = reply else { throw Self.unexpected(reply) }
         return page
+    }
+
+    public func getContent(
+        _ contentID: String,
+        in session: SessionRef,
+        offset: UInt64,
+        maxBytes: Int
+    ) async throws -> ContentChunk {
+        let reply = try await request(
+            .getContent(session, contentID: contentID, offset: offset, maxBytes: maxBytes)
+        )
+        guard case .content(let chunk) = reply else { throw Self.unexpected(reply) }
+        return chunk
     }
 
     // MARK: Mutations
@@ -192,6 +243,7 @@ public actor LiveRemoteClient: RemoteClient {
         // The waiter is registered before the frame leaves, so a fast reply cannot be missed.
         let (replies, waiter) = AsyncStream.makeStream(of: Result<RemoteReply, RemoteError>.self)
         waiters[id] = waiter
+        waitingOrder.append(id)
         let timer = Task { [weak self, requestTimeout] in
             try? await Task.sleep(for: requestTimeout)
             guard !Task.isCancelled else { return }
@@ -200,6 +252,7 @@ public actor LiveRemoteClient: RemoteClient {
         defer {
             timer.cancel()
             waiters[id] = nil
+            waitingOrder.removeAll { $0 == id }
             receivedOnly.remove(id)
         }
 
@@ -225,6 +278,8 @@ public actor LiveRemoteClient: RemoteClient {
             return RequestReceipt(requestID: id, state: state)
         } catch RemoteError.rejected(let rejection) {
             return RequestReceipt(requestID: id, state: .rejected(rejection))
+        } catch RemoteError.outcomeUnknown {
+            return RequestReceipt(requestID: id, state: .unknown)
         }
     }
 
@@ -251,19 +306,37 @@ public actor LiveRemoteClient: RemoteClient {
                 return
             }
             resolve(id, with: .success(reply))
+        case .handshake(let reply):
+            resolve(Self.handshakeID, with: .success(.handshake(reply)))
+        case .gatewayFailure(let failure):
+            if waiters[Self.handshakeID] != nil {
+                // The handshake failed; the gateway closes the connection behind this frame.
+                resolve(Self.handshakeID, with: .failure(failure.error))
+            } else if failure.closesConnection || failure.error.isUnauthorized {
+                await teardown(with: failure.error)
+            } else if let oldest = waitingOrder.first {
+                resolve(oldest, with: .failure(failure.error))
+            }
         case .sessionsChanged(let sessions):
             sessionsContinuation?.yield(sessions)
         case .sessionUpdate(let update):
             updateContinuations[update.session]?.yield(update)
         case .resyncRequired(let session):
             updateContinuations.removeValue(forKey: session)?.finish(throwing: RemoteError.resyncRequired)
-        case .closing(let error):
-            await teardown(with: error)
+        case .sessionClosed(let session, let reason):
+            replayGateways[session] = nil
+            updateContinuations.removeValue(forKey: session)?
+                .finish(throwing: RemoteError.sessionClosed(reason))
+        case .unknown:
+            // A newer host may send frames this version does not know. They carry nothing
+            // this client could act on.
+            break
         }
     }
 
     private func resolve(_ id: RequestID, with result: Result<RemoteReply, RemoteError>) {
         guard let waiter = waiters.removeValue(forKey: id) else { return }
+        waitingOrder.removeAll { $0 == id }
         waiter.yield(result)
         waiter.finish()
     }
@@ -301,6 +374,9 @@ public actor LiveRemoteClient: RemoteClient {
 
         await transport.close()
     }
+
+    /// The handshake frames carry no request ID; their reply is correlated under this one.
+    private static let handshakeID = RequestID("handshake")
 
     private static func unexpected(_ reply: RemoteReply) -> RemoteError {
         .invalidFrame("unexpected reply")

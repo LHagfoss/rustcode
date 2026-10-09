@@ -1,0 +1,352 @@
+{
+  "$defs": {
+    "ApprovalChoice": {
+      "enum": [
+        "approve",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "RemoteAnswer": {
+      "oneOf": [
+        {
+          "description": "Options of the question, verbatim. Exactly one unless the question\nis `multiple`.",
+          "properties": {
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "selected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "options"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "custom",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RemoteOperation": {
+      "oneOf": [
+        {
+          "description": "Live shared sessions on this host, once.",
+          "properties": {
+            "type": {
+              "const": "list_sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "As `list_sessions`, then a `sessions` frame on every change.",
+          "properties": {
+            "type": {
+              "const": "subscribe_sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Subscribe to one session. Without `resume` (or when replay is not\npossible) the response carries an authoritative snapshot.",
+          "properties": {
+            "resume": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResumeCursor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "attach_session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "detach_session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Older transcript, newest page first. `cursor` comes from a snapshot\nor a previous page; omit it to start at the transcript tail.",
+          "properties": {
+            "cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "get_history",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "limit"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One chunk of content that was truncated in another frame.",
+          "properties": {
+            "content_id": {
+              "type": "string"
+            },
+            "max_bytes": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "get_content",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "content_id",
+            "offset",
+            "max_bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Start a turn. Rejected with `busy` while the session is running.",
+          "properties": {
+            "prompt": {
+              "type": "string"
+            },
+            "type": {
+              "const": "submit_prompt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Redirect the running turn. Rejected when it does not accept steering.",
+          "properties": {
+            "prompt": {
+              "type": "string"
+            },
+            "type": {
+              "const": "steer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Run after the running turn. Rejected with `not_running` when idle.",
+          "properties": {
+            "prompt": {
+              "type": "string"
+            },
+            "type": {
+              "const": "queue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel_turn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "answer": {
+              "$ref": "#/$defs/RemoteAnswer"
+            },
+            "question_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "answer_question",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "question_id",
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "batch_id": {
+              "type": "string"
+            },
+            "choice": {
+              "$ref": "#/$defs/ApprovalChoice"
+            },
+            "type": {
+              "const": "resolve_approval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "batch_id",
+            "choice"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Outcome of an earlier mutation whose response was lost. Never applies\nanything.",
+          "properties": {
+            "target_request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "get_request_status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target_request_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ResumeCursor": {
+      "description": "Where a reconnecting client left off. Replay is offered only for the same\ngateway instance and registration epoch.",
+      "properties": {
+        "gateway_id": {
+          "type": "string"
+        },
+        "last_sequence": {
+          "description": "Sequence of the last event the client applied.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gateway_id",
+        "last_sequence"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Client → host. Device identity is derived from authentication and never\ntravels in the frame.",
+  "properties": {
+    "operation": {
+      "$ref": "#/$defs/RemoteOperation"
+    },
+    "protocol_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "registration_epoch": {
+      "description": "The registration the client observed for `session_id`. A session that\nwas re-shared has a new epoch and rejects the old one.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "request_id": {
+      "description": "Client-chosen, unique per device and registration epoch. Reusing it\nwith the same payload returns the original outcome.",
+      "type": "string"
+    },
+    "session_id": {
+      "description": "Required for every operation that targets one session.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "protocol_version",
+    "request_id",
+    "operation"
+  ],
+  "title": "RemoteRequest",
+  "type": "object"
+}

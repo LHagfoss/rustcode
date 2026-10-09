@@ -6,8 +6,7 @@ import UIKit
 struct RustCodeApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var store = RemoteStore(
-        // The schema-backed codec replaces this placeholder once the wire contract is final.
-        client: LiveRemoteClient(codec: UnavailableRemoteCodec()),
+        client: LiveRemoteClient(codec: WireCodec()),
         credentials: KeychainCredentialStore()
     )
 

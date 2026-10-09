@@ -72,7 +72,7 @@ private struct SessionSidebar: View {
             ContentUnavailableView(
                 "No Shared Sessions",
                 systemImage: "terminal",
-                description: Text("Run /remote in a RustCode session on \(store.host?.name ?? "your Mac") to share it.")
+                description: Text("Connected to \(store.host?.name ?? "the host"). Sessions appear here once they are shared with /\u{2060}remote.")
             )
         case .connecting:
             ProgressView("Connecting…")
