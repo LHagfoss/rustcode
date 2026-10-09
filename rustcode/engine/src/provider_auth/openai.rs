@@ -114,6 +114,8 @@ pub(super) async fn login(
     config: &AppConfig,
     selected_account: Option<&str>,
     login_guard: tokio::sync::OwnedMutexGuard<()>,
+    mode: super::LoginMode,
+    progress: Option<tokio::sync::mpsc::Sender<String>>,
 ) -> Result<AuthCommandResult> {
     if !config
         .providers
@@ -192,19 +194,31 @@ pub(super) async fn login(
         authorize
             .query_pairs_mut()
             .append_pair("agent_name_hint", "RustCode");
-    } else if let Some(row) = prior.as_ref() {
-        if let Ok(id_token) = super::secret_store()
+    }
+    // What the user is shown to open by hand; the saved identity token goes
+    // to the browser only.
+    let shown = authorize.clone();
+    if let Some(row) = prior.as_ref()
+        && let Ok(id_token) = super::secret_store()
             .get("openai", &row.account, "id-token")
             .await
-        {
-            authorize
-                .query_pairs_mut()
-                .append_pair("id_token_hint", &id_token);
-        }
+    {
+        authorize
+            .query_pairs_mut()
+            .append_pair("id_token_hint", &id_token);
     }
 
-    open::that_detached(authorize.as_str())
-        .context("could not open the system browser for ChatGPT sign-in")?;
+    let opened = mode.opens_browser()
+        && match open::that_detached(authorize.as_str()) {
+            Ok(()) => true,
+            Err(error) if mode == super::LoginMode::Browser => {
+                return Err(error).context("could not open the system browser for ChatGPT sign-in");
+            }
+            Err(_) => false,
+        };
+    if !opened && let Some(progress) = &progress {
+        let _ = progress.try_send(headless_instructions(&shown, port));
+    }
     let callback = timeout(FLOW_TIMEOUT, receive_callback(listener))
         .await
         .map_err(|_| anyhow!("ChatGPT sign-in timed out; run /login openai to try again"))??;
@@ -249,6 +263,14 @@ pub(super) async fn login(
     ))
     .await
     .context("ChatGPT login task stopped while completing sign-in")?
+}
+
+/// The sign-in ends on this machine's loopback listener, so a browser on
+/// another machine reaches it only through a forwarded port.
+fn headless_instructions(authorize: &url::Url, port: u16) -> String {
+    format!(
+        "ChatGPT sign-in\nOpen this URL in a browser:\n{authorize}\nSign-in returns to http://127.0.0.1:{port} on this machine. From another machine, forward that port first: ssh -L {port}:127.0.0.1:{port} <this-host>\nWaiting for sign-in…"
+    )
 }
 
 /// Refresh an already connected account's current model catalog without
@@ -1019,6 +1041,16 @@ fn unix_now() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_instructions_name_the_url_and_the_callback_port() {
+        let url =
+            url::Url::parse("https://auth.openai.com/api/accounts/authorize?state=s").unwrap();
+        let text = headless_instructions(&url, 49152);
+        assert!(text.contains(url.as_str()), "{text}");
+        assert!(text.contains("http://127.0.0.1:49152"), "{text}");
+        assert!(text.contains("ssh -L 49152:127.0.0.1:49152"), "{text}");
+    }
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
     use tokio::net::TcpStream;

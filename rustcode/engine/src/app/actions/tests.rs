@@ -1381,6 +1381,8 @@ fn provider_auth_recall_only_keeps_well_formed_non_secret_commands() {
         "/refresh",
         "/refresh openai",
         "/logout openai",
+        "/login openai --headless",
+        "/login --browser openai new",
     ] {
         assert!(
             super::enter::is_safe_provider_auth_recall(command, &config),
@@ -1404,6 +1406,8 @@ fn provider_auth_recall_only_keeps_well_formed_non_secret_commands() {
         "/logout openai QWNjb3VudElE",
         "/logout unknown-provider",
         "/logout openai extra secret",
+        "/logout openai --headless",
+        "/login openai --headless sk-live-secret",
     ] {
         assert!(
             !super::enter::is_safe_provider_auth_recall(command, &config),

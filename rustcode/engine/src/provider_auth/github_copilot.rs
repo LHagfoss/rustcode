@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 pub(super) const PROVIDER: &str = "github-copilot";
 const ENDPOINT: &str = "https://api.githubcopilot.com";
 const DEVICE_URL: &str = "https://github.com/login/device/code";
+const DEVICE_PAGE: &str = "https://github.com/login/device";
 const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const IDENTITY_URL: &str = "https://api.github.com/user";
 const USER_AGENT: &str = concat!("rustcode/", env!("CARGO_PKG_VERSION"));
@@ -206,6 +207,7 @@ async fn device_login(
     client_id: &str,
     cancel: &CancellationToken,
     sender: &Option<mpsc::Sender<String>>,
+    mode: super::LoginMode,
 ) -> Result<(SecretTokens, Vec<String>)> {
     let response = tokio::select! {
         _ = cancel.cancelled() => bail!("GitHub sign-in was cancelled"),
@@ -221,7 +223,7 @@ async fn device_login(
         .json()
         .await
         .map_err(|_| anyhow!("GitHub device authorization response was invalid"))?;
-    if device.verification_uri != "https://github.com/login/device"
+    if device.verification_uri != DEVICE_PAGE
         || !valid_user_code(&device.user_code)
         || device.device_code.is_empty()
         || device.expires_in == 0
@@ -235,7 +237,7 @@ async fn device_login(
             device.verification_uri, device.user_code
         ),
     );
-    let _ = open::that_detached(&device.verification_uri);
+    open_device_page(mode)?;
     let token = poll_device(client, TOKEN_URL, client_id, device, cancel).await?;
     let scopes = token
         .scope
@@ -247,6 +249,20 @@ async fn device_login(
         .collect();
     Ok((token.into_tokens()?, scopes))
 }
+/// Open GitHub's device page when the mode asks for a browser. Only a
+/// required browser that cannot be opened is an error: the page and the code
+/// are on screen either way.
+fn open_device_page(mode: super::LoginMode) -> Result<()> {
+    if !mode.opens_browser() {
+        return Ok(());
+    }
+    let opened = open::that_detached(DEVICE_PAGE);
+    if mode == super::LoginMode::Browser {
+        opened.context("could not open the system browser for GitHub sign-in")?;
+    }
+    Ok(())
+}
+
 fn valid_user_code(code: &str) -> bool {
     code.len() >= 6
         && code.len() <= 16
@@ -283,14 +299,16 @@ async fn gh_token(program: &std::ffi::OsStr, cancel: &CancellationToken) -> Resu
 async fn gh_login(
     cancel: &CancellationToken,
     sender: &Option<mpsc::Sender<String>>,
+    mode: super::LoginMode,
 ) -> Result<SecretTokens> {
-    gh_login_using(std::ffi::OsStr::new("gh"), cancel, sender).await
+    gh_login_using(std::ffi::OsStr::new("gh"), cancel, sender, mode).await
 }
 
 async fn gh_login_using(
     program: &std::ffi::OsStr,
     cancel: &CancellationToken,
     sender: &Option<mpsc::Sender<String>>,
+    mode: super::LoginMode,
 ) -> Result<SecretTokens> {
     if let Some(access_token) = gh_token(program, cancel).await? {
         return Ok(SecretTokens {
@@ -302,10 +320,15 @@ async fn gh_login_using(
     }
     progress(
         sender,
-        "GitHub Copilot sign-in\nStarting GitHub CLI browser authorization… Press Esc to cancel."
-            .into(),
+        "GitHub Copilot sign-in\nStarting GitHub CLI authorization… Press Esc to cancel.".into(),
     );
-    let mut child = tokio::process::Command::new(program)
+    let mut command = tokio::process::Command::new(program);
+    // Whether a browser opens is RustCode's decision, made once the code is
+    // known, so gh is given a browser that does nothing.
+    #[cfg(unix)]
+    command.env("GH_BROWSER", "true");
+    let mut opened = cfg!(not(unix));
+    let mut child = command
         .args([
             "auth",
             "login",
@@ -343,6 +366,9 @@ async fn gh_login_using(
             .split_whitespace()
             .find(|word| word.contains('-') && valid_user_code(word))
         {
+            if !std::mem::replace(&mut opened, true) {
+                open_device_page(mode)?;
+            }
             progress(
                 sender,
                 format!(
@@ -387,6 +413,7 @@ pub(super) async fn login(
     requested: Option<&str>,
     caller_cancel: &CancellationToken,
     sender: Option<mpsc::Sender<String>>,
+    mode: super::LoginMode,
 ) -> Result<AuthCommandResult> {
     let endpoint = ensure_enabled(config)?.to_owned();
     if requested != Some("new") {
@@ -419,9 +446,9 @@ pub(super) async fn login(
         bail!("RUSTCODE_COPILOT_CLIENT_ID is invalid");
     }
     let (tokens, scopes) = if let Some(id) = client_id.as_deref() {
-        device_login(&client, id, &cancel, &sender).await?
+        device_login(&client, id, &cancel, &sender, mode).await?
     } else {
-        (gh_login(&cancel, &sender).await?, Vec::new())
+        (gh_login(&cancel, &sender, mode).await?, Vec::new())
     };
     #[derive(Deserialize)]
     struct Identity {
@@ -1265,15 +1292,21 @@ mod tests {
 marker="${0}.authorized"
 case "$2" in
   token) if test -f "$marker"; then printf 'fake-gh-secret'; exit 0; else exit 1; fi ;;
-  login) if read value; then exit 3; fi; printf '! First copy your one-time code: ABCD-EFGH\n' >&2; touch "$marker"; exit 0 ;;
+  login) if read value; then exit 3; fi; test "$GH_BROWSER" = true || exit 5; printf '! First copy your one-time code: ABCD-EFGH\n' >&2; touch "$marker"; exit 0 ;;
 esac
 exit 4
 "#).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         let (sender, mut progress) = mpsc::channel(8);
-        let tokens = gh_login_using(path.as_os_str(), &CancellationToken::new(), &Some(sender))
-            .await
-            .unwrap();
+        // Headless, so the test opens no browser; gh is told not to either.
+        let tokens = gh_login_using(
+            path.as_os_str(),
+            &CancellationToken::new(),
+            &Some(sender),
+            super::super::LoginMode::Headless,
+        )
+        .await
+        .unwrap();
         assert_eq!(tokens.access_token, "fake-gh-secret");
         let mut messages = Vec::new();
         while let Ok(message) = progress.try_recv() {

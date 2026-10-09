@@ -1275,11 +1275,15 @@ pub(super) fn is_provider_auth_command(input: &str) -> bool {
 }
 
 pub(super) fn is_safe_provider_auth_recall(input: &str, config: &crate::config::AppConfig) -> bool {
-    let words = input.split_whitespace().collect::<Vec<_>>();
+    let mut words = input.split_whitespace().collect::<Vec<_>>();
     let Some(command) = words.first() else {
         return false;
     };
     let command = command.to_ascii_lowercase();
+    // How a sign-in reaches the browser is no part of what it signs in to.
+    if command == "/login" {
+        words.retain(|word| !crate::provider_auth::is_login_mode_flag(word));
+    }
     let provider = |value: &str| {
         !value.is_empty()
             && value.len() <= 64
