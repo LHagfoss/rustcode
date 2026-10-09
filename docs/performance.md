@@ -4,6 +4,9 @@
 rounds, tool calls, context bytes, replays and supplied token usage. Provider
 wall time includes network waiting. Tool work is summed execution time and may
 overlap; harness time subtracts provider and tool wall time, never tool work.
+Time a turn waits for the user to answer `ask_question` or an approval prompt
+is `user_wait_us` (`User wait` in the report): it is part of `wall_us` but not
+of tool wall time, tool work or harness time.
 TTFT observes generated deltas. Persistence time measures enqueue work, not
 flush latency. Missing provider facts remain unavailable. The report is not a
 correctness score. Use `rustcode bench --report file --baseline baseline`.

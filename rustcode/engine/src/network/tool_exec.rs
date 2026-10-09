@@ -264,6 +264,7 @@ pub(crate) async fn ask_user_question(
         } else {
             false
         };
+        s.exclude_user_wait(user_wait);
         if pending_changed || status_changed {
             s.request_redraw();
         }
@@ -766,6 +767,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let start_wait = std::time::Instant::now();
         let rx_res = rx.await;
         user_wait_dur = start_wait.elapsed();
+        state.lock().await.exclude_user_wait(user_wait_dur);
 
         if let Ok(crate::app::ToolConfirmationResponse::ApproveAndRemember(prefix)) = &rx_res
             && name == "run_command"
@@ -1516,7 +1518,9 @@ async fn execute_tool_batch_validated(
             }
         }
         let mut result = tool_result_from_execution(&executed_name, args, execution, final_diff);
-        result.metadata.execution_us = crate::benchmark::elapsed_us(execution_started);
+        // Time the call waited on the user is not execution time (#1891).
+        result.metadata.execution_us = crate::benchmark::elapsed_us(execution_started)
+            .saturating_sub(crate::benchmark::duration_us(user_wait));
         result.metadata.workspace_generation = state
             .lock()
             .await

@@ -225,7 +225,15 @@ impl InteractivePolicy {
                 "Awaiting user batch confirmation for {} tools",
                 tool_calls.len()
             );
-            approved = match rx.await {
+            let wait_started = std::time::Instant::now();
+            let response = rx.await;
+            {
+                let wait = wait_started.elapsed();
+                let mut state = state.lock().await;
+                state.approval_wait += wait;
+                state.exclude_user_wait(wait);
+            }
+            approved = match response {
                 Ok(crate::app::ToolConfirmationResponse::Approve) => {
                     crate::dbg_log!("User approved batch tool calls");
                     true
@@ -525,6 +533,10 @@ mod tests {
             "the exact current policy batch ID should resolve"
         );
         assert!(!task.await.expect("policy task should finish"));
+        assert!(
+            state.lock().await.approval_wait > std::time::Duration::ZERO,
+            "the time the prompt was open is kept for the turn's user-wait total"
+        );
     }
 
     #[tokio::test]

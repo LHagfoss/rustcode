@@ -42,6 +42,11 @@ does the same for every block, and `ctrl+shift+o` steps one entry at a time.
 The row under the transcript names the state of the turn (`Generating`,
 `Thinking`, `Working`, `Queued`) with the model and the turn's token total. It
 never names a tool. Approvals and questions have separate waiting states.
+The clock on the row, and the `Worked for` line it becomes, count the turn
+from the submitted prompt, including model and tool time but not the time an
+approval or a question waited for the user: the row is hidden while one is
+open and the clock resumes where it stopped. `performance.json` reports that
+wait on its own as `user_wait_us`.
 
 Background tasks are counted in the footer (`2 tasks · 1 done`), where `done`
 is a result the model has not read yet. Clicking the counter, or `/tasks`

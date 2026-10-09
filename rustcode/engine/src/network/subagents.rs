@@ -554,7 +554,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         })
                     });
                 let tool_started = std::time::Instant::now();
-                let (execution, diff_opt, _user_wait) = if crate::tools::is_agent_tool(name) {
+                let (execution, diff_opt, user_wait) = if crate::tools::is_agent_tool(name) {
                     let execution = Box::pin(handle_agent_tool_for_parent(
                         client,
                         state,
@@ -619,9 +619,12 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     let mut s = state.lock().await;
                     if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == agent_id) {
                         let elapsed = crate::benchmark::elapsed_us(tool_started);
+                        let user_wait = crate::benchmark::duration_us(user_wait);
+                        let work = elapsed.saturating_sub(user_wait);
                         agent.performance.tool_calls += 1;
-                        agent.performance.tool_wall_us += elapsed;
-                        agent.performance.tool_work_us += elapsed;
+                        agent
+                            .performance
+                            .record_tool_batch(elapsed, work, user_wait);
                     }
                 }
                 let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content)

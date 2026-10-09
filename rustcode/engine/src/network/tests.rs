@@ -3386,6 +3386,92 @@ async fn question_prompt_transitions_invalidate_render_metrics_once() {
 }
 
 #[tokio::test]
+async fn question_answered_after_a_delay_is_user_wait_not_tool_time() {
+    let delay = std::time::Duration::from_millis(300);
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let turn_started = std::time::Instant::now();
+    state.lock().await.current_turn_started_at = Some(turn_started);
+    let answerer = tokio::spawn({
+        let state = Arc::clone(&state);
+        async move {
+            let response = loop {
+                if let Some(response) = state.lock().await.question_response.take() {
+                    break response;
+                }
+                tokio::task::yield_now().await;
+            };
+            tokio::time::sleep(delay).await;
+            response
+                .send("User selected: Proceed".to_owned())
+                .expect("question task alive");
+        }
+    });
+
+    let client = reqwest::Client::new();
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut compile_dirty = false;
+    let mut compile_cache = None;
+    let mut user_wait = std::time::Duration::ZERO;
+    let batch_started = std::time::Instant::now();
+    let results = execute_tool_batch(
+        &client,
+        &state,
+        &cancel_token,
+        &[crate::tools::ToolCall {
+            name: "ask_question".to_owned(),
+            arguments: serde_json::json!({
+                "question": "Continue?",
+                "options": ["Proceed", "Cancel"]
+            }),
+            call_id: Some("question".to_owned()),
+        }],
+        true,
+        &None,
+        &mut compile_dirty,
+        &mut compile_cache,
+        &mut user_wait,
+        None,
+    )
+    .await;
+    let batch_us = crate::benchmark::elapsed_us(batch_started);
+    answerer.await.expect("answer task should finish");
+
+    assert!(results[0].metadata.success);
+    assert!(user_wait >= delay, "{user_wait:?}");
+    let delay_us = crate::benchmark::duration_us(delay);
+    assert!(
+        results[0].metadata.execution_us < delay_us,
+        "the wait must not be execution time: {}",
+        results[0].metadata.execution_us
+    );
+
+    // What the turn records for this batch (`turn.performance`).
+    let mut performance = crate::benchmark::TurnPerformance {
+        wall_us: batch_us,
+        ..Default::default()
+    };
+    performance.record_tool_batch(
+        batch_us,
+        results[0].metadata.execution_us,
+        crate::benchmark::duration_us(user_wait),
+    );
+    assert!(performance.user_wait_us >= delay_us);
+    assert!(performance.tool_wall_us < delay_us);
+    assert!(performance.tool_work_us < delay_us);
+    assert_eq!(performance.harness_us(), 0);
+
+    // The `Working` row clock and `Worked for` read this start: the wait is
+    // taken out of it.
+    let clock_start = state
+        .lock()
+        .await
+        .current_turn_started_at
+        .expect("turn clock");
+    assert!(clock_start >= turn_started + delay);
+    assert!(clock_start <= std::time::Instant::now());
+}
+
+#[tokio::test]
 async fn tool_confirmation_cleanup_invalidates_render_metrics_once() {
     let mut app = AppState::new();
     app.agent_mode = crate::config::AgentMode::Build;
