@@ -550,30 +550,47 @@ pub fn to_system_message_with_budget(
     (Some(output.trim_end().to_string()), dropped)
 }
 
+/// How every refusal of a fact's content starts, so the tool layer can report
+/// it as a validation error rather than an internal one.
+const REFUSAL_PREFIX: &str = "project memory refuses";
+
+pub(crate) fn is_refusal(error: &str) -> bool {
+    error.starts_with(REFUSAL_PREFIX)
+}
+
+/// Refuse a literal credential, not a note about one: naming the environment
+/// variable or file a credential comes from is what memory is for. The error
+/// names the rule that matched and never the text it matched.
 fn safe_fact(fact: &MemoryFact) -> Result<(), String> {
     let combined = format!(
         "{} {} {} {}",
         fact.category, fact.key, fact.value, fact.source
-    )
-    .to_lowercase();
-    if combined.contains("password")
-        || combined.contains("secret")
-        || combined.contains("api_key")
-        || combined.contains("access_token")
-        || combined.contains("bearer ")
-        || combined.contains("token=")
-        || combined.contains("token:")
-        || combined.contains("private key")
-        || combined.contains("-----begin")
-        || combined.contains("ghp_")
-        || combined.contains("github_pat_")
-        || combined.contains("sk-")
-        || combined.contains("xoxb-")
-        || combined.contains("akia")
-        || combined.contains("agents.md")
-        || combined.contains("claude.md")
-    {
-        return Err("project memory refuses secrets and AGENTS.md/CLAUDE.md facts".to_string());
+    );
+    let lowered = combined.to_lowercase();
+    if lowered.contains("agents.md") || lowered.contains("claude.md") {
+        return Err(format!(
+            "{REFUSAL_PREFIX} AGENTS.md/CLAUDE.md facts (rule: instruction file name)"
+        ));
+    }
+    // The key and value are an assignment of their own. A lone word under a
+    // credential-named key is the credential, as in an env file, unless it is
+    // shaped like the name of an environment variable.
+    let value = fact.value.trim();
+    let variable_name = value.chars().all(|character| {
+        character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+    });
+    let separator = if value.contains(char::is_whitespace) || variable_name {
+        ": "
+    } else {
+        "="
+    };
+    let rule = crate::network::output::literal_credential_rule(&combined).or_else(|| {
+        crate::network::output::literal_credential_rule(&format!("{}{separator}{value}", fact.key))
+    });
+    if let Some(rule) = rule {
+        return Err(format!(
+            "{REFUSAL_PREFIX} a literal credential (rule: {rule}); name where it comes from instead, such as an environment variable or a file path"
+        ));
     }
     Ok(())
 }
@@ -711,13 +728,54 @@ mod tests {
             )
             .is_err()
         );
-        assert!(
-            upsert(
-                Some(root.path()),
-                fact("environment", "api_key", "do not save", "user")
-            )
-            .is_err()
-        );
+        for (key, value) in [
+            ("api_key", "0a1b2c3d4e5f"),
+            ("password", "hunter"),
+            ("deploy", "export DEPLOY_TOKEN=abcdefgh before running"),
+            ("deploy", "the password is hunter2"),
+            ("ci", "curl -H 'Authorization: Bearer abc123def' https://ci"),
+            ("openai", "key sk-proj-0a1b2c3d4e5f6g7h"),
+            ("github", "ghp_0123456789abcdefghij"),
+            ("ssh", "-----BEGIN OPENSSH PRIVATE KEY-----"),
+        ] {
+            let error = upsert(Some(root.path()), fact("environment", key, value, "user"))
+                .expect_err(value);
+            assert!(is_refusal(&error), "{error}");
+            assert!(error.contains("(rule: "), "{error}");
+            // The rule is named; the text that matched it is not repeated.
+            assert!(
+                !value
+                    .split_whitespace()
+                    .any(|word| word.len() > 5 && error.contains(word)),
+                "{error}"
+            );
+        }
+        assert!(load(Some(root.path())).unwrap().facts.is_empty());
+    }
+
+    #[test]
+    fn memory_stores_notes_that_name_a_credential_source() {
+        let root = tempfile::tempdir().unwrap();
+        // The note refused in session 01a11ffc8dd0: no credential is in it.
+        let session_note = "Time-logging MCP at /Users/lagos/code/worklog_mcp (Rust, rmcp 3.2, stdio). Registered in ~/.config/rustcode/config.toml as [[mcp_servers]] name=\"worklog\". Token via SOLIDTIME_API_KEY, or WORKLOG_ENV_FILE=.env containing TOKEN. Times are Europe/Oslo local in/out.";
+        let notes = [
+            ("worklog_mcp", session_note),
+            ("api_key", "SOLIDTIME_API_KEY"),
+            ("solidtime token", "read from $SOLIDTIME_API_KEY"),
+            ("db password", "/run/secrets/db_password"),
+            (
+                "deploy",
+                "export TOKEN=$DEPLOY_TOKEN, then run the task-runner",
+            ),
+            (
+                "skills",
+                "risk-review and ask-first are skills; max_tokens=4096",
+            ),
+        ];
+        for (key, value) in notes {
+            upsert(Some(root.path()), fact("project", key, value, "user")).expect(value);
+        }
+        assert_eq!(load(Some(root.path())).unwrap().facts.len(), notes.len());
     }
 
     #[test]

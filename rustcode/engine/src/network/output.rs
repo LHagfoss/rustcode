@@ -51,16 +51,92 @@ pub(crate) fn sanitize_tool_output(result: &str) -> String {
             let quoted = !found[3].is_empty();
             // `KEY=value` with nothing around it is how env files and shell
             // assignments are written, where a bare word is the secret itself.
-            let env_style = separator == "=" && !value.ends_with([',', ';', ')']);
-            let keep = is_credential_reference(value)
-                || (!quoted && !env_style && is_code_expression(value));
-            if keep {
-                found[0].to_owned()
-            } else {
+            if is_literal_assignment(separator, quoted, value) {
                 format!("{}{}[REDACTED]{}", &found[1], &found[3], &found[5])
+            } else {
+                found[0].to_owned()
             }
         })
         .into_owned()
+}
+
+/// Whether the value assigned to a credential name can be the credential
+/// itself rather than a reference to it or a piece of code.
+fn is_literal_assignment(separator: &str, quoted: bool, value: &str) -> bool {
+    let env_style = separator == "=" && !value.ends_with([',', ';', ')']);
+    !is_credential_reference(value) && (quoted || env_style || !is_code_expression(value))
+}
+
+/// Like `SENSITIVE_ASSIGNMENT`, but the credential word may end a longer name
+/// (`SOLIDTIME_API_KEY=`) and prose may assign with "is". Nothing is rewritten
+/// from this pattern, so it can afford to be wider.
+static NOTE_ASSIGNMENT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)\b[\w.-]*?(?:api[_ -]?key|access[_ -]?key|secret[_ -]?key|private[_ -]?key|access[_ -]?token|authorization|password|passwd|secret|token|cookie)\b(\s*[:=]\s*|\s+is\s+)(["']?)([^\s"'`]+)"#,
+    )
+    .expect("note assignment regex")
+});
+static BEARER_VALUE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"(?i)\bbearer\s+([^\s"'`]+)"#).expect("bearer value regex")
+});
+/// Prefixes that providers put on issued credentials. Anchored at a word
+/// start and followed by a key-length body, so `task-`, `risk-` or a word
+/// containing `akia` is not one.
+static PROVIDER_TOKEN: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r"\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16})",
+    )
+    .expect("provider token regex")
+});
+
+/// Name the rule under which `text` holds a literal credential, for stores
+/// that refuse such text instead of redacting it. Uses the same distinction
+/// as `sanitize_tool_output`: text that names where a credential comes from
+/// (an environment variable, `$VAR`, a file path) is not a credential.
+pub(crate) fn literal_credential_rule(text: &str) -> Option<&'static str> {
+    if text.contains("-----BEGIN ") {
+        return Some("PEM block");
+    }
+    if PROVIDER_TOKEN.is_match(text) {
+        return Some("provider token prefix");
+    }
+    let header = AUTH_HEADER.captures_iter(text).any(|found| {
+        let value = &found[3];
+        !is_credential_reference(value) && (found.get(2).is_some() || !is_code_expression(value))
+    });
+    if header {
+        return Some("authorization header");
+    }
+    let assignment = NOTE_ASSIGNMENT.captures_iter(text).any(|found| {
+        let (separator, value) = (found[1].trim(), &found[3]);
+        !is_path_reference(value) && is_literal_assignment(separator, !found[2].is_empty(), value)
+    });
+    if assignment {
+        return Some("credential assignment");
+    }
+    let bearer = BEARER_VALUE
+        .captures_iter(text)
+        .any(|found| !is_credential_reference(&found[1]) && !is_code_expression(&found[1]));
+    bearer.then_some("bearer token")
+}
+
+/// A file a credential is read from. A base64 secret can start with `/`, so
+/// an absolute path has to read as one: short plain segments, at least two.
+fn is_path_reference(value: &str) -> bool {
+    let path = value.trim_end_matches([',', ';', ')', '.', '/']);
+    if path.starts_with("~/") || path.starts_with("./") || path.starts_with("../") {
+        return true;
+    }
+    path.strip_prefix('/').is_some_and(|rest| {
+        rest.contains('/')
+            && rest.split('/').all(|segment| {
+                !segment.is_empty()
+                    && segment.len() <= 32
+                    && segment.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+                    })
+            })
+    })
 }
 
 /// A variable, placeholder or template that stands in for a credential.
@@ -311,6 +387,53 @@ token usage: 1234
             "    cookie: u64,",
         ] {
             assert_eq!(sanitize_tool_output(line), line);
+        }
+    }
+
+    #[test]
+    fn literal_credentials_are_named_by_rule_without_the_value() {
+        for (text, rule) in [
+            ("SOLIDTIME_API_KEY=st_0a1b2c3d4e", "credential assignment"),
+            ("export GITHUB_TOKEN=abcdefgh", "credential assignment"),
+            ("password: hunter2", "credential assignment"),
+            ("the password is hunter2", "credential assignment"),
+            ("token: \"abcdef\"", "credential assignment"),
+            (
+                "aws secret=/Xk3abcdefghijklmnopqrstuvwxyz0123456789AB",
+                "credential assignment",
+            ),
+            ("Authorization: Bearer abcdef", "authorization header"),
+            (
+                "send Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0 with it",
+                "bearer token",
+            ),
+            ("key sk-live-0a1b2c3d4e5f", "provider token prefix"),
+            ("ghp_0123456789abcdefghij", "provider token prefix"),
+            ("xoxb-1234-5678-abcdef", "provider token prefix"),
+            ("AKIAIOSFODNN7EXAMPLE", "provider token prefix"),
+            ("-----BEGIN OPENSSH PRIVATE KEY-----", "PEM block"),
+        ] {
+            assert_eq!(literal_credential_rule(text), Some(rule), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn text_that_names_a_credential_source_is_not_a_literal_credential() {
+        for text in [
+            "Token via SOLIDTIME_API_KEY, or WORKLOG_ENV_FILE=.env containing TOKEN.",
+            "export TOKEN=$SOLIDTIME_API_KEY",
+            "api key: SOLIDTIME_API_KEY",
+            "token: ~/.config/solidtime/token",
+            "password=/run/secrets/db_password",
+            "Authorization: Bearer $T",
+            "uses a bearer token from the keychain",
+            "the secret is stored in the keychain",
+            "set max_tokens=4096; token_count: 12; tokens: 1200",
+            "task-runner, risk-assessment-notes and ask-before-edit are skills",
+            "Nakiajarvi is the test fixture city",
+            "the private key lives in ~/.ssh/id_ed25519",
+        ] {
+            assert_eq!(literal_credential_rule(text), None, "{text:?}");
         }
     }
 
