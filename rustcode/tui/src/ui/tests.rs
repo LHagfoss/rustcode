@@ -1334,6 +1334,53 @@ fn context_and_settings_panels_survive_controller_tool_events_and_completion() {
 }
 
 #[test]
+fn remote_panel_uses_the_full_viewport_and_restores_the_composer_on_close() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.input_buffer = "saved draft".into();
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "Remote",
+        content: (0..60)
+            .map(|row| format!("Remote row {row:02}  content"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    });
+    let mut transcript = TranscriptState::default();
+    for height in [24, 48] {
+        let rendered =
+            render_state_to_text_with_transcript(&mut state, &mut transcript, 80, height);
+        assert_eq!(
+            rendered.lines().nth(1).unwrap().trim(),
+            "Remote",
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("Remote row {:02}", height - 6)),
+            "{rendered}"
+        );
+        assert_eq!(
+            transcript.panel_selection_area.unwrap(),
+            ratatui::layout::Rect::new(2, 3, 76, height - 5)
+        );
+        assert!(transcript.tasks_chip.is_none());
+        assert!(!rendered.contains("saved draft"));
+    }
+    state.modal_scroll_row = 12;
+    let scrolled = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+    assert!(
+        scrolled.contains("Remote row 12") && !scrolled.contains("Remote row 00"),
+        "{scrolled}"
+    );
+
+    state.command_panel = None;
+    state.modal_scroll_row = 0;
+    let closed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+    assert!(closed.contains("saved draft"), "{closed}");
+    assert!(transcript.panel_selection_area.is_none());
+    assert_eq!(state.input_buffer, "saved draft");
+}
+
+#[test]
 fn command_output_panel_scrolls_wrapped_content_on_short_terminals() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();

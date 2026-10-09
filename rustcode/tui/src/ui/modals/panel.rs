@@ -567,6 +567,23 @@ const MIN_TABLE_ROWS: usize = 2;
 /// layer reserves, so a panel never paints over the transcript (#1588).
 pub(in crate::ui) const COMMAND_PANEL_HEIGHT: u16 = 18;
 
+/// Remote pairing needs the entire viewport for its QR code and quiet zone.
+/// Other command output keeps its bounded position above the composer.
+pub(in crate::ui) fn command_panel_area(
+    f: &Frame,
+    state: &RenderSnapshot,
+    input_area: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    if state
+        .command_panel()
+        .is_some_and(|panel| panel.title == "Remote")
+    {
+        f.area()
+    } else {
+        input_anchor_rect(f, input_area, COMMAND_PANEL_HEIGHT)
+    }
+}
+
 /// One `label<gap>value` row recovered from a raw panel line.
 struct PanelRow<'a> {
     /// Leading whitespace, kept so an indented table keeps its indent.
@@ -816,7 +833,7 @@ fn percentage_prefix(value: &str) -> Option<f64> {
         .ok()
 }
 
-/// Scrollable command output uses the same bounded surface as the other panels.
+/// Scrollable command output, with a full-height surface for remote pairing.
 ///
 /// The panel is an output surface, not a picker: it has no rows to activate, so
 /// it carries no selection marker and no selection state, and the footer below
@@ -829,7 +846,7 @@ pub(in crate::ui) fn render_command_panel(
     let Some(panel) = state.command_panel() else {
         return;
     };
-    let area = input_anchor_rect(f, input_area, COMMAND_PANEL_HEIGHT);
+    let area = command_panel_area(f, state, input_area);
     let inner = render_padded_panel(f, area).inner(Margin {
         vertical: 0,
         horizontal: 2,
@@ -851,7 +868,14 @@ pub(in crate::ui) fn render_command_panel(
         chunks[0],
     );
     let mut lines = render_panel_content(&panel.content, inner.width as usize);
-    paint_panel_line_backgrounds(&mut lines, COLOR_PANEL());
+    // Use the panel as the fallback; QR spans keep their explicit white ground.
+    let background = Style::default().bg(COLOR_PANEL());
+    for line in &mut lines {
+        line.style = background.patch(line.style);
+        for span in &mut line.spans {
+            span.style = background.patch(span.style);
+        }
+    }
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })

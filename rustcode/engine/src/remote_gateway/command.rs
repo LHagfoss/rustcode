@@ -129,7 +129,7 @@ pub enum QrStyle {
 pub fn format_offer(offer: &OfferDetails, style: QrStyle) -> String {
     let panel = style == QrStyle::Panel;
     let mut blocks = Vec::new();
-    if offer.loopback_only {
+    if offer.loopback_only && !panel {
         blocks.push(loopback_guidance(panel));
     }
     let code = match style {
@@ -147,6 +147,11 @@ pub fn format_offer(offer: &OfferDetails, style: QrStyle) -> String {
         offer.code.expose()
     );
     match code {
+        Some(code) if panel => {
+            blocks.push(format!("{lifetime}\n{by_hand}"));
+            blocks.push(code);
+            blocks.push("Scan the QR in the app, or enter the address and code above.".to_owned());
+        }
         Some(code) => {
             blocks.push(format!("{lifetime} Scan this code in the app:"));
             blocks.push(code);
@@ -156,6 +161,9 @@ pub fn format_offer(offer: &OfferDetails, style: QrStyle) -> String {
             "{lifetime}\n  QR payload: {}\n{by_hand}",
             offer.qr_payload.expose()
         )),
+    }
+    if offer.loopback_only && panel {
+        blocks.push(loopback_guidance(true));
     }
     blocks.push("Asking for pairing details again replaces this challenge.".to_owned());
     blocks.join("\n\n")
@@ -182,7 +190,7 @@ pub async fn show_pairing_details(
     state.lock().await.update_command_panel_if_current(
         title,
         generation,
-        format!("{header}\n\n{details}"),
+        format!("{details}\n\n{header}"),
     );
 }
 
@@ -336,6 +344,13 @@ mod tests {
         assert!(!lan.contains("loopback"));
         // The drawing replaces the raw payload, which carries the credential.
         assert!(!lan.contains("credential-value"));
+
+        let local_panel = format_offer(&offer("127.0.0.1"), QrStyle::Panel);
+        let qr_start = local_panel.find(qr::PANEL_ROW_MARK).unwrap();
+        assert!(local_panel.find("address:").unwrap() < qr_start);
+        assert!(local_panel.find("code:").unwrap() < qr_start);
+        assert!(local_panel[..qr_start].lines().count() <= 5);
+        assert!(local_panel.find("The gateway listens").unwrap() > qr_start);
 
         let local = format_offer(&offer("127.0.0.1"), QrStyle::Text);
         assert!(local.starts_with("The gateway listens on this machine only"));
