@@ -1,0 +1,334 @@
+//! Handshake frames: the only frames the gateway itself understands.
+//!
+//! NOTE: these are deliberately self-contained. They will be folded into the
+//! versioned remote envelope when the protocol work (issue #1907) lands; until
+//! then they are the contract the first frame on every connection follows.
+//! Everything after a successful handshake is opaque text handed to
+//! [`super::router::FrameRouter`].
+//!
+//! Every frame is one JSON object in one WebSocket text frame, tagged by
+//! `type`. Unknown fields are ignored so the envelope can add its own.
+
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// Version of the handshake frames below.
+pub const HANDSHAKE_PROTOCOL_VERSION: u32 = 1;
+
+/// Largest handshake frame accepted from an unauthenticated socket.
+pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 8 * 1024;
+
+/// A pairing credential, manual code or device token. Serializes as a plain
+/// string; `Debug` never prints the value, so it cannot reach logs or error
+/// strings through a derived impl.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// The raw value, for comparison, hashing or showing it to its owner.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Secret(<redacted>)")
+    }
+}
+
+/// Which representation of a pairing challenge the device presents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingMethod {
+    /// The high-entropy credential carried by the QR payload.
+    Credential,
+    /// The short code typed by hand next to the address.
+    Code,
+}
+
+/// First frame from a device. Anything else closes the connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HandshakeRequest {
+    /// Exchange a pairing challenge for a device token.
+    Pair {
+        protocol_version: u32,
+        method: PairingMethod,
+        secret: Secret,
+        /// A label chosen by the device. Never an identity.
+        device_name: String,
+    },
+    /// Present a device token obtained from an earlier `paired` frame.
+    Authenticate {
+        protocol_version: u32,
+        device_id: String,
+        token: Secret,
+    },
+}
+
+impl HandshakeRequest {
+    /// Parse a first frame. The version is checked before the shape, so a
+    /// newer client gets `unsupported_version` rather than `invalid_frame`.
+    pub fn parse(text: &str) -> Result<Self, HandshakeResponse> {
+        if text.len() > MAX_HANDSHAKE_FRAME_BYTES {
+            return Err(HandshakeResponse::error(
+                ErrorCode::FrameTooLarge,
+                "handshake frame is too large",
+            ));
+        }
+        let invalid = || {
+            HandshakeResponse::error(
+                ErrorCode::InvalidFrame,
+                "first frame must be a pair or authenticate request",
+            )
+        };
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|_| invalid())?;
+        let version = value.get("protocol_version").and_then(|v| v.as_u64());
+        if version.is_some_and(|version| version != u64::from(HANDSHAKE_PROTOCOL_VERSION)) {
+            return Err(HandshakeResponse::error(
+                ErrorCode::UnsupportedVersion,
+                format!("this gateway speaks protocol version {HANDSHAKE_PROTOCOL_VERSION}"),
+            ));
+        }
+        // serde_json errors can quote input; never forward them to the peer or a log.
+        serde_json::from_value(value).map_err(|_| invalid())
+    }
+}
+
+/// Frames the gateway sends during the handshake, and the error frame it
+/// uses for the rest of the connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HandshakeResponse {
+    /// Pairing succeeded. `token` is shown exactly once; the connection is
+    /// authenticated as this device from here on.
+    Paired {
+        protocol_version: u32,
+        gateway_id: String,
+        instance_id: String,
+        device_id: String,
+        device_name: String,
+        token: Secret,
+    },
+    /// The device token was accepted.
+    Authenticated {
+        protocol_version: u32,
+        gateway_id: String,
+        instance_id: String,
+        device_id: String,
+        device_name: String,
+    },
+    Error {
+        code: ErrorCode,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_secs: Option<u64>,
+    },
+}
+
+impl HandshakeResponse {
+    pub fn error(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::Error {
+            code,
+            message: message.into(),
+            retry_after_secs: None,
+        }
+    }
+
+    pub fn to_text(&self) -> String {
+        serde_json::to_string(self).expect("handshake frames always serialize")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    /// The frame is not JSON, not text, or not a known handshake request.
+    InvalidFrame,
+    FrameTooLarge,
+    UnsupportedVersion,
+    /// No frame arrived within the handshake deadline.
+    HandshakeTimeout,
+    /// Wrong, expired, exhausted or already used pairing secret. The cases
+    /// are deliberately indistinguishable.
+    PairingFailed,
+    /// Too many failed pairing attempts on this host; see `retry_after_secs`.
+    RateLimited,
+    /// Unknown device, revoked device or wrong token; indistinguishable.
+    Unauthorized,
+    /// The gateway is at its connection or device limit.
+    Busy,
+    /// The device was revoked while connected. Do not reconnect.
+    Revoked,
+    /// The device did not read fast enough and its queue overflowed.
+    SlowConsumer,
+    /// Nothing was received from the device for too long.
+    IdleTimeout,
+    ShuttingDown,
+    /// The gateway foundation shares no sessions yet.
+    NotImplemented,
+    Internal,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_wire_shapes_are_stable() {
+        let pair = HandshakeRequest::Pair {
+            protocol_version: 1,
+            method: PairingMethod::Code,
+            secret: Secret::new("1234-5678"),
+            device_name: "phone".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&pair).unwrap(),
+            r#"{"type":"pair","protocol_version":1,"method":"code","secret":"1234-5678","device_name":"phone"}"#
+        );
+        let authenticate = HandshakeRequest::Authenticate {
+            protocol_version: 1,
+            device_id: "0011223344556677".into(),
+            token: Secret::new("tok"),
+        };
+        assert_eq!(
+            serde_json::to_string(&authenticate).unwrap(),
+            r#"{"type":"authenticate","protocol_version":1,"device_id":"0011223344556677","token":"tok"}"#
+        );
+        assert_eq!(
+            HandshakeRequest::parse(&serde_json::to_string(&pair).unwrap()).unwrap(),
+            pair
+        );
+    }
+
+    #[test]
+    fn response_wire_shapes_are_stable() {
+        let paired = HandshakeResponse::Paired {
+            protocol_version: 1,
+            gateway_id: "gw".into(),
+            instance_id: "inst".into(),
+            device_id: "dev".into(),
+            device_name: "phone".into(),
+            token: Secret::new("tok"),
+        };
+        assert_eq!(
+            paired.to_text(),
+            r#"{"type":"paired","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","token":"tok"}"#
+        );
+        let authenticated = HandshakeResponse::Authenticated {
+            protocol_version: 1,
+            gateway_id: "gw".into(),
+            instance_id: "inst".into(),
+            device_id: "dev".into(),
+            device_name: "phone".into(),
+        };
+        assert_eq!(
+            authenticated.to_text(),
+            r#"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone"}"#
+        );
+        assert_eq!(
+            HandshakeResponse::error(ErrorCode::PairingFailed, "no").to_text(),
+            r#"{"type":"error","code":"pairing_failed","message":"no"}"#
+        );
+        let limited = HandshakeResponse::Error {
+            code: ErrorCode::RateLimited,
+            message: "wait".into(),
+            retry_after_secs: Some(30),
+        };
+        assert_eq!(
+            limited.to_text(),
+            r#"{"type":"error","code":"rate_limited","message":"wait","retry_after_secs":30}"#
+        );
+    }
+
+    fn code_of(result: Result<HandshakeRequest, HandshakeResponse>) -> ErrorCode {
+        match result {
+            Err(HandshakeResponse::Error { code, .. }) => code,
+            other => panic!("expected an error frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_other_versions_shapes_and_oversized_frames() {
+        assert_eq!(
+            code_of(HandshakeRequest::parse(
+                r#"{"type":"authenticate","protocol_version":2,"device_id":"d","token":"t"}"#
+            )),
+            ErrorCode::UnsupportedVersion
+        );
+        // A newer shape still reports the version, not a parse failure.
+        assert_eq!(
+            code_of(HandshakeRequest::parse(
+                r#"{"type":"hello","protocol_version":9}"#
+            )),
+            ErrorCode::UnsupportedVersion
+        );
+        for invalid in [
+            "",
+            "not json",
+            "[]",
+            r#"{"type":"list_sessions","protocol_version":1}"#,
+            r#"{"type":"authenticate","device_id":"d","token":"t"}"#,
+            r#"{"type":"pair","protocol_version":1,"method":"guess","secret":"s","device_name":"n"}"#,
+        ] {
+            assert_eq!(
+                code_of(HandshakeRequest::parse(invalid)),
+                ErrorCode::InvalidFrame,
+                "{invalid}"
+            );
+        }
+        let oversized = format!(
+            r#"{{"type":"authenticate","protocol_version":1,"device_id":"d","token":"{}"}}"#,
+            "a".repeat(MAX_HANDSHAKE_FRAME_BYTES)
+        );
+        assert_eq!(
+            code_of(HandshakeRequest::parse(&oversized)),
+            ErrorCode::FrameTooLarge
+        );
+    }
+
+    #[test]
+    fn unknown_fields_are_ignored_for_the_future_envelope() {
+        let request = HandshakeRequest::parse(
+            r#"{"type":"authenticate","protocol_version":1,"request_id":"r1","device_id":"d","token":"t"}"#,
+        )
+        .unwrap();
+        assert!(matches!(request, HandshakeRequest::Authenticate { .. }));
+    }
+
+    #[test]
+    fn secrets_never_appear_in_debug_output_or_parse_errors() {
+        let needle = "s3cr3t-value-zzz";
+        let pair = HandshakeRequest::Pair {
+            protocol_version: 1,
+            method: PairingMethod::Credential,
+            secret: Secret::new(needle),
+            device_name: "phone".into(),
+        };
+        let paired = HandshakeResponse::Paired {
+            protocol_version: 1,
+            gateway_id: "gw".into(),
+            instance_id: "inst".into(),
+            device_id: "dev".into(),
+            device_name: "phone".into(),
+            token: Secret::new(needle),
+        };
+        assert!(!format!("{pair:?}").contains(needle));
+        assert!(!format!("{paired:?}").contains(needle));
+        assert!(!format!("{:?}", Secret::new(needle)).contains(needle));
+
+        // A malformed frame that carries a secret is rejected without echoing it.
+        let rejected = HandshakeRequest::parse(&format!(
+            r#"{{"type":"authenticate","protocol_version":1,"token":"{needle}"}}"#
+        ))
+        .unwrap_err();
+        assert!(!rejected.to_text().contains(needle));
+        assert!(!format!("{rejected:?}").contains(needle));
+    }
+}

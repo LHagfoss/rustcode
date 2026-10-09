@@ -29,6 +29,10 @@ pub mod tools;
 pub mod update;
 mod workspace_intelligence;
 
+// Declared apart from the list above so it cannot collide with `remote`, the
+// protocol module of issue #1907; fold it into that tree once both have landed.
+pub mod remote_gateway;
+
 pub(crate) fn background_task_history_message(
     task_id: &str,
     output: crate::tools::ToolExecutionOutput,
