@@ -21,6 +21,7 @@
         },
         "health": "live"
       },
+      "snapshot_id": "snapshot-example",
       "sequence": 412,
       "generation": 1,
       "turn": {

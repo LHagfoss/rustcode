@@ -145,6 +145,10 @@ observed terminal time and outcome can still be supplied.
    logical turn metadata by `turn_id` and durable messages by
    `(history_revision, message_id)`.
 2. An attached snapshot replaces session state at `snapshot.sequence`.
+   Keep its optional `snapshot_id` in the reconnect cursor as well as the
+   applied sequence, gateway ID, instance ID and registration epoch. Send
+   `snapshot_id` in `attach_session.resume` to resume at the current watermark;
+   refresh it on every replacement snapshot, and retain it across later events.
    Restore active clocks from `turn.timing`, terminal footers from `last_turn`
    and `transcript[].turn`, and thinking labels from each assistant segment.
 3. Apply subsequent numbered events exactly once. Replace timing values;

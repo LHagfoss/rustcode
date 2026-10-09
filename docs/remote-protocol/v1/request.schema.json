@@ -308,6 +308,13 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "snapshot_id": {
+          "description": "Identity of the last applied snapshot. Required to resume exactly at\nits watermark, where a newer snapshot can have the same sequence.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

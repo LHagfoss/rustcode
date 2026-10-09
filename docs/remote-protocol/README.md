@@ -294,7 +294,7 @@ attaches with that cursor:
 {
   "protocol_version": 1, "request_id": "req-0003",
   "session_id": "…", "registration_epoch": 3,
-  "operation": { "type": "attach_session", "resume": { "gateway_id": "…", "instance_id": "…", "last_sequence": 412 } }
+  "operation": { "type": "attach_session", "resume": { "gateway_id": "…", "instance_id": "…", "last_sequence": 412, "snapshot_id": "…" } }
 }
 ```
 
@@ -325,6 +325,20 @@ The gateway decides; the client does not have to compare anything itself.
 sequence alone, which also refuses every cursor from before a restart (as
 `sequence_gap` rather than `gateway_restarted`). A cursor for another
 `registration_epoch` is `stale_session`, as for any request.
+
+Store `snapshot.snapshot_id` alongside the applied sequence and send it as
+`resume.snapshot_id`. This optional opaque identifier lets a cursor exactly
+at the current snapshot watermark resume, including sequence zero with no
+missed events. Snapshots can replace state without advancing the sequence:
+a replaced snapshot has a new identifier, so its old cursor gets a fresh
+`attached` response instead. Keep the identifier while applying later events;
+replace it whenever a snapshot replaces the local state. Older clients without
+the identifier still work, but get a fresh snapshot at this boundary.
+
+New transcript messages use RFC3339 `timestamp` values with a timezone.
+Legacy time-only values have no known date and are omitted from the remote
+projection. An untitled session with no user prompt has an empty title;
+the app can choose its own display placeholder.
 
 An `attached` without a requested `resume` has no `resync` field.
 
@@ -447,6 +461,15 @@ discover them:
   custom answer is allowed; the terminal accepts a non-empty `custom` answer
   for every question.
 - Approval actions have no ID; a batch is approved or denied as a whole.
+- Mutation receipts are bounded by count (1024 per registration), with no age
+  eviction. At capacity, new mutations return `receipt_capacity`; known IDs
+  remain queryable. Stop and re-share the session to create a new receipt store.
+- Tool calls expose bounded summary/input/output text, without a separate
+  structured command field. A tool-specific command copy button needs an
+  additive structured payload; do not reconstruct commands from summaries.
+- On Unix, a fallback `/tmp/rustcode-<uid>` socket directory can remain after
+  gateway shutdown. Socket files are removed; the private directory is retained
+  to avoid racing another process using it. Clients never need that path.
 - `resync_required` with reason `gateway_restarted` is never sent as an
   event: a restart closes the connection, and the reason reaches the client
   in `attached.resync`.

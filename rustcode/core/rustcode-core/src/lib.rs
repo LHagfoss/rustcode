@@ -15,7 +15,7 @@ pub mod status;
 pub mod update;
 
 fn current_timestamp() -> String {
-    chrono::Local::now().format("%H:%M").to_string()
+    chrono::Local::now().to_rfc3339()
 }
 
 /// Usage reported by a provider for one completion request.
@@ -361,7 +361,7 @@ pub struct ChatMessage {
     pub turn: Option<TurnTiming>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<TokenUsage>,
-    #[serde(default = "current_timestamp")]
+    #[serde(default)]
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_time_ms: Option<u64>,

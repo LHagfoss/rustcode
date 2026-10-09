@@ -160,7 +160,9 @@ mod tests {
             ContextInheritance::Minimal,
             Some("evidence"),
         );
-        assert_eq!(minimal, vec![ChatMessage::new("user", "child")]);
+        assert_eq!(minimal.len(), 1);
+        assert_eq!(minimal[0].role, "user");
+        assert_eq!(minimal[0].content, "child");
         let evidence =
             inherit_context(&parent, "child", ContextInheritance::Evidence, Some("fact"));
         assert_eq!(evidence.len(), 2);

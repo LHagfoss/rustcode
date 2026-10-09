@@ -491,6 +491,54 @@ impl View {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gateway_resumes_the_current_snapshot_and_exposes_machine_readable_history() {
+    let host = Host::start().await;
+    let connector = host.connector();
+    let mut terminal = Terminal::share(&connector, "session-client-followups").await;
+    terminal.registered().await;
+    let (mut phone, paired) = Phone::pair(&host, "Cursor phone").await;
+    let attached = phone
+        .request(
+            Some(&terminal.registration),
+            json!({"type": "attach_session"}),
+        )
+        .await;
+    let snapshot = &attached["result"]["snapshot"];
+    assert_eq!(snapshot["session"]["title"], "");
+    assert!(snapshot["snapshot_id"].is_string());
+    let cursor = json!({"gateway_id": paired["gateway_id"], "instance_id": paired["instance_id"],
+        "last_sequence": snapshot["sequence"], "snapshot_id": snapshot["snapshot_id"]});
+    drop(phone);
+    let (mut phone, _) = Phone::authenticate(&host, &paired).await;
+    let resumed = phone
+        .request(
+            Some(&terminal.registration),
+            json!({"type": "attach_session", "resume": cursor}),
+        )
+        .await;
+    assert_eq!(resumed["result"]["type"], "resumed", "{resumed}");
+    terminal
+        .state
+        .lock()
+        .await
+        .history
+        .push(crate::app::ChatMessage::new("user", "Fresh timestamp"));
+    let history = phone
+        .request(
+            Some(&terminal.registration),
+            json!({"type": "get_history", "limit": 10}),
+        )
+        .await;
+    let timestamp = history["result"]["messages"][0]["timestamp"]
+        .as_str()
+        .unwrap();
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(timestamp).is_ok(),
+        "{timestamp}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_remote_off_preserves_the_reason_with_gateway_status_in_flight() {
     let host = Host::start().await;
     let connector = host.connector();
