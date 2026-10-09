@@ -1,0 +1,10 @@
+{
+  "protocol_version": 1,
+  "request_id": "req-0008",
+  "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+  "registration_epoch": 3,
+  "operation": {
+    "type": "submit_prompt",
+    "prompt": "Run the test suite and fix what fails"
+  }
+}

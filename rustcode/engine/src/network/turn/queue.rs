@@ -130,7 +130,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
         lease: Some(lease.clone()),
     };
     loop {
-        let (next_prompt, is_wakeup, is_promoted_steer, turn_context, turn_session_id) = {
+        let (next_prompt, is_wakeup, is_promoted_steer, turn_context, turn_session_id, turn_id) = {
             let mut s = state.lock().await;
             // Cancellation owns the current turn until it reaches this
             // boundary. Do not dequeue the next item while the token is
@@ -182,6 +182,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
                 max_total_tool_rounds,
             );
             let turn_session_id = s.active_session_id.clone();
+            let turn_id = s.begin_turn_identity();
             configure_turn_steerability(
                 &mut s,
                 &turn_session_id,
@@ -195,6 +196,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
                 is_promoted_steer,
                 turn_context,
                 turn_session_id,
+                turn_id,
             )
         };
 
@@ -222,6 +224,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
         let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
         if !record_prompt_to_history(&state, is_wakeup, &next_prompt, &turn_session_id).await {
             let mut s = state.lock().await;
+            s.end_turn_identity(&turn_id);
             super::clear_turn_steerability_for_session(&mut s, &turn_session_id);
             break;
         }
@@ -256,6 +259,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             .await;
 
         let mut s = state.lock().await;
+        s.end_turn_identity(&turn_id);
         if s.active_session_id != turn_session_id {
             // The user switched sessions while this cancelled turn was
             // unwinding. Do not carry its turn context into the replacement.
@@ -548,6 +552,12 @@ mod enter_event_tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn local_streaming_provider() -> String {
+        held_streaming_provider(None).await
+    }
+
+    /// As `local_streaming_provider`, but the stream stays open after its
+    /// first delta until `hold` resolves, so a test can inspect a live turn.
+    async fn held_streaming_provider(hold: Option<tokio::sync::oneshot::Receiver<()>>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind local provider");
@@ -597,7 +607,12 @@ mod enter_event_tests {
                 .write_all(format!("{:X}\r\n{}\r\n", first.len(), first).as_bytes())
                 .await
                 .expect("write provider text delta");
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            match hold {
+                Some(hold) => {
+                    let _ = hold.await;
+                }
+                None => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
             socket
                 .write_all(format!("{:X}\r\n{}\r\n0\r\n\r\n", second.len(), second).as_bytes())
                 .await
@@ -685,5 +700,82 @@ mod enter_event_tests {
             saw_terminal,
             "Enter-started turn should publish a terminal event"
         );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_running_turn_has_an_identity_that_ends_with_it() {
+        use crate::config::{ApiProtocol, ModelProfile};
+
+        let (release, hold) = tokio::sync::oneshot::channel();
+        let endpoint = held_streaming_provider(Some(hold)).await;
+        let mut app = AppState::new();
+        app.api_base_url = endpoint.clone();
+        app.model_name = "turn-identity-test".into();
+        app.config.models = vec![ModelProfile {
+            name: app.model_name.clone(),
+            url: endpoint.clone(),
+            model: app.model_name.clone(),
+            api_protocol: Some(ApiProtocol::ChatCompletions),
+            context_window: Some(8_192),
+            ..ModelProfile::default()
+        }];
+        app.record_function_calling_support(&endpoint, false);
+        app.input_buffer = "say hello".into();
+        app.cursor_position = app.input_buffer.len();
+        assert_eq!(app.active_turn_id, None);
+        let state = Arc::new(Mutex::new(app));
+        let (sender, mut receiver) = crate::network::ui_adapter::AgentUiEventSender::channel();
+        let client = reqwest::Client::new();
+        let mut cancellation = tokio_util::sync::CancellationToken::new();
+
+        crate::app::handle_enter_with_ui_events(
+            &state,
+            &client,
+            &mut cancellation,
+            sender,
+            &|| Vec::new(),
+        )
+        .await;
+
+        // The provider holds the stream open after its first delta, so the
+        // turn is certainly still running here.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = receiver.recv().await {
+                if matches!(event, AgentUiEvent::TextDelta { .. }) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("the turn should stream its first delta");
+        let turn_id = state
+            .lock()
+            .await
+            .active_turn_id
+            .clone()
+            .expect("a running turn has an identity");
+
+        // A cancel written for some earlier turn leaves this one running.
+        assert!(!crate::controller::cancel_turn_for_turn(&state, &cancellation, "turn:0:0").await);
+        assert!(!cancellation.is_cancelled());
+        assert_eq!(
+            state.lock().await.active_turn_id.as_deref(),
+            Some(turn_id.as_str())
+        );
+
+        release
+            .send(())
+            .expect("provider is still holding the stream");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while state.lock().await.orchestrator_running {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the turn should finish once the provider completes");
+        assert_eq!(state.lock().await.active_turn_id, None);
+
+        // The finished turn's identity can no longer cancel anything.
+        assert!(!crate::controller::cancel_turn_for_turn(&state, &cancellation, &turn_id).await);
+        assert!(!cancellation.is_cancelled());
     }
 }

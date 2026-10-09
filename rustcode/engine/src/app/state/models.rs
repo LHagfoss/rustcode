@@ -53,6 +53,9 @@ pub struct ToolConfirmation {
 /// own highlight/ticks/answer while the user moves between them.
 #[derive(Debug, Clone)]
 pub struct PendingQuestion {
+    /// Identity of this exact prompt. A remote answer names it, so an answer
+    /// written for one question can never resolve the question that replaced it.
+    pub id: String,
     /// Short label shown in the modal header (opencode-style `header`).
     pub header: String,
     pub question: String,
@@ -79,6 +82,7 @@ impl PendingQuestion {
     pub fn new(question: String, options: Vec<String>, is_multi_select: bool) -> Self {
         let chosen = vec![false; options.len()];
         Self {
+            id: crate::controller::next_question_id(),
             header: "Question".to_owned(),
             question,
             options,

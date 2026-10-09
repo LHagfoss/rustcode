@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::app::{AppState, AppStatus};
+use crate::app::AppState;
 
 /// Source shape for the question modal. Frontends render this until the
 /// builder endgame migrates the modal to the snapshot-owned
@@ -38,6 +38,10 @@ pub enum Command {
     RestorePendingPrompt(PendingPrompt),
     RemovePendingPrompt(PendingPrompt),
     Cancel,
+    /// Cancel only the turn the caller observed; a stale ID is rejected.
+    CancelTurn {
+        turn_id: String,
+    },
     SetAutoApprove(bool),
     SelectModel(String),
     /// Persist the active session's config to disk (settings/MCP flows).
@@ -50,6 +54,11 @@ pub enum Command {
         task_id: Option<String>,
     },
     AnswerQuestion(String),
+    /// Answer only the question the caller was shown; a stale ID is rejected.
+    AnswerQuestionFor {
+        question_id: String,
+        reply: super::QuestionReply,
+    },
     /// Legacy unbound decision. The controller rejects it because it cannot
     /// identify which pending batch the caller reviewed.
     Approval(ApprovalChoice),
@@ -263,6 +272,63 @@ fn bounded_preview(value: &str, max_chars: usize) -> String {
     }
 }
 
+/// Short display detail for each history message that is a tool result, in
+/// history order (`None` for every other message). Details follow call IDs,
+/// so the whole history is read even when only its tail is shown.
+pub(crate) fn transcript_tool_details(state: &AppState) -> Vec<Option<String>> {
+    let mut details = std::collections::HashMap::new();
+    state
+        .history
+        .iter()
+        .map(|message| {
+            if message.role == "assistant" {
+                for call in rustcode_tool_protocol::resolve_tool_calls(
+                    message,
+                    state.active_tool_protocol(),
+                ) {
+                    let id = call.call_id.clone().unwrap_or_else(|| {
+                        format!(
+                            "local_{}",
+                            crate::network::tool_exec::stable_arguments_hash(&call.arguments)
+                        )
+                    });
+                    details.insert(
+                        id,
+                        crate::network::ui_adapter::tool_display_detail(
+                            &call.name,
+                            &call.arguments,
+                        ),
+                    );
+                }
+            }
+            message.tool_result.as_ref().and_then(|record| {
+                let id = message
+                    .tool_call_id
+                    .clone()
+                    .unwrap_or_else(|| format!("local_{}", record.arguments_hash));
+                details
+                    .get(&id)
+                    .cloned()
+                    .flatten()
+                    .or_else(|| {
+                        record.command.as_ref().and_then(|command| {
+                            crate::network::ui_adapter::tool_display_detail(
+                                "run_command",
+                                &serde_json::json!({"command": command}),
+                            )
+                        })
+                    })
+                    .or_else(|| {
+                        record
+                            .changed_paths
+                            .first()
+                            .map(|path| rustcode_core::activity::sanitize_tool_parameter(path, 120))
+                    })
+            })
+        })
+        .collect()
+}
+
 /// An owned, presentation-independent view of the current interactive session.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ControllerSnapshot {
@@ -349,70 +415,25 @@ impl ControllerSnapshot {
                     }),
             )
             .collect();
-        let mut details = std::collections::HashMap::new();
         let transcript = state
             .history
             .iter()
-            .map(|message| {
-                if message.role == "assistant" {
-                    for call in rustcode_tool_protocol::resolve_tool_calls(
-                        message,
-                        state.active_tool_protocol(),
-                    ) {
-                        let id = call.call_id.clone().unwrap_or_else(|| {
-                            format!(
-                                "local_{}",
-                                crate::network::tool_exec::stable_arguments_hash(&call.arguments)
-                            )
-                        });
-                        details.insert(
-                            id,
-                            crate::network::ui_adapter::tool_display_detail(
-                                &call.name,
-                                &call.arguments,
-                            ),
-                        );
-                    }
-                }
-                let tool_detail = message.tool_result.as_ref().and_then(|record| {
-                    let id = message
-                        .tool_call_id
-                        .clone()
-                        .unwrap_or_else(|| format!("local_{}", record.arguments_hash));
-                    details
-                        .get(&id)
-                        .cloned()
-                        .flatten()
-                        .or_else(|| {
-                            record.command.as_ref().and_then(|command| {
-                                crate::network::ui_adapter::tool_display_detail(
-                                    "run_command",
-                                    &serde_json::json!({"command": command}),
-                                )
-                            })
-                        })
-                        .or_else(|| {
-                            record.changed_paths.first().map(|path| {
-                                rustcode_core::activity::sanitize_tool_parameter(path, 120)
-                            })
-                        })
-                });
-                TranscriptItem {
-                    role: message.role.clone(),
-                    content: message.content.clone(),
-                    tool_name: message
-                        .tool_result
-                        .as_ref()
-                        .map(|result| result.tool_name.clone()),
-                    tool_detail,
-                    tool_success: message.tool_result.as_ref().map(|result| result.success),
-                    tool_pending: message
-                        .tool_result
-                        .as_ref()
-                        .is_some_and(|result| result.pending),
-                    response_time_ms: message.response_time_ms,
-                    thought_time_ms: message.thought_time_ms,
-                }
+            .zip(transcript_tool_details(state))
+            .map(|(message, tool_detail)| TranscriptItem {
+                role: message.role.clone(),
+                content: message.content.clone(),
+                tool_name: message
+                    .tool_result
+                    .as_ref()
+                    .map(|result| result.tool_name.clone()),
+                tool_detail,
+                tool_success: message.tool_result.as_ref().map(|result| result.success),
+                tool_pending: message
+                    .tool_result
+                    .as_ref()
+                    .is_some_and(|result| result.pending),
+                response_time_ms: message.response_time_ms,
+                thought_time_ms: message.thought_time_ms,
             })
             .collect();
         let mut sessions = state
@@ -474,13 +495,7 @@ impl ControllerSnapshot {
             queued_count: pending_prompts.len(),
             can_steer: state.can_accept_steer(),
             pending_prompts,
-            turn_active: matches!(
-                state.status,
-                AppStatus::Streaming
-                    | AppStatus::Queued
-                    | AppStatus::AwaitingToolConfirmation
-                    | AppStatus::AwaitingQuestion
-            ) || state.orchestrator_running,
+            turn_active: state.has_active_turn(),
             auto_approve: state.auto_confirm,
             pending_question: state
                 .pending_question

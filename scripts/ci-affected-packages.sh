@@ -14,6 +14,9 @@ while IFS= read -r path; do
             all=true ;;
         rustcode/engine/src/*|rustcode/engine/tests/*|rustcode/engine/build.rs|src/*|tests/*|build.rs)
             engine=true ;;
+        # Generated from the engine's wire types; its tests detect drift.
+        docs/remote-protocol/v1/*)
+            engine=true ;;
         rustcode/tui/Cargo.toml|rustcode/tui/build.rs|rustcode/tui/src/*|rustcode/tui/tests/*|rustcode/tui/benches/*|rustcode/tui/examples/*)
             tui=true ;;
         rustcode/core/*/Cargo.toml|rustcode/core/*/build.rs|rustcode/core/*/src/*|rustcode/core/*/tests/*|rustcode/core/*/benches/*|rustcode/core/*/examples/*)

@@ -7215,6 +7215,7 @@ dependencies = [
  "rustcode-tasks",
  "rustcode-tool-protocol",
  "rustcode-tools",
+ "schemars 1.2.2",
  "scraper",
  "serde",
  "serde_json",

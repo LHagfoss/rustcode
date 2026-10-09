@@ -324,6 +324,12 @@ pub async fn apply_question_answer(
         QuestionAnswer::Cancelled => unreachable!("cancelled handled above"),
     };
     let mut state = state.lock().await;
+    record_question_answer(&mut state, current);
+}
+
+/// Record `current` for the active question: advance the chain, or resolve
+/// the tool call once the last question is answered.
+fn record_question_answer(state: &mut AppState, current: String) {
     if !state.pending_question_queue.is_empty() {
         // More questions remain in the chain: record this answer, advance to
         // the next question, and keep waiting — the tool call resolves only
@@ -344,6 +350,107 @@ pub async fn apply_question_answer(
         let _ = tx.send(output);
     }
     state.request_redraw();
+}
+
+/// A typed answer to one identified question. Unlike [`QuestionAnswer`] it
+/// carries the chosen options separately, so they can be checked against the
+/// question they were chosen from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuestionReply {
+    /// One or more of the question's own options, verbatim.
+    Options(Vec<String>),
+    /// Free text, for the always-present "write your own answer" slot.
+    Custom(String),
+}
+
+/// Why an identity-bound answer was not applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuestionRejection {
+    /// The named question is no longer the pending one (answered, cancelled
+    /// or replaced).
+    Stale,
+    /// The question is still pending but the answer does not fit it.
+    Invalid(String),
+}
+
+/// Answers a question only while `expected_question_id` still names the one
+/// that is pending. The identity check, the option validation and the
+/// response-channel take happen under the same state lock, so of two racing
+/// answers exactly one applies and the other sees [`QuestionRejection::Stale`].
+pub async fn apply_question_answer_for_question(
+    state: &Arc<Mutex<AppState>>,
+    expected_question_id: &str,
+    reply: QuestionReply,
+) -> Result<(), QuestionRejection> {
+    let mut state = state.lock().await;
+    let Some(question) = state
+        .pending_question
+        .as_ref()
+        .filter(|question| question.id == expected_question_id)
+    else {
+        return Err(QuestionRejection::Stale);
+    };
+    if state.question_response.is_none() {
+        return Err(QuestionRejection::Stale);
+    }
+    let current = match reply {
+        QuestionReply::Options(selected) => {
+            if selected.is_empty() {
+                return Err(QuestionRejection::Invalid(
+                    "no option was selected".to_owned(),
+                ));
+            }
+            if selected.len() > 1 && !question.is_multi_select {
+                return Err(QuestionRejection::Invalid(
+                    "this question accepts exactly one option".to_owned(),
+                ));
+            }
+            for (index, option) in selected.iter().enumerate() {
+                if !question.options.contains(option) {
+                    return Err(QuestionRejection::Invalid(format!(
+                        "`{option}` is not an option of this question"
+                    )));
+                }
+                if selected[..index].contains(option) {
+                    return Err(QuestionRejection::Invalid(format!(
+                        "`{option}` was selected more than once"
+                    )));
+                }
+            }
+            // Same rendering as the terminal modal's multi-select answer.
+            selected.join(", ")
+        }
+        QuestionReply::Custom(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                return Err(QuestionRejection::Invalid(
+                    "a custom answer cannot be empty".to_owned(),
+                ));
+            }
+            text.to_owned()
+        }
+    };
+    record_question_answer(&mut state, current);
+    Ok(())
+}
+
+/// Requests cancellation only while `expected_turn_id` still names the turn
+/// the orchestrator is running. The comparison and the token cancel happen
+/// under the state lock that assigns turn identities, so a cancel written for
+/// a finished turn can never stop the one that started after it. The caller
+/// then runs its normal cancel cleanup (joining the turn, replacing the token).
+pub async fn cancel_turn_for_turn(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &CancellationToken,
+    expected_turn_id: &str,
+) -> bool {
+    let mut state = state.lock().await;
+    if state.active_turn_id.as_deref() != Some(expected_turn_id) {
+        return false;
+    }
+    state.active_turn_id = None;
+    cancel_token.cancel();
+    true
 }
 #[cfg(test)]
 mod tests {

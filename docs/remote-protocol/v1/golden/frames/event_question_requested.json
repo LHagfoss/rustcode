@@ -1,0 +1,28 @@
+{
+  "kind": "event",
+  "protocol_version": 1,
+  "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+  "registration_epoch": 3,
+  "sequence": 420,
+  "generation": 1,
+  "event": {
+    "type": "question_requested",
+    "question": {
+      "question_id": "question:48213:4",
+      "header": "Branch",
+      "text": "The branch is behind main. How should I continue?",
+      "options": [
+        {
+          "label": "Rebase onto main",
+          "description": "Replays the two local commits"
+        },
+        {
+          "label": "Merge main"
+        }
+      ],
+      "multiple": false,
+      "position": 1,
+      "chain_length": 2
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "kind": "event",
+  "protocol_version": 1,
+  "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+  "registration_epoch": 3,
+  "sequence": 418,
+  "generation": 1,
+  "event": {
+    "type": "approval_requested",
+    "approval": {
+      "batch_id": "controller:48213:7",
+      "actions": [
+        {
+          "tool_name": "run_command",
+          "summary": "run_command · cargo test --workspace",
+          "risk": "This action requires your approval before it can continue.",
+          "details": {
+            "text": "{\"command\":\"cargo test --workspace\"}",
+            "truncated": false,
+            "offset": 0,
+            "total_bytes": 36,
+            "content_id": "approval:controller:48213:7:0"
+          }
+        },
+        {
+          "tool_name": "write_to_file",
+          "summary": "write_to_file · src/parser.rs",
+          "risk": "This action requires your approval before it can continue.",
+          "details": {
+            "text": "{\"path\":\"src/parser.rs\",\"content\":\"use std::collections::HashMap;\\n",
+            "truncated": true,
+            "offset": 0,
+            "total_bytes": 48211,
+            "content_id": "approval:controller:48213:7:1"
+          }
+        }
+      ]
+    }
+  }
+}

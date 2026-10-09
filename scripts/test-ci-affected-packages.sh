@@ -16,6 +16,8 @@ check() {
 
 check 'TUI only' 'rustcode/tui/src/ui.rs' '-p rustcode-tui '
 check 'engine only' 'rustcode/engine/src/lib.rs' '-p rustcode '
+check 'remote protocol contract' 'docs/remote-protocol/v1/frame.schema.json' '-p rustcode '
+check 'remote protocol prose' 'docs/remote-protocol/README.md' ''
 check 'core only' 'rustcode/core/rustcode-tools/src/lib.rs' '-p rustcode-tools '
 check 'desktop only' 'rustcode/desktop/src/main.rs' ''
 check 'workflow only' '.github/workflows/ci.yml' ''
