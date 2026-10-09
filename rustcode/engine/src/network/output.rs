@@ -11,23 +11,81 @@ pub(crate) const COMPLETED_MUTATION_NOTICE: &str = "[mutation_completed_with_cli
 static NEXT_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static SENSITIVE_ASSIGNMENT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(
-        r#"(?i)(\b(?:api[_ -]?key|access[_ -]?token|authorization|password|secret|token|cookie)\b\s*[:=]\s*)(["']?)[^\s"'`]+(["']?)"#,
+        r#"(?i)(\b(?:api[_ -]?key|access[_ -]?token|authorization|password|secret|token|cookie)\b(\s*[:=]\s*))(["']?)([^\s"'`]+)(["']?)"#,
     )
     .expect("sensitive output regex")
 });
 static AUTH_HEADER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r"(?i)(\bauthorization\s*:\s*)(?:bearer\s+)?\S+")
+    Regex::new(r#"(?i)(\bauthorization\s*:\s*)((?:bearer|basic|token)\s+)?([^\s"'`]+)"#)
         .expect("authorization header regex")
 });
 
 /// Remove common credential assignments before output is persisted or shown
 /// to the model. This intentionally leaves ordinary token counts and prose
-/// untouched while covering shell assignments, JSON fields, and headers.
+/// untouched while covering shell assignments, YAML fields, and headers.
+///
+/// Every tool result passes through here, file reads included, so a value is
+/// redacted only when it can be a literal credential. Text that names where a
+/// credential comes from (`$TOKEN`, `<token>`) or is plainly source code
+/// (`token: Option<String>,`) is left alone: rewriting it showed the model a
+/// file that did not exist, and its edits against that text could not match.
 pub(crate) fn sanitize_tool_output(result: &str) -> String {
-    let redacted = AUTH_HEADER.replace_all(result, "$1[REDACTED]");
+    let redacted = AUTH_HEADER.replace_all(result, |found: &regex::Captures<'_>| {
+        let value = &found[3];
+        // With a scheme in front the value is a credential unless it is a
+        // reference; without one it may be a field declaration.
+        let keep = if found.get(2).is_some() {
+            is_credential_reference(value)
+        } else {
+            is_credential_reference(value) || is_code_expression(value)
+        };
+        if keep {
+            found[0].to_owned()
+        } else {
+            format!("{}[REDACTED]", &found[1])
+        }
+    });
     SENSITIVE_ASSIGNMENT
-        .replace_all(&redacted, "$1$2[REDACTED]$3")
+        .replace_all(&redacted, |found: &regex::Captures<'_>| {
+            let (separator, value) = (&found[2], &found[4]);
+            let quoted = !found[3].is_empty();
+            // `KEY=value` with nothing around it is how env files and shell
+            // assignments are written, where a bare word is the secret itself.
+            let env_style = separator == "=" && !value.ends_with([',', ';', ')']);
+            let keep = is_credential_reference(value)
+                || (!quoted && !env_style && is_code_expression(value));
+            if keep {
+                found[0].to_owned()
+            } else {
+                format!("{}{}[REDACTED]{}", &found[1], &found[3], &found[5])
+            }
+        })
         .into_owned()
+}
+
+/// A variable, placeholder or template that stands in for a credential.
+fn is_credential_reference(value: &str) -> bool {
+    value.starts_with(['$', '<', '{', '%']) || value.starts_with("[REDACTED")
+}
+
+/// An unquoted value that reads as code rather than as a literal: a type, a
+/// call, or a name such as `String`, `self.token` or `None`.
+fn is_code_expression(value: &str) -> bool {
+    if value.contains(['(', ')', '<', '>', '[', ']', '{', '}', '&', '*']) || value.contains("::") {
+        return true;
+    }
+    let name = value.trim_end_matches([',', ';']);
+    const SIZED_TYPES: &[&str] = &[
+        "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "f32", "f64",
+    ];
+    SIZED_TYPES.contains(&name)
+        || (!name.is_empty()
+            && name.split('.').all(|segment| {
+                !segment.is_empty()
+                    && segment
+                        .chars()
+                        .all(|character| character.is_ascii_alphabetic() || character == '_')
+            }))
 }
 
 pub(crate) struct BoundedToolOutput {
@@ -207,6 +265,53 @@ token usage: 1234
             .expect("bounded output must name its artifact");
         let artifact = std::fs::read_to_string(path).expect("artifact must be readable");
         assert!(!artifact.contains("long-lived-secret"));
+    }
+
+    #[test]
+    fn literal_credentials_are_redacted_in_every_common_form() {
+        for (input, leaked) in [
+            ("TOKEN=abcdefgh", "abcdefgh"),
+            ("export API_KEY=sk-live-0a1b2c", "sk-live"),
+            ("password: hunter2", "hunter2"),
+            ("secret = 'p4ss word'", "p4ss"),
+            ("token = \"ghp_0123456789abcdef\"", "ghp_"),
+            ("Authorization: Bearer abcdef", "abcdef"),
+            ("-H \"Authorization: Basic dXNlcjpwYXNz\"", "dXNlcjpwYXNz"),
+            ("authorization: 0123456789abcdef", "0123456789abcdef"),
+        ] {
+            let out = sanitize_tool_output(input);
+            assert!(out.contains("[REDACTED]"), "{input:?} -> {out:?}");
+            assert!(!out.contains(leaked), "{input:?} -> {out:?}");
+        }
+        // The quote that closes the argument survives the redaction.
+        assert_eq!(
+            sanitize_tool_output("curl -H \"Authorization: Bearer abc123\" https://x"),
+            "curl -H \"Authorization: [REDACTED]\" https://x"
+        );
+    }
+
+    #[test]
+    fn references_and_source_code_are_shown_as_written() {
+        // Rewriting any of these shows the model a file that does not exist,
+        // and an edit written against that text cannot match the real one.
+        for line in [
+            "curl -sS \"$URL\" -H \"Authorization: Bearer $T\"",
+            "  -H \"Authorization: Bearer ${SOLIDTIME_API_KEY}\" \\",
+            "Authorization: Bearer <token>",
+            "export TOKEN=$SOLIDTIME_API_KEY",
+            "password: {{ vault_password }}",
+            "    pub token: Option<String>,",
+            "    secret: &str,",
+            "    authorization: String,",
+            "    password: str = None",
+            "let token = self.next_token();",
+            "const TOKEN = process.env.TOKEN;",
+            "client = Client(api_key=api_key, timeout=3)",
+            "token: the bearer token used for every request",
+            "    cookie: u64,",
+        ] {
+            assert_eq!(sanitize_tool_output(line), line);
+        }
     }
 
     #[test]
