@@ -286,6 +286,10 @@ pub struct AppState {
     pub live_tool_call_sequence: u64,
 
     pub stream_tracker: Option<StreamTracker>,
+    /// Last sign of life from the turn outside a provider stream: a tool
+    /// finished, or the user answered a question or approval. The stall
+    /// watchdog reads it so time spent there is not mistaken for a dead turn.
+    pub turn_progress_at: Option<std::time::Instant>,
 
     pub auto_confirm: bool,
 
@@ -490,6 +494,13 @@ impl AppState {
         self.generation_start_time = None;
         self.current_turn_started_at = None;
         self.stream_tracker = None;
+        self.turn_progress_at = None;
+    }
+
+    /// Record that the turn machinery just did something the stream clock
+    /// does not see (see `turn_progress_at`).
+    pub fn note_turn_progress(&mut self) {
+        self.turn_progress_at = Some(std::time::Instant::now());
     }
 
     /// Start a chained question flow: the first question becomes active, the
@@ -608,8 +619,9 @@ impl AppState {
     }
 
     /// Detect a dead turn: status says work is in flight but nothing can make
-    /// progress — no background tasks, no running tools, and the stream (if
-    /// any) silent past the watchdog timeout. Also catches a stuck
+    /// progress — no background tasks, no running tools, no question or
+    /// approval waiting on the user, and both the stream (if any) and the
+    /// turn's own progress clock silent past the watchdog timeout. Also catches a stuck
     /// orchestrator flag wedging a non-empty queue (the loop only spawns
     /// while the flag is clear), and a queue orphaned with no owner at all
     /// (invalidated while prompts remained, or a spawn that never happened):
@@ -626,7 +638,20 @@ impl AppState {
         if background_active || !self.running_tools.is_empty() {
             return None;
         }
+        // Waiting for the user is not a stall, however long they take.
+        if self.pending_question.is_some() || self.pending_tool_confirmation.is_some() {
+            return None;
+        }
         let timeout = std::time::Duration::from_secs(STALL_WATCHDOG_TIMEOUT_SECS);
+        // A tool that just finished or an answer that just arrived proves the
+        // turn is alive even though the turn start and the last stream are
+        // both older than the timeout (#1885).
+        if self
+            .turn_progress_at
+            .is_some_and(|at| now.saturating_duration_since(at) < timeout)
+        {
+            return None;
+        }
         let generation_stale = self
             .generation_start_time
             .is_some_and(|started| now.saturating_duration_since(started) >= timeout);
@@ -1093,6 +1118,7 @@ impl AppState {
         self.token_usage_in_flight = false;
         self.provider_request_in_flight = false;
         self.stream_tracker = None;
+        self.turn_progress_at = None;
         self.generation_start_time = None;
         self.current_turn_started_at = None;
         self.request_redraw();
@@ -1304,6 +1330,7 @@ impl AppState {
             retain_finished_live_tool_calls: false,
             live_tool_call_sequence: 0,
             stream_tracker: None,
+            turn_progress_at: None,
             auto_confirm: false,
             subagent_supervisor,
             active_session_id,
