@@ -3514,7 +3514,7 @@ fn high_verbosity_hides_generic_tool_details() {
 }
 
 #[test]
-fn generic_tool_output_is_hidden_at_every_verbosity_without_mutating_history() {
+fn generic_tool_output_follows_verbosity_without_mutating_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -3555,18 +3555,25 @@ fn generic_tool_output_is_hidden_at_every_verbosity_without_mutating_history() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(!low.iter().any(|line| line.contains("line 25")));
-    assert!(!low.iter().any(|line| line.contains("line 49")));
+    // Low previews the result like a command's: its first and last rows
+    // around an omission marker, with the hint to open the rest.
+    assert!(low.iter().any(|line| line.contains("completed")), "{low:?}");
+    assert!(low.iter().any(|line| line.contains("line 49")), "{low:?}");
+    assert!(!low.iter().any(|line| line.contains("line 25")), "{low:?}");
+    assert!(low.iter().any(|line| line.contains("lines")), "{low:?}");
+    assert!(
+        low.iter().any(|line| line.contains("(ctrl+o all")),
+        "{low:?}"
+    );
+    // High shows the row alone.
+    assert_eq!(high.len(), 2, "{high:?}");
     assert!(!high.iter().any(|line| line.contains("line 49")));
-    assert!(!high.iter().any(|line| line.contains("… +31 lines")));
-    assert!(!high.iter().any(|line| line.contains("line 25")));
-    assert!(!low.iter().any(|line| line.contains("(ctrl+o all")));
     assert!(!high.iter().any(|line| line.contains("(ctrl+o all")));
     assert!(state.history == history);
 }
 
 #[test]
-fn low_verbosity_generic_output_stays_hidden_when_expanded() {
+fn low_verbosity_generic_output_is_shown_and_wraps_when_narrow() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -3592,25 +3599,30 @@ fn low_verbosity_generic_output_stays_hidden_when_expanded() {
             }),
     );
 
-    // Generic result bodies stay hidden even if an old expansion index is
-    // present in the view state.
+    // A result that fits the preview is shown whole, so there is nothing
+    // further to open and no hint.
     let collapsed = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(collapsed.len(), 2);
+    assert_eq!(collapsed.len(), 3, "{collapsed:?}");
     assert_eq!(collapsed[0], "• Ran");
     assert!(
         collapsed[1].contains("McpCustomTool") && !collapsed[1].contains("(ctrl+o all"),
-        "generic action remains without an expansion hint: {collapsed:?}"
+        "a fully visible result needs no expansion hint: {collapsed:?}"
     );
+    assert!(collapsed[2].contains(long_line), "{collapsed:?}");
 
     state.expanded_thoughts.insert(1);
     let expanded = super::render_committed_tool_result_group(&state, &[1], 30, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert!(!expanded.iter().any(|line| line.contains("result line")));
+    assert!(expanded.iter().any(|line| line.contains("result line")));
+    assert!(
+        expanded.iter().all(|line| line.chars().count() <= 30),
+        "the body wraps to the terminal width: {expanded:?}"
+    );
 }
 
 #[test]
@@ -3781,7 +3793,7 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
 }
 
 #[test]
-fn low_verbosity_long_generic_body_stays_hidden_when_expanded() {
+fn low_verbosity_long_generic_body_is_shown_in_full_when_expanded() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -3815,8 +3827,9 @@ fn low_verbosity_long_generic_body_stays_hidden_when_expanded() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert!(!rendered.iter().any(|line| line.contains("line 0")));
-    assert!(!rendered.iter().any(|line| line.contains("line 49")));
+    for shown in ["line 0", "line 25", "line 49"] {
+        assert!(rendered.iter().any(|line| line.contains(shown)), "{shown}");
+    }
     assert!(
         !rendered
             .iter()
@@ -4026,7 +4039,7 @@ fn low_verbosity_frame_keeps_hierarchy_and_diff_visible() {
 }
 
 #[test]
-fn low_verbosity_frame_shows_only_bash_output_and_edit_diffs() {
+fn low_verbosity_frame_shows_every_tool_result_and_high_shows_none() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -4097,37 +4110,46 @@ fn low_verbosity_frame_shows_only_bash_output_and_edit_diffs() {
         );
     }
 
-    let assert_no_hidden_payloads = |rendered: &str| {
-        assert!(!rendered.contains("read-payload-marker"), "{rendered}");
-        assert!(!rendered.contains("mcp-payload-marker"), "{rendered}");
-        assert!(!rendered.contains("skill-payload-marker"), "{rendered}");
-        assert!(!rendered.contains("specific_error_marker"), "{rendered}");
-        assert!(
-            rendered.contains("failed"),
-            "failure status stays visible: {rendered}"
-        );
-    };
+    let payloads = [
+        "read-payload-marker",
+        "mcp-payload-marker",
+        "skill-payload-marker",
+        "bash-output-marker",
+        "edit-diff-marker",
+    ];
 
+    // High shows each row alone, with its status.
     state.verbosity = Verbosity::High;
     let high = render_state_to_text(&mut state, 100, 40);
-    assert_no_hidden_payloads(&high);
-    // The command invocation remains visible at high verbosity.
-    assert!(!high.contains("edit-diff-marker"), "{high}");
+    for payload in [
+        "read-payload-marker",
+        "mcp-payload-marker",
+        "skill-payload-marker",
+        "edit-diff-marker",
+    ] {
+        assert!(!high.contains(payload), "{payload}: {high}");
+    }
+    assert!(
+        high.contains("failed"),
+        "failure status stays visible: {high}"
+    );
 
+    // Low shows what every tool returned, and every one of them can be opened.
     state.verbosity = Verbosity::Low;
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 100);
-    assert_eq!(candidates, [4, 5], "only Bash and edit bodies expand");
+    assert_eq!(candidates, [1, 2, 3, 4, 5], "every tool result expands");
 
     let collapsed = render_state_to_text(&mut state, 100, 40);
-    assert_no_hidden_payloads(&collapsed);
-    assert!(collapsed.contains("bash-output-marker"), "{collapsed}");
-    assert!(collapsed.contains("edit-diff-marker"), "{collapsed}");
+    for payload in payloads {
+        assert!(collapsed.contains(payload), "{payload}: {collapsed}");
+    }
+    assert!(collapsed.contains("failed"), "{collapsed}");
 
     state.expanded_thoughts.extend(candidates);
     let expanded = render_state_to_text(&mut state, 100, 40);
-    assert_no_hidden_payloads(&expanded);
-    assert!(expanded.contains("bash-output-marker"), "{expanded}");
-    assert!(expanded.contains("edit-diff-marker"), "{expanded}");
+    for payload in payloads {
+        assert!(expanded.contains(payload), "{payload}: {expanded}");
+    }
 }
 
 #[test]
@@ -4944,7 +4966,7 @@ fn command_preview_preserves_the_output_tail() {
 }
 
 #[test]
-fn expanded_generic_tool_preserves_only_its_action_row() {
+fn expanded_generic_tool_shows_its_result_under_the_action_row() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -4986,8 +5008,8 @@ fn expanded_generic_tool_preserves_only_its_action_row() {
             .any(|line| line.contains("CustomLookup query=\"renderer\"")),
         "the compact generic action row remains: {rendered:?}"
     );
-    assert!(!rendered.iter().any(|line| line.contains("first result")));
-    assert!(!rendered.iter().any(|line| line.contains("second result")));
+    assert!(rendered.iter().any(|line| line.contains("first result")));
+    assert!(rendered.iter().any(|line| line.contains("second result")));
 }
 
 #[test]
@@ -5058,6 +5080,7 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
             "  ✓ Bash git status --short",
             "  │ M src/main.rs",
             "  ✓ GetTime",
+            "  │ Thursday, 08:30",
         ],
         "each hint stays on the row of the entry it expands: {rendered:?}"
     );
@@ -5121,7 +5144,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
             }),
     );
     state.history.push(
-        ChatMessage::new("tool", "get_time: Thursday, 08:30")
+        ChatMessage::new("tool", "get_time: ")
             .answering(Some("call-2".to_owned()))
             .with_tool_result(ToolResultRecord {
                 workspace_generation: None,
@@ -5140,7 +5163,11 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
             .collect::<Vec<_>>()
     };
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
-    assert_eq!(candidates, [1], "only the command body is collapsible");
+    assert_eq!(
+        candidates,
+        [1],
+        "a result with no output has nothing to open"
+    );
     assert!(
         render(&state)
             .iter()
@@ -5400,10 +5427,9 @@ fn mixed_batch_keeps_command_collapsible_alongside_generic() {
             }),
     );
 
-    // The command remains expandable in a mixed batch; hidden generic output
-    // offers no expansion candidate.
+    // Both entries of a mixed batch can be opened.
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
-    assert_eq!(candidates, [1]);
+    assert_eq!(candidates, [1, 2]);
     let rendered = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
         .into_iter()
         .map(|line| line.to_string())

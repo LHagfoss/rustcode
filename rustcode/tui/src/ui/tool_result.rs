@@ -93,14 +93,9 @@ pub(super) fn render_tool_result<'a>(
         | "movefile"
         | "copy_file"
         | "copyfile" => render_mutation_result(result, width, show_picker),
-        // The action line already communicates control-plane lifecycle. Their
-        // raw acknowledgement is implementation noise in the transcript.
-        // `ask_question` is excluded: its result is the user's answer, which
-        // must stay visible (question + choice render as the entry headline,
-        // the full answer renders here for the expanded view).
-        "use_skill" | "set_goal" | "todo_write" | "spawn_agent" | "send_agent" | "cancel_agent"
-        | "complete_task" => Vec::new(),
-        "ask_question" => render_generic_result(result, show_picker),
+        // These never get a transcript row of their own, so their
+        // acknowledgement has nowhere to be shown.
+        "set_goal" | "todo_write" | "complete_task" => Vec::new(),
         _ => render_generic_result(result, show_picker),
     };
 
@@ -667,6 +662,10 @@ fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<
             )));
             continue;
         }
+        // A note to the model about how to continue reading, not file content.
+        if raw.starts_with("[Read complete:") {
+            continue;
+        }
         let Some((number, code)) = raw.split_once(": ") else {
             lines.push(Line::from(Span::styled(
                 raw.to_string(),
@@ -846,6 +845,23 @@ mod tests {
             .collect();
         assert!(text.starts_with("    4 │ "));
         assert!(text.contains("fn main"));
+    }
+
+    #[test]
+    fn read_results_leave_out_the_continuation_note_for_the_model() {
+        let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
+        let lines = render_tool_result(
+            "view_file",
+            "[File: src/main.rs, Lines 1 to 1 of 1]\n[Read complete: all lines in the requested range were delivered; no continuation is needed.]\n1: fn main() {}",
+            80,
+            &rustcode::controller::Verbosity::Low,
+            false,
+        );
+        let text = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(text.len(), 2, "{text:?}");
+        assert!(!text.iter().any(|line| line.contains("Read complete")));
+        assert!(text[1].contains("fn main"));
     }
 
     #[test]
@@ -1033,29 +1049,28 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_results_are_hidden() {
+    fn control_plane_results_render_like_any_other_tool() {
         let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
-        assert!(
-            render_tool_result(
-                "use_skill",
-                "loaded skill",
+        for (tool, result) in [("use_skill", "loaded skill"), ("spawn_agent", "agent done")] {
+            let lines = render_tool_result(
+                tool,
+                result,
                 80,
                 &rustcode::controller::Verbosity::Low,
-                false
-            )
-            .is_empty()
-        );
-        assert!(
-            render_tool_result(
-                "spawn_agent",
-                "agent done",
-                80,
-                &rustcode::controller::Verbosity::Low,
-                false
-            )
-            .is_empty()
-        );
+                false,
+            );
+            assert_eq!(lines.len(), 1, "{tool}");
+            assert!(lines[0].to_string().contains(result), "{tool}");
+        }
+        // These have no transcript row to hang a result under.
+        for tool in ["set_goal", "todo_write", "complete_task"] {
+            assert!(
+                render_tool_result(tool, "ok", 80, &rustcode::controller::Verbosity::Low, false)
+                    .is_empty(),
+                "{tool}"
+            );
+        }
     }
 
     #[test]

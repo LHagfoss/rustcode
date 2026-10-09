@@ -1133,8 +1133,8 @@ pub(super) fn tool_transcript_entry(
         None
     };
     let diff_counts = edit_diff.and_then(edit_diff_counts);
-    // Only command output and file diffs expose tool payloads. Human answers
-    // remain available because they belong to the conversation.
+    // Every tool carries what it returned. An edit shows its diff instead of
+    // the receipt that repeats it.
     let mut body = if let Some(diff) = edit_diff {
         cached_file_edit_diff(
             diff,
@@ -1148,10 +1148,11 @@ pub(super) fn tool_transcript_entry(
         // the task. The row already says both; the output comes with the
         // task's own row.
         Vec::new()
-    } else if kind == ToolTranscriptKind::Command
-        || tool_name == "ask_question"
-        || is_task_completion
-    {
+    } else if kind == ToolTranscriptKind::Edit {
+        // The receipt of an edit only restates the path; its lines come from
+        // the diff above or the synthesized preview below.
+        Vec::new()
+    } else {
         // The entry always carries its output; whether it is shown is the
         // group renderer's decision (verbosity default, or opened).
         cached_tool_result(
@@ -1165,8 +1166,6 @@ pub(super) fn tool_transcript_entry(
             &rustcode::controller::Verbosity::Low,
             show_picker,
         )
-    } else {
-        Vec::new()
     };
     if kind == ToolTranscriptKind::Edit && success && edit_result_is_noop(result) {
         status = "no changes".to_owned();
