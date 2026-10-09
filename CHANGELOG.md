@@ -1,3 +1,13 @@
+## [v0.62.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.62.0) - 2026-10-09
+
+### Features
+- Every tool row carries what the tool returned, not only commands and file edits: file reads, searches, listings, MCP calls, skill loads and task waits can be opened with `ctrl+o`, `ctrl+shift+o` or a click, and show a five-row preview at `low` verbosity. `high` still shows the rows alone (#1883)
+- The `Working` row shows the elapsed time and the tokens for the whole turn, from the submitted prompt until the agent finishes, including tool and approval time; `Worked for` reads the same clock (#1882)
+- Fixed an expanded file-edit diff being double-spaced, with an empty row after every line (#1881)
+- Fixed secret redaction rewriting code and documentation the model reads: `-H "Authorization: Bearer $T"` was shown as `Authorization: [REDACTED]` without its closing quote and `token: Option<String>,` as `token: [REDACTED]`, so edits against that text could not match the file. References (`$VAR`, `<placeholder>`) and unquoted code are now shown as written; literal credentials are still redacted (#1877)
+- A `background=true` command that finishes within 1.5 seconds returns its result directly instead of a task ID that costs another request to read, and `manage_task` no longer fails when an empty `task_ids` is sent with a valid `task_id` (#1880)
+- A run resumed by a finished background task keeps the same tool list as the turns around it instead of losing the sub-agent tools, and a recap or prompt-improver request no longer resets the MCP tools offered to the main conversation (#1878)
+- Each request logs a `provider.request_prefix` event with how much of it repeats the previous request, to tell a changed request from a provider-side prompt-cache miss (#1879)
 ## [v0.61.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.61.0) - 2026-10-09
 
 ### Features
