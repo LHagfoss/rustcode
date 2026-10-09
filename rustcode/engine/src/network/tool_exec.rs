@@ -683,7 +683,11 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         }
     } else {
         dbg_log!("Tool '{}' requires confirmation", name);
-        let path = if let Some(p) = args
+        let mcp_approval =
+            crate::tools::mcp_servers_approval(name, args, execution_workspace_root.as_deref());
+        let path = if let Some(approval) = &mcp_approval {
+            approval.label.clone()
+        } else if let Some(p) = args
             .get("path")
             .or_else(|| args.get("output_path"))
             .or_else(|| args.get("project_path"))
@@ -706,6 +710,8 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let (preview, content_bytes) = if let Some(preview) = render_preview {
             let content_bytes = preview.len();
             (preview, content_bytes)
+        } else if let Some(approval) = &mcp_approval {
+            (approval.preview.clone(), approval.preview.len())
         } else if let Some(ref d) = diff_opt {
             (d.clone(), d.len())
         } else {
@@ -759,7 +765,12 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     .then(|| crate::tools::rememberable_command_forbid_prefix_for_call(args))
                     .flatten(),
             }]);
-            s.pending_approval_details = Some(vec![args.to_string()]);
+            s.pending_approval_details = Some(vec![
+                mcp_approval
+                    .as_ref()
+                    .map_or(args, |approval| &approval.arguments)
+                    .to_string(),
+            ]);
             s.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
             s.tool_confirmation_response = Some(tx);
             s.status = AppStatus::AwaitingToolConfirmation;
@@ -969,6 +980,27 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
 
     if diff_opt.is_none() {
         diff_opt = mutation_diff.lock().ok().and_then(|mut diff| diff.take());
+    }
+
+    // The tool edits the user config on disk. Once it has run, bring the
+    // session's copy in line even after a failed start, or the next
+    // whole-config save would write the stale server list back over the edit.
+    if name == "manage_mcp_servers"
+        && result.error_kind != Some(crate::tools::ToolErrorKind::PermissionDenied)
+    {
+        let workspace = execution_workspace_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
+        if let Some(workspace) = workspace {
+            let servers = crate::config::load_config_for_workspace(&workspace)
+                .2
+                .mcp_servers;
+            let mut s = state.lock().await;
+            if s.config.mcp_servers != servers {
+                s.config.mcp_servers = servers;
+                s.request_redraw();
+            }
+        }
     }
 
     (result, diff_opt, user_wait_dur)

@@ -1715,7 +1715,11 @@ pub fn load_config() -> (String, String, AppConfig) {
 /// repository ancestors. Later (closer) project files take precedence over
 /// earlier ones, and all project files take precedence over the global file.
 pub fn load_config_for_workspace(workspace: &Path) -> (String, String, AppConfig) {
-    let (_, _, mut config) = load_config();
+    let (_, _, config) = load_config();
+    overlay_project_config(config, workspace)
+}
+
+fn overlay_project_config(mut config: AppConfig, workspace: &Path) -> (String, String, AppConfig) {
     for path in project_config_paths(workspace) {
         match read_toml_config(&path) {
             Ok(file) => apply_project_toml_config(&mut config, file),
@@ -2364,7 +2368,11 @@ fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 mod mcp_servers;
-pub use mcp_servers::{add_mcp_server, parse_mcp_env, parse_mcp_header, remove_mcp_server};
+pub use mcp_servers::{
+    McpServerSpec, McpTransport, add_mcp_server, mcp_server_from_spec, mcp_server_summary,
+    parse_mcp_env, parse_mcp_header, remove_mcp_server,
+};
+pub(crate) use mcp_servers::{add_mcp_server_in, remove_mcp_server_in, workspace_mcp_servers_in};
 
 mod session;
 pub use session::session_title;

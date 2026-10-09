@@ -121,8 +121,14 @@ impl InteractivePolicy {
                     && !covered_by_prefix
                     && !blocked_by_prefix
                 {
-                    let path = if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str())
-                    {
+                    let mcp_approval = tools::mcp_servers_approval(
+                        &call.name,
+                        &call.arguments,
+                        workspace_root.as_deref(),
+                    );
+                    let path = if let Some(approval) = &mcp_approval {
+                        approval.label.clone()
+                    } else if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str()) {
                         p.to_string()
                     } else if let Some(cmd) = call.arguments.get("command").and_then(|c| c.as_str())
                     {
@@ -166,6 +172,8 @@ impl InteractivePolicy {
                             requested_filesystem_path.as_deref(),
                         );
                         (preview, command.len())
+                    } else if let Some(approval) = &mcp_approval {
+                        (approval.preview.clone(), approval.preview.len())
                     } else if let Some(ref d) = diff_opt {
                         (d.clone(), d.len())
                     } else {
@@ -198,7 +206,12 @@ impl InteractivePolicy {
                             })
                             .flatten(),
                     });
-                    confirmation_details.push(call.arguments.to_string());
+                    confirmation_details.push(
+                        mcp_approval
+                            .as_ref()
+                            .map_or(&call.arguments, |approval| &approval.arguments)
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -789,5 +802,63 @@ mod tests {
             state.lock().await.config.denied_command_prefixes,
             ["make test"]
         );
+    }
+
+    #[tokio::test]
+    async fn registering_an_mcp_server_prompts_with_its_target_and_no_secret_values() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        state.lock().await.auto_confirm = false;
+        let policy_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            let calls = [ToolCall {
+                name: "manage_mcp_servers".to_string(),
+                arguments: serde_json::json!({
+                    "operation": "add",
+                    "name": "api",
+                    "target": ["https://mcp.example.test/mcp"],
+                    "headers": ["Authorization: Bearer sk-live-0123456789"]
+                }),
+                call_id: None,
+            }];
+            InteractivePolicy
+                .should_approve(&policy_state, &calls)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.lock().await.status == crate::app::AppStatus::AwaitingToolConfirmation {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("registering a server must await a user decision");
+        {
+            let state = state.lock().await;
+            let confirmation = &state.pending_tool_confirmation.as_ref().unwrap()[0];
+            assert_eq!(
+                confirmation.path,
+                "add api  http  https://mcp.example.test/mcp  (headers: Authorization)"
+            );
+            assert!(confirmation.content_preview.contains("user config"));
+            let details = &state.pending_approval_details.as_ref().unwrap()[0];
+            assert!(details.contains("Authorization: [REDACTED]"), "{details}");
+            let shown = format!(
+                "{}{}{details}",
+                confirmation.path, confirmation.content_preview
+            );
+            assert!(!shown.contains("sk-live-0123456789"), "{shown}");
+        }
+        state
+            .lock()
+            .await
+            .tool_confirmation_response
+            .take()
+            .unwrap()
+            .send(crate::app::ToolConfirmationResponse::Deny)
+            .unwrap();
+        assert!(!task.await.expect("policy task should finish"));
     }
 }

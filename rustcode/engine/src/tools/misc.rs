@@ -333,6 +333,44 @@ pub const LIST_MCP_TOOLS: Tool = Tool {
     safety: ToolSafety::ReadOnly,
 };
 
+fn manage_mcp_servers_schema() -> Value {
+    let strings = |description: &str| serde_json::json!({"type":"array","items":{"type":"string"},"description":description});
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "operation": {"type":"string","enum":["add","list","start","remove"]},
+            "name": {"type":"string"},
+            "target": strings("URL, or command then arguments"),
+            "transport": {"type":"string","enum":["stdio","http"]},
+            "headers": strings("`Name: value`, remote only"),
+            "env": strings("`KEY=value`, stdio only"),
+            "client_id": {"type":"string"},
+            "always_include": {"type":"boolean"},
+            "replace": {"type":"boolean"},
+            "start": {"type":"boolean"}
+        },
+        "required": ["operation"],
+        "additionalProperties": false
+    })
+}
+
+pub const MANAGE_MCP_SERVERS: Tool = Tool {
+    name: "manage_mcp_servers",
+    description: "Add, list, start or remove MCP servers in the user config, validated like `rustcode mcp add`. `add` also starts the server in this session, so its tools are callable at once. Never edit config.toml or pipe JSON-RPC from a shell instead. Secret values are stored, never shown.",
+    arguments: r#"{"operation":"add|list|start|remove", "name":"server name (add, start, remove)", "target":["URL, or command then its arguments"], "transport":"stdio|http", "headers":["Name: value"], "env":["KEY=value"], "client_id":"OAuth client id", "always_include":false, "replace":false, "start":true}"#,
+    handler: manage_mcp_servers,
+    // Every operation prompts: `add` and `start` launch a command or open a
+    // connection of the model's choosing, and `add`/`remove` edit the user config.
+    requires_confirmation: true,
+    schema: manage_mcp_servers_schema,
+    capabilities: &[
+        ToolCapability::ExecuteCommands,
+        ToolCapability::Network,
+        ToolCapability::SessionState,
+    ],
+    safety: ToolSafety::ControlPlane,
+};
+
 fn subagent_id_schema() -> Value {
     serde_json::json!({
         "type": "object",
@@ -945,6 +983,315 @@ fn truncate_mcp_description(description: &str) -> String {
     } else {
         short
     }
+}
+
+/// A cold `npx`-style launch downloads its package first, so a server the
+/// model just registered gets longer than the launch-time startup budget.
+const MCP_SESSION_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Shorter values are too likely to be ordinary words to blank out of an error.
+const MIN_REDACTED_SECRET_CHARS: usize = 6;
+const MCP_SECRET_PLACEHOLDER: &str = "[REDACTED]";
+
+fn manage_mcp_servers(args: &Value) -> Result<String, String> {
+    let dir = crate::config::get_config_dir().ok_or("config directory unavailable")?;
+    manage_mcp_servers_in(args, &dir, &mcp_workspace(None))
+}
+
+fn mcp_workspace(workspace: Option<&std::path::Path>) -> std::path::PathBuf {
+    workspace
+        .map(std::path::Path::to_path_buf)
+        .or_else(super::active_workspace_root)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+pub(crate) fn manage_mcp_servers_in(
+    args: &Value,
+    dir: &std::path::Path,
+    workspace: &std::path::Path,
+) -> Result<String, String> {
+    let operation = args
+        .get("operation")
+        .and_then(Value::as_str)
+        .ok_or("missing 'operation'")?;
+    let server_name = || {
+        optional_nonempty_string(args, "name")?
+            .ok_or_else(|| format!("'{operation}' needs the server 'name'"))
+    };
+    let active = |name: &str| {
+        crate::config::workspace_mcp_servers_in(dir, workspace)
+            .into_iter()
+            .find(|server| server.name == name)
+    };
+    match operation {
+        "list" => {
+            let servers = crate::config::workspace_mcp_servers_in(dir, workspace);
+            if servers.is_empty() {
+                return Ok("No MCP servers configured.".to_owned());
+            }
+            let running = running_mcp_servers();
+            Ok(servers
+                .iter()
+                .map(|server| {
+                    let state = if running.contains(&server.name) {
+                        "running"
+                    } else {
+                        "not running"
+                    };
+                    format!("{}  [{state}]", crate::config::mcp_server_summary(server))
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "add" => {
+            let server = crate::config::mcp_server_from_spec(&mcp_server_spec(args)?)?;
+            let replace = mcp_flag(args, "replace", false)?;
+            let start = mcp_flag(args, "start", true)?;
+            let replaced = crate::config::add_mcp_server_in(dir, server.clone(), replace)
+                .map_err(|error| error.replace("pass --force", "set \"replace\": true"))?;
+            let saved = format!(
+                "{} {} in the user config.",
+                if replaced { "Replaced" } else { "Added" },
+                crate::config::mcp_server_summary(&server)
+            );
+            if active(&server.name).as_ref() != Some(&server) {
+                return Ok(format!(
+                    "{saved} A project .rustcode/config.toml sets its own mcp_servers, so '{}' is not active in this workspace and was not started.",
+                    server.name
+                ));
+            }
+            if !start {
+                return Ok(format!("{saved} Not started."));
+            }
+            match start_mcp_server_in_session(&server, workspace) {
+                Ok(started) => Ok(format!("{saved} {started}")),
+                Err(error) => Err(format!(
+                    "{saved} It failed to start: {error}. Fix the cause, then call operation \"start\", or \"add\" again with \"replace\": true."
+                )),
+            }
+        }
+        "start" => {
+            let name = server_name()?;
+            let server = active(name)
+                .ok_or_else(|| format!("no MCP server named '{name}' is configured"))?;
+            if !server.enabled {
+                return Err(format!(
+                    "MCP server '{name}' is disabled; the user can enable it in /mcp"
+                ));
+            }
+            start_mcp_server_in_session(&server, workspace)
+        }
+        "remove" => {
+            let name = server_name()?;
+            crate::config::remove_mcp_server_in(dir, name)?;
+            // A project file may still declare a server of this name; that one
+            // stays configured, so it keeps running.
+            if active(name).is_some() {
+                return Ok(format!(
+                    "Removed '{name}' from the user config. A project .rustcode/config.toml still declares it, so it was left running."
+                ));
+            }
+            let stopped = running_mcp_servers().iter().any(|running| running == name);
+            if stopped {
+                mcp_runtime()?.block_on(crate::mcp::shutdown_server(name));
+            }
+            Ok(format!(
+                "Removed '{name}' from the user config{}.",
+                if stopped { " and stopped it" } else { "" }
+            ))
+        }
+        _ => Err(format!("unknown operation '{operation}'")),
+    }
+}
+
+fn mcp_server_spec(args: &Value) -> Result<crate::config::McpServerSpec, String> {
+    let strings = |key: &str| -> Result<Vec<String>, String> {
+        let Some(value) = args.get(key) else {
+            return Ok(Vec::new());
+        };
+        value
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .ok_or_else(|| format!("'{key}' must be an array of strings"))
+    };
+    Ok(crate::config::McpServerSpec {
+        name: optional_nonempty_string(args, "name")?
+            .ok_or("'add' needs the server 'name'")?
+            .to_owned(),
+        target: strings("target")?,
+        transport: match args.get("transport").map(|value| value.as_str()) {
+            None => None,
+            Some(Some("stdio")) => Some(crate::config::McpTransport::Stdio),
+            Some(Some("http")) => Some(crate::config::McpTransport::Http),
+            Some(_) => return Err("'transport' must be \"stdio\" or \"http\"".to_owned()),
+        },
+        headers: strings("headers")?,
+        env: strings("env")?,
+        client_id: optional_nonempty_string(args, "client_id")?.map(str::to_owned),
+        always_include: mcp_flag(args, "always_include", false)?,
+    })
+}
+
+fn mcp_flag(args: &Value, key: &str, default: bool) -> Result<bool, String> {
+    args.get(key).map_or(Ok(default), |value| {
+        value
+            .as_bool()
+            .ok_or_else(|| format!("'{key}' must be true or false"))
+    })
+}
+
+/// The session runtime the tool call was dispatched from. Server tasks have
+/// to outlive this call, so a private runtime would not do.
+fn mcp_runtime() -> Result<tokio::runtime::Handle, String> {
+    tokio::runtime::Handle::try_current()
+        .map_err(|_| "no session runtime is available to manage MCP servers".to_owned())
+}
+
+fn running_mcp_servers() -> Vec<String> {
+    crate::mcp::get_mcp_registry()
+        .lock()
+        .map(|registry| registry.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Start `server` in the running session and report the tools it added. The
+/// registry is only locked for the snapshot afterwards, never while the
+/// server spawns or connects.
+fn start_mcp_server_in_session(
+    server: &crate::config::McpServerConfig,
+    workspace: &std::path::Path,
+) -> Result<String, String> {
+    let name = &server.name;
+    let started = mcp_runtime()?.block_on(async {
+        tokio::time::timeout(
+            MCP_SESSION_START_TIMEOUT,
+            crate::mcp::start_configured_server(server.clone(), workspace),
+        )
+        .await
+    });
+    match started {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return Err(without_mcp_secrets(&error, server)),
+        Err(_) => {
+            return Err(format!(
+                "MCP server '{name}' did not finish starting within {}s",
+                MCP_SESSION_START_TIMEOUT.as_secs()
+            ));
+        }
+    }
+    let mut clients = crate::mcp::get_mcp_registry()
+        .lock()
+        .map(|registry| registry.values().cloned().collect::<Vec<_>>())
+        .map_err(|error| format!("MCP registry unavailable: {error}"))?;
+    clients.sort_by(|a, b| a.name.cmp(&b.name));
+    let tools = clients
+        .iter()
+        .find(|client| &client.name == name)
+        .and_then(|client| client.get_tools().ok())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|tool| tool.get("name")?.as_str().map(str::to_owned))
+        .map(|tool| super::schema::mcp_canonical_name_for_clients(name, &tool, &clients))
+        .collect::<Vec<_>>();
+    Ok(if tools.is_empty() {
+        format!("Started '{name}' in this session; it lists no tools.")
+    } else {
+        format!(
+            "Started '{name}' in this session. Callable now: {}.",
+            tools.join(", ")
+        )
+    })
+}
+
+/// Blank out the server's header and environment values wherever a transport
+/// or process error quotes them back.
+fn without_mcp_secrets(text: &str, server: &crate::config::McpServerConfig) -> String {
+    server
+        .headers
+        .values()
+        .chain(server.env.values())
+        .filter(|value| value.chars().count() >= MIN_REDACTED_SECRET_CHARS)
+        .fold(text.to_owned(), |text, value| {
+            text.replace(value.as_str(), MCP_SECRET_PLACEHOLDER)
+        })
+}
+
+/// What an approval prompt shows for one `manage_mcp_servers` call.
+pub(crate) struct McpServersApproval {
+    /// The operation and the server it acts on, with secret values left out.
+    pub(crate) label: String,
+    pub(crate) preview: String,
+    /// The call's arguments with header and environment values blanked.
+    pub(crate) arguments: Value,
+}
+
+/// Describe a `manage_mcp_servers` call for the user who has to approve it:
+/// the command or URL it would launch, and no header or environment values.
+/// Returns `None` for every other tool.
+pub(crate) fn mcp_servers_approval(
+    name: &str,
+    args: &Value,
+    workspace: Option<&std::path::Path>,
+) -> Option<McpServersApproval> {
+    if name != MANAGE_MCP_SERVERS.name {
+        return None;
+    }
+    let operation = args.get("operation").and_then(Value::as_str).unwrap_or("?");
+    let server = args.get("name").and_then(Value::as_str).unwrap_or("");
+    let configured = || {
+        let dir = crate::config::get_config_dir()?;
+        crate::config::workspace_mcp_servers_in(&dir, &mcp_workspace(workspace))
+            .into_iter()
+            .find(|entry| entry.name == server)
+    };
+    let summary = match operation {
+        "add" => mcp_server_spec(args)
+            .and_then(|spec| crate::config::mcp_server_from_spec(&spec))
+            .ok(),
+        "start" | "remove" => configured(),
+        _ => None,
+    }
+    .map(|entry| crate::config::mcp_server_summary(&entry))
+    .unwrap_or_else(|| server.to_owned());
+    let preview = match operation {
+        "add" if args.get("start").and_then(Value::as_bool) == Some(false) => {
+            "Saves this server to the user config. Header and environment values are hidden."
+        }
+        "add" => {
+            "Saves this server to the user config and starts it in this session.\nHeader and environment values are hidden."
+        }
+        "start" => "Starts this configured server in this session.",
+        "remove" => "Removes this server from the user config and stops it.",
+        _ => "",
+    };
+    Some(McpServersApproval {
+        label: format!("{operation} {summary}").trim().to_owned(),
+        preview: preview.to_owned(),
+        arguments: mcp_arguments_without_secrets(args),
+    })
+}
+
+fn mcp_arguments_without_secrets(args: &Value) -> Value {
+    let mut redacted = args.clone();
+    for (key, separator, shown) in [("headers", ':', ": "), ("env", '=', "=")] {
+        let Some(entries) = redacted.get_mut(key).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for entry in entries {
+            let name = entry
+                .as_str()
+                .and_then(|raw| raw.split_once(separator))
+                .map(|(name, _)| format!("{}{shown}", name.trim()))
+                .unwrap_or_default();
+            *entry = Value::String(format!("{name}{MCP_SECRET_PLACEHOLDER}"));
+        }
+    }
+    redacted
 }
 
 pub fn complete_task_tool(args: &Value) -> Result<String, String> {

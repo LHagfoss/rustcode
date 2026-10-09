@@ -83,6 +83,28 @@ there in plain text (the file is created with mode `0600`), and `mcp list`
 prints only their names. `config.toml` is one of the files `rustcode sync`
 pushes, so keep the sync remote private when it holds tokens.
 
+Inside a session the model does the same through the `manage_mcp_servers`
+tool, which applies the validation of `rustcode mcp add`:
+
+| `operation` | Effect |
+| --- | --- |
+| `add` | Saves the server to the user `config.toml` and starts it in the running session, so its tools are callable in the same turn. Takes `name`, `target` (one URL, or the command followed by its arguments), and optionally `transport`, `headers` (`Name: value`), `env` (`KEY=value`), `client_id`, `always_include`, `replace` (the tool's `--force`) and `start` (`false` to save without starting). |
+| `list` | Prints the `mcp list` lines for this workspace, each marked `[running]` or `[not running]`. |
+| `start` | Starts, or restarts, a configured server by `name` in the running session. |
+| `remove` | Removes the server from the user config and stops it. |
+
+Every operation asks for approval before it runs, because `add` and `start`
+launch a command or open a connection the model chose and `add` and `remove`
+edit your config; Plan mode blocks the tool outright. Approve-all (YOLO)
+answers this prompt like any other. The prompt shows the command or URL and the
+header and environment names; their values are left out of the prompt, the tool
+result and startup errors, as in `mcp list`. The values the model passes are
+still part of its own tool call in the session history, so prefer adding a
+server that needs a real secret with `rustcode mcp add` yourself. A server that
+fails to start stays saved, and `start` retries it. When a project
+`.rustcode/config.toml` sets its own `mcp_servers`, a server added to the user
+config is saved but is not active, and not started, in that workspace.
+
 Native API requests expose at most 16 MCP tool schemas at a time. Set
 `always_include = true` on an MCP server's `[[mcp_servers]]` entry to reserve
 slots for its complete toolset, independent of the current prompt:

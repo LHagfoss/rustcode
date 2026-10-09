@@ -2104,36 +2104,47 @@ pub async fn start_server_by_name_in_workspace(
         cfg.mcp_servers.iter().find(|s| s.name == name).cloned()
     };
 
-    if let Some(srv_config) = config {
-        if !srv_config.enabled {
-            return Ok(());
+    match config {
+        Some(srv_config) if srv_config.enabled => {
+            start_configured_server(srv_config, workspace).await
         }
-        srv_config.validate()?;
-        shutdown_server(name).await;
-
-        let client = if srv_config.is_remote() {
-            McpClient::start_remote_configured(
-                srv_config.name.clone(),
-                srv_config.url.clone().unwrap_or_default(),
-                srv_config.headers.clone(),
-                srv_config.client_id.clone(),
-            )
-            .await?
-        } else {
-            McpClient::start_in_workspace(
-                srv_config.name.clone(),
-                srv_config.command,
-                srv_config.args,
-                srv_config.env,
-                Some(workspace),
-            )
-            .await?
-        };
-        if let Ok(mut reg) = get_mcp_registry().lock() {
-            reg.insert(name.to_string(), client);
-        }
-        bump_mcp_generation();
+        _ => Ok(()),
     }
+}
+
+/// Start `srv_config` in this session, replacing a running server of the same
+/// name. The registry lock is only taken once the client is up, never across
+/// the spawn or handshake.
+pub(crate) async fn start_configured_server(
+    srv_config: crate::config::McpServerConfig,
+    workspace: &std::path::Path,
+) -> Result<(), String> {
+    srv_config.validate()?;
+    let name = srv_config.name.clone();
+    shutdown_server(&name).await;
+
+    let client = if srv_config.is_remote() {
+        McpClient::start_remote_configured(
+            srv_config.name.clone(),
+            srv_config.url.clone().unwrap_or_default(),
+            srv_config.headers.clone(),
+            srv_config.client_id.clone(),
+        )
+        .await?
+    } else {
+        McpClient::start_in_workspace(
+            srv_config.name.clone(),
+            srv_config.command,
+            srv_config.args,
+            srv_config.env,
+            Some(workspace),
+        )
+        .await?
+    };
+    if let Ok(mut reg) = get_mcp_registry().lock() {
+        reg.insert(name, client);
+    }
+    bump_mcp_generation();
     Ok(())
 }
 

@@ -12,6 +12,8 @@ mod envelope;
 pub(crate) mod exec;
 mod filesystem;
 mod git;
+#[cfg(all(test, unix))]
+mod mcp_servers_tests;
 mod misc;
 mod openapi;
 mod parser;
@@ -86,7 +88,7 @@ pub(crate) use exec::{
 pub use schema::mcp_tool_display_name;
 
 pub(crate) use filesystem::edit_target_and_replacement;
-pub(crate) use misc::search_web_async;
+pub(crate) use misc::{mcp_servers_approval, search_web_async};
 pub(crate) use video::render_confirmation_preview;
 
 pub use rustcode_tool_protocol::ToolCall;
@@ -1367,6 +1369,7 @@ pub const TOOLS: &[Tool] = &[
     misc::GET_TIME,
     misc::SET_SESSION_TITLE,
     misc::LIST_MCP_TOOLS,
+    misc::MANAGE_MCP_SERVERS,
     misc::WAIT_AGENT,
     misc::SEND_MESSAGE,
     misc::FOLLOWUP_TASK,

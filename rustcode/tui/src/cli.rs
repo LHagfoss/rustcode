@@ -218,85 +218,26 @@ pub enum McpTransport {
     Http,
 }
 
-/// Turn `mcp add` arguments into a config entry, rejecting options that
-/// do not apply to the chosen transport instead of dropping them.
+/// Turn `mcp add` arguments into a config entry through the validator the
+/// `manage_mcp_servers` tool shares.
 pub(crate) fn mcp_server_from_args(
     args: &McpAddArgs,
 ) -> Result<rustcode::config::McpServerConfig, String> {
-    let first = args.target[0].as_str();
-    let looks_remote = first.starts_with("http://") || first.starts_with("https://");
-    let remote = match args.transport {
-        Some(McpTransport::Http) if !looks_remote => {
-            return Err("--transport http needs an http:// or https:// URL".to_owned());
-        }
-        Some(McpTransport::Http) => true,
-        Some(McpTransport::Stdio) => false,
-        None => looks_remote,
-    };
-    if remote {
-        if args.target.len() > 1 {
-            return Err("a remote server takes a URL and no further arguments".to_owned());
-        }
-        if !args.env.is_empty() {
-            return Err("--env only applies to stdio servers; use --header".to_owned());
-        }
-    } else if !args.headers.is_empty() || args.client_id.is_some() {
-        return Err("--header and --client-id only apply to remote (http) servers".to_owned());
-    }
-    let headers = args
-        .headers
-        .iter()
-        .map(|raw| rustcode::config::parse_mcp_header(raw))
-        .collect::<Result<_, _>>()?;
-    let env = args
-        .env
-        .iter()
-        .map(|raw| rustcode::config::parse_mcp_env(raw))
-        .collect::<Result<_, _>>()?;
-    Ok(rustcode::config::McpServerConfig {
+    rustcode::config::mcp_server_from_spec(&rustcode::config::McpServerSpec {
         name: args.name.clone(),
-        command: if remote {
-            String::new()
-        } else {
-            first.to_owned()
-        },
-        args: if remote {
-            Vec::new()
-        } else {
-            args.target[1..].to_vec()
-        },
-        env,
-        url: remote.then(|| first.to_owned()),
-        headers,
+        target: args.target.clone(),
+        transport: args.transport.map(|transport| match transport {
+            McpTransport::Stdio => rustcode::config::McpTransport::Stdio,
+            McpTransport::Http => rustcode::config::McpTransport::Http,
+        }),
+        headers: args.headers.clone(),
+        env: args.env.clone(),
         client_id: args.client_id.clone(),
-        enabled: true,
         always_include: args.always_include,
     })
 }
 
-/// One `mcp list` line. Header and environment values are secrets, so only
-/// their names are shown.
-pub(crate) fn mcp_server_summary(server: &rustcode::config::McpServerConfig) -> String {
-    let mut line = match server.url.as_deref().filter(|_| server.is_remote()) {
-        Some(url) => format!("{}  http  {url}", server.name),
-        None => {
-            let mut command = vec![server.command.as_str()];
-            command.extend(server.args.iter().map(String::as_str));
-            format!("{}  stdio  {}", server.name, command.join(" "))
-        }
-    };
-    for (label, values) in [("headers", &server.headers), ("env", &server.env)] {
-        if !values.is_empty() {
-            let mut names: Vec<&str> = values.keys().map(String::as_str).collect();
-            names.sort_unstable();
-            line.push_str(&format!("  ({label}: {})", names.join(", ")));
-        }
-    }
-    if !server.enabled {
-        line.push_str("  [disabled]");
-    }
-    line
-}
+pub(crate) use rustcode::config::mcp_server_summary;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum DaemonCommands {
