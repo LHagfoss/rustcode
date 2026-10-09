@@ -67,7 +67,7 @@ struct LineCodec: RemoteCodec {
         case .authenticate: "authenticate"
         case .subscribeSessions: "subscribe"
         case .attachSession(_, let resume):
-            resume.map { "attach:\($0.gatewayID)@\($0.lastSequence)" } ?? "attach"
+            resume.map { "attach:\($0.origin.gatewayID)/\($0.origin.instanceID ?? "-")@\($0.lastSequence)" } ?? "attach"
         case .detachSession: "detach"
         case .getHistory: "history"
         case .getContent: "content"
@@ -93,15 +93,20 @@ struct LineCodec: RemoteCodec {
             guard let sequence = UInt64(parts[2]) else { throw RemoteError.invalidFrame(frame) }
             let ref = SessionRef(sessionID: parts[1], registrationEpoch: 1)
             return .sessionUpdate(SessionUpdate(session: ref, sequence: sequence, event: .assistantDelta(itemID: "a", text: parts[3])))
+        case "snapshot" where parts.count == 3:
+            guard let sequence = UInt64(parts[2]) else { throw RemoteError.invalidFrame(frame) }
+            let ref = SessionRef(sessionID: parts[1], registrationEpoch: 1)
+            return .sessionUpdate(SessionUpdate(
+                session: ref,
+                sequence: sequence,
+                event: .replaced(SessionSnapshot(session: ref, sequence: sequence))
+            ))
         case "resync" where parts.count == 2:
             return .resyncRequired(SessionRef(sessionID: parts[1], registrationEpoch: 1))
         case "closing":
-            return .gatewayFailure(GatewayFailure(error: .unauthorized, closesConnection: true))
+            return .gatewayFailure(GatewayFailure(error: .unauthorized))
         case "gateway-error" where parts.count == 2:
-            return .gatewayFailure(GatewayFailure(
-                error: parts[1] == "not_implemented" ? .notImplemented : .transport(parts[1]),
-                closesConnection: parts[1] == "shutting_down"
-            ))
+            return .gatewayFailure(GatewayFailure(error: .transport(parts[1])))
         case "future":
             return .unknown("future")
         default:
@@ -124,8 +129,11 @@ struct LineCodec: RemoteCodec {
             ConnectionIdentity(gatewayID: gateway.isEmpty ? "gateway" : gateway, instanceID: "instance-1")
         ))
         case ("sessions", let count): .sessions(sessions(count))
-        case ("attached", _): .attached(.snapshot(SessionSnapshot(session: Self.session, sequence: 10)), gatewayID: "gw-1")
-        case ("resumed", _): .attached(.resumed, gatewayID: "gw-1")
+        case ("attached", _): .attached(
+            .snapshot(SessionSnapshot(session: Self.session, sequence: 10)),
+            origin: ReplayOrigin(gatewayID: "gw-1", instanceID: "inst-1")
+        )
+        case ("resumed", _): .attached(.resumed, origin: ReplayOrigin(gatewayID: "gw-1", instanceID: "inst-1"))
         case ("content", let text): .content(ContentChunk(contentID: "c", offset: 0, text: text, totalBytes: 1, nextOffset: nil))
         case ("receipt-unknown", _): .failure(.outcomeUnknown)
         case ("mystery", _): .unknown("mystery")

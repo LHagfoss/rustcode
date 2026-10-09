@@ -5,6 +5,7 @@
   "result": {
     "type": "attached",
     "gateway_id": "gw-8e1f4b7a",
+    "instance_id": "inst-41c07d92",
     "snapshot": {
       "session": {
         "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",

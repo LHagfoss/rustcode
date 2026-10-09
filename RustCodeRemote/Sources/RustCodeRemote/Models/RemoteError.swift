@@ -22,8 +22,6 @@ public enum RemoteError: Error, Sendable, Equatable {
     case sessionClosed(String)
     /// The host at the stored address is not the gateway this device paired with.
     case hostIdentityChanged
-    /// The gateway accepted the connection but does not route sessions yet.
-    case notImplemented
     case transport(String)
     case rejected(RemoteRejection)
 
@@ -51,7 +49,6 @@ extension RemoteError: LocalizedError {
         case .outcomeUnknown: "The host could not confirm the request."
         case .sessionClosed(let reason): reason
         case .hostIdentityChanged: "The host at this address is not the one this device was paired with. Pair again."
-        case .notImplemented: "This host does not share sessions yet."
         case .transport(let detail): detail
         case .rejected(let rejection): rejection.message
         }

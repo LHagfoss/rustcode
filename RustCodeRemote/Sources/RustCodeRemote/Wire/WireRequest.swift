@@ -179,10 +179,14 @@ public enum WireOperation: Codable, Equatable, Sendable {
 
 public struct WireResumeCursor: Codable, Equatable, Sendable {
     public var gatewayID: String
+    /// The gateway run the sequence numbers came from. The gateway uses it to decide
+    /// between a replay and a fresh snapshot.
+    public var instanceID: String?
     public var lastSequence: UInt64
 
     enum CodingKeys: String, CodingKey {
         case gatewayID = "gateway_id"
+        case instanceID = "instance_id"
         case lastSequence = "last_sequence"
     }
 }

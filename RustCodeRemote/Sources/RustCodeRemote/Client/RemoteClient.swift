@@ -41,6 +41,10 @@ public protocol RemoteClient: Sendable {
     /// The stream ends (or throws) when the connection does.
     func subscribeSessions() async throws -> AsyncThrowingStream<[SessionSummary], any Error>
 
+    /// Asks for the list again. The answer arrives through the stream `subscribeSessions`
+    /// returned.
+    func refreshSessions() async throws
+
     /// - Parameter resumeAfter: the last sequence already applied for this exact registration,
     ///   to ask for a replay instead of a snapshot.
     func attach(_ session: SessionRef, resumeAfter: UInt64?) async throws -> SessionAttachment

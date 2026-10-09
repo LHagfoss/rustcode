@@ -68,7 +68,7 @@ enum Contract {
 
     @Test func everyGoldenFrameRoundTrips() throws {
         let files = try Contract.goldenFiles("frames")
-        #expect(files.count == 41)
+        #expect(files.count == 42)
         var kinds = Set<String>()
         var results = Set<String>()
         var events = Set<String>()
@@ -110,6 +110,74 @@ enum Contract {
         #expect(events == WireEvent.knownTypes)
         // The golden set does not exercise every error code; the schema test covers the rest.
         #expect(errorCodes.isSubset(of: Set(WireErrorCode.allCases.map(\.rawValue))))
+    }
+
+    @Test func everyGoldenHandshakeFrameRoundTrips() throws {
+        let requests = try Contract.goldenFiles("handshake/requests")
+        #expect(requests.count == 3)
+        var methods = Set<String>()
+        var requestTypes = Set<String>()
+        for file in requests {
+            let data = try Data(contentsOf: file)
+            let request = try JSONDecoder().decode(WireHandshakeRequest.self, from: data)
+            #expect(try Contract.json(JSONEncoder().encode(request)) == Contract.json(data), "\(file.lastPathComponent) does not round-trip")
+            switch request {
+            case .pair(let pair):
+                requestTypes.insert("pair")
+                #expect(pair.method.known != nil)
+                methods.insert(pair.method.rawValue)
+            case .authenticate:
+                requestTypes.insert("authenticate")
+            }
+        }
+        #expect(requestTypes == ["pair", "authenticate"])
+        #expect(methods == Set(WirePairingMethod.allCases.map(\.rawValue)))
+
+        let responses = try Contract.goldenFiles("handshake/responses")
+        #expect(responses.count == 16)
+        var responseTypes = Set<String>()
+        var codes = Set<String>()
+        for file in responses {
+            let data = try Data(contentsOf: file)
+            let response = try JSONDecoder().decode(WireGatewayFrame.self, from: data)
+            #expect(try Contract.json(JSONEncoder().encode(response)) == Contract.json(data), "\(file.lastPathComponent) does not round-trip")
+            switch response {
+            case .paired: responseTypes.insert("paired")
+            case .authenticated: responseTypes.insert("authenticated")
+            case .error(let failure):
+                responseTypes.insert("error")
+                #expect(failure.code.known != nil, "\(file.lastPathComponent): unknown error code")
+                codes.insert(failure.code.rawValue)
+            case .unknown(let type, _):
+                Issue.record("\(file.lastPathComponent): handshake response \(type) is not modelled")
+            }
+            // And each maps to something the client acts on.
+            if case .unknown = try WireCodec().decode(String(decoding: data, as: UTF8.self)) {
+                Issue.record("\(file.lastPathComponent) decoded to unknown")
+            }
+        }
+        #expect(responseTypes == ["paired", "authenticated", "error"])
+        // One golden error frame per code the gateway can send.
+        #expect(codes == Set(WireGatewayErrorCode.allCases.map(\.rawValue)))
+
+        let qr = try Data(contentsOf: Contract.root.appendingPathComponent("golden/handshake/pairing_qr.json"))
+        let payload = try JSONDecoder().decode(WirePairingPayload.self, from: qr)
+        #expect(try Contract.json(JSONEncoder().encode(payload)) == Contract.json(qr))
+        #expect(payload.hostName == "studio")
+    }
+
+    @Test func theHandshakeDTOsKnowExactlyWhatTheSchemasAllow() throws {
+        let request = try Contract.schema("handshake-request")
+        let response = try Contract.schema("handshake-response")
+        #expect(Contract.strings(in: request, tag: "type") == ["pair", "authenticate"])
+        #expect(Contract.strings(in: Contract.definition("PairingMethod", in: request)) == Set(WirePairingMethod.allCases.map(\.rawValue)))
+        #expect(Contract.strings(in: response, tag: "type") == ["paired", "authenticated", "error"])
+        #expect(Contract.strings(in: Contract.definition("ErrorCode", in: response)) == Set(WireGatewayErrorCode.allCases.map(\.rawValue)))
+
+        // The QR payload has exactly the fields the DTO reads.
+        let qr = try Contract.schema("pairing-qr")
+        let properties = try #require(qr["properties"] as? [String: Any])
+        #expect(Set(properties.keys) == ["protocol_version", "address", "gateway_id", "credential", "host_name"])
     }
 
     @Test func theDTOsKnowExactlyWhatTheSchemasAllow() throws {
@@ -246,8 +314,7 @@ enum Contract {
         #expect(try WireCodec().decode(#"{"type":"welcome","protocol_version":1}"#) == .unknown("welcome"))
         let failure = try WireCodec().decode(#"{"type":"error","code":"maintenance","message":"Back soon"}"#)
         #expect(failure == .gatewayFailure(GatewayFailure(
-            error: .rejected(.other(code: "maintenance", message: "Back soon")),
-            closesConnection: false
+            error: .transport("The host closed the connection: Back soon (maintenance).")
         )))
     }
 

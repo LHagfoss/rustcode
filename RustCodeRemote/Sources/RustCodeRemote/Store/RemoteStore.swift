@@ -70,7 +70,8 @@ public final class RemoteStore {
     /// Above this size the detail of an approval is not pulled onto the phone; the action
     /// has to be reviewed in the terminal.
     public static let maximumApprovalDetailBytes: UInt64 = 2 * 1024 * 1024
-    private static let contentChunkBytes = 128 * 1024
+    /// The host serves content in chunks of at most 64 KiB.
+    private static let contentChunkBytes = 64 * 1024
 
     public init(
         client: any RemoteClient,
@@ -196,6 +197,24 @@ public final class RemoteStore {
     }
 
     // MARK: Sessions
+
+    /// Asks the host for the session list again. The connection stays as it is.
+    public func refreshSessions() async {
+        guard connection == .connected else {
+            retryNow()
+            return
+        }
+        do {
+            try await client.refreshSessions()
+        } catch {
+            // A dead connection is noticed and retried by the connection loop.
+        }
+    }
+
+    /// Stops following the attached session. The session itself is not affected.
+    public func detach() {
+        select(nil)
+    }
 
     public func select(_ sessionID: String?) {
         guard sessionID != selectedSessionID else { return }
@@ -384,6 +403,7 @@ public final class RemoteStore {
                 let identity = try await client.connect(using: credential)
                 try Task.checkCancellation()
                 currentInstanceID = identity.instanceID
+                adoptHostName(identity.hostName, for: credential)
                 let lists = try await client.subscribeSessions()
                 try Task.checkCancellation()
                 connection = .connected
@@ -435,6 +455,17 @@ public final class RemoteStore {
                 }
             }
         }
+    }
+
+    /// The host can be renamed, and an older pairing only knows its address. Keep the name
+    /// it reports now, in memory and in the credential store.
+    private func adoptHostName(_ name: String?, for stored: StoredCredential) {
+        guard let name, !name.isEmpty, host?.gatewayID == stored.host.gatewayID, host?.name != name else { return }
+        host?.name = name
+        guard !isDemo, var updated = credential else { return }
+        updated.host.name = name
+        credential = updated
+        try? credentials.save(updated)
     }
 
     /// Revoked or unauthorized: stop reconnecting and drop the token, which is now useless.

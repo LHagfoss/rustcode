@@ -1,8 +1,9 @@
 import Foundation
 
-// Handshake frames of the RustCode gateway (`rustcode/engine/src/remote_gateway/handshake.rs`).
-// They are provisional: the gateway plans to fold them into the versioned envelope. They are
-// tagged by `type` and carry no `kind`, which is how they are told apart from protocol frames.
+// DTOs for `handshake-request.schema.json`, `handshake-response.schema.json` and
+// `pairing-qr.schema.json`. Handshake frames are tagged by `type` and carry no `kind`, which
+// is how they are told apart from protocol frames. After the handshake a frame of this
+// family can only be an `error`, and the gateway closes the connection behind it.
 
 public enum WireHandshakeRequest: Codable, Equatable, Sendable {
     case pair(Pair)
@@ -72,6 +73,8 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
         public var deviceID: String
         public var deviceName: String
         public var token: String
+        /// The host's own name, for display.
+        public var hostName: String?
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
@@ -80,6 +83,7 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
             case deviceID = "device_id"
             case deviceName = "device_name"
             case token
+            case hostName = "host_name"
         }
     }
 
@@ -89,6 +93,7 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
         public var instanceID: String
         public var deviceID: String
         public var deviceName: String
+        public var hostName: String?
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
@@ -96,6 +101,7 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
             case instanceID = "instance_id"
             case deviceID = "device_id"
             case deviceName = "device_name"
+            case hostName = "host_name"
         }
     }
 
@@ -155,11 +161,13 @@ public struct WirePairingPayload: Codable, Equatable, Sendable {
     public var address: String
     public var gatewayID: String
     public var credential: String
+    public var hostName: String?
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case address
         case gatewayID = "gateway_id"
         case credential
+        case hostName = "host_name"
     }
 }

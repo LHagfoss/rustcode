@@ -863,6 +863,13 @@
             "gateway_id": {
               "type": "string"
             },
+            "instance_id": {
+              "description": "The running gateway process; changes on every gateway start.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "sessions": {
               "items": {
                 "$ref": "#/$defs/RemoteSessionInfo"
@@ -892,6 +899,23 @@
             "gateway_id": {
               "type": "string"
             },
+            "instance_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resync": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResyncReason"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Set when the request carried a `resume` cursor that could not be\nreplayed: the client discards what it holds for the session and\nstarts from `snapshot`."
+            },
             "snapshot": {
               "$ref": "#/$defs/RemoteSnapshot"
             },
@@ -912,6 +936,12 @@
           "properties": {
             "gateway_id": {
               "type": "string"
+            },
+            "instance_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "next_sequence": {
               "format": "uint64",
@@ -1117,6 +1147,12 @@
       "properties": {
         "gateway_id": {
           "type": "string"
+        },
+        "instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "protocol_version": {
           "format": "uint32",

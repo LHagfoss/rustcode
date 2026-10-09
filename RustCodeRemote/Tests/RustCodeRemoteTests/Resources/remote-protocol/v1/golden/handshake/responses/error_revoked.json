@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "revoked",
+  "message": "why the connection is being closed"
+}

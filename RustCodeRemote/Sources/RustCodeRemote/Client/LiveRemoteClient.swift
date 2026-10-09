@@ -21,16 +21,15 @@ public actor LiveRemoteClient: RemoteClient {
     private var generation = 0
 
     private var waiters: [RequestID: Waiter] = [:]
-    /// Requests in the order they were sent. An error frame that names no request answers
-    /// the oldest one.
-    private var waitingOrder: [RequestID] = []
-    /// The gateway ID each attached session was last served under; a resume cursor names it.
-    private var replayGateways: [SessionRef: String] = [:]
+    /// Where each attached session's sequence numbers came from; a resume cursor names it.
+    private var replayOrigins: [SessionRef: ReplayOrigin] = [:]
     /// Mutations in flight; a `received` receipt for these is not the final answer.
     private var mutations: Set<RequestID> = []
     private var receivedOnly: Set<RequestID> = []
     private var sessionsContinuation: SessionsContinuation?
     private var updateContinuations: [SessionRef: UpdatesContinuation] = [:]
+    /// Sessions whose events cannot be trusted until the snapshot the host announced arrives.
+    private var awaitingSnapshot: Set<SessionRef> = []
 
     public init(
         codec: any RemoteCodec,
@@ -62,7 +61,7 @@ public actor LiveRemoteClient: RemoteClient {
             return StoredCredential(
                 host: PairedHost(
                     gatewayID: grant.identity.gatewayID,
-                    name: target.address.host,
+                    name: grant.identity.hostName ?? target.hostName ?? target.address.host,
                     address: target.address,
                     device: grant.device,
                     pairedAt: Date()
@@ -110,11 +109,6 @@ public actor LiveRemoteClient: RemoteClient {
             let reply = try await request(.subscribeSessions)
             guard case .sessions = reply else { throw Self.unexpected(reply) }
             return stream
-        } catch RemoteError.notImplemented {
-            // A gateway that does not route sessions yet: connected, nothing shared. The
-            // stream stays open and ends with the connection.
-            continuation.yield([])
-            return stream
         } catch {
             continuation.finish()
             sessionsContinuation = nil
@@ -122,18 +116,27 @@ public actor LiveRemoteClient: RemoteClient {
         }
     }
 
+    public func refreshSessions() async throws {
+        guard sessionsContinuation != nil else { throw RemoteError.notConnected }
+        // The reply's list is delivered through the stream already handed out.
+        let reply = try await request(.subscribeSessions)
+        guard case .sessions = reply else { throw Self.unexpected(reply) }
+    }
+
     public func attach(_ session: SessionRef, resumeAfter: UInt64?) async throws -> SessionAttachment {
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: SessionUpdate.self)
         updateContinuations[session]?.finish()
         updateContinuations[session] = continuation
-        // A replay needs the gateway the cursor came from; without it, ask for a snapshot.
+        awaitingSnapshot.remove(session)
+        // A replay needs to name where the cursor came from; without that, ask for a snapshot.
+        // The gateway decides whether it can replay and says so in its reply.
         let resume = resumeAfter.flatMap { sequence in
-            replayGateways[session].map { ResumeCursor(gatewayID: $0, lastSequence: sequence) }
+            replayOrigins[session].map { ResumeCursor(origin: $0, lastSequence: sequence) }
         }
         do {
             let reply = try await request(.attachSession(session, resume: resume))
-            guard case .attached(let start, let gatewayID) = reply else { throw Self.unexpected(reply) }
-            replayGateways[session] = gatewayID
+            guard case .attached(let start, let origin) = reply else { throw Self.unexpected(reply) }
+            replayOrigins[session] = origin
             return SessionAttachment(start: start, updates: stream)
         } catch {
             continuation.finish()
@@ -243,7 +246,6 @@ public actor LiveRemoteClient: RemoteClient {
         // The waiter is registered before the frame leaves, so a fast reply cannot be missed.
         let (replies, waiter) = AsyncStream.makeStream(of: Result<RemoteReply, RemoteError>.self)
         waiters[id] = waiter
-        waitingOrder.append(id)
         let timer = Task { [weak self, requestTimeout] in
             try? await Task.sleep(for: requestTimeout)
             guard !Task.isCancelled else { return }
@@ -252,7 +254,6 @@ public actor LiveRemoteClient: RemoteClient {
         defer {
             timer.cancel()
             waiters[id] = nil
-            waitingOrder.removeAll { $0 == id }
             receivedOnly.remove(id)
         }
 
@@ -312,19 +313,25 @@ public actor LiveRemoteClient: RemoteClient {
             if waiters[Self.handshakeID] != nil {
                 // The handshake failed; the gateway closes the connection behind this frame.
                 resolve(Self.handshakeID, with: .failure(failure.error))
-            } else if failure.closesConnection || failure.error.isUnauthorized {
+            } else {
+                // After the handshake every reply is a correlated response. An error that
+                // names no request says why the gateway is closing the connection.
                 await teardown(with: failure.error)
-            } else if let oldest = waitingOrder.first {
-                resolve(oldest, with: .failure(failure.error))
             }
         case .sessionsChanged(let sessions):
             sessionsContinuation?.yield(sessions)
         case .sessionUpdate(let update):
+            if awaitingSnapshot.contains(update.session) {
+                // Nothing between a resync notice and its snapshot can be trusted.
+                guard update.isSnapshot else { return }
+                awaitingSnapshot.remove(update.session)
+            }
             updateContinuations[update.session]?.yield(update)
         case .resyncRequired(let session):
-            updateContinuations.removeValue(forKey: session)?.finish(throwing: RemoteError.resyncRequired)
+            // The host follows this with a snapshot event on the same subscription.
+            awaitingSnapshot.insert(session)
         case .sessionClosed(let session, let reason):
-            replayGateways[session] = nil
+            replayOrigins[session] = nil
             updateContinuations.removeValue(forKey: session)?
                 .finish(throwing: RemoteError.sessionClosed(reason))
         case .unknown:
@@ -336,7 +343,6 @@ public actor LiveRemoteClient: RemoteClient {
 
     private func resolve(_ id: RequestID, with result: Result<RemoteReply, RemoteError>) {
         guard let waiter = waiters.removeValue(forKey: id) else { return }
-        waitingOrder.removeAll { $0 == id }
         waiter.yield(result)
         waiter.finish()
     }
@@ -371,6 +377,7 @@ public actor LiveRemoteClient: RemoteClient {
             continuation.finish(throwing: error)
         }
         updateContinuations.removeAll()
+        awaitingSnapshot.removeAll()
 
         await transport.close()
     }

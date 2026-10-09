@@ -56,6 +56,20 @@ private struct SessionSidebar: View {
                             Button("Copy Workspace Path", systemImage: "folder") {
                                 Clipboard.copy(session.workspace)
                             }
+                            if session.id == store.selectedSessionID {
+                                Button("Detach", systemImage: "eye.slash") {
+                                    store.detach()
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .trailing) {
+                            // Detaching only stops following the session from this device.
+                            if session.id == store.selectedSessionID {
+                                Button("Detach", systemImage: "eye.slash") {
+                                    store.detach()
+                                }
+                                .tint(.gray)
+                            }
                         }
                 }
             } footer: {
@@ -64,9 +78,13 @@ private struct SessionSidebar: View {
                 }
             }
         }
+        .refreshable {
+            await store.refreshSessions()
+        }
         .overlay {
+            // Not hit-testable, so the empty list underneath can still be pulled to refresh.
             if store.sessions.isEmpty {
-                emptyState
+                emptyState.allowsHitTesting(false)
             } else if sessions.isEmpty {
                 ContentUnavailableView.search(text: query)
             }
@@ -92,7 +110,7 @@ private struct SessionSidebar: View {
             ContentUnavailableView(
                 "No Shared Sessions",
                 systemImage: "terminal",
-                description: Text("Connected to \(store.host?.name ?? "the host"). Sessions appear here once they are shared with /\u{2060}remote.")
+                description: Text("Run /\u{2060}remote in a RustCode session on \(store.host?.name ?? "your Mac").")
             )
         case .connecting:
             ProgressView("Connecting…")

@@ -54,7 +54,7 @@ public actor DemoRemoteClient: RemoteClient {
     @discardableResult
     public func connect(using credential: StoredCredential) async throws -> ConnectionIdentity {
         isConnected = true
-        return ConnectionIdentity(gatewayID: "demo-gateway", instanceID: "demo-instance")
+        return ConnectionIdentity(gatewayID: "demo-gateway", instanceID: "demo-instance", hostName: "Demo Mac")
     }
 
     public func disconnect() async {
@@ -76,6 +76,12 @@ public actor DemoRemoteClient: RemoteClient {
         listContinuation = continuation
         continuation.yield(summaries)
         return stream
+    }
+
+    public func refreshSessions() async throws {
+        guard isConnected, let listContinuation else { throw RemoteError.notConnected }
+        _ = await pause(8)
+        listContinuation.yield(summaries)
     }
 
     public func attach(_ session: SessionRef, resumeAfter: UInt64?) async throws -> SessionAttachment {

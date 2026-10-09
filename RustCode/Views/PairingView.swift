@@ -72,7 +72,7 @@ struct PairingView: View {
     private var scanSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label {
-                Text("Run **rustcode remote pair** on your Mac, then scan the code it shows or enter the address and code.")
+                Text("Run **/remote** in a RustCode session on your Mac, then scan the QR code it shows.")
             } icon: {
                 Image(systemName: "1.circle.fill").foregroundStyle(.tint)
             }
@@ -142,7 +142,7 @@ struct PairingView: View {
             .controlSize(.large)
             .disabled(isPairing || address.isEmpty || (code.isEmpty && !address.hasPrefix("{")))
 
-            Text("You can also paste the QR payload that the terminal prints into the address field.")
+            Text("The address and code are shown under the QR code. A pasted QR payload works in the address field too.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -181,7 +181,7 @@ struct PairingView: View {
             Task { await store.pair(.manual(address: parsed, code: code), deviceName: UIDevice.current.name) }
         } catch {
             addressError = switch error {
-            case .empty: "Enter the address shown by rustcode remote pair."
+            case .empty: "Enter the address shown under the QR code."
             case .missingPort: "Include the port, for example 192.168.1.20:17879."
             case .invalidPort: "The port has to be a number between 1 and 65535."
             case .invalidHost: "That does not look like a host address."

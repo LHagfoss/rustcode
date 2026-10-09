@@ -158,10 +158,13 @@ public struct DeviceIdentity: Hashable, Sendable, Codable {
 public struct ConnectionIdentity: Hashable, Sendable {
     public var gatewayID: String
     public var instanceID: String
+    /// The host's own name, when it says. A label for display, never an identity.
+    public var hostName: String?
 
-    public init(gatewayID: String, instanceID: String) {
+    public init(gatewayID: String, instanceID: String, hostName: String? = nil) {
         self.gatewayID = gatewayID
         self.instanceID = instanceID
+        self.hostName = hostName
     }
 }
 

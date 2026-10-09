@@ -76,11 +76,13 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
 
     public struct Sessions: Codable, Equatable, Sendable {
         public var gatewayID: String
+        public var instanceID: String?
         public var sessions: [WireSessionInfo]
         public var subscribed: Bool
 
         enum CodingKeys: String, CodingKey {
             case gatewayID = "gateway_id"
+            case instanceID = "instance_id"
             case sessions
             case subscribed
         }
@@ -88,20 +90,29 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
 
     public struct Attached: Codable, Equatable, Sendable {
         public var gatewayID: String
+        public var instanceID: String?
+        /// Set when the client asked to resume and could not: whatever it held for the
+        /// session is void and this snapshot replaces it.
+        public var resync: WireOpen<WireResyncReason>?
         public var snapshot: WireSnapshot
 
         enum CodingKeys: String, CodingKey {
             case gatewayID = "gateway_id"
+            case instanceID = "instance_id"
+            case resync
             case snapshot
         }
     }
 
     public struct Resumed: Codable, Equatable, Sendable {
         public var gatewayID: String
+        public var instanceID: String?
+        /// Exactly the missed events follow, starting here.
         public var nextSequence: UInt64
 
         enum CodingKeys: String, CodingKey {
             case gatewayID = "gateway_id"
+            case instanceID = "instance_id"
             case nextSequence = "next_sequence"
         }
     }
@@ -454,11 +465,13 @@ public enum WireSessionCloseReason: String, Sendable, Equatable, CaseIterable {
 public struct WireSessionsFrame: Codable, Equatable, Sendable {
     public var protocolVersion: UInt32
     public var gatewayID: String
+    public var instanceID: String?
     public var sessions: [WireSessionInfo]
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case gatewayID = "gateway_id"
+        case instanceID = "instance_id"
         case sessions
     }
 }

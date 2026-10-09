@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "frame_too_large",
+  "message": "why the connection is being closed"
+}

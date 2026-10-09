@@ -58,7 +58,7 @@ struct SettingsView: View {
                 } header: {
                     Text("About")
                 } footer: {
-                    Text("RustCode Remote controls sessions you share with /remote from a RustCode terminal. Sessions keep running on your Mac; closing this app never cancels work. The gateway currently pairs and authenticates devices; sharing sessions through it is still in development on the RustCode side.")
+                    Text("RustCode Remote controls sessions you share with /remote from a RustCode terminal. Sessions keep running on your Mac; closing this app never cancels work. To share a session, run /remote in it; to stop, run /remote off.")
                 }
             }
             .navigationTitle("Settings")

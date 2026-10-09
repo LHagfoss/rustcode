@@ -38,7 +38,7 @@ import Testing
     }
 
     @Test func handshakeRepliesDecode() throws {
-        let identity = ConnectionIdentity(gatewayID: "gw", instanceID: "inst")
+        var identity = ConnectionIdentity(gatewayID: "gw", instanceID: "inst")
         #expect(try codec.decode(
             #"{"type":"paired","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","token":"tok"}"#
         ) == .handshake(.paired(PairingGrant(
@@ -49,6 +49,16 @@ import Testing
         #expect(try codec.decode(
             #"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone"}"#
         ) == .handshake(.authenticated(identity)))
+
+        // The golden frames carry the host's name.
+        identity = ConnectionIdentity(gatewayID: "gw-8e1f4b7a", instanceID: "inst-41c07d92", hostName: "studio")
+        #expect(try codec.decode(try golden("handshake/responses/authenticated")) == .handshake(.authenticated(identity)))
+        guard case .handshake(.paired(let grant)) = try codec.decode(try golden("handshake/responses/paired")) else {
+            Issue.record("expected a pairing grant")
+            return
+        }
+        #expect(grant.identity == identity)
+        #expect(grant.device == DeviceIdentity(id: "0011223344556677", name: "Lars's iPhone"))
     }
 
     @Test func gatewayErrorsMapToWhatTheAppDoesAboutThem() throws {
@@ -59,13 +69,11 @@ import Testing
             return failure
         }
         #expect(try failure("unauthorized").error == .unauthorized)
-        #expect(try failure("revoked") == GatewayFailure(error: .unauthorized, closesConnection: true))
+        #expect(try failure("revoked") == GatewayFailure(error: .unauthorized))
         #expect(try failure("rate_limited", extra: #","retry_after_secs":240"#).error == .rateLimited(retryAfter: .seconds(240)))
         #expect(try failure("rate_limited").error == .rateLimited(retryAfter: nil))
         #expect(try failure("unsupported_version").error == .incompatibleProtocol)
-        #expect(try failure("not_implemented") == GatewayFailure(error: .notImplemented, closesConnection: false))
-        #expect(try failure("shutting_down").closesConnection)
-        #expect(try failure("idle_timeout").closesConnection)
+        #expect(try failure("idle_timeout").error == .transport("The host closed the connection: m."))
         guard case .pairingFailed = try failure("pairing_failed").error else {
             Issue.record("pairing_failed should be a pairing failure")
             return
@@ -86,6 +94,10 @@ import Testing
             credential: .oneTime("abc"),
             expectedGatewayID: "gw-1"
         ))
+        let named = try codec.pairingTarget(for: .scanned(try golden("handshake/pairing_qr")))
+        #expect(named.address == HostAddress(host: "100.92.13.44", port: 17879))
+        #expect(named.hostName == "studio")
+        #expect(named.address.protection == .tunnelEncrypted)
     }
 
     @Test func aManualCodeYieldsTheShortCode() throws {
@@ -126,7 +138,10 @@ import Testing
         let cases: [(String, String, RemoteCommand)] = [
             ("subscribe_sessions", "req-0002", .subscribeSessions),
             ("attach_session", "req-0003", .attachSession(session, resume: nil)),
-            ("attach_session_resume", "req-0004", .attachSession(session, resume: ResumeCursor(gatewayID: "gw-8e1f4b7a", lastSequence: 412))),
+            ("attach_session_resume", "req-0004", .attachSession(session, resume: ResumeCursor(
+                origin: ReplayOrigin(gatewayID: "gw-8e1f4b7a", instanceID: "inst-41c07d92"),
+                lastSequence: 412
+            ))),
             ("detach_session", "req-0005", .detachSession(session)),
             ("get_history", "req-0006", .getHistory(session, before: HistoryCursor("60@h2"), limit: 25)),
             ("get_content", "req-0007", .getContent(session, contentID: "approval:controller:48213:7:0", offset: 16384, maxBytes: 65536)),
@@ -137,7 +152,6 @@ import Testing
             ("answer_question_selected", "req-0012", .answerQuestion(session, questionID: "question:48213:4", answer: QuestionAnswer(selectedOptionIDs: ["Rebase onto main"]))),
             ("answer_question_custom", "", .answerQuestion(session, questionID: "", answer: QuestionAnswer())),
             ("resolve_approval", "req-0014", .resolveApproval(session, batchID: "controller:48213:7", decision: .approve)),
-            ("get_request_status", "req-0015", .getRequestStatus(session, target: RequestID("req-0008"))),
         ]
         for (name, _, template) in cases {
             let text = try golden("requests/\(name)")
@@ -160,7 +174,18 @@ import Testing
             #expect(try Contract.json(Data(encoded.utf8)) == Contract.json(Data(text.utf8)), "\(name) differs from the golden request")
         }
         // `list_sessions` is the one operation the app does not use: it subscribes instead.
-        #expect(cases.count == 14)
+        #expect(cases.count == 13)
+
+        // The golden status request is the host-wide form. The app names the session it
+        // sent the mutation to, which the protocol calls the precise form.
+        let status = WireCodec.request(
+            for: .getRequestStatus(session, target: RequestID("req-0008")),
+            requestID: RequestID("req-0015")
+        )
+        let goldenStatus = try JSONDecoder().decode(WireRequest.self, from: Data(try golden("requests/get_request_status").utf8))
+        #expect(status.operation == goldenStatus.operation)
+        #expect(status.sessionID == session.sessionID)
+        #expect(status.registrationEpoch == session.registrationEpoch)
     }
 
     @Test func typedTextWinsOverASelectionBecauseTheWireTakesOnlyOne() {
@@ -187,7 +212,14 @@ import Testing
         #expect(try reply("response_question_answered") == .receipt(.applied))
         #expect(try reply("response_approval_resolved") == .receipt(.applied))
         #expect(try reply("response_detached") == .detached)
-        #expect(try reply("response_resumed") == .attached(.resumed, gatewayID: "gw-8e1f4b7a"))
+        let origin = ReplayOrigin(gatewayID: "gw-8e1f4b7a", instanceID: "inst-41c07d92")
+        #expect(try reply("response_resumed") == .attached(.resumed, origin: origin))
+        // A refused resume is a snapshot like any other: it replaces what the client held.
+        guard case .attached(.snapshot(let resynced), origin) = try reply("response_attached_resync") else {
+            Issue.record("expected a snapshot")
+            return
+        }
+        #expect(resynced.sequence == 412)
         #expect(try reply("response_request_status") == .receipt(.applied))
         #expect(try reply("response_request_status_received") == .receipt(.received))
         #expect(try reply("response_request_status_unknown") == .receipt(.unknown))
@@ -272,11 +304,11 @@ import Testing
     }
 
     @Test func anAttachedSnapshotWithARunningTurnShowsItsToolsAndLiveText() throws {
-        guard case .reply(_, .attached(.snapshot(let snapshot), let gatewayID)) = try decodeGolden("response_attached") else {
+        guard case .reply(_, .attached(.snapshot(let snapshot), let origin)) = try decodeGolden("response_attached") else {
             Issue.record("expected an attached snapshot")
             return
         }
-        #expect(gatewayID == "gw-8e1f4b7a")
+        #expect(origin == ReplayOrigin(gatewayID: "gw-8e1f4b7a", instanceID: "inst-41c07d92"))
         let wire = try JSONDecoder().decode(WireFrame.self, from: Data(try golden("frames/response_attached").utf8))
         guard case .response(let response) = wire, case .attached(let attached) = response.result else { return }
         #expect(snapshot.activeTurnID == attached.snapshot.turn?.turnID)
@@ -371,15 +403,17 @@ import Testing
 
 /// Pairing and reconnecting, end to end through the real codec over a scripted socket.
 @Suite struct WirePairingFlowTests {
-    private let paired = #"{"type":"paired","protocol_version":1,"gateway_id":"gw-1","instance_id":"inst-1","device_id":"0011223344556677","device_name":"Phone","token":"device-token"}"#
+    private let paired = #"{"type":"paired","protocol_version":1,"gateway_id":"gw-1","instance_id":"inst-1","device_id":"0011223344556677","device_name":"Phone","token":"device-token","host_name":"studio"}"#
     private let authenticated = #"{"type":"authenticated","protocol_version":1,"gateway_id":"gw-1","instance_id":"inst-2","device_id":"0011223344556677","device_name":"Phone"}"#
 
-    /// A gateway reduced to its handshake: answers the first frame, then `not_implemented`.
+    /// A gateway reduced to its handshake and an empty session list.
     private func gateway(handshake reply: String) -> ScriptedTransport {
         ScriptedTransport { frame in
-            frame.contains(#""type":"pair""#) || frame.contains(#""type":"authenticate""#)
-                ? [reply]
-                : [#"{"type":"error","code":"not_implemented","message":"this gateway shares no sessions yet"}"#]
+            if frame.contains(#""type":"pair""#) || frame.contains(#""type":"authenticate""#) {
+                return [reply]
+            }
+            guard let request = try? JSONDecoder().decode(WireRequest.self, from: Data(frame.utf8)) else { return [] }
+            return [#"{"kind":"response","protocol_version":1,"request_id":"\#(request.requestID)","result":{"type":"sessions","gateway_id":"gw-1","instance_id":"inst-2","sessions":[],"subscribed":true}}"#]
         }
     }
 
@@ -404,6 +438,7 @@ import Testing
 
         #expect(credential.deviceToken == "device-token")
         #expect(credential.host.gatewayID == "gw-1")
+        #expect(credential.host.name == "studio")
         #expect(credential.host.device == DeviceIdentity(id: "0011223344556677", name: "Phone"))
         #expect(credential.host.address == HostAddress(host: "192.168.1.20", port: 17879))
         #expect(await transport.isClosed)
@@ -495,7 +530,7 @@ import Testing
         }
     }
 
-    @Test func aFoundationGatewayIsConnectedWithNothingShared() async throws {
+    @Test func nothingSharedIsAnEmptyListAndRevocationEndsTheStream() async throws {
         let transport = gateway(handshake: authenticated)
         let client = LiveRemoteClient(codec: WireCodec()) { transport }
         try await client.connect(using: storedCredential())

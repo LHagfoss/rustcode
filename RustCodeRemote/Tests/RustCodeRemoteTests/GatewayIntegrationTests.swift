@@ -15,12 +15,17 @@ struct GatewayIntegrationTests {
         let port: Int
         private let process: Process
 
-        init() async throws {
+        /// - Parameter configFile: contents of `config.toml` for this configuration directory,
+        ///   which a terminal session started with it will also use.
+        init(configFile: String? = nil) async throws {
             binary = try #require(ProcessInfo.processInfo.environment["RUSTCODE_GATEWAY_BIN"])
             // The gateway's control socket lives under the configuration directory, and a
             // Unix socket path has to stay short.
             configuration = URL(fileURLWithPath: "/tmp/rcgw-\(UUID().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: configuration, withIntermediateDirectories: true)
+            if let configFile {
+                try configFile.write(to: configuration.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+            }
             port = Int.random(in: 20000...40000)
 
             process = Process()
@@ -109,11 +114,11 @@ struct GatewayIntegrationTests {
         #expect(identity.gatewayID == credential.host.gatewayID)
         #expect(!identity.instanceID.isEmpty)
 
-        // The foundation gateway shares nothing: connected, with an empty session list.
+        // Nothing is shared yet: connected, with an empty session list.
         let sessions = try await client.subscribeSessions()
         var iterator = sessions.makeAsyncIterator()
         #expect(try await iterator.next() == [])
-        #expect(try gateway.run("remote", "status").contains("connections    1"))
+        #expect(try gateway.run("remote", "status").contains("running"))
 
         // Revoking the device closes its connection with `revoked`.
         try gateway.run("remote", "revoke", credential.host.device.id)

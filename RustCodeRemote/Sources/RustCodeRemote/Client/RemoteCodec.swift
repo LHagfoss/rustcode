@@ -36,12 +36,23 @@ public enum RemoteCommand: Sendable, Equatable {
 /// Where a replay should continue. The gateway ID is the one the host reported when the
 /// session was attached; a cursor from another gateway is worthless.
 public struct ResumeCursor: Sendable, Equatable {
-    public var gatewayID: String
+    public var origin: ReplayOrigin
     public var lastSequence: UInt64
 
-    public init(gatewayID: String, lastSequence: UInt64) {
-        self.gatewayID = gatewayID
+    public init(origin: ReplayOrigin, lastSequence: UInt64) {
+        self.origin = origin
         self.lastSequence = lastSequence
+    }
+}
+
+/// The gateway, and the run of it, that numbered a session's events.
+public struct ReplayOrigin: Sendable, Equatable {
+    public var gatewayID: String
+    public var instanceID: String?
+
+    public init(gatewayID: String, instanceID: String? = nil) {
+        self.gatewayID = gatewayID
+        self.instanceID = instanceID
     }
 }
 
@@ -58,11 +69,19 @@ public struct PairingTarget: Sendable, Equatable {
     public var credential: PairingCredential
     /// The gateway the QR code named. The host that answers must be that one.
     public var expectedGatewayID: String?
+    /// The host's name as the QR code gave it.
+    public var hostName: String?
 
-    public init(address: HostAddress, credential: PairingCredential, expectedGatewayID: String? = nil) {
+    public init(
+        address: HostAddress,
+        credential: PairingCredential,
+        expectedGatewayID: String? = nil,
+        hostName: String? = nil
+    ) {
         self.address = address
         self.credential = credential
         self.expectedGatewayID = expectedGatewayID
+        self.hostName = hostName
     }
 }
 
@@ -86,8 +105,8 @@ public enum HandshakeReply: Sendable, Equatable {
 public enum RemoteReply: Sendable, Equatable {
     case handshake(HandshakeReply)
     case sessions([SessionSummary])
-    /// `gatewayID` is what a later resume cursor for this session has to name.
-    case attached(SessionAttachment.Start, gatewayID: String)
+    /// `origin` is what a later resume cursor for this session has to name.
+    case attached(SessionAttachment.Start, origin: ReplayOrigin)
     case detached
     case history(HistoryPage)
     case content(ContentChunk)
@@ -99,17 +118,14 @@ public enum RemoteReply: Sendable, Equatable {
     case unknown(String)
 }
 
-/// An error frame that names no request. During the handshake it answers the first frame;
-/// afterwards it answers the oldest request still waiting, or announces that the gateway
-/// is closing the connection.
+/// An error frame that names no request. During the handshake it answers the first frame.
+/// Afterwards every reply is a correlated response, so it can only mean that the gateway
+/// is closing the connection, and why.
 public struct GatewayFailure: Sendable, Equatable {
     public var error: RemoteError
-    /// The gateway closes the connection after sending this.
-    public var closesConnection: Bool
 
-    public init(error: RemoteError, closesConnection: Bool) {
+    public init(error: RemoteError) {
         self.error = error
-        self.closesConnection = closesConnection
     }
 }
 

@@ -5,6 +5,7 @@
   "result": {
     "type": "resumed",
     "gateway_id": "gw-8e1f4b7a",
+    "instance_id": "inst-41c07d92",
     "next_sequence": 413
   }
 }

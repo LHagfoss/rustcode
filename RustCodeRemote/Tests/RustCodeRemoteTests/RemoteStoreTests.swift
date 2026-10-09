@@ -61,7 +61,7 @@ private actor StubClient: RemoteClient {
             try connectResults.removeFirst().get()
         }
         let instance = instanceIDs.count > 1 ? instanceIDs.removeFirst() : instanceIDs[0]
-        return ConnectionIdentity(gatewayID: "gateway", instanceID: instance)
+        return ConnectionIdentity(gatewayID: "gateway", instanceID: instance, hostName: hostName)
     }
 
     func getContent(_ contentID: String, in session: SessionRef, offset: UInt64, maxBytes: Int) async throws -> ContentChunk {
@@ -83,6 +83,15 @@ private actor StubClient: RemoteClient {
         listContinuation = continuation
         continuation.yield(sessions)
         return stream
+    }
+
+    private(set) var refreshCalls = 0
+    var hostName: String?
+    func set(hostName: String) { self.hostName = hostName }
+
+    func refreshSessions() async throws {
+        refreshCalls += 1
+        listContinuation?.yield(sessions)
     }
 
     func attach(_ session: SessionRef, resumeAfter: UInt64?) async throws -> SessionAttachment {
@@ -390,6 +399,44 @@ private final class DelayLog: Sendable {
         #expect(await waitUntil { store.selectedSessionID == nil })
         #expect(store.attached == nil)
         #expect(store.notice == "Sharing was turned off for this session.")
+    }
+
+    @Test func refreshingAsksForTheListAgainWithoutReconnecting() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+
+        await store.refreshSessions()
+        #expect(await client.refreshCalls == 1)
+        #expect(await client.connectCalls == 1)
+        #expect(store.connection == .connected)
+    }
+
+    @Test func detachingStopsFollowingTheSession() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+
+        store.detach()
+        #expect(store.selectedSessionID == nil)
+        #expect(store.attached == nil)
+        #expect(store.sessions.count == 1)
+    }
+
+    @Test func theHostsReportedNameReplacesTheAddressAndIsStored() async {
+        let client = StubClient()
+        await client.set(hostName: "studio")
+        let credentials = InMemoryCredentialStore(makeCredential())
+        let store = makeStore(client, credentials: credentials)
+        store.bootstrap()
+        #expect(store.host?.name == "Test Mac")
+        #expect(await waitUntil { store.host?.name == "studio" })
+        #expect(credentials.load()?.host.name == "studio")
+        #expect(credentials.load()?.deviceToken == "token")
     }
 
     // MARK: Approval details

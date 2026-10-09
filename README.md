@@ -11,43 +11,56 @@ keyboard for it; closing the app never cancels work.
 
 ## Status
 
-The app speaks the real protocol, and the RustCode side is not finished yet.
+The app speaks the final version of remote protocol v1 and works against a real RustCode
+host. What that means, precisely:
 
-- **Pairing and authentication work against a real gateway.** The app pairs with
-  `rustcode remote serve` by QR payload or by address and code, stores the device token in
-  the Keychain, authenticates with it on every later connection, and goes back to the
-  pairing screen when the device is revoked. This is checked by an integration test that
-  drives a real gateway over loopback (see [Tests](#tests)).
-- **No session can be shared yet.** The gateway that exists today (RustCode PR #1912) is a
-  foundation: it answers everything after the handshake with `not_implemented`. The app
-  shows that as connected with an empty session list. The `/remote` command and session
-  routing are still being built in RustCode.
-- **The session protocol is implemented against its contract, not against a host.**
-  Requests, responses and events are encoded and decoded from the JSON Schemas and the 56
-  golden frames published in the RustCode repository. No host produces those frames over
-  a socket yet, so the path from a live session to the transcript has only been exercised
-  with the golden frames and the in-app demo host.
-- **Demo mode** shows the whole interface against a simulated host, without a Mac.
+- **Checked end to end on one Mac, over loopback.** An integration test starts a real
+  gateway and a real RustCode terminal session, shares the session with `/remote`, and
+  drives it with this package's client: pair, list, attach, submit a prompt, follow the
+  streamed response event by event, queue a second prompt, look up request receipts,
+  reconnect and resume, `/remote off`, revoke (see [Tests](#tests)). The model behind the
+  session in that test is a local stand-in that streams a fixed reply.
+- **Not yet checked from a phone over a network.** Pairing an iPhone with a Mac over a LAN
+  or NetBird, the local-network permission prompt and QR scanning with the camera have
+  not been exercised; they need a person holding the phone.
+- **Approvals, questions, tools and sub-agents** are implemented against the published
+  golden frames and the in-app demo host. The end-to-end test does not produce them,
+  because its stand-in model only writes text.
+- The RustCode side is on the `feat/engine-remote-routing` branch (PR #1914) at the time
+  of writing. You need a RustCode build that includes it.
 
 ## Pair with a host
 
-On the Mac (a RustCode build that has `remote serve`):
+The phone has to be able to reach the Mac, so the gateway must listen on an address other
+than loopback. Use the Mac's NetBird address (recommended, the tunnel encrypts the
+connection) or its LAN address (not encrypted, see [Network security](#network-security)).
+
+On the Mac:
 
 ```sh
-rustcode remote serve --bind <address> --advertise <address>   # default: loopback, port 17879
-rustcode remote pair
+netbird status | grep "NetBird IP"        # or: ipconfig getifaddr en0   for the LAN address
+rustcode remote serve --bind <that address>
 ```
 
-`remote pair` prints an address, an eight-digit code and a QR payload. In the app either:
+Then, in the RustCode terminal session you want to share:
 
-- type the address (`192.168.1.20:17879`) and the code, or
-- paste the QR payload (the `{"protocol_version":1,…}` line) into the address field, or
-- scan it, once something draws it as a QR code. The terminal prints the payload as text
-  only; the scanner accepts a QR code that encodes exactly that text.
+```
+/remote
+```
 
-A challenge lasts two minutes and works once. After too many wrong attempts the host locks
-pairing for a few minutes and the app says for how long. `rustcode remote devices` lists
-paired devices and `rustcode remote revoke <device>` removes one.
+`/remote` shows a QR code, the address and an eight-digit code. In the app tap **Scan
+Pairing Code** and point the camera at the QR code. The first time, iOS asks for camera
+access and, on a LAN, for local-network access; allow both. Without a camera, type the
+address (`192.168.1.20:17879`) and the code instead.
+
+The session appears in the app's list as soon as it is shared. `/remote off` stops
+sharing it; closing the terminal ends it. `rustcode remote devices` lists paired devices
+and `rustcode remote revoke <device>` removes one, which sends the app back to the
+pairing screen.
+
+A pairing code lasts two minutes and works once; run `/remote` or `rustcode remote pair`
+again for a new one. After too many wrong attempts the host locks pairing for a few
+minutes and the app says for how long.
 
 ## Requirements
 
@@ -167,8 +180,8 @@ cd RustCodeRemote
 swift test
 ```
 
-That includes the contract tests: every golden request and frame is decoded, encoded
-again and compared as JSON (the round trip RustCode's own tests run), every golden file
+That includes the contract tests: every golden request, frame and handshake frame is
+decoded, encoded again and compared as JSON (the round trip RustCode's own tests run), every golden file
 has to be covered, and the tags and enum values the DTOs know are compared with what the
 schemas allow, so a change on the RustCode side shows up as a failing test here. The
 Keychain store is tested against the login keychain of the Mac running the tests.
@@ -183,15 +196,21 @@ Scripts/sync-protocol.sh /path/to/rustcode some-ref
 It copies the schemas and golden frames from that commit into the test resources and
 records the commit in `Resources/remote-protocol/SOURCE.txt`.
 
-The integration tests need a real gateway and are skipped unless you name one:
+The integration tests need a real `rustcode` binary and are skipped unless you name one:
 
 ```sh
-RUSTCODE_GATEWAY_BIN=/path/to/rustcode swift test --filter GatewayIntegrationTests
+RUSTCODE_GATEWAY_BIN=/path/to/rustcode swift test
 ```
 
-They start `rustcode remote serve` on loopback in a temporary configuration directory and
-pair by QR payload and by code, authenticate, check the empty session list, revoke the
-device and watch the connection close, restart the gateway, and trip the pairing rate limit.
+They run everything on loopback, in a temporary configuration directory:
+
+- `GatewayIntegrationTests` pair by QR payload and by code, authenticate, revoke a device
+  and watch the connection close, restart the gateway, and trip the pairing rate limit.
+- `SessionEndToEndTests` also starts a RustCode terminal session in a pseudo-terminal,
+  types `/remote` into it, and drives the shared session from the client as described
+  under [Status](#status). The session's model is a small HTTP server in the test that
+  streams a fixed reply, so no provider account is involved. Set `RUSTCODE_E2E_FRAMES` to
+  a file path to get every frame of the run written out, with secrets redacted.
 
 The app:
 
@@ -223,9 +242,10 @@ unknown event still takes its place in the sequence so the events after it apply
 that is not valid protocol at all drops the connection, and reconnecting resynchronises
 from a snapshot.
 
-The handshake frames (`pair`, `authenticate`, `paired`, `authenticated`, `error`) are
-provisional on the RustCode side and are expected to move into the versioned envelope. That
-change is contained in `Wire/WireHandshake.swift` and `WireCodec`.
+The handshake frames (`pair`, `authenticate`, `paired`, `authenticated`, `error`) have
+their own schemas and golden files and are covered the same way. After the handshake every
+reply is a response that names its request; an `error` frame without a request ID means
+the gateway is closing the connection.
 
 ## Network security
 

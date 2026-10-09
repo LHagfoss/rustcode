@@ -1,0 +1,87 @@
+{
+  "$defs": {
+    "PairingMethod": {
+      "description": "Which representation of a pairing challenge the device presents.",
+      "oneOf": [
+        {
+          "const": "credential",
+          "description": "The high-entropy credential carried by the QR payload.",
+          "type": "string"
+        },
+        {
+          "const": "code",
+          "description": "The short code typed by hand next to the address.",
+          "type": "string"
+        }
+      ]
+    },
+    "Secret": {
+      "description": "A pairing credential, manual code or device token. Serializes as a plain\nstring; `Debug` never prints the value, so it cannot reach logs or error\nstrings through a derived impl.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "First frame from a device. Anything else closes the connection.",
+  "oneOf": [
+    {
+      "description": "Exchange a pairing challenge for a device token.",
+      "properties": {
+        "device_name": {
+          "description": "A label chosen by the device. Never an identity.",
+          "type": "string"
+        },
+        "method": {
+          "$ref": "#/$defs/PairingMethod"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "secret": {
+          "$ref": "#/$defs/Secret"
+        },
+        "type": {
+          "const": "pair",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "method",
+        "secret",
+        "device_name"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Present a device token obtained from an earlier `paired` frame.",
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token": {
+          "$ref": "#/$defs/Secret"
+        },
+        "type": {
+          "const": "authenticate",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "device_id",
+        "token"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "HandshakeRequest"
+}

@@ -50,6 +50,12 @@ public struct SessionUpdate: Sendable, Equatable {
     public init(session: SessionRef, sequence: UInt64, event: SessionEvent) {
         self.init(session: session, sequence: sequence, changes: [event])
     }
+
+    /// A snapshot replaces all state and does not take a sequence number of its own.
+    public var isSnapshot: Bool {
+        if changes.count == 1, case .replaced = changes[0] { return true }
+        return false
+    }
 }
 
 /// The authoritative state of one attached session: a bounded transcript tail, the complete
@@ -116,6 +122,14 @@ public struct SessionSnapshot: Sendable, Equatable {
     @discardableResult
     public mutating func apply(_ update: SessionUpdate) -> ApplyOutcome {
         guard update.session == session else { return .foreign }
+        // A snapshot does not take a sequence number: it carries the watermark it stands
+        // for and replaces everything, wherever the client was.
+        if update.isSnapshot, case .replaced(let snapshot) = update.changes[0] {
+            let session = session
+            self = snapshot
+            self.session = session
+            return .applied
+        }
         guard update.sequence > sequence else { return .duplicate }
         guard update.sequence == sequence + 1 else {
             return .gap(expected: sequence + 1, received: update.sequence)

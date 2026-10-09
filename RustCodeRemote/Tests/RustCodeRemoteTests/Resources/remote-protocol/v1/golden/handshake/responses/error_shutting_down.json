@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "shutting_down",
+  "message": "why the connection is being closed"
+}

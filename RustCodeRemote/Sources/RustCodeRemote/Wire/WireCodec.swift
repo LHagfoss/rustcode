@@ -36,7 +36,8 @@ public struct WireCodec: RemoteCodec {
             return PairingTarget(
                 address: address,
                 credential: .oneTime(payload.credential),
-                expectedGatewayID: payload.gatewayID
+                expectedGatewayID: payload.gatewayID,
+                hostName: payload.hostName
             )
         }
     }
@@ -102,7 +103,13 @@ public struct WireCodec: RemoteCodec {
         case .subscribeSessions:
             return WireRequest(requestID: requestID.rawValue, operation: .subscribeSessions)
         case .attachSession(let session, let resume):
-            let cursor = resume.map { WireResumeCursor(gatewayID: $0.gatewayID, lastSequence: $0.lastSequence) }
+            let cursor = resume.map {
+                WireResumeCursor(
+                    gatewayID: $0.origin.gatewayID,
+                    instanceID: $0.origin.instanceID,
+                    lastSequence: $0.lastSequence
+                )
+            }
             return scoped(session, .attachSession(.init(resume: cursor)))
         case .detachSession(let session):
             return scoped(session, .detachSession)
@@ -129,12 +136,10 @@ public struct WireCodec: RemoteCodec {
                 batchID: batchID,
                 choice: WireOpen(decision == .approve ? .approve : .deny)
             )))
-        case .getRequestStatus(_, let target):
-            // Host-scoped on the wire: the protocol looks the receipt up by request ID alone.
-            return WireRequest(
-                requestID: requestID.rawValue,
-                operation: .getRequestStatus(.init(targetRequestID: target.rawValue))
-            )
+        case .getRequestStatus(let session, let target):
+            // Resolved by device and request ID; naming the session asks exactly the
+            // terminal that would hold the receipt.
+            return scoped(session, .getRequestStatus(.init(targetRequestID: target.rawValue)))
         }
     }
 
@@ -189,14 +194,19 @@ public struct WireCodec: RemoteCodec {
         switch frame {
         case .paired(let paired):
             .handshake(.paired(PairingGrant(
-                identity: ConnectionIdentity(gatewayID: paired.gatewayID, instanceID: paired.instanceID),
+                identity: ConnectionIdentity(
+                    gatewayID: paired.gatewayID,
+                    instanceID: paired.instanceID,
+                    hostName: paired.hostName
+                ),
                 device: DeviceIdentity(id: paired.deviceID, name: paired.deviceName),
                 deviceToken: paired.token
             )))
         case .authenticated(let authenticated):
             .handshake(.authenticated(ConnectionIdentity(
                 gatewayID: authenticated.gatewayID,
-                instanceID: authenticated.instanceID
+                instanceID: authenticated.instanceID,
+                hostName: authenticated.hostName
             )))
         case .error(let failure):
             .gatewayFailure(gatewayFailure(failure))
@@ -207,37 +217,25 @@ public struct WireCodec: RemoteCodec {
 
     static func gatewayFailure(_ failure: WireGatewayFrame.Failure) -> GatewayFailure {
         let message = failure.message
-        switch failure.code.known {
+        let error: RemoteError = switch failure.code.known {
         case .pairingFailed:
-            return GatewayFailure(
-                error: .pairingFailed("the code is wrong, expired or already used"),
-                closesConnection: true
-            )
+            .pairingFailed("the code is wrong, expired or already used")
         case .rateLimited:
-            let retryAfter = failure.retryAfterSeconds.map { Duration.seconds(Int64(clamping: $0)) }
-            return GatewayFailure(error: .rateLimited(retryAfter: retryAfter), closesConnection: true)
+            .rateLimited(retryAfter: failure.retryAfterSeconds.map { Duration.seconds(Int64(clamping: $0)) })
         case .unauthorized, .revoked:
-            return GatewayFailure(error: .unauthorized, closesConnection: true)
+            .unauthorized
         case .unsupportedVersion:
-            return GatewayFailure(error: .incompatibleProtocol, closesConnection: true)
-        case .notImplemented:
-            return GatewayFailure(error: .notImplemented, closesConnection: false)
+            .incompatibleProtocol
         case .busy:
-            return GatewayFailure(error: .transport("The host has too many connections right now."), closesConnection: true)
-        case .handshakeTimeout, .slowConsumer, .idleTimeout, .shuttingDown:
-            return GatewayFailure(error: .transport("The host closed the connection: \(message)."), closesConnection: true)
-        case .invalidFrame, .frameTooLarge, .internal:
-            return GatewayFailure(
-                error: .rejected(.other(code: failure.code.rawValue, message: message)),
-                closesConnection: false
-            )
+            .transport("The host has too many connections right now.")
+        case .handshakeTimeout, .slowConsumer, .idleTimeout, .shuttingDown, .invalidFrame, .frameTooLarge,
+             .internal, .notImplemented:
+            .transport("The host closed the connection: \(message).")
         case nil:
-            // A code from a newer gateway: report it, and let the socket say whether it closed.
-            return GatewayFailure(
-                error: .rejected(.other(code: failure.code.rawValue, message: message)),
-                closesConnection: false
-            )
+            // A code from a newer gateway. Whatever it means, the connection is going away.
+            .transport("The host closed the connection: \(message) (\(failure.code.rawValue)).")
         }
+        return GatewayFailure(error: error)
     }
 
     // MARK: Protocol frames
@@ -267,9 +265,16 @@ public struct WireCodec: RemoteCodec {
         case .sessions(let sessions):
             return .sessions(sessions.sessions.map(summary))
         case .attached(let attached):
-            return .attached(.snapshot(snapshot(attached.snapshot)), gatewayID: attached.gatewayID)
+            // With or without `resync`, a snapshot replaces whatever the client held.
+            return .attached(
+                .snapshot(snapshot(attached.snapshot)),
+                origin: ReplayOrigin(gatewayID: attached.gatewayID, instanceID: attached.instanceID)
+            )
         case .resumed(let resumed):
-            return .attached(.resumed, gatewayID: resumed.gatewayID)
+            return .attached(
+                .resumed,
+                origin: ReplayOrigin(gatewayID: resumed.gatewayID, instanceID: resumed.instanceID)
+            )
         case .detached:
             return .detached
         case .history(let page):

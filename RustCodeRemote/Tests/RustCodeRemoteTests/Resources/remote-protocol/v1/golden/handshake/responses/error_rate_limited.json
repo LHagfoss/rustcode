@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "code": "rate_limited",
+  "message": "why the connection is being closed",
+  "retry_after_secs": 240
+}

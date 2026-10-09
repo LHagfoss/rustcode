@@ -1,0 +1,214 @@
+import Foundation
+import Testing
+@testable import RustCodeRemote
+
+/// The whole path against real processes on loopback: a gateway, a terminal session shared
+/// with `/remote`, a model endpoint that streams a fixed reply, and this package's client.
+///
+///     RUSTCODE_GATEWAY_BIN=/path/to/rustcode swift test --filter SessionEndToEndTests
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["RUSTCODE_GATEWAY_BIN"] != nil), .serialized)
+struct SessionEndToEndTests {
+    private func configFile(modelPort: UInt16) -> String {
+        """
+        version = 1
+        tool_protocol = "json"
+        sandbox_mode = "trusted"
+        discord_rpc_enabled = false
+        auto_recap = false
+        prompt_improver = false
+        vision_model = "fake"
+
+        [default]
+        big = "fake"
+        small = "fake"
+
+        [[models]]
+        name = "fake"
+        url = "http://127.0.0.1:\(modelPort)/v1/chat/completions"
+        model = "fake"
+        context_window = 128000
+        supports_vision = false
+        """
+    }
+
+    /// Waits for a session list that satisfies `condition`.
+    private func list(
+        _ iterator: inout AsyncThrowingStream<[SessionSummary], any Error>.Iterator,
+        where condition: ([SessionSummary]) -> Bool
+    ) async throws -> [SessionSummary] {
+        while let sessions = try await iterator.next() {
+            if condition(sessions) { return sessions }
+        }
+        throw RemoteError.connectionClosed
+    }
+
+    @Test(.timeLimit(.minutes(2)))
+    func aSharedTerminalSessionIsListedAttachedDrivenAndClosed() async throws {
+        let model = try FakeModelServer()
+        let modelPort = try await model.start()
+        let gateway = try await GatewayIntegrationTests.Gateway(configFile: configFile(modelPort: modelPort))
+        let workspace = gateway.configuration.appendingPathComponent("workspace")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let terminal = try TerminalSession(binary: gateway.binary, configuration: gateway.configuration, workspace: workspace)
+        let log = FrameLog()
+        defer {
+            log.flush()
+            terminal.stop()
+            gateway.stop()
+            model.stop()
+        }
+        let client = LiveRemoteClient(codec: WireCodec(), requestTimeout: .seconds(15)) { RecordingTransport(log: log) }
+
+        // Pair and connect before anything is shared.
+        let credential = try await client.pair(.scanned(try gateway.pairingChallenge().payload), deviceName: "E2E Phone")
+        let identity = try await client.connect(using: credential)
+        #expect(identity.gatewayID == credential.host.gatewayID)
+        var lists = try await client.subscribeSessions().makeAsyncIterator()
+        #expect(try await lists.next() == [])
+
+        // Share the terminal session.
+        try await Task.sleep(for: .seconds(3))
+        terminal.type("/remote\r")
+        let shared = try await list(&lists) { !$0.isEmpty }
+        let session = try #require(shared.first)
+        #expect(shared.count == 1)
+        #expect(session.model == "fake")
+        #expect(session.activity == .idle)
+        #expect(session.health == .healthy)
+        #expect(session.workspace.hasSuffix("workspace"))
+        try await Task.sleep(for: .milliseconds(500))
+        terminal.type("\u{1b}")
+
+        // Attach: a snapshot of an idle, empty session.
+        let attachment = try await client.attach(session.ref, resumeAfter: nil)
+        guard case .snapshot(var state) = attachment.start else {
+            Issue.record("expected a snapshot")
+            return
+        }
+        #expect(state.session == session.ref)
+        #expect(!state.isRunning)
+        var updates = attachment.updates.makeAsyncIterator()
+
+        // A slash command from the phone is refused, and never runs.
+        let slash = try await client.submit("/exit", to: session.ref, requestID: RequestID())
+        #expect(slash.state == .rejected(.unsupportedOperation))
+
+        // Run a turn from the phone and follow it event by event.
+        let promptID = RequestID()
+        let receipt = try await client.submit("Say hello", to: session.ref, requestID: promptID)
+        #expect(receipt.state == .applied)
+
+        var sawTurnStart = false
+        var queued = false
+        var finishedTurns = 0
+        var queueID: RequestID?
+        while finishedTurns < 2, let update = try await updates.next() {
+            // Every event applies in sequence: no gap, no duplicate.
+            #expect(state.apply(update) == .applied, "event \(update.sequence) did not apply at \(state.sequence)")
+            for change in update.changes {
+                switch change {
+                case .turnStarted:
+                    sawTurnStart = true
+                case .responseDelta where !queued:
+                    // While the turn streams, a second submit is busy and a queued prompt is accepted.
+                    queued = true
+                    let busy = try await client.submit("Too early", to: session.ref, requestID: RequestID())
+                    #expect(busy.state == .rejected(.busy))
+                    let id = RequestID()
+                    queueID = id
+                    let queuedReceipt = try await client.queue("And again", in: session.ref, requestID: id)
+                    #expect(queuedReceipt.state == .applied)
+                case .turnFinished(_, let outcome):
+                    #expect(outcome == .completed)
+                    finishedTurns += 1
+                default:
+                    break
+                }
+            }
+        }
+        #expect(sawTurnStart)
+        #expect(finishedTurns == 2)
+        #expect(!state.isRunning)
+
+        let users = state.items.compactMap { item -> String? in
+            if case .user(let text) = item.content { text } else { nil }
+        }
+        #expect(users.contains("Say hello"))
+        #expect(users.contains("And again"))
+        let responses = state.items.compactMap { item -> String? in
+            if case .assistant(let assistant) = item.content { assistant.text } else { nil }
+        }
+        let expected = FakeModelServer.reply.joined()
+        #expect(responses.contains { $0.contains(expected) }, "streamed text was \(responses)")
+
+        // The outcome of a mutation can be asked for afterwards; an ID nobody saw is unknown.
+        #expect(try await client.getRequestStatus(promptID, in: session.ref).state == .applied)
+        if let queueID {
+            #expect(try await client.getRequestStatus(queueID, in: session.ref).state == .applied)
+        }
+        #expect(try await client.getRequestStatus(RequestID(), in: session.ref).state == .unknown)
+
+        // A stale cancel cannot stop anything.
+        let cancel = try await client.cancel(turnID: "turn:0:0", in: session.ref, requestID: RequestID())
+        #expect(cancel.state == .rejected(.staleTurn))
+
+        // Reconnect and resume from the last applied event.
+        await client.disconnect()
+        try await client.connect(using: credential)
+        lists = try await client.subscribeSessions().makeAsyncIterator()
+        #expect(try await list(&lists) { !$0.isEmpty }.first?.ref == session.ref)
+        let resumed = try await client.attach(session.ref, resumeAfter: state.sequence)
+        switch resumed.start {
+        case .resumed:
+            break
+        case .snapshot(let fresh):
+            // Also valid: the gateway may answer a resume with a snapshot.
+            #expect(fresh.sequence >= state.sequence)
+            state = fresh
+        }
+        updates = resumed.updates.makeAsyncIterator()
+
+        // A fresh attach shows the finished conversation from the transcript.
+        let reattached = try await client.attach(session.ref, resumeAfter: nil)
+        guard case .snapshot(let after) = reattached.start else {
+            Issue.record("expected a snapshot")
+            return
+        }
+        let transcript = after.items.compactMap { item -> String? in
+            switch item.content {
+            case .user(let text): "user: \(text)"
+            case .assistant(let assistant): "assistant: \(assistant.text)"
+            default: nil
+            }
+        }
+        #expect(transcript.contains("user: Say hello"))
+        #expect(transcript.contains { $0.hasPrefix("assistant: ") && $0.contains(expected) })
+        updates = reattached.updates.makeAsyncIterator()
+
+        // `/remote off` in the terminal: the session closes and leaves the list.
+        terminal.type("/remote off\r")
+        #expect(try await list(&lists) { $0.isEmpty } == [])
+        do {
+            while try await updates.next() != nil {}
+            Issue.record("the update stream should end with session_closed")
+        } catch {
+            guard case RemoteError.sessionClosed = error else {
+                Issue.record("unexpected end of the update stream: \(error)")
+                return
+            }
+        }
+        let late = try await client.submit("Anyone there?", to: session.ref, requestID: RequestID())
+        if case .rejected = late.state {} else {
+            Issue.record("a prompt to a closed session was not rejected: \(late.state)")
+        }
+
+        // Revoking the device closes the connection for good.
+        try gateway.run("remote", "revoke", credential.host.device.id)
+        await #expect(throws: RemoteError.unauthorized) {
+            while try await lists.next() != nil {}
+        }
+        await #expect(throws: RemoteError.unauthorized) {
+            try await client.connect(using: credential)
+        }
+    }
+}

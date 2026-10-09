@@ -106,15 +106,29 @@ import Testing
         #expect(snapshot.items.first?.content == .assistant(AssistantText(text: "Hello", isStreaming: true)))
     }
 
-    @Test func resyncRequiredEndsTheUpdateStreamWithThatError() async throws {
+    @Test func afterAResyncNoticeOnlyTheSnapshotIsTrusted() async throws {
         let (client, transport) = makeClient(["authenticate": ["authenticated"], "attach": ["attached"]])
         try await client.connect(using: makeCredential())
-        let attachment = try await client.attach(ref, resumeAfter: 4)
+        let attachment = try await client.attach(ref, resumeAfter: nil)
+        await transport.push("update|s1|11|kept")
         await transport.push("resync|s1")
+        await transport.push("update|s1|12|dropped")
+        await transport.push("snapshot|s1|40")
+        await transport.push("update|s1|41|after")
 
-        await #expect(throws: RemoteError.resyncRequired) {
-            for try await _ in attachment.updates {}
+        var received: [SessionUpdate] = []
+        for try await update in attachment.updates {
+            received.append(update)
+            if received.count == 3 { break }
         }
+        #expect(received.map(\.sequence) == [11, 40, 41])
+        #expect(received[1].isSnapshot)
+
+        guard case .snapshot(var state) = attachment.start else { return }
+        for update in received {
+            #expect(state.apply(update) == .applied)
+        }
+        #expect(state.sequence == 41)
     }
 
     @Test func aMutationWaitsPastReceivedForTheOwnersAnswer() async throws {
@@ -254,24 +268,29 @@ import Testing
         #expect(identity == ConnectionIdentity(gatewayID: "gateway", instanceID: "instance-1"))
     }
 
-    @Test func aGatewayThatSharesNothingYetIsConnectedWithNoSessions() async throws {
-        let (client, transport) = makeClient([
-            "authenticate": ["authenticated"],
-            "subscribe": ["!gateway-error|not_implemented"],
-        ])
+    @Test func anErrorThatNamesNoRequestMeansTheConnectionIsClosing() async throws {
+        let (client, transport) = makeClient(["authenticate": ["authenticated"], "history": ["!gateway-error|idle_timeout"]])
+        try await client.connect(using: makeCredential())
+        await #expect(throws: RemoteError.transport("idle_timeout")) {
+            _ = try await client.getHistory(ref, before: HistoryCursor("c"), limit: 10)
+        }
+        #expect(await transport.isClosed)
+    }
+
+    @Test func refreshingDeliversTheNewListThroughTheSameStream() async throws {
+        let transport = ScriptedTransport()
+        let client = LiveRemoteClient(codec: LineCodec()) { transport }
+        await transport.setResponder(scriptedResponder(["authenticate": ["authenticated"], "subscribe": ["sessions|1"]]))
+        await #expect(throws: RemoteError.notConnected) { try await client.refreshSessions() }
         try await client.connect(using: makeCredential())
         let stream = try await client.subscribeSessions()
         var iterator = stream.makeAsyncIterator()
-        #expect(try await iterator.next() == [])
-        #expect(await transport.isClosed == false)
-    }
+        #expect(try await iterator.next()?.count == 1)
 
-    @Test func anUncorrelatedErrorAnswersTheOldestRequest() async throws {
-        let (client, _) = makeClient(["authenticate": ["authenticated"], "history": ["!gateway-error|boom"]])
-        try await client.connect(using: makeCredential())
-        await #expect(throws: RemoteError.transport("boom")) {
-            _ = try await client.getHistory(ref, before: HistoryCursor("c"), limit: 10)
-        }
+        await transport.setResponder(scriptedResponder(["subscribe": ["sessions|3"]]))
+        try await client.refreshSessions()
+        #expect(try await iterator.next()?.count == 3)
+        #expect(await transport.isClosed == false)
     }
 
     @Test func anErrorThatClosesTheConnectionFailsEverything() async throws {
@@ -310,7 +329,7 @@ import Testing
         let (client, transport) = makeClient([
             "authenticate": ["authenticated"],
             "attach": ["attached"],
-            "attach:gw-1@12": ["resumed"],
+            "attach:gw-1/inst-1@12": ["resumed"],
         ])
         try await client.connect(using: makeCredential())
         // Nothing to resume from yet: the first attach cannot name a gateway.
@@ -319,7 +338,7 @@ import Testing
         #expect(second.start == .resumed)
         let sent = await transport.sent
         #expect(sent[1].hasSuffix("|attach"))
-        #expect(sent[2].hasSuffix("|attach:gw-1@12"))
+        #expect(sent[2].hasSuffix("|attach:gw-1/inst-1@12"))
     }
 
     @Test func anUnknownOutcomeIsAnUnknownReceiptNotAnError() async throws {

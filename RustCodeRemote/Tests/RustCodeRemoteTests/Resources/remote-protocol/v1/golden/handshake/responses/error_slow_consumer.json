@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "slow_consumer",
+  "message": "why the connection is being closed"
+}
