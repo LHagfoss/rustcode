@@ -651,7 +651,6 @@ pub(crate) fn render_with_transcript_snapshot(
         transcript,
         (!control_row_suppressed).then_some(chunks[5]),
     );
-    transcript.highlight_hovered_target(f.buffer_mut());
 
     let selection_area = if let Some(question_area) = question_area {
         ratatui::layout::Rect::new(
@@ -666,6 +665,8 @@ pub(crate) fn render_with_transcript_snapshot(
     if let Some(rows) = tool_rows {
         transcript.set_tool_rows(selection_area, rows);
     }
+    transcript.refresh_hover();
+    transcript.highlight_hovered_target(f.buffer_mut());
     transcript.highlight_hovered_tool_block(f.buffer_mut());
     transcript.selection.refresh_view(
         selection_area,
