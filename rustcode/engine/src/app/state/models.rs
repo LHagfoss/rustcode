@@ -740,19 +740,27 @@ pub struct PromptCache {
     system_prompt: String,
     skill_metadata: Option<Arc<Vec<crate::skills::SkillMetadata>>>,
     skill_metadata_generation: u64,
-    mcp_selection_policy: Option<crate::tools::ToolSchemaPolicy>,
     mcp_selection_session_id: Option<String>,
-    mcp_selection_user_count: Option<usize>,
-    /// The pinned MCP menu. The schema selector seats it ahead of everything
-    /// but explicit requests and the newest user message, so a growing
-    /// transcript or a server registering mid-turn cannot reshuffle a full
-    /// budget. Cleared only when the session or policy changes — never on a
-    /// new turn or on `bump_mcp_generation`, which fires for every lazily
-    /// started server. (#1591)
-    mcp_selected_names: Vec<String>,
-    /// Invalidates schema computations that started from an older cache
-    /// snapshot, including concurrent requests with the same session inputs.
-    mcp_selection_revision: u64,
+    /// One pinned MCP menu per schema policy. The main loop, the recap and the
+    /// prompt improver each request tools under their own policy through this
+    /// cache; with a single slot every side request cleared the main loop's
+    /// pin, so its menu was re-scored on the next request after each of them.
+    mcp_pins: Vec<McpPin>,
+}
+
+/// The MCP names pinned for requests made under one schema policy. The schema
+/// selector seats them ahead of everything but explicit requests and the
+/// newest user message, so a growing transcript or a server registering
+/// mid-turn cannot reshuffle a full budget. Dropped only when the session
+/// changes — never on a new turn or on `bump_mcp_generation`, which fires for
+/// every lazily started server. (#1591)
+struct McpPin {
+    policy: crate::tools::ToolSchemaPolicy,
+    user_count: usize,
+    names: Vec<String>,
+    /// Invalidates schema computations that started from an older snapshot,
+    /// including concurrent requests with the same session inputs.
+    revision: u64,
 }
 
 impl PromptCache {
@@ -813,28 +821,42 @@ impl PromptCache {
         // it, and dropping the pin there is what made `selected_names` disjoint
         // between consecutive rounds of one turn. (#1591)
         let pin_policy = mcp_pin_policy(policy);
+        if self.mcp_selection_session_id.as_deref() != Some(session_id) {
+            self.mcp_pins.clear();
+            self.mcp_selection_session_id = Some(session_id.to_string());
+        }
         // A new user turn keeps the pin as well. Releasing it re-scored the
         // menu from the whole transcript, so the `tools` block differed on the
         // first request of every turn and the provider's cached prefix was
         // rewritten each time. The selector admits what the new message asks
         // for ahead of the pinned names instead.
-        if self.mcp_selection_policy != Some(pin_policy)
-            || self.mcp_selection_session_id.as_deref() != Some(session_id)
+        let index = match self
+            .mcp_pins
+            .iter()
+            .position(|pin| pin.policy == pin_policy)
         {
-            self.mcp_selected_names.clear();
-            self.mcp_selection_policy = Some(pin_policy);
-            self.mcp_selection_session_id = Some(session_id.to_string());
-        }
-        self.mcp_selection_user_count = Some(turn_user_message_count);
-        self.mcp_selection_revision = self.mcp_selection_revision.wrapping_add(1);
+            Some(index) => index,
+            None => {
+                self.mcp_pins.push(McpPin {
+                    policy: pin_policy,
+                    user_count: 0,
+                    names: Vec::new(),
+                    revision: 0,
+                });
+                self.mcp_pins.len() - 1
+            }
+        };
+        let pin = &mut self.mcp_pins[index];
+        pin.user_count = turn_user_message_count;
+        pin.revision = pin.revision.wrapping_add(1);
 
         NativeToolSchemaSnapshot {
             generation,
             policy,
             session_id: session_id.to_string(),
             turn_user_message_count,
-            selection_revision: self.mcp_selection_revision,
-            sticky_names: self.mcp_selected_names.clone(),
+            selection_revision: pin.revision,
+            sticky_names: pin.names.clone(),
         }
     }
 
@@ -848,15 +870,29 @@ impl PromptCache {
         // rejected every commit after the first lazy server start, so the menu
         // was never pinned and was re-scored on each round. (#1796)
         if crate::mcp::mcp_generation() != snapshot.generation
-            || self.mcp_selection_policy != Some(mcp_pin_policy(snapshot.policy))
             || self.mcp_selection_session_id.as_deref() != Some(snapshot.session_id.as_str())
-            || self.mcp_selection_user_count != Some(snapshot.turn_user_message_count)
-            || self.mcp_selection_revision != snapshot.selection_revision
         {
             return false;
         }
-        self.mcp_selected_names = selected_names.to_vec();
+        let pin_policy = mcp_pin_policy(snapshot.policy);
+        let Some(pin) = self.mcp_pins.iter_mut().find(|pin| {
+            pin.policy == pin_policy
+                && pin.user_count == snapshot.turn_user_message_count
+                && pin.revision == snapshot.selection_revision
+        }) else {
+            return false;
+        };
+        pin.names = selected_names.to_vec();
         true
+    }
+
+    #[cfg(test)]
+    fn pinned_names(&self, policy: crate::tools::ToolSchemaPolicy) -> &[String] {
+        let policy = mcp_pin_policy(policy);
+        self.mcp_pins
+            .iter()
+            .find(|pin| pin.policy == policy)
+            .map_or(&[], |pin| pin.names.as_slice())
     }
 }
 
@@ -939,7 +975,7 @@ mod prompt_cache_snapshot_tests {
 
         assert!(!cache.commit_native_tool_schema_selection(&old, &["old-tool".to_string()]));
         assert!(cache.commit_native_tool_schema_selection(&new, &["new-tool".to_string()]));
-        assert_eq!(cache.mcp_selected_names, ["new-tool"]);
+        assert_eq!(cache.pinned_names(policy), ["new-tool"]);
     }
 
     #[test]
@@ -953,7 +989,7 @@ mod prompt_cache_snapshot_tests {
         crate::mcp::bump_mcp_generation();
 
         assert!(!cache.commit_native_tool_schema_selection(&snapshot, &["stale-tool".to_string()]));
-        assert!(cache.mcp_selected_names.is_empty());
+        assert!(cache.pinned_names(policy).is_empty());
     }
 
     #[test]
@@ -1007,6 +1043,34 @@ mod prompt_cache_snapshot_tests {
         assert!(cache.commit_native_tool_schema_selection(&sent, &pinned));
         let next_round = cache.native_tool_schema_snapshot(preflight, &messages(1), "session");
         assert_eq!(next_round.sticky_names, pinned);
+    }
+
+    #[test]
+    fn a_side_request_under_another_policy_leaves_the_main_pin_alone() {
+        let _guard = GENERATION_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut cache = PromptCache::default();
+        // The main loop offers agent tools; the recap and the prompt improver
+        // ask for schemas without them, between and during its turns.
+        let main = ToolSchemaPolicy::root(true);
+        let side = ToolSchemaPolicy::root(false);
+        let pinned = vec!["alpha_read".to_string()];
+        let first = cache.native_tool_schema_snapshot(main, &messages(1), "session");
+        assert!(cache.commit_native_tool_schema_selection(&first, &pinned));
+
+        let in_flight = cache.native_tool_schema_snapshot(main, &messages(1), "session");
+        let recap = cache.native_tool_schema_snapshot(side, &messages(1), "session");
+        assert!(recap.sticky_names.is_empty());
+        assert!(cache.commit_native_tool_schema_selection(&recap, &["beta_read".to_string()]));
+
+        // The side request neither took the main pin nor made a main request
+        // that was already being prepared stale.
+        assert!(cache.commit_native_tool_schema_selection(&in_flight, &pinned));
+        let next = cache.native_tool_schema_snapshot(main, &messages(2), "session");
+        assert_eq!(next.sticky_names, pinned);
+        let recap = cache.native_tool_schema_snapshot(side, &messages(2), "session");
+        assert_eq!(recap.sticky_names, ["beta_read"]);
     }
 
     #[test]

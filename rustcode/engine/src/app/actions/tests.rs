@@ -1964,6 +1964,34 @@ fn delegation_is_default_on_and_session_opt_out_persists() {
 }
 
 #[test]
+fn a_wakeup_from_idle_gets_the_standing_delegation_setting() {
+    use crate::app::AppState;
+
+    // Going idle switches delegation off; a background task that finishes
+    // afterwards starts a run nobody submitted.
+    let mut state = AppState::new();
+    state.delegation_active = false;
+    super::resume_delegation_for_wakeup(&mut state);
+    assert!(state.delegation_active);
+
+    // `/delegate off` and the config gate still hold for it.
+    let mut state = AppState::new();
+    state.delegation_sticky = false;
+    state.delegation_armed = true;
+    super::resume_delegation_for_wakeup(&mut state);
+    assert!(
+        !state.delegation_active,
+        "a one-shot arming is not carried over"
+    );
+    assert!(state.delegation_armed);
+
+    let mut state = AppState::new();
+    state.config.delegation_enabled = false;
+    super::resume_delegation_for_wakeup(&mut state);
+    assert!(!state.delegation_active);
+}
+
+#[test]
 fn delegation_is_enabled_for_a_fresh_session_without_a_magic_phrase() {
     use crate::app::AppState;
 
