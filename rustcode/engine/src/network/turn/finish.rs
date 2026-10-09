@@ -191,7 +191,10 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
         .clone()
         .or_else(|| usage.clone());
     s.continuous_mode = false;
-    s.response_time = Some(prompt_start_time.elapsed());
+    // The whole turn, as the Working row counted it: runs the harness
+    // resumed are one turn, and this run alone is only its last part.
+    let turn_started_at = s.current_turn_started_at.unwrap_or(prompt_start_time);
+    s.response_time = Some(turn_started_at.elapsed());
     if let Some(content) = final_transcript {
         let role = if had_final_content {
             "assistant"
@@ -235,7 +238,7 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
         && !cancel_token.is_cancelled()
         && let Some(user_index) = latest_user_index
     {
-        let duration_ms = prompt_start_time.elapsed().as_millis() as u64;
+        let duration_ms = turn_started_at.elapsed().as_millis() as u64;
         if let Some(message) = s
             .history
             .iter_mut()

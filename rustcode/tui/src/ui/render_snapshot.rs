@@ -49,6 +49,7 @@ pub(crate) struct RenderSnapshot {
     home_path: Option<String>,
     overlay: OverlaySnapshot,
     generation_start_time: Option<std::time::Instant>,
+    current_turn_started_at: Option<std::time::Instant>,
     pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     pending_question: Option<PendingQuestion>,
     /// Chain position mirrors for the question modal header (`i/N`,
@@ -239,6 +240,7 @@ impl RenderSnapshot {
             home_path: view.home_path.clone(),
             overlay: OverlaySnapshot::new(view),
             generation_start_time: view.generation_start_time,
+            current_turn_started_at: view.current_turn_started_at,
             pending_tool_confirmation: view.pending_tool_confirmation.clone(),
             pending_question: view.pending_question.clone(),
             pending_question_chain_len: view.pending_question_chain_len,
@@ -566,6 +568,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn generation_start_time(&self) -> Option<std::time::Instant> {
         self.generation_start_time
+    }
+    pub(crate) fn current_turn_started_at(&self) -> Option<std::time::Instant> {
+        self.current_turn_started_at
     }
     pub(crate) fn modal_scroll_row(&self) -> u16 {
         self.overlay.modal_scroll_row

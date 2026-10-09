@@ -48,6 +48,11 @@ fn take_turn_context_for_queued_prompt(
     max_total_tool_rounds: usize,
 ) -> super::TurnContext {
     if is_promoted_steer {
+        // A steer is the user's own message: its totals start from zero
+        // rather than showing the interrupted turn's until the first reply.
+        state.current_turn_started_at = Some(std::time::Instant::now());
+        state.current_turn_token_usage = None;
+        state.current_turn_token_usage_is_estimated = false;
         let mut context = super::TurnContext::new();
         context.remove_round_limits();
         context

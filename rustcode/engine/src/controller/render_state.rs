@@ -127,6 +127,8 @@ pub struct RenderState {
     pub model_quota_remaining: Option<f32>,
     pub provider_rate_limits: Option<crate::provider_auth::ProviderRateLimits>,
     pub generation_start_time: Option<std::time::Instant>,
+    /// Start of the turn in progress; its elapsed time is the turn's total.
+    pub current_turn_started_at: Option<std::time::Instant>,
     pub pending_queue: Vec<String>,
     /// Text of each steer queued during the active turn.
     pub pending_steers: Vec<String>,
@@ -339,6 +341,7 @@ pub fn render_state(state: &AppState) -> RenderState {
         model_quota_remaining: state.model_quota_remaining,
         provider_rate_limits: state.provider_rate_limits.clone(),
         generation_start_time: state.generation_start_time,
+        current_turn_started_at: state.current_turn_started_at,
         pending_queue: state.pending_queue.clone(),
         pending_steers: state
             .pending_steers
