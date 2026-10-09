@@ -4555,6 +4555,7 @@ async fn stream_request_with_timeouts(
                 builtin: selection.builtin_available,
                 mcp: selection.available,
                 agent: text_surface.agent,
+                outside_table: text_surface.outside_table,
             };
             (schemas, selection, surface)
         } else {

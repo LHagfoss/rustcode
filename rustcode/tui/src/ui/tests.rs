@@ -2861,6 +2861,71 @@ fn committed_tool_result_shows_failure_status() {
 }
 
 #[test]
+fn spawn_agent_row_names_the_child_its_task_model_and_status() {
+    use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let args = serde_json::json!({
+        "task": "Check the latest PRs\nand report which ones touch the sandbox",
+        "agent_type": "explorer",
+        "model": "local-small",
+    });
+    // While the call runs there is no child yet: the row is the request.
+    assert_eq!(
+        super::format_pi_tool_action("spawn_agent", &args, None),
+        (
+            "SpawnAgent".to_owned(),
+            "explorer · Check the latest PRs · local-small".to_owned()
+        )
+    );
+    assert_eq!(
+        super::spawn_agent_target(&serde_json::json!({}), None),
+        "agent task"
+    );
+
+    let mut state = RenderState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "spawn_agent".to_owned(),
+            arguments: serde_json::json!({"task": "Check the latest PRs"}).to_string(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            r#"spawn_agent: {"agent_id":3,"agent_type":"default","model":"gpt-main","nickname":"agent-3","status":"queued"}"#,
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "spawn_agent".to_owned(),
+            success: true,
+            ..Default::default()
+        }),
+    );
+    let entry = super::tool_transcript_entry(&render_snapshot(&state), 1, 80, false)
+        .expect("a spawn has a transcript row");
+    assert_eq!(entry.action, "SpawnAgent");
+    // The model comes from the receipt: the call named none.
+    assert_eq!(
+        entry.target,
+        "agent-3 · Check the latest PRs · gpt-main · queued"
+    );
+    assert!(entry.success);
+
+    // A spawn that failed keeps the request and its failed state.
+    state.history[1] = ChatMessage::new("tool", "spawn_agent: error: unknown model 'x'")
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "spawn_agent".to_owned(),
+            success: false,
+            ..Default::default()
+        });
+    let entry = super::tool_transcript_entry(&render_snapshot(&state), 1, 80, false).unwrap();
+    assert_eq!(entry.target, "Check the latest PRs");
+    assert_eq!((entry.success, entry.status.as_str()), (false, "failed"));
+}
+
+#[test]
 fn ask_question_renders_prompt_and_answer_in_committed_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 

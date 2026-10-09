@@ -494,6 +494,8 @@ pub struct SubAgent {
     #[serde(default)]
     pub context_inheritance: crate::app::subagent_context::ContextInheritance,
     #[serde(default)]
+    pub agent_type: crate::app::subagent_context::AgentRole,
+    #[serde(default)]
     pub mailbox: std::collections::VecDeque<String>,
     #[serde(default)]
     pub created_at_ms: u64,

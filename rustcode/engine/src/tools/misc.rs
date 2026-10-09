@@ -380,7 +380,7 @@ fn subagent_id_schema() -> Value {
                     {"type": "integer", "minimum": 1},
                     {"type": "string", "pattern": "^[0-9]*[1-9][0-9]*$"}
                 ],
-                "description": "Id from spawn_agent"
+                "description": "Agent id"
             }
         },
         "required": ["id"],
@@ -435,7 +435,7 @@ fn agent_message_schema(minimum_id: u32) -> Value {
         "description": if minimum_id == 0 {
             "Agent id; a child may use 0 for main"
         } else {
-            "Id from spawn_agent"
+            "Agent id"
         }
     });
     schema["properties"]["message"] =
@@ -461,13 +461,27 @@ pub const SEND_MESSAGE: Tool = Tool {
     ],
     safety: ToolSafety::Delegation,
 };
+/// `followup_task`: a message, plus the choice to stop the child's current
+/// turn for it instead of queueing behind it.
+fn followup_task_schema() -> Value {
+    let mut schema = agent_message_schema(1);
+    schema["properties"]["interrupt"] = interrupt_schema();
+    schema
+}
+
+/// Kept bare: the tool description says what it does, and the built-in
+/// schema block is sent with every request.
+pub(super) fn interrupt_schema() -> Value {
+    serde_json::json!({"type": "boolean"})
+}
+
 pub const FOLLOWUP_TASK: Tool = Tool {
     name: "followup_task",
-    description: "Start a follow-up on an idle, completed or interrupted child, or queue instructions for an active one.",
-    arguments: r#"{"id":"subagent id","message":"next task"}"#,
+    description: "Start a follow-up on an idle, completed or interrupted child, or queue for an active one; interrupt redirects it now.",
+    arguments: r#"{"id":"subagent id","message":"next task","interrupt":false}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
-    schema: || agent_message_schema(1),
+    schema: followup_task_schema,
     capabilities: &[
         ToolCapability::AgentDelegation,
         ToolCapability::SessionState,

@@ -6,7 +6,10 @@ task only, `/delegate on` keeps them available for the session, and
 command. Set
 `delegation_enabled = false` in the user `config.toml` to disable delegation
 entirely; project config cannot override this user-level setting. `spawn_agent` returns
-immediately with a stable session-local numeric ID. Children retain separate
+immediately with a JSON receipt: `agent_id` (the stable session-local numeric ID
+every other agent tool takes as `id`), `nickname` (`agent-<id>`, the name used
+in notices and the agent picker), `agent_type`, the resolved `model` and the
+`status` the spawn left the child in. Children retain separate
 histories, model context budgets and loop detectors. The existing configurable
 `subagent_concurrency_limit` controls admitted execution; additional children
 queue. A session supports up to 64 recorded children and three levels of
@@ -27,14 +30,40 @@ queue instructions for an active child. Mailboxes retain at most 32 messages;
 each message and selected evidence are limited to 8192 bytes. Delivery preserves
 arrival order and does not rewrite a request already in flight.
 
-`wait_agent` accepts `id` and optional `timeout_ms` (default 60000, range
-1–300000). It wakes for completion or agent mailbox activity; a timeout leaves
+With `interrupt: true`, `followup_task` and `send_agent` redirect a running
+child instead: its current turn is cancelled, the call returns once that turn
+has cleaned up, and a new turn starts with the message as its instruction. Work
+in flight is abandoned and children the interrupted turn started are cancelled
+with it, as with any parent turn. The child keeps its history, the root gets no
+completion notice for the stopped turn, and the new turn queues for an
+execution slot like any other. A child that is idle or still queued has nothing
+to interrupt and is handled as an ordinary follow-up. `send_message` is
+queue-only and rejects `interrupt`; an agent cannot interrupt itself or an
+ancestor.
+
+`wait_agent` accepts `id`, or `ids` to wait for whichever of several children
+finishes first, and optional `timeout_ms` (default 60000, range 1–3600000). It
+wakes for completion or agent mailbox activity; a timeout leaves
 the child available. Waiting children yield their execution slot so a parent
 can join a nested child even with concurrency one. Self/ancestor waits are
 rejected. `cancel_agent` cancels a child and its descendants; parent cancellation
 propagates through child cancellation tokens. Admitted runners finish process
 and blocking cleanup before publishing terminal completion. Session switches
 signal cancellation; terminal shutdown waits for cleanup.
+
+`spawn_agent` takes an optional `agent_type` role, listed in its schema:
+
+- `default`: read-only unless `write_access` is passed.
+- `explorer`: read-only investigation. Combining it with `write_access: true`
+  is an error.
+- `worker`: presets `write_access: true`. Combining it with
+  `write_access: false` is an error.
+
+A role is only a preset over `write_access`. A worker is held to everything an
+explicit `write_access: true` is: `allowed_paths` is required, nested
+delegation stays read-only, a write-enabled agent cannot delegate, and its
+tool calls go through the same approval. An unknown `agent_type` is rejected
+with the list of roles. Roles are built in; there are no user-defined roles.
 
 Context inheritance is explicit in `spawn_agent`:
 
@@ -62,7 +91,9 @@ history. Persisted terminal summaries remain inspectable and waitable.
 
 Operational events include `subagent.spawn`, `subagent.spawn.finish`,
 `subagent.queue.finish`, `subagent.model.finish`, `subagent.summary` and existing
-start/finish events. Metadata exposes request/round/tool counts, model/tool
+start/finish events. In `context.request_composition`, `available_agent_tools`
+counts the advertised tools that carry the delegation capability; those defined
+as built-ins are also part of `available_builtin_tools`. Metadata exposes request/round/tool counts, model/tool
 microseconds, context bytes and provider usage when supplied. Usage shown for a
 round is the last provider request's reported usage; continuation counts remain
 explicit. [Local Codex research](codex-multi-agent-research.md) records the
