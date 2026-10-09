@@ -1,5 +1,11 @@
 # Mobile (remote only)
 
+The proposed next stage is documented in
+[`Live terminal sessions from an Expo client`](architecture/mobile-remote-plan.md).
+That plan covers `/remote`, a multi-session gateway, pairing, WebSocket and an
+Expo-compatible client package. It is a proposal; the transport below describes
+the currently implemented behavior.
+
 Decision: the phone never links Rust and never embeds the agent loop. Mobile
 is a remote control for a PC or Mac that already runs RustCode. There is no
 on-device core, no shared renderer strategy, and no Expo app in the release
