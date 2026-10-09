@@ -121,10 +121,17 @@ pub fn project_session_info(state: &AppState, context: &ProjectionContext) -> Re
     RemoteSessionInfo {
         session_id: state.active_session_id.clone(),
         registration_epoch: context.registration_epoch,
-        title: context
-            .title
-            .clone()
-            .unwrap_or_else(|| crate::config::session_title(&state.history)),
+        title: context.title.clone().unwrap_or_else(|| {
+            if state
+                .history
+                .iter()
+                .any(|message| message.role == "user" && !message.content.starts_with('/'))
+            {
+                crate::config::session_title(&state.history)
+            } else {
+                String::new()
+            }
+        }),
         workspace: state
             .task_working_directory
             .clone()
@@ -300,7 +307,9 @@ fn project_messages(
                     success: record.success,
                     pending: record.pending,
                 }),
-            timestamp: Some(message.timestamp.clone()).filter(|timestamp| !timestamp.is_empty()),
+            timestamp: chrono::DateTime::parse_from_rfc3339(&message.timestamp)
+                .ok()
+                .map(|_| message.timestamp.clone()),
             response_time_ms: message.response_time_ms,
             thought_time_ms: message.thought_time_ms,
             completed_at: message.completed_at.clone(),
@@ -435,6 +444,7 @@ pub fn project_snapshot(
         .collect();
     let mut snapshot = RemoteSnapshot {
         session: project_session_info(state, context),
+        snapshot_id: None,
         sequence: context.sequence,
         generation: context.generation,
         turn,
@@ -685,6 +695,38 @@ pub fn project_event(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_client_followups_use_machine_timestamps_and_empty_untitled_sessions() {
+        let mut state = state_with_history(0, 0);
+        let mut context = context();
+        context.title = None;
+        assert!(project_session_info(&state, &context).title.is_empty());
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "fresh prompt"));
+        let page = project_history_page(&state, &ProjectionLimits::default(), None, 10).unwrap();
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(page.messages[0].timestamp.as_deref().unwrap())
+                .is_ok()
+        );
+        state.history.as_mut_vec()[0].timestamp = "18:42".into();
+        let page = project_history_page(&state, &ProjectionLimits::default(), None, 10).unwrap();
+        assert!(
+            page.messages[0].timestamp.is_none(),
+            "legacy time-only values have no known date"
+        );
+        state.history.push(
+            serde_json::from_value(serde_json::json!({
+                "role": "assistant", "content": "Legacy answer without a timestamp"
+            }))
+            .unwrap(),
+        );
+        let page = project_history_page(&state, &ProjectionLimits::default(), None, 10).unwrap();
+        assert!(state.history[1].timestamp.is_empty());
+        assert!(page.messages[1].timestamp.is_none());
+        context.title = Some("My title".into());
+        assert_eq!(project_session_info(&state, &context).title, "My title");
+    }
     use super::*;
     use crate::app::{AppStatus, ChatMessage, ToolConfirmation};
 

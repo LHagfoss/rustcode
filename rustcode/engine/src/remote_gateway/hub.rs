@@ -294,16 +294,23 @@ impl Session {
 
     /// Whether a client that applied everything up to `last_sequence` can be
     /// brought up to date from the ring alone.
-    fn replayable(&self, last_sequence: u64) -> Result<(), ResyncReason> {
+    fn replayable(&self, cursor: &ResumeCursor) -> Result<(), ResyncReason> {
+        let last_sequence = cursor.last_sequence;
         let Some(cache) = self.cache.as_deref() else {
             return Err(ResyncReason::SequenceGap);
         };
         if last_sequence < self.ring.floor {
             return Err(ResyncReason::Lagged);
         }
-        // A snapshot replaces state without consuming a sequence number, so
-        // a cursor at or before the cached one may predate it.
-        if last_sequence <= cache.sequence || last_sequence > self.last {
+        // At the snapshot watermark, sequence alone cannot distinguish two
+        // different cuts. A matching identity proves the client has this cut.
+        let at_current_snapshot = last_sequence == cache.sequence
+            && cursor.snapshot_id.is_some()
+            && cursor.snapshot_id == cache.snapshot_id;
+        if last_sequence < cache.sequence
+            || (last_sequence == cache.sequence && !at_current_snapshot)
+            || last_sequence > self.last
+        {
             return Err(ResyncReason::SequenceGap);
         }
         Ok(())
@@ -549,6 +556,7 @@ impl SessionHub {
         let (to_owner, frames) = mpsc::channel(self.limits.owner_queue.max(1));
         let info = owned_info(&registration, snapshot.session.clone(), OwnerHealth::Live);
         snapshot.session = info.clone();
+        snapshot.snapshot_id = Some(uuid::Uuid::new_v4().to_string());
         let mut session = Session {
             owner_id,
             epoch: registration.registration_epoch,
@@ -597,6 +605,9 @@ impl SessionHub {
         session.last_heard = Instant::now();
         session.info.health = OwnerHealth::Live;
         if let Some(cache) = session.cache.as_mut() {
+            if cache.session.health != OwnerHealth::Live {
+                cache.snapshot_id = Some(uuid::Uuid::new_v4().to_string());
+            }
             cache.session.health = OwnerHealth::Live;
         }
         let mut list_changed = was_unresponsive;
@@ -649,6 +660,7 @@ impl SessionHub {
                 list_changed |= info != session.info;
                 session.info = info.clone();
                 snapshot.session = info;
+                snapshot.snapshot_id = Some(uuid::Uuid::new_v4().to_string());
                 session.last = snapshot.sequence;
                 session.ring = ReplayRing::starting_after(snapshot.sequence);
                 session.cache = Some(snapshot);
@@ -665,6 +677,9 @@ impl SessionHub {
                 let info = owned_info(&registration, info, OwnerHealth::Live);
                 list_changed |= info != session.info;
                 if let Some(cache) = session.cache.as_mut() {
+                    if cache.session != info {
+                        cache.snapshot_id = Some(uuid::Uuid::new_v4().to_string());
+                    }
                     cache.session = info.clone();
                 }
                 session.info = info;
@@ -891,7 +906,7 @@ impl SessionHub {
             {
                 Err(ResyncReason::GatewayRestarted)
             } else {
-                session.replayable(cursor.last_sequence)
+                session.replayable(cursor)
             }
         });
         match (resume, replay) {
@@ -1089,6 +1104,7 @@ impl SessionHub {
                 session.info.health = OwnerHealth::Unresponsive;
                 if let Some(cache) = session.cache.as_mut() {
                     cache.session.health = OwnerHealth::Unresponsive;
+                    cache.snapshot_id = Some(uuid::Uuid::new_v4().to_string());
                 }
                 list_changed = true;
             }

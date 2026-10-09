@@ -909,10 +909,8 @@ mod tests {
         assert_eq!(contexts[1].parent_id, Some(parent));
         assert_eq!(contexts[1].status, SubAgentStatus::Running);
         assert!(contexts[1].active_turn);
-        assert_eq!(
-            contexts[1].history[0],
-            ChatMessage::new("user", "inspect the child")
-        );
+        assert_eq!(contexts[1].history[0].role, "user");
+        assert_eq!(contexts[1].history[0].content, "inspect the child");
     }
 
     #[test]

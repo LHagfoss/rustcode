@@ -160,6 +160,10 @@ impl RemoteOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ResumeCursor {
     pub gateway_id: String,
+    /// Identity of the last applied snapshot. Required to resume exactly at
+    /// its watermark, where a newer snapshot can have the same sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
     /// The `instance_id` the cursor was obtained under, as the handshake and
     /// the `attached`/`resumed` results report it. A cursor from another
     /// gateway instance is never replayed. When absent the gateway decides
@@ -565,6 +569,10 @@ pub struct RemoteContentChunk {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteSnapshot {
     pub session: RemoteSessionInfo,
+    /// Opaque gateway identity for this snapshot cut, including replacements
+    /// at the same sequence. Store alongside the reconnect cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
     pub sequence: u64,
     pub generation: u64,
     /// Present while a prompt is being run. Absent in the short gap between

@@ -244,6 +244,7 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
                 RemoteOperation::AttachSession {
                     resume: Some(ResumeCursor {
                         gateway_id: GATEWAY.to_owned(),
+                        snapshot_id: Some("snapshot-example".to_owned()),
                         instance_id: Some(INSTANCE.to_owned()),
                         last_sequence: 412,
                     }),
@@ -536,6 +537,7 @@ fn golden_previous_timing() -> RemoteTurnTiming {
 
 fn golden_snapshot() -> RemoteSnapshot {
     RemoteSnapshot {
+        snapshot_id: Some("snapshot-example".to_owned()),
         session: golden_session_info(),
         sequence: 412,
         generation: 1,

@@ -1329,6 +1329,13 @@
         "session": {
           "$ref": "#/$defs/RemoteSessionInfo"
         },
+        "snapshot_id": {
+          "description": "Opaque gateway identity for this snapshot cut, including replacements\nat the same sequence. Store alongside the reconnect cursor.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "subagents": {
           "items": {
             "$ref": "#/$defs/RemoteSubagent"

@@ -47,6 +47,7 @@ fn info(session_id: &str, epoch: u64) -> RemoteSessionInfo {
 
 fn snapshot(session_id: &str, epoch: u64, sequence: u64) -> Box<RemoteSnapshot> {
     Box::new(RemoteSnapshot {
+        snapshot_id: None,
         session: info(session_id, epoch),
         sequence,
         generation: 0,
@@ -589,6 +590,32 @@ async fn replay_retains_terminal_turn_timing_and_outcome() {
         replayed["event"]["timing"],
         serde_json::to_value(timing).unwrap()
     );
+}
+
+#[tokio::test]
+async fn current_snapshot_cursor_resumes_and_rejects_a_replaced_snapshot_at_the_same_sequence() {
+    let hub = hub(limits());
+    let owner = Owner::register(&hub, "session-a", 1);
+    let mut phone = Device::connect(&hub, 1, "phone");
+    let attached = phone.attach("session-a", 1);
+    let snapshot_id = attached["result"]["snapshot"]["snapshot_id"].clone();
+    let cursor = json!({"gateway_id": GATEWAY, "instance_id": INSTANCE, "last_sequence": 0, "snapshot_id": snapshot_id});
+    let id = phone.send(
+        Some(("session-a", 1)),
+        json!({"type": "attach_session", "resume": cursor}),
+    );
+    assert_eq!(phone.response(&id)["result"]["type"], "resumed");
+    assert!(phone.next().is_none());
+    owner.snapshot(None);
+    phone.drain();
+    let id = phone.send(
+        Some(("session-a", 1)),
+        json!({"type": "attach_session", "resume": cursor}),
+    );
+    let response = phone.response(&id);
+    assert_eq!(response["result"]["type"], "attached");
+    assert_eq!(response["result"]["resync"], "sequence_gap");
+    assert_ne!(response["result"]["snapshot"]["snapshot_id"], snapshot_id);
 }
 
 #[tokio::test]
