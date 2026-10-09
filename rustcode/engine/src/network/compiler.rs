@@ -801,8 +801,8 @@ pub(crate) fn append_compiler_outcome(result: &mut ToolResult, outcome: &Compile
             result
                 .content
                 .push_str(&compiler_diagnostics_with_snippets(output));
-            result.metadata.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
-            result.metadata.retryable = true;
+            // Reported next to the result, not as its status: the edit this
+            // is appended to succeeded (#1887).
         }
         CompilerCheckOutcome::UnverifiedInfrastructure { reason } => {
             result.content.push_str("\n\n");

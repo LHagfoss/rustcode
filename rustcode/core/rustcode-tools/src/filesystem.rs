@@ -94,10 +94,11 @@ pub fn write_file_chunk_schema() -> Value {
         "type": "object", "additionalProperties": false, "properties": {
             "path": { "type": "string" },
             "content": { "type": "string" },
-            "offset": { "type": "integer", "minimum": 0, "description": "Resume from the returned next_offset" },
-            "truncate": { "type": "boolean", "default": false, "description": "Truncate the file first; only with offset 0" },
+            "offset": { "type": "integer", "minimum": 0, "description": "Returned next_offset" },
+            "truncate": { "type": "boolean", "description": "Only with offset 0" },
             "expected_size": { "type": "integer", "minimum": 0, "description": "Guard: current file size" },
-            "expected_sha256": { "type": "string", "description": "Guard: current file SHA-256" }
+            "expected_sha256": { "type": "string", "description": "Guard: current file SHA-256" },
+            "more": { "type": "boolean" }
         }, "required": ["path", "content"]
     })
 }

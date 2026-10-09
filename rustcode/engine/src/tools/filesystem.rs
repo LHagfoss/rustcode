@@ -148,8 +148,8 @@ pub const WRITE_TO_FILE: Tool = Tool {
 
 pub const WRITE_FILE_CHUNK: Tool = Tool {
     name: "write_file_chunk",
-    description: "Write one chunk of at most 16 KiB at a byte offset. Returns offset, next_offset, bytes, size and SHA-256 so an interrupted write resumes without duplicating content.",
-    arguments: r#"{"path": "file path", "content": "chunk (maximum 16384 bytes)", "offset": "optional byte offset, defaults to 0", "truncate": "optional boolean for the first chunk at offset 0", "expected_size": "optional current file size guard", "expected_sha256": "optional current file SHA-256 guard"}"#,
+    description: "Write one chunk of at most 16 KiB at a byte offset. Returns next_offset, size and SHA-256, so a cut-off write resumes. Set more=true on all but the last chunk: the compiler check waits for it.",
+    arguments: r#"{"path": "file path", "content": "chunk (maximum 16384 bytes)", "offset": "optional byte offset, defaults to 0", "truncate": "optional boolean for the first chunk at offset 0", "expected_size": "optional current file size guard", "expected_sha256": "optional current file SHA-256 guard", "more": "true when further chunks of this file follow; the compiler check runs after the last chunk"}"#,
     handler: write_file_chunk_tool,
     requires_confirmation: true,
     schema: write_file_chunk_schema,
