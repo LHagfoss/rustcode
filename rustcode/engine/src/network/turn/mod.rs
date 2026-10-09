@@ -67,6 +67,13 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         state.current_turn_token_usage = context.response.turn_token_usage.clone();
         state.current_turn_token_usage_is_estimated =
             context.response.turn_token_usage_is_estimated;
+        // A resumed turn keeps the time its earlier runs took, as it keeps
+        // their tokens. A wakeup with no saved turn starts from zero.
+        let now = std::time::Instant::now();
+        state.current_turn_started_at = Some(
+            now.checked_sub(context.lifecycle.prior_run_duration)
+                .unwrap_or(now),
+        );
         state.current_round_token_usage = None;
         state.current_round_estimated_input_tokens = 0;
         state.current_round_estimated_output_tokens = 0;
@@ -79,6 +86,7 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         // background result inherit the previous task's loop or verification
         // budgets.
         state.background_turn_context = None;
+        state.current_turn_started_at = Some(std::time::Instant::now());
         state.current_turn_token_usage = None;
         state.current_turn_token_usage_is_estimated = false;
         state.current_round_token_usage = None;
@@ -102,7 +110,7 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
 
 pub(crate) fn save_turn_context_after_run(
     state: &mut AppState,
-    context: TurnContext,
+    mut context: TurnContext,
     preserve_for_wakeup: bool,
 ) {
     if preserve_for_wakeup
@@ -127,6 +135,9 @@ pub(crate) fn save_turn_context_after_run(
                 background_pending,
             ),
         );
+        if let Some(started) = state.current_turn_started_at {
+            context.lifecycle.prior_run_duration = started.elapsed();
+        }
         state.background_turn_context = Some(Box::new(context));
     } else {
         crate::config::clear_segment_checkpoint(&state.active_session_id);
@@ -453,6 +464,77 @@ mod tests {
             Some(provider_usage)
         );
         assert!(!provider_state.current_turn_token_usage_is_estimated);
+    }
+
+    #[test]
+    fn turn_totals_span_harness_resumed_runs_and_restart_with_a_new_prompt() {
+        use std::time::{Duration, Instant};
+
+        let elapsed = |state: &AppState| {
+            state
+                .current_turn_started_at
+                .expect("a running turn has a start")
+                .elapsed()
+        };
+        let request = TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 20,
+            total_tokens: 120,
+            ..Default::default()
+        };
+        let mut state = AppState::new();
+
+        // First run: two provider requests, 90 seconds, then it stops to wait
+        // for a background command.
+        let mut context = take_turn_context_for_prompt(&mut state, false, 40);
+        assert!(elapsed(&state) < Duration::from_secs(5));
+        context.record_token_usage(Some(&request));
+        context.record_token_usage(Some(&request));
+        context.lifecycle.stop_reason = Some(super::lifecycle::StopReason::BackgroundPending);
+        state.current_turn_started_at = Some(Instant::now() - Duration::from_secs(90));
+        super::save_turn_context_after_run(&mut state, context, true);
+        state.enter_idle();
+        assert!(state.current_turn_started_at.is_none());
+
+        // The wakeup continues the same turn: the wait is not counted, the
+        // first run's time and tokens are.
+        let mut context = take_turn_context_for_prompt(&mut state, true, 40);
+        let resumed = elapsed(&state);
+        assert!(
+            (Duration::from_secs(90)..Duration::from_secs(95)).contains(&resumed),
+            "{resumed:?}"
+        );
+        assert_eq!(
+            state
+                .current_turn_token_usage
+                .as_ref()
+                .map(|usage| usage.completion_tokens),
+            Some(40)
+        );
+        context.record_token_usage(Some(&request));
+        assert_eq!(
+            context
+                .response
+                .turn_token_usage
+                .as_ref()
+                .map(|usage| usage.completion_tokens),
+            Some(60)
+        );
+
+        // The turn finished, so a later wakeup has no turn to continue.
+        context.lifecycle.task_completed = true;
+        context.lifecycle.stop_reason = None;
+        super::save_turn_context_after_run(&mut state, context, true);
+        let _late_wakeup = take_turn_context_for_prompt(&mut state, true, 40);
+        assert!(elapsed(&state) < Duration::from_secs(5));
+        assert!(state.current_turn_token_usage.is_none());
+
+        // A user prompt always starts its own totals.
+        state.current_turn_started_at = Some(Instant::now() - Duration::from_secs(90));
+        state.current_turn_token_usage = Some(request);
+        let _new = take_turn_context_for_prompt(&mut state, false, 40);
+        assert!(elapsed(&state) < Duration::from_secs(5));
+        assert!(state.current_turn_token_usage.is_none());
     }
 
     #[test]

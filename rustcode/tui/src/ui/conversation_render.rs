@@ -247,9 +247,10 @@ fn render_live_tail_mode(
 /// Plain running indicator (spinner + model) painted in the reserved row at
 /// the bottom of the chat, or `None` when there is nothing to report.
 ///
-/// Deliberately plain — status words, elapsed clocks and token rates belong in
-/// the transcript. A turn waiting on the provider or a tool still shows that
-/// work is happening instead of an empty chat.
+/// Deliberately plain: per-call clocks and token rates belong in the
+/// transcript, and this row carries only the totals for the whole turn. A turn
+/// waiting on the provider or a tool still shows that work is happening
+/// instead of an empty chat.
 pub(super) fn live_running_indicator(state: &RenderSnapshot, width: u16) -> Option<Line<'static>> {
     if matches!(
         state.status(),
@@ -284,13 +285,22 @@ pub(super) fn live_running_indicator(state: &RenderSnapshot, width: u16) -> Opti
     let provisional = state.token_usage_in_flight()
         || state.current_turn_token_usage_is_estimated()
         || state.current_round_estimated_output_tokens() > 0;
-    let token_suffix = (provisional || state.current_turn_token_usage().is_some()).then(|| {
+    let token_label = (provisional || state.current_turn_token_usage().is_some()).then(|| {
+        format!(
+            "↓ {}{} tokens",
+            if provisional { "~" } else { "" },
+            super::composer_render::format_token_count(tokens.min(u64::from(u32::MAX)) as u32)
+        )
+    });
+    // Since the turn started, not since the last request or tool call: the
+    // transcript rows time those.
+    let elapsed_label = state
+        .current_turn_started_at()
+        .map(|started| super::composer_render::fmt_elapsed_compact(started.elapsed().as_secs()));
+    let totals: Vec<String> = elapsed_label.into_iter().chain(token_label).collect();
+    let token_suffix = (!totals.is_empty()).then(|| {
         Span::styled(
-            format!(
-                " · ↓ {}{} tokens",
-                if provisional { "~" } else { "" },
-                super::composer_render::format_token_count(tokens.min(u64::from(u32::MAX)) as u32)
-            ),
+            format!(" · {}", totals.join(" · ")),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
         )
     });

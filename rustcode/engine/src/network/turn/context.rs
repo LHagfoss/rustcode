@@ -200,6 +200,9 @@ pub struct LifecycleState {
     pub turn_machine: events::TurnMachine,
     pub task_completed: bool,
     pub turn_started_at: Instant,
+    /// Time the logical turn spent in runs that ended before the harness
+    /// resumed it. The wait between runs is not work and is not counted.
+    pub prior_run_duration: Duration,
     pub user_wait_duration: Duration,
     pub stop_reason: Option<lifecycle::StopReason>,
 }
@@ -352,6 +355,7 @@ impl TurnContext {
                 turn_machine: events::TurnMachine::new(),
                 task_completed: false,
                 turn_started_at: Instant::now(),
+                prior_run_duration: Duration::ZERO,
                 user_wait_duration: Duration::ZERO,
                 stop_reason: None,
             },

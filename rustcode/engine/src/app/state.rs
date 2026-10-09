@@ -244,6 +244,11 @@ pub struct AppState {
     /// Short-lived UI feedback; never part of the model conversation.
     pub transient_notice: Option<(String, std::time::Instant)>,
     pub generation_start_time: Option<std::time::Instant>,
+    /// When the turn in progress started: the user's submission, moved back
+    /// by the time earlier runs of the same turn took when the harness
+    /// resumed it. Unlike `generation_start_time` it does not restart with
+    /// each run, so its elapsed time is the turn's total.
+    pub current_turn_started_at: Option<std::time::Instant>,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     /// Complete serialized arguments for the pending confirmation actions.
     /// Kept separately from the bounded terminal/UI preview on each action.
@@ -483,6 +488,7 @@ impl AppState {
         // look 5-minutes-stalled to the watchdog after any idle stretch, so
         // it injected a bogus recovery notice on the next submit.
         self.generation_start_time = None;
+        self.current_turn_started_at = None;
         self.stream_tracker = None;
     }
 
@@ -1088,6 +1094,7 @@ impl AppState {
         self.provider_request_in_flight = false;
         self.stream_tracker = None;
         self.generation_start_time = None;
+        self.current_turn_started_at = None;
         self.request_redraw();
     }
 
@@ -1281,6 +1288,7 @@ impl AppState {
             last_copy_text: None,
             transient_notice: None,
             generation_start_time: None,
+            current_turn_started_at: None,
             pending_tool_confirmation: None,
             pending_approval_details: None,
             pending_approval_batch_id: None,

@@ -10496,6 +10496,45 @@ fn running_indicator_keeps_cumulative_usage_while_waiting_for_tools() {
 }
 
 #[test]
+fn running_indicator_shows_elapsed_time_and_tokens_for_the_whole_turn() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    state.running_tools.push("run_command".to_owned());
+    state.config.reduced_motion = true;
+    state.model_name = "test-model".to_owned();
+    // The turn is two minutes in; the request and the tool call are recent.
+    state.current_turn_started_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(125));
+    state.generation_start_time = Some(std::time::Instant::now());
+    state.current_turn_token_usage = Some(rustcode::controller::TokenUsage {
+        prompt_tokens: 9_000,
+        completion_tokens: 1_200,
+        total_tokens: 10_200,
+        ..Default::default()
+    });
+
+    let row = |state: &RenderState, width| {
+        super::live_running_indicator(&render_snapshot(state), width)
+            .expect("tool work has an indicator")
+            .to_string()
+    };
+    assert_eq!(
+        row(&state, 80),
+        "• Working · test-model · esc interrupt · 2m 05s · ↓ 1.2K tokens"
+    );
+    // The totals are the last thing a narrow row gives up.
+    assert_eq!(row(&state, 34), "• Working · 2m 05s · ↓ 1.2K tokens");
+
+    // Before the first usage report there is still a clock.
+    state.current_turn_token_usage = None;
+    assert_eq!(
+        row(&state, 80),
+        "• Working · test-model · esc interrupt · 2m 05s"
+    );
+}
+
+#[test]
 fn running_indicator_updates_provisional_stream_estimates_across_continuations() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
