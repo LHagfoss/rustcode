@@ -2355,11 +2355,11 @@ mod schema_budget_tests {
     /// root coding policy with agent tools, the widest menu a request carries.
     ///
     /// The block was 31,659 bytes before its descriptions were trimmed to
-    /// 23,583 (#1826). The 24 KiB ceiling accommodates archive retrieval
-    /// while staying below the old size. It is sent on every request, so
-    /// keep new descriptions concise and measure their cost. Run
-    /// with `-- --nocapture` for the per-tool table.
-    const BUILTIN_SCHEMA_BYTE_BUDGET: usize = 24 * 1024;
+    /// 23,583 (#1826). The 25 KiB ceiling accommodates archive retrieval and
+    /// MCP server management (#1890) while staying below the old size. It is
+    /// sent on every request, so keep new descriptions concise and measure
+    /// their cost. Run with `-- --nocapture` for the per-tool table.
+    const BUILTIN_SCHEMA_BYTE_BUDGET: usize = 25 * 1024;
 
     /// Serialized bytes of every built-in tool's native schema entry, largest
     /// first, measured the way the request builder serializes it. Covers the

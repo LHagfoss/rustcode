@@ -87,12 +87,23 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
                     .call_id
                     .clone()
                     .unwrap_or_else(|| format!("acp-{index}-{}", call.name));
-                let tool_call = ToolCallUpdate::new(
-                    call_id,
-                    ToolCallUpdateFields::new()
-                        .title(call.name.clone())
-                        .raw_input(call.arguments.clone()),
-                );
+                // The client shows this to the user, so an MCP registration
+                // names what it would launch and leaves secret values out.
+                let mcp_approval =
+                    crate::tools::mcp_servers_approval(&call.name, &call.arguments, None);
+                let tool_call =
+                    ToolCallUpdate::new(
+                        call_id,
+                        ToolCallUpdateFields::new()
+                            .title(mcp_approval.as_ref().map_or_else(
+                                || call.name.clone(),
+                                |approval| format!("{} {}", call.name, approval.label),
+                            ))
+                            .raw_input(mcp_approval.map_or_else(
+                                || call.arguments.clone(),
+                                |approval| approval.arguments,
+                            )),
+                    );
                 let request = RequestPermissionRequest::new(
                     session_id.clone(),
                     tool_call,
