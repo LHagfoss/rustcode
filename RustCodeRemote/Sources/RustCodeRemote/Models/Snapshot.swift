@@ -4,6 +4,7 @@ public enum TurnOutcome: Sendable, Equatable {
     case completed
     case cancelled
     case failed
+    case unknown(String)
 }
 
 /// One change to a shared session, already decoded into domain terms.
@@ -22,6 +23,8 @@ public enum SessionEvent: Sendable, Equatable {
     /// A sub-agent of the session changed; the item's ID identifies it.
     case subagentUpdated(TranscriptItem)
     case turnStarted(turnID: String)
+    case timingChanged(TurnTiming, thoughtTimeMilliseconds: UInt64?)
+    case thoughtTimeChanged(UInt64)
     /// A nil `turnID` ends whichever turn is running.
     case turnFinished(turnID: String?, outcome: TurnOutcome)
     case questionChanged(PendingQuestion?)
@@ -64,6 +67,9 @@ public struct SessionSnapshot: Sendable, Equatable {
     public var session: SessionRef
     public var items: [TranscriptItem]
     public var activeTurnID: String?
+    public var activeTurnTiming: TurnTiming?
+    public var lastTurn: TurnTiming?
+    public var snapshotID: String?
     /// Whether the running turn accepts steering. Only a snapshot says so.
     public var canSteer: Bool
     public var pendingQuestion: PendingQuestion?
@@ -89,11 +95,17 @@ public struct SessionSnapshot: Sendable, Equatable {
         pendingPrompts: [PendingPrompt] = [],
         omitted: OmittedCounts = OmittedCounts(),
         sequence: UInt64 = 0,
-        historyCursor: HistoryCursor? = nil
+        historyCursor: HistoryCursor? = nil,
+        activeTurnTiming: TurnTiming? = nil,
+        lastTurn: TurnTiming? = nil,
+        snapshotID: String? = nil
     ) {
         self.session = session
         self.items = items
         self.activeTurnID = activeTurnID
+        self.activeTurnTiming = activeTurnTiming ?? activeTurnID.map { TurnTiming(turnID: $0) }
+        self.lastTurn = lastTurn
+        self.snapshotID = snapshotID
         self.canSteer = canSteer
         self.pendingQuestion = pendingQuestion
         self.pendingApproval = pendingApproval
@@ -157,14 +169,15 @@ public struct SessionSnapshot: Sendable, Equatable {
         case .assistantCompleted(let itemID):
             finishStreaming { $0.id == itemID }
         case .responseDelta(let text):
+            guard !text.isEmpty else { return }
             if let last = items.indices.last, case .assistant(var assistant) = items[last].content,
                assistant.isStreaming {
                 assistant.text += text
                 items[last].content = .assistant(assistant)
             } else {
                 items.append(TranscriptItem(
-                    id: "response:\(sequence)",
-                    .assistant(AssistantText(text: text, isStreaming: true))
+                    id: responseItemID(sequence: sequence),
+                    .assistant(AssistantText(text: text, isStreaming: true, turn: activeTurnTiming)), turn: activeTurnTiming
                 ))
             }
         case .toolFinished(let itemID, let succeeded, let isPending, let output, let isOutputTruncated):
@@ -184,10 +197,45 @@ public struct SessionSnapshot: Sendable, Equatable {
             } else {
                 subagents.append(item)
             }
+        case .thoughtTimeChanged(let milliseconds):
+            guard let index = items.indices.last, case .assistant(var assistant) = items[index].content,
+                  assistant.isStreaming else { return }
+            assistant.thoughtTimeMilliseconds = milliseconds
+            items[index].content = .assistant(assistant)
         case .turnStarted(let turnID):
             activeTurnID = turnID
-        case .turnFinished(let turnID, _):
-            if turnID == nil || activeTurnID == turnID { activeTurnID = nil }
+            activeTurnTiming = TurnTiming(turnID: turnID)
+        case .timingChanged(let timing, let thoughtTimeMilliseconds):
+            if timing.turnID == activeTurnID { activeTurnTiming = timing }
+            for index in items.indices {
+                if items[index].turnTiming?.turnID == timing.turnID { items[index].turn = timing }
+                guard case .assistant(var assistant) = items[index].content else { continue }
+                if assistant.turn?.turnID == timing.turnID ||
+                   (assistant.isStreaming && timing.turnID == activeTurnID) {
+                    assistant.turn = timing
+                    // This aggregate belongs to the current segment, never every thought block
+                    // or the earlier assistant segments separated by tools.
+                    if assistant.isStreaming, index == items.indices.last, let thoughtTimeMilliseconds {
+                        assistant.thoughtTimeMilliseconds = thoughtTimeMilliseconds
+                    }
+                    items[index].content = .assistant(assistant)
+                }
+            }
+        case .turnFinished(let turnID, let outcome):
+            guard turnID == nil || activeTurnID == turnID else { return }
+            if var timing = activeTurnTiming {
+                if timing.outcome == nil {
+                    timing.outcome = switch outcome {
+                    case .completed: "completed"
+                    case .cancelled: "cancelled"
+                    case .failed: "failed"
+                    case .unknown(let value): value
+                    }
+                }
+                lastTurn = timing
+            }
+            activeTurnID = nil
+            activeTurnTiming = nil
             finishStreaming { _ in true }
         case .questionChanged(let question):
             pendingQuestion = question
@@ -220,6 +268,12 @@ public struct SessionSnapshot: Sendable, Equatable {
             finishStreaming { _ in true }
             items.append(item)
         }
+    }
+
+    private func responseItemID(sequence: UInt64) -> String {
+        guard let activeTurnID else { return "response:\(sequence)" }
+        let base = "response:\(activeTurnID)"
+        return items.contains(where: { $0.id == base }) ? "\(base):\(sequence)" : base
     }
 
     private mutating func finishStreaming(where matches: (TranscriptItem) -> Bool) {

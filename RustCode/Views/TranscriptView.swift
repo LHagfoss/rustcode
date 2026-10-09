@@ -77,7 +77,8 @@ struct TranscriptView: View {
     }
 
     private func transcript(_ snapshot: SessionSnapshot) -> some View {
-        ScrollView {
+        let footers = TimingPresentation.footerOwners(items: snapshot.items, lastTurn: snapshot.lastTurn)
+        return ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 if snapshot.historyCursor != nil {
                     Button {
@@ -97,7 +98,7 @@ struct TranscriptView: View {
                     .disabled(store.isLoadingHistory)
                 }
                 ForEach(snapshot.items) { item in
-                    TranscriptRow(item: item)
+                    TranscriptRow(item: item, footer: footers[item.id])
                 }
                 if isThinking(snapshot) {
                     StreamingIndicator()
@@ -209,12 +210,25 @@ private struct SessionActivityView: View {
 
     private var isEmpty: Bool {
         snapshot.subagents.isEmpty && snapshot.backgroundTasks.isEmpty && snapshot.pendingPrompts.isEmpty
-            && snapshot.omitted.total == 0
+            && snapshot.omitted.total == 0 && snapshot.activeTurnTiming == nil && unrepresentedLastTurn == nil
+    }
+
+    private var unrepresentedLastTurn: TurnTiming? {
+        TimingPresentation.standaloneFooter(items: snapshot.items, lastTurn: snapshot.lastTurn)
     }
 
     var body: some View {
         if !isEmpty {
             VStack(alignment: .leading, spacing: 10) {
+                if let turn = snapshot.activeTurnTiming {
+                    Text(TimingPresentation.turnLabel(turn,
+                        isWaiting: snapshot.pendingApproval != nil || snapshot.pendingQuestion != nil))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("turnTiming")
+                }
+                if let turn = unrepresentedLastTurn {
+                    TurnFooter(timing: turn)
+                }
                 ForEach(snapshot.subagents) { item in
                     if case .subagent(let subagent) = item.content {
                         SubagentRow(subagent: subagent)

@@ -309,15 +309,24 @@ public enum WireEvent: Codable, Equatable, Sendable {
         /// Absent only when the turn had already ended when the event was projected.
         public var turnID: String?
         public var prompt: WireBoundedText
+        public var timing: WireTurnTiming? = nil
 
         enum CodingKeys: String, CodingKey {
             case turnID = "turn_id"
             case prompt
+            case timing
         }
     }
 
     public struct TextDelta: Codable, Equatable, Sendable {
         public var text: String
+        public var timing: WireTurnTiming? = nil
+        public var thoughtTimeMilliseconds: UInt64? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case text, timing
+            case thoughtTimeMilliseconds = "thought_time_ms"
+        }
     }
 
     public struct ToolStarted: Codable, Equatable, Sendable {
@@ -362,8 +371,10 @@ public enum WireEvent: Codable, Equatable, Sendable {
 
     public struct TurnEnded: Codable, Equatable, Sendable {
         public var turnID: String?
+        public var timing: WireTurnTiming? = nil
 
         enum CodingKeys: String, CodingKey {
+            case timing
             case turnID = "turn_id"
         }
     }
@@ -553,6 +564,8 @@ public struct WireContentChunk: Codable, Equatable, Sendable {
 // MARK: - Snapshot
 
 public struct WireSnapshot: Codable, Equatable, Sendable {
+    public var snapshotID: String? = nil
+    public var lastTurn: WireTurnTiming? = nil
     public var session: WireSessionInfo
     public var sequence: UInt64
     public var generation: UInt64
@@ -573,6 +586,8 @@ public struct WireSnapshot: Codable, Equatable, Sendable {
         case generation
         case turn
         case transcript
+        case snapshotID = "snapshot_id"
+        case lastTurn = "last_turn"
         case historyRevision = "history_revision"
         case historyCursor = "history_cursor"
         case pendingQuestion = "pending_question"
@@ -599,6 +614,8 @@ public struct WireOmitted: Codable, Equatable, Sendable {
 }
 
 public struct WireTurn: Codable, Equatable, Sendable {
+    public var timing: WireTurnTiming? = nil
+    public var thoughtTimeMilliseconds: UInt64? = nil
     public var turnID: String
     public var liveResponse: WireBoundedText
     public var tools: [WireTool]
@@ -606,6 +623,8 @@ public struct WireTurn: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case turnID = "turn_id"
+        case timing
+        case thoughtTimeMilliseconds = "thought_time_ms"
         case liveResponse = "live_response"
         case tools
         case canSteer = "can_steer"
@@ -678,13 +697,54 @@ public struct WireMessage: Codable, Equatable, Sendable {
     /// Set on a tool-result message.
     public var tool: WireMessageTool?
     public var timestamp: String?
+    public var responseTimeMilliseconds: UInt64? = nil
+    public var thoughtTimeMilliseconds: UInt64? = nil
+    public var completedAt: String? = nil
+    public var turn: WireTurnTiming? = nil
+    public var metadata: [String: JSONValue] = [:]
 
     enum CodingKeys: String, CodingKey {
         case messageID = "message_id"
         case role
         case content
         case tool
-        case timestamp
+        case timestamp, turn
+        case responseTimeMilliseconds = "response_time_ms"
+        case thoughtTimeMilliseconds = "thought_time_ms"
+        case completedAt = "completed_at"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messageID = try container.decode(String.self, forKey: .messageID)
+        role = try container.decode(String.self, forKey: .role)
+        content = try container.decode(WireBoundedText.self, forKey: .content)
+        tool = try container.decodeIfPresent(WireMessageTool.self, forKey: .tool)
+        timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
+        responseTimeMilliseconds = try container.decodeIfPresent(UInt64.self, forKey: .responseTimeMilliseconds)
+        thoughtTimeMilliseconds = try container.decodeIfPresent(UInt64.self, forKey: .thoughtTimeMilliseconds)
+        completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
+        turn = try container.decodeIfPresent(WireTurnTiming.self, forKey: .turn)
+        var fields = try decoder.singleValueContainer().decode([String: JSONValue].self)
+        for key in ["message_id", "role", "content", "tool", "timestamp", "response_time_ms", "thought_time_ms", "completed_at", "turn"] {
+            fields.removeValue(forKey: key)
+        }
+        metadata = fields
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var extras = encoder.container(keyedBy: WireTag.Key.self)
+        for (key, value) in metadata { try extras.encode(value, forKey: .init(key)) }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(messageID, forKey: .messageID)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        try container.encodeIfPresent(tool, forKey: .tool)
+        try container.encodeIfPresent(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(responseTimeMilliseconds, forKey: .responseTimeMilliseconds)
+        try container.encodeIfPresent(thoughtTimeMilliseconds, forKey: .thoughtTimeMilliseconds)
+        try container.encodeIfPresent(completedAt, forKey: .completedAt)
+        try container.encodeIfPresent(turn, forKey: .turn)
     }
 }
 

@@ -68,7 +68,7 @@ enum Contract {
 
     @Test func everyGoldenFrameRoundTrips() throws {
         let files = try Contract.goldenFiles("frames")
-        #expect(files.count == 42)
+        #expect(files.count == 44)
         var kinds = Set<String>()
         var results = Set<String>()
         var events = Set<String>()

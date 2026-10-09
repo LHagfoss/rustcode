@@ -7,6 +7,12 @@
   "generation": 1,
   "event": {
     "type": "text_delta",
-    "text": "The failure comes from "
+    "text": "The failure comes from ",
+    "timing": {
+      "turn_id": "turn:48213:12",
+      "started_at": "2026-10-09T18:41:00+02:00",
+      "elapsed_work_ms": 12000
+    },
+    "thought_time_ms": 4000
   }
 }

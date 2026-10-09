@@ -5,7 +5,7 @@ public let remoteProtocolVersion: UInt32 = 1
 
 /// Any JSON value. Used to carry a frame, operation, result or event that this version does
 /// not know, so that it decodes, can be inspected and encodes back unchanged.
-public enum JSONValue: Codable, Equatable, Sendable {
+public enum JSONValue: Codable, Hashable, Sendable {
     case null
     case bool(Bool)
     case number(Double)

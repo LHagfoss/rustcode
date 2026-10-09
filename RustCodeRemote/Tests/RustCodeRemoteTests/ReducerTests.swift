@@ -60,10 +60,16 @@ import Testing
         snapshot.apply(update(ref, 2, .assistantDelta(itemID: "a", text: "partial")))
         snapshot.apply(update(ref, 3, .turnFinished(turnID: "t1", outcome: .cancelled)))
         #expect(snapshot.activeTurnID == "t2")
-        #expect(snapshot.items[0].content == .assistant(AssistantText(text: "partial", isStreaming: false)))
+        #expect(snapshot.items[0].content == .assistant(AssistantText(text: "partial", isStreaming: true)))
 
         snapshot.apply(update(ref, 4, .turnFinished(turnID: "t2", outcome: .completed)))
         #expect(!snapshot.isRunning)
+    }
+
+    @Test func emptyClockDeltaDoesNotCreateATranscriptItem() {
+        var snapshot = SessionSnapshot(session: ref, activeTurnID: "t1")
+        snapshot.apply(update(ref, 1, .responseDelta("")))
+        #expect(snapshot.items.isEmpty)
     }
 
     @Test func tracksPendingAttention() {

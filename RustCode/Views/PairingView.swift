@@ -83,7 +83,7 @@ struct PairingView: View {
     private var scanSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label {
-                Text("Run **/remote** in a RustCode session on your Mac, then scan the QR code it shows.")
+                Text("Connect your iPhone and Mac to the same Wi-Fi. Run **/remote** in a RustCode session on your Mac, then scan its QR code.")
             } icon: {
                 Image(systemName: "1.circle.fill").foregroundStyle(.tint)
             }

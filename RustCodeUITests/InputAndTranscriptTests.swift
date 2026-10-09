@@ -63,7 +63,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoSession", "idle"]
         app.launch()
-        let thinking = app.buttons["Thinking"]
+        let thinking = app.buttons["Thinking · 4s"]
         XCTAssertTrue(thinking.waitForExistence(timeout: 5))
         app.swipeDown()
         if !thinking.isHittable { app.swipeDown() }
@@ -78,6 +78,20 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["I’ll group the merged changes by scope, then check the release steps."].exists)
         app.swipeUp()
         XCTAssertTrue(app.descendants(matching: .any)["markdownTable"].waitForExistence(timeout: 3))
+    }
+
+    func testHistoricalTimingIsVisibleAndThoughtAggregateAppearsOnce() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSession", "idle"]
+        app.launch()
+        let thinking = app.buttons["Thinking · 4s"]
+        XCTAssertTrue(thinking.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "Thinking · 4s").count, 1)
+        XCTAssertTrue(app.staticTexts["Response · 12s"].exists)
+        XCTAssertTrue(app.staticTexts["Completed · Worked for 32s"].exists)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Completed · Worked for 32s").count, 1)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Completed at ")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Failed · Worked for 8s"].exists)
     }
 
     private func launchChat(draft: String) -> XCUIApplication {

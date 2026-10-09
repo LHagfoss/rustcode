@@ -11,7 +11,7 @@ keyboard for it; closing the app never cancels work.
 
 ## Status
 
-The app speaks the final version of remote protocol v1 and works against a real RustCode
+The app speaks remote protocol v1 and works against a real RustCode
 host. What that means, precisely:
 
 - **Checked end to end on one Mac, over loopback.** An integration test starts a real
@@ -26,27 +26,31 @@ host. What that means, precisely:
 - **Approvals, questions, tools and sub-agents** are implemented against the published
   golden frames and the in-app demo host. The end-to-end test does not produce them,
   because its stand-in model only writes text.
-- The RustCode side is on the `feat/engine-remote-routing` branch (PR #1914) at the time
-  of writing. You need a RustCode build that includes it.
+- Use a current RustCode build with remote session sharing and timing metadata.
+  The checked contract revision is recorded in the package's `Resources/remote-protocol/SOURCE.txt`.
 
 ## Pair with a host
 
-The phone has to be able to reach the Mac, so the gateway must listen on an address other
-than loopback. Use the Mac's NetBird address (recommended, the tunnel encrypts the
-connection) or its LAN address (not encrypted, see [Network security](#network-security)).
-
-On the Mac:
-
-```sh
-netbird status | grep "NetBird IP"        # or: ipconfig getifaddr en0   for the LAN address
-rustcode remote serve --bind <that address>
-```
-
-Then, in the RustCode terminal session you want to share:
+Connect the Mac and iPhone to the same Wi-Fi network. In the RustCode terminal session
+you want to share, run:
 
 ```
 /remote
 ```
+
+RustCode starts the gateway automatically and selects a reachable Mac LAN address.
+You do not need to look up an IP address or start `remote serve` for this same-network flow.
+If the Mac has no reachable LAN address, RustCode explains how to provide one explicitly.
+
+For access away from home, connect both devices to the same NetBird VPN and explicitly
+choose the Mac's NetBird address:
+
+```sh
+rustcode remote serve --bind <Mac NetBird address>
+```
+
+Then run `/remote` in the session and scan its code. NetBird encrypts the connection;
+the automatic LAN flow is for a network you trust (see [Network security](#network-security)).
 
 `/remote` shows a QR code, the address and an eight-digit code. In the app tap **Scan
 Pairing Code** and point the camera at the QR code. The first time, iOS asks for camera
@@ -58,9 +62,9 @@ sharing it; closing the terminal ends it. `rustcode remote devices` lists paired
 and `rustcode remote revoke <device>` removes one, which sends the app back to the
 pairing screen.
 
-A pairing code lasts two minutes and works once; run `/remote` or `rustcode remote pair`
-again for a new one. After too many wrong attempts the host locks pairing for a few
-minutes and the app says for how long.
+A pairing code lasts two minutes and works once. If pairing reports an expired or invalid
+code, run `/remote` or `rustcode remote pair` again and scan the fresh code. After too many
+wrong attempts the host locks pairing for a few minutes and the app says for how long.
 
 ## Requirements
 
@@ -213,10 +217,22 @@ records the commit in `Resources/remote-protocol/SOURCE.txt`.
 The integration tests need a real `rustcode` binary and are skipped unless you name one:
 
 ```sh
-RUSTCODE_GATEWAY_BIN=/path/to/rustcode swift test
+RUSTCODE_GATEWAY_BIN=/path/to/rustcode swift test --package-path RustCodeRemote
 ```
 
-They run everything on loopback, in a temporary configuration directory:
+The default gateway/session fixtures run on explicit loopback in a temporary configuration
+directory. To also verify automatic LAN selection and actual QR-payload pairing on a Mac
+with a reachable LAN, set `RUSTCODE_LAN_PAIRING=1` with the same binary:
+
+```sh
+RUSTCODE_GATEWAY_BIN=/path/to/rustcode RUSTCODE_LAN_PAIRING=1 \
+  swift test --package-path RustCodeRemote
+```
+
+The LAN check connects the package's live client to the address the gateway advertises;
+it does not install or run the app on a physical phone.
+
+The real-host suites cover:
 
 - `GatewayIntegrationTests` pair by QR payload and by code, authenticate, revoke a device
   and watch the connection close, restart the gateway, and trip the pairing rate limit.
@@ -236,6 +252,12 @@ xcodebuild -project RustCode.xcodeproj -scheme RustCode \
 `CODE_SIGNING_ALLOWED=NO` is fine for checking that it compiles, but an app built that
 way has no keychain access and reports a keychain error at launch. To run it in the
 Simulator, build without that flag (or just press Run in Xcode).
+
+The transcript shows host-reported response and thought time, logical-turn work time,
+completion timestamps, and completed, cancelled or failed outcomes when available.
+Work time excludes waits for user input and gaps between runs. Missing timings stay absent;
+reconnecting retains the snapshot ID alongside the replay sequence so replaced histories
+resynchronise safely.
 
 ## The wire boundary
 

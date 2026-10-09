@@ -8,6 +8,11 @@
   "event": {
     "type": "turn_started",
     "turn_id": "turn:48213:12",
+    "timing": {
+      "turn_id": "turn:48213:12",
+      "started_at": "2026-10-09T18:41:00+02:00",
+      "elapsed_work_ms": 12000
+    },
     "prompt": {
       "text": "Run the test suite and fix what fails",
       "truncated": false,

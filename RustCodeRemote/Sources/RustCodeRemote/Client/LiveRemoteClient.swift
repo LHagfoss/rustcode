@@ -23,6 +23,7 @@ public actor LiveRemoteClient: RemoteClient {
     private var waiters: [RequestID: Waiter] = [:]
     /// Where each attached session's sequence numbers came from; a resume cursor names it.
     private var replayOrigins: [SessionRef: ReplayOrigin] = [:]
+    private var replaySnapshotIDs: [SessionRef: String] = [:]
     /// Mutations in flight; a `received` receipt for these is not the final answer.
     private var mutations: Set<RequestID> = []
     private var receivedOnly: Set<RequestID> = []
@@ -131,7 +132,7 @@ public actor LiveRemoteClient: RemoteClient {
         // A replay needs to name where the cursor came from; without that, ask for a snapshot.
         // The gateway decides whether it can replay and says so in its reply.
         let resume = resumeAfter.flatMap { sequence in
-            replayOrigins[session].map { ResumeCursor(origin: $0, lastSequence: sequence) }
+            replayOrigins[session].map { ResumeCursor(origin: $0, lastSequence: sequence, snapshotID: replaySnapshotIDs[session]) }
         }
         do {
             let reply = try await request(.attachSession(session, resume: resume))
@@ -299,6 +300,9 @@ public actor LiveRemoteClient: RemoteClient {
 
         switch message {
         case .reply(let id, let reply):
+            if case .attached(.snapshot(let snapshot), _) = reply {
+                replaySnapshotIDs[snapshot.session] = snapshot.snapshotID
+            }
             if case .sessions(let sessions) = reply {
                 sessionsContinuation?.yield(sessions)
             }
@@ -321,6 +325,9 @@ public actor LiveRemoteClient: RemoteClient {
         case .sessionsChanged(let sessions):
             sessionsContinuation?.yield(sessions)
         case .sessionUpdate(let update):
+            if update.isSnapshot, case .replaced(let snapshot) = update.changes[0] {
+                replaySnapshotIDs[update.session] = snapshot.snapshotID
+            }
             if awaitingSnapshot.contains(update.session) {
                 // Nothing between a resync notice and its snapshot can be trusted.
                 guard update.isSnapshot else { return }
@@ -332,6 +339,7 @@ public actor LiveRemoteClient: RemoteClient {
             awaitingSnapshot.insert(session)
         case .sessionClosed(let session, let reason):
             replayOrigins[session] = nil
+            replaySnapshotIDs[session] = nil
             updateContinuations.removeValue(forKey: session)?
                 .finish(throwing: RemoteError.sessionClosed(reason))
         case .unknown:

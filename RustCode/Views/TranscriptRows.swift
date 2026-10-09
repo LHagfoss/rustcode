@@ -3,8 +3,22 @@ import SwiftUI
 
 struct TranscriptRow: View {
     let item: TranscriptItem
+    var footer: TurnTiming? = nil
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            content
+            if let footer {
+                TurnFooter(timing: footer)
+            } else if item.turnTiming == nil, case .assistant(let assistant) = item.content,
+                      let completedAt = assistant.completedAt {
+                TurnFooter(legacyCompletedAt: completedAt)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch item.content {
         case .user(let text):
             UserMessage(text: text)
@@ -27,6 +41,32 @@ struct TranscriptRow: View {
     }
 }
 
+struct TurnFooter: View {
+    var timing: TurnTiming? = nil
+    var legacyCompletedAt: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let timing, timing.outcome != nil {
+                Text(TimingPresentation.turnLabel(timing))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let timestamp = TimingPresentation.endTimestamp(timing: timing, legacy: legacyCompletedAt) {
+                let prefix = TimingPresentation.endLabel(outcome: timing?.outcome)
+                Group {
+                    if let date = TimingPresentation.date(timestamp) {
+                        Text("\(prefix) \(date.formatted(date: .abbreviated, time: .standard))")
+                    } else {
+                        Text("\(prefix) \(timestamp)")
+                    }
+                }
+                .font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+        .accessibilityIdentifier("turnFooter")
+    }
+}
+
 private struct UserMessage: View {
     let text: String
 
@@ -46,18 +86,28 @@ private struct UserMessage: View {
 private struct AssistantMessage: View {
     let assistant: AssistantText
 
+    private var blocks: [AssistantBlock] {
+        AssistantBlock.parse(assistant.text, isStreaming: assistant.isStreaming)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(AssistantBlock.parse(assistant.text, isStreaming: assistant.isStreaming).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 switch block {
                 case .markdown(let text):
                     MarkdownText(text: text)
                 case .thinking(let text, let isComplete):
-                    ThinkingBlock(text: text, isThinking: assistant.isStreaming && !isComplete)
+                    ThinkingBlock(text: text, isThinking: assistant.isStreaming && !isComplete,
+                        title: TimingPresentation.thinkingLabel(at: index, in: blocks,
+                            milliseconds: assistant.thoughtTimeMilliseconds) ?? "Thinking")
                 }
             }
             if assistant.isStreaming {
                 StreamingIndicator()
+            }
+            if let response = assistant.responseTimeMilliseconds {
+                Text("Response · \(TimingPresentation.duration(response))")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .contentShape(.contextMenuPreview, .rect(cornerRadius: 12))
@@ -70,6 +120,7 @@ private struct AssistantMessage: View {
 private struct ThinkingBlock: View {
     let text: String
     let isThinking: Bool
+    var title = "Thinking"
     @State private var isExpanded = false
 
     var body: some View {
@@ -82,7 +133,7 @@ private struct ThinkingBlock: View {
                 .contextMenu { TextActions(text: text, readableText: MarkdownText.plainText(text)) }
         } label: {
             HStack(spacing: 8) {
-                Label("Thinking", systemImage: "brain")
+                Label(title, systemImage: "brain")
                 if isThinking { ProgressView().controlSize(.mini).accessibilityHidden(true) }
                 Spacer(minLength: 0)
             }

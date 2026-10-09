@@ -17,7 +17,7 @@ struct GatewayIntegrationTests {
 
         /// - Parameter configFile: contents of `config.toml` for this configuration directory,
         ///   which a terminal session started with it will also use.
-        init(configFile: String? = nil) async throws {
+        init(configFile: String? = nil, bind: String? = "127.0.0.1") async throws {
             binary = try #require(ProcessInfo.processInfo.environment["RUSTCODE_GATEWAY_BIN"])
             // The gateway's control socket lives under the configuration directory, and a
             // Unix socket path has to stay short.
@@ -31,6 +31,7 @@ struct GatewayIntegrationTests {
             process = Process()
             process.executableURL = URL(fileURLWithPath: binary)
             process.arguments = ["remote", "serve", "--port", "\(port)"]
+            if let bind { process.arguments! += ["--bind", bind] }
             process.environment = ["RUSTCODE_CONFIG_DIR": configuration.path, "PATH": "/usr/bin:/bin"]
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
@@ -77,6 +78,28 @@ struct GatewayIntegrationTests {
 
     private func makeClient() -> LiveRemoteClient {
         LiveRemoteClient(codec: WireCodec(), requestTimeout: .seconds(5))
+    }
+
+    /// Opt in on a Mac with a reachable LAN; do not make isolated CI require Wi-Fi.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["RUSTCODE_LAN_PAIRING"] == "1"))
+    func automaticallyAdvertisedLANQRCodePairsWithTheLiveClient() async throws {
+        let gateway = try await Gateway(bind: nil)
+        defer { gateway.stop() }
+        let challenge = try gateway.pairingChallenge()
+        let target = try WireCodec().pairingTarget(for: .scanned(challenge.payload))
+        #expect(target.address.host != "127.0.0.1")
+        #expect(target.address.host != "localhost")
+        #expect(target.address.host != "0.0.0.0")
+        #expect(target.address.host != "::")
+        #expect(target.address.host != "::1")
+        let client = makeClient()
+        let credential = try await client.pair(.scanned(challenge.payload), deviceName: "LAN Integration Client")
+        #expect(credential.host.address == target.address)
+        let identity = try await client.connect(using: credential)
+        #expect(identity.gatewayID == target.expectedGatewayID)
+        var lists = try await client.subscribeSessions().makeAsyncIterator()
+        #expect(try await lists.next() == [])
+        await client.disconnect()
     }
 
     @Test func pairsWithTheQRPayloadAuthenticatesAndIsClosedWhenRevoked() async throws {
@@ -164,7 +187,7 @@ struct GatewayIntegrationTests {
         // Same configuration directory and port: the same host, started again.
         let restarted = Process()
         restarted.executableURL = URL(fileURLWithPath: gateway.binary)
-        restarted.arguments = ["remote", "serve", "--port", "\(gateway.port)"]
+        restarted.arguments = ["remote", "serve", "--bind", "127.0.0.1", "--port", "\(gateway.port)"]
         restarted.environment = ["RUSTCODE_CONFIG_DIR": gateway.configuration.path, "PATH": "/usr/bin:/bin"]
         restarted.standardOutput = FileHandle.nullDevice
         restarted.standardError = FileHandle.nullDevice

@@ -38,10 +38,12 @@ public enum RemoteCommand: Sendable, Equatable {
 public struct ResumeCursor: Sendable, Equatable {
     public var origin: ReplayOrigin
     public var lastSequence: UInt64
+    public var snapshotID: String?
 
-    public init(origin: ReplayOrigin, lastSequence: UInt64) {
+    public init(origin: ReplayOrigin, lastSequence: UInt64, snapshotID: String? = nil) {
         self.origin = origin
         self.lastSequence = lastSequence
+        self.snapshotID = snapshotID
     }
 }
 

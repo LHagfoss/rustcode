@@ -140,7 +140,7 @@ import Testing
             ("attach_session", "req-0003", .attachSession(session, resume: nil)),
             ("attach_session_resume", "req-0004", .attachSession(session, resume: ResumeCursor(
                 origin: ReplayOrigin(gatewayID: "gw-8e1f4b7a", instanceID: "inst-41c07d92"),
-                lastSequence: 412
+                lastSequence: 412, snapshotID: "snapshot-example"
             ))),
             ("detach_session", "req-0005", .detachSession(session)),
             ("get_history", "req-0006", .getHistory(session, before: HistoryCursor("60@h2"), limit: 25)),
@@ -269,9 +269,9 @@ import Testing
         #expect(update.sequence == 424)
         #expect(snapshot.session == session)
         #expect(snapshot.sequence == 424)
-        #expect(snapshot.items.map(\.id) == ["m60", "m61"])
-        #expect(snapshot.items[0].content == .user("Why does the parser test fail?"))
-        guard case .tool(let tool) = snapshot.items[1].content else {
+        #expect(snapshot.items.map(\.id) == ["m59", "m60", "m61"])
+        #expect(snapshot.items[1].content == .user("Why does the parser test fail?"))
+        guard case .tool(let tool) = snapshot.items[2].content else {
             Issue.record("expected a tool row")
             return
         }
@@ -298,7 +298,7 @@ import Testing
         // A snapshot event replaces whatever the client had.
         var state = SessionSnapshot(session: session, items: [TranscriptItem(id: "old", .user("old"))], activeTurnID: "t", sequence: 423)
         #expect(state.apply(update) == .applied)
-        #expect(state.items.map(\.id) == ["m60", "m61"])
+        #expect(state.items.map(\.id) == ["m59", "m60", "m61"])
         #expect(state.sequence == 424)
         #expect(state.activeTurnID == nil)
     }
@@ -315,6 +315,39 @@ import Testing
         #expect(snapshot.canSteer == (attached.snapshot.turn?.canSteer ?? true))
         let toolCount = attached.snapshot.turn?.tools.count ?? 0
         #expect(snapshot.items.count >= attached.snapshot.transcript.count + toolCount)
+    }
+
+    @Test func assistantMetadataFromFutureHostsRoundTrips() throws {
+        let raw = #"{"message_id":"m1","role":"assistant","content":{"text":"Done","truncated":false,"offset":0,"total_bytes":4},"future_clock":{"paused":true}}"#
+        let data = Data(raw.utf8)
+        let message = try JSONDecoder().decode(WireMessage.self, from: data)
+        #expect(try Contract.json(JSONEncoder().encode(message)) == Contract.json(data))
+    }
+
+    @Test func thoughtClockIsOptionalIndependentlyOfTurnClock() throws {
+        let frame = #"{"kind":"event","protocol_version":1,"session_id":"s","registration_epoch":1,"sequence":1,"generation":1,"event":{"type":"text_delta","text":"","thought_time_ms":9000}}"#
+        guard case .sessionUpdate(let update) = try codec.decode(frame) else { return }
+        var state = SessionSnapshot(session: update.session, items: [
+            TranscriptItem(id: "response:t", .assistant(AssistantText(text: "<think>Plan", isStreaming: true)))
+        ], activeTurnID: "t")
+        state.apply(update)
+        guard case .assistant(let response) = state.items[0].content else { return }
+        #expect(response.thoughtTimeMilliseconds == 9000)
+        #expect(state.items.count == 1)
+    }
+
+    @Test func unknownOutcomeIsNeverReportedAsCompleted() throws {
+        let frame = try golden("frames/event_turn_finished").replacingOccurrences(of: "completed", with: "future")
+        guard case .sessionUpdate(let update) = try codec.decode(frame) else { return }
+        #expect(!update.changes.contains(.turnFinished(turnID: "turn:48213:12", outcome: .completed)))
+    }
+
+    @Test func failedTurnUsesTheHostOutcome() throws {
+        guard case .sessionUpdate(let update) = try decodeGolden("event_turn_failed") else {
+            Issue.record("expected a turn update")
+            return
+        }
+        #expect(update.changes.contains(.turnFinished(turnID: "turn:48213:12", outcome: .failed)))
     }
 
     @Test func aTurnOfEventsBuildsTheTranscript() throws {
@@ -334,7 +367,10 @@ import Testing
         #expect(state.items.count == 3)
         #expect(state.items[0].content == .user("Run the test suite and fix what fails"))
         // The tool row ended the response text that came before it.
-        #expect(state.items[1].content == .assistant(AssistantText(text: "The failure comes from ", isStreaming: false)))
+        guard case .assistant(let response) = state.items[1].content else { return }
+        #expect(response.text == "The failure comes from ")
+        #expect(!response.isStreaming)
+        #expect(response.turn?.turnID == state.activeTurnID)
         guard case .tool(let tool) = state.items[2].content else {
             Issue.record("expected a tool row")
             return
@@ -396,7 +432,7 @@ import Testing
             Issue.record("expected a history page")
             return
         }
-        #expect(page.items.map(\.id) == ["m60", "m61"])
+        #expect(page.items.map(\.id) == ["m59", "m60", "m61"])
         #expect(page.nextCursor == HistoryCursor("35@h2"))
     }
 }

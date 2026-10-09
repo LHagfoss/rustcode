@@ -105,6 +105,7 @@ public struct WireCodec: RemoteCodec {
         case .attachSession(let session, let resume):
             let cursor = resume.map {
                 WireResumeCursor(
+                    snapshotID: $0.snapshotID,
                     gatewayID: $0.origin.gatewayID,
                     instanceID: $0.origin.instanceID,
                     lastSequence: $0.lastSequence
@@ -347,14 +348,24 @@ public struct WireCodec: RemoteCodec {
         case .turnStarted(let started):
             // The prompt belongs to the transcript; the event is the only place it arrives.
             var changes: [SessionEvent] = [
-                .itemAppended(TranscriptItem(id: "prompt:\(frame.sequence)", .user(started.prompt.text)))
+                .itemAppended(TranscriptItem(id: "prompt:\(frame.sequence)", .user(started.prompt.text),
+                    turn: started.timing.map(timing) ?? started.turnID.map { TurnTiming(turnID: $0) }))
             ]
-            if let turnID = started.turnID {
+            if let turnID = started.turnID ?? started.timing?.turnID {
                 changes.append(.turnStarted(turnID: turnID))
+            }
+            if let timing = started.timing {
+                changes.append(.timingChanged(Self.timing(timing), thoughtTimeMilliseconds: nil))
             }
             return update(changes)
         case .textDelta(let delta):
-            return update([.responseDelta(delta.text)])
+            var changes: [SessionEvent] = delta.text.isEmpty ? [] : [.responseDelta(delta.text)]
+            if let timing = delta.timing {
+                changes.append(.timingChanged(Self.timing(timing), thoughtTimeMilliseconds: delta.thoughtTimeMilliseconds))
+            } else if let thought = delta.thoughtTimeMilliseconds {
+                changes.append(.thoughtTimeChanged(thought))
+            }
+            return update(changes)
         case .toolStarted(let started):
             return update([.itemAppended(toolItem(started.tool))])
         case .toolFinished(let finished):
@@ -375,10 +386,18 @@ public struct WireCodec: RemoteCodec {
             return update([.questionChanged(question(requested.question))])
         case .questionResolved(let resolved):
             return update([.questionResolved(questionID: resolved.questionID)])
-        case .turnFinished(let ended):
-            return update([.turnFinished(turnID: ended.turnID, outcome: .completed)])
-        case .turnCancelled(let ended):
-            return update([.turnFinished(turnID: ended.turnID, outcome: .cancelled)])
+        case .turnFinished(let ended), .turnCancelled(let ended):
+            let fallback: TurnOutcome = frame.event.type == "turn_cancelled" ? .cancelled : .completed
+            let outcome: TurnOutcome = switch ended.timing?.outcome {
+            case "failed": .failed
+            case "cancelled": .cancelled
+            case "completed": .completed
+            case .some(let value): .unknown(value)
+            case nil: fallback
+            }
+            var changes = ended.timing.map { [SessionEvent.timingChanged(Self.timing($0), thoughtTimeMilliseconds: nil)] } ?? []
+            changes.append(.turnFinished(turnID: ended.turnID ?? ended.timing?.turnID, outcome: outcome))
+            return update(changes)
         case .snapshot(let replaced):
             return update([.replaced(snapshot(replaced.snapshot))])
         case .resyncRequired:
@@ -433,7 +452,9 @@ public struct WireCodec: RemoteCodec {
             if !turn.liveResponse.text.isEmpty {
                 items.append(TranscriptItem(
                     id: "response:\(turn.turnID)",
-                    .assistant(AssistantText(text: turn.liveResponse.text, isStreaming: true))
+                    .assistant(AssistantText(text: turn.liveResponse.text, isStreaming: true,
+                        thoughtTimeMilliseconds: turn.thoughtTimeMilliseconds,
+                        turn: turn.timing.map(timing) ?? TurnTiming(turnID: turn.turnID)))
                 ))
             }
         }
@@ -465,14 +486,21 @@ public struct WireCodec: RemoteCodec {
                 backgroundTasks: Int(wire.omitted.backgroundTasks)
             ),
             sequence: wire.sequence,
-            historyCursor: wire.historyCursor.map { HistoryCursor($0) }
+            historyCursor: wire.historyCursor.map { HistoryCursor($0) },
+            activeTurnTiming: wire.turn?.timing.map(timing),
+            lastTurn: wire.lastTurn.map(timing),
+            snapshotID: wire.snapshotID
         )
     }
 
     static func item(_ message: WireMessage) -> TranscriptItem {
         let text = message.content.text
+        func entry(_ content: TranscriptItem.Content) -> TranscriptItem {
+            TranscriptItem(id: message.messageID, content, turn: message.turn.map(timing),
+                timestamp: message.timestamp, metadata: message.metadata)
+        }
         if let tool = message.tool {
-            return TranscriptItem(id: message.messageID, .tool(ToolCall(
+            return entry(.tool(ToolCall(
                 name: tool.name,
                 summary: tool.detail ?? "",
                 output: text.isEmpty ? nil : text,
@@ -481,11 +509,21 @@ public struct WireCodec: RemoteCodec {
             )))
         }
         switch message.role {
-        case "user": return TranscriptItem(id: message.messageID, .user(text))
-        case "assistant": return TranscriptItem(id: message.messageID, .assistant(AssistantText(text: text)))
+        case "user": return entry(.user(text))
+        case "assistant": return entry(.assistant(AssistantText(
+            text: text, responseTimeMilliseconds: message.responseTimeMilliseconds,
+            thoughtTimeMilliseconds: message.thoughtTimeMilliseconds, timestamp: message.timestamp,
+            completedAt: message.completedAt, turn: message.turn.map(timing), metadata: message.metadata
+        )))
         // `role` is a free string on the wire; anything else is shown without a speaker.
-        default: return TranscriptItem(id: message.messageID, .notice(text))
+        default: return entry(.notice(text))
         }
+    }
+
+    static func timing(_ wire: WireTurnTiming) -> TurnTiming {
+        TurnTiming(turnID: wire.turnID, startedAt: wire.startedAt, endedAt: wire.endedAt,
+                   elapsedWorkMilliseconds: wire.elapsedWorkMilliseconds, outcome: wire.outcome,
+                   metadata: wire.metadata)
     }
 
     static func toolItemID(_ id: String) -> String { "tool:\(id)" }

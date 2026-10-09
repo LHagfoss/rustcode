@@ -72,6 +72,9 @@ public struct SessionSummary: Identifiable, Hashable, Sendable {
 public struct TranscriptItem: Identifiable, Hashable, Sendable {
     public var id: String
     public var content: Content
+    public var turn: TurnTiming?
+    public var timestamp: String?
+    public var metadata: [String: JSONValue]
 
     public enum Content: Hashable, Sendable {
         case user(String)
@@ -81,19 +84,43 @@ public struct TranscriptItem: Identifiable, Hashable, Sendable {
         case notice(String)
     }
 
-    public init(id: String, _ content: Content) {
+    public init(id: String, _ content: Content, turn: TurnTiming? = nil, timestamp: String? = nil,
+                metadata: [String: JSONValue] = [:]) {
         self.id = id
         self.content = content
+        self.turn = turn
+        self.timestamp = timestamp
+        self.metadata = metadata
+    }
+
+    public var turnTiming: TurnTiming? {
+        if let turn { return turn }
+        if case .assistant(let assistant) = content { return assistant.turn }
+        return nil
     }
 }
 
 public struct AssistantText: Hashable, Sendable {
     public var text: String
     public var isStreaming: Bool
+    public var responseTimeMilliseconds: UInt64?
+    public var thoughtTimeMilliseconds: UInt64?
+    public var timestamp: String?
+    public var completedAt: String?
+    public var turn: TurnTiming?
+    public var metadata: [String: JSONValue]
 
-    public init(text: String, isStreaming: Bool = false) {
+    public init(text: String, isStreaming: Bool = false, responseTimeMilliseconds: UInt64? = nil,
+                thoughtTimeMilliseconds: UInt64? = nil, timestamp: String? = nil,
+                completedAt: String? = nil, turn: TurnTiming? = nil, metadata: [String: JSONValue] = [:]) {
         self.text = text
         self.isStreaming = isStreaming
+        self.responseTimeMilliseconds = responseTimeMilliseconds
+        self.thoughtTimeMilliseconds = thoughtTimeMilliseconds
+        self.timestamp = timestamp
+        self.completedAt = completedAt
+        self.turn = turn
+        self.metadata = metadata
     }
 }
 
