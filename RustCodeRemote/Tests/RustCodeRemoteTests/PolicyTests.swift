@@ -103,6 +103,52 @@ import Testing
 }
 
 @Suite struct MarkdownBlockTests {
+    @Test func tablesStopAtFollowingMarkdownBlocksWithPipes() {
+        #expect(MarkdownBlock.parse("a | b\n--- | ---\n1 | 2\n# A | B | C\n- x | y\n> quote | text") == [
+            .table(headers: ["a", "b"], rows: [["1", "2"]]),
+            .heading(level: 1, text: "A | B | C"),
+            .listItem(marker: "•", text: "x | y"), .quote("quote | text"),
+        ])
+    }
+
+    @Test func windowsLineEndingsDoNotAddEmptyLinesOrBreakTables() {
+        #expect(MarkdownBlock.parse("```swift\r\nlet a = 1\r\nlet b = 2\r\n```") == [
+            .code(language: "swift", text: "let a = 1\nlet b = 2"),
+        ])
+        #expect(MarkdownBlock.parse("a | b\r\n--- | ---\r\n1 | 2") == [
+            .table(headers: ["a", "b"], rows: [["1", "2"]]),
+        ])
+    }
+
+    @Test func supportsTildeAndLongFencesWithoutClosingOnCodeContent() {
+        #expect(MarkdownBlock.parse("~~~~swift\nlet x = 1\n~~~\n~~~~") == [
+            .code(language: "swift", text: "let x = 1\n~~~"),
+        ])
+        #expect(MarkdownBlock.parse("````md\n```swift\nlet x = 1\n```\n````") == [
+            .code(language: "md", text: "```swift\nlet x = 1\n```"),
+        ])
+        #expect(MarkdownBlock.parse("```\n```not a closing fence\n```") == [
+            .code(language: nil, text: "```not a closing fence"),
+        ])
+    }
+
+    @Test func parsesTablesWithEscapedAndInlineCodePipes() {
+        #expect(MarkdownBlock.parse("| Name | Value |\n| --- | :---: |\n| a\\|b | `x|y` |\nAfter") == [
+            .table(headers: ["Name", "Value"], rows: [["a|b", "`x|y`"]]), .paragraph("After"),
+        ])
+        #expect(MarkdownBlock.parse("a | b\n--- | ---\n1 | 2") == [
+            .table(headers: ["a", "b"], rows: [["1", "2"]]),
+        ])
+        #expect(MarkdownBlock.parse("a | b\n--- | nope") == [.paragraph("a | b\n--- | nope")])
+    }
+
+    @Test func rendersTaskListsAndRules() {
+        #expect(MarkdownBlock.parse("- [ ] pending\n- [x] done\n---\n***\n___") == [
+            .listItem(marker: "☐", text: "pending"), .listItem(marker: "☑", text: "done"),
+            .rule, .rule, .rule,
+        ])
+    }
+
     @Test func splitsBlocks() {
         let text = """
             # Title

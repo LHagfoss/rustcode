@@ -632,6 +632,8 @@ public actor DemoRemoteClient: RemoteClient {
                 id: "notes-6",
                 .assistant(AssistantText(
                     text: """
+                        <think>I’ll group the merged changes by scope, then check the release steps.</think>
+
                         ## Release notes
 
                         **Engine**
@@ -645,6 +647,14 @@ public actor DemoRemoteClient: RemoteClient {
                         2. Chunked writes are verified after the last chunk.
 
                         Run `scripts/release.sh` when you are ready to tag.
+
+                        | Area | Status |
+                        | --- | --- |
+                        | Engine | Ready |
+                        | Fixes | Verified |
+
+                        - [x] Review merged changes
+                        - [ ] Tag the release
                         """
                 ))
             ),

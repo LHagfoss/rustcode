@@ -6,6 +6,7 @@ struct TranscriptView: View {
     @State private var sheet: AttentionSheet?
     @State private var selectable: SelectableText?
     @State private var hasAutoPresented = false
+    @FocusState private var isComposerFocused: Bool
     var presentsAttentionOnAppear = false
 
     var body: some View {
@@ -113,8 +114,14 @@ struct TranscriptView: View {
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .defaultScrollAnchor(.top, for: .alignment)
-        .scrollDismissesKeyboard(.interactively)
-        .floatingBottomBar {
+        .scrollDismissesKeyboard(.immediately)
+        .onScrollPhaseChange { _, phase in
+            if phase == .interacting { isComposerFocused = false }
+        }
+        .accessibilityIdentifier("transcript")
+        // Keep the editable field in a stable safe-area inset. safeAreaBar relocates
+        // its content as the keyboard changes, which breaks the field's focus binding.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             composerDock
         }
     }
@@ -148,7 +155,8 @@ struct TranscriptView: View {
                     ComposerBar(
                         isRunning: snapshot.isRunning,
                         canSteer: snapshot.canSteer,
-                        isEnabled: store.connection == .connected
+                        isEnabled: store.connection == .connected,
+                        isFocused: $isComposerFocused
                     )
                 }
             }

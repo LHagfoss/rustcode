@@ -43,6 +43,17 @@ struct PairingView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    if focus != nil {
+                        if focus == .address {
+                            Button("Next") { focus = .code }
+                        }
+                        Spacer()
+                        Button("Done") { focus = nil }
+                    }
+                }
+            }
             .sheet(isPresented: $showsScanner) {
                 QRScannerSheet { payload in
                     showsScanner = false
@@ -79,6 +90,7 @@ struct PairingView: View {
             .font(.subheadline)
 
             Button {
+                focus = nil
                 store.clearPairingError()
                 showsScanner = true
             } label: {
@@ -98,26 +110,43 @@ struct PairingView: View {
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 0) {
-                TextField("Address, for example 192.168.1.20:17879", text: $address)
-                    .textContentType(.URL)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.next)
-                    .focused($focus, equals: .address)
-                    .onSubmit { focus = .code }
-                    .padding(14)
-                    .accessibilityLabel("Host address and port")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Address and port").font(.caption).foregroundStyle(.secondary)
+                    TextField("192.168.1.20:17879", text: $address)
+                        .textContentType(.URL)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.next)
+                        .focused($focus, equals: .address)
+                        .onSubmit { focus = .code }
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .accessibilityLabel("Host address and port")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background {
+                    Color.clear.contentShape(.rect).onTapGesture { focus = .address }
+                }
                 Divider().padding(.leading, 14)
-                TextField("Pairing code, for example 1234-5678", text: $code)
-                    .keyboardType(.numbersAndPunctuation)
-                    .autocorrectionDisabled()
-                    .font(code.isEmpty ? .body : .body.monospaced())
-                    .submitLabel(.go)
-                    .focused($focus, equals: .code)
-                    .onSubmit(pairManually)
-                    .padding(14)
-                    .accessibilityLabel("Pairing code")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Pairing code").font(.caption).foregroundStyle(.secondary)
+                    TextField("1234-5678", text: $code)
+                        .textContentType(.oneTimeCode)
+                        .keyboardType(.numbersAndPunctuation)
+                        .autocorrectionDisabled()
+                        .font(code.isEmpty ? .body : .body.monospaced())
+                        .submitLabel(.go)
+                        .focused($focus, equals: .code)
+                        .onSubmit(pairManually)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .accessibilityLabel("Pairing code")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background {
+                    Color.clear.contentShape(.rect).onTapGesture { focus = .code }
+                }
             }
             .background(.fill.quaternary, in: .rect(cornerRadius: 14))
 
@@ -152,6 +181,7 @@ struct PairingView: View {
     private var demoSection: some View {
         VStack(spacing: 6) {
             Button("Try the Demo") {
+                focus = nil
                 Task { await store.startDemo(deviceName: UIDevice.current.name) }
             }
             .font(.body.weight(.medium))

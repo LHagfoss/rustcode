@@ -12,8 +12,8 @@ struct ComposerBar: View {
     @State private var text = ""
     @State private var sendCount = 0
     @State private var stopCount = 0
-    @FocusState private var isFocused: Bool
-    @ScaledMetric(relativeTo: .body) private var buttonSize: CGFloat = 34
+    @FocusState.Binding var isFocused: Bool
+    @ScaledMetric(relativeTo: .body) private var buttonSize: CGFloat = 44
 
     private let inset: CGFloat = 7
 
@@ -31,8 +31,24 @@ struct ComposerBar: View {
             TextField(isRunning ? "Queue a message" : "Message", text: $text, axis: .vertical)
                 .lineLimit(1...6)
                 .focused($isFocused)
-                .frame(minHeight: buttonSize)
+                .frame(maxWidth: .infinity, minHeight: buttonSize)
+                .background {
+                    Color.clear.contentShape(.rect).onTapGesture { isFocused = true }
+                }
                 .accessibilityLabel(isRunning ? "Message to queue" : "Message")
+
+            if isFocused {
+                Button {
+                    isFocused = false
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .foregroundStyle(.secondary)
+                        .frame(width: buttonSize, height: buttonSize)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss keyboard")
+            }
 
             if isRunning {
                 if !trimmed.isEmpty {
@@ -50,7 +66,6 @@ struct ComposerBar: View {
         .padding(.trailing, inset)
         .padding(.vertical, inset)
         .contentShape(shape)
-        .onTapGesture { isFocused = true }
         .glassSurface(in: shape)
         .animation(.snappy(duration: 0.2), value: isRunning)
         .animation(.snappy(duration: 0.2), value: trimmed.isEmpty)
@@ -126,15 +141,13 @@ struct ComposerBar: View {
             .foregroundStyle(foreground)
             .frame(width: buttonSize, height: buttonSize)
             .background(fill, in: .circle)
-            // A 44-point target without growing the control.
-            .padding(5)
             .contentShape(.rect)
-            .padding(-5)
     }
 
     private func send(_ mode: SendMode) {
         let message = trimmed
         guard !message.isEmpty else { return }
+        isFocused = false
         text = ""
         sendCount += 1
         Task {

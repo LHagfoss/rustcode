@@ -173,6 +173,20 @@ docs/screenshots/          Simulator screenshots of the pairing screen, the demo
 
 ### Tests
 
+The shared Xcode scheme includes `RustCodeUITests`, covering pairing-field touch and
+keyboard navigation, chat dismissal and draft preservation, sending, collapsible
+thinking and Markdown tables. Choose an installed iPhone Simulator and run:
+
+```sh
+xcodebuild test -project RustCode.xcodeproj -scheme RustCode \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+```
+
+Thinking text supplied by the host as `<think>…</think>` appears in collapsed **Thinking**
+sections. Assistant replies render headings, inline formatting and links, lists and task
+lists, quotes, tables, horizontal rules and fenced code. Code and tables scroll
+horizontally when needed. Images and nested list indentation are not supported.
+
 The package builds and tests on the Mac, without a simulator:
 
 ```sh

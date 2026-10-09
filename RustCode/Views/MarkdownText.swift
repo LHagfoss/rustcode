@@ -2,7 +2,7 @@ import RustCodeRemote
 import SwiftUI
 
 /// Assistant text. Blocks come from `MarkdownBlock`; inline styling from
-/// `AttributedString(markdown:)`. Deliberately small: no tables, images or nested lists.
+/// `AttributedString(markdown:)`. Tables scroll horizontally on narrow screens.
 struct MarkdownText: View {
     let text: String
 
@@ -41,6 +41,29 @@ struct MarkdownText: View {
                 }
         case .code(let language, let text):
             CodeBlock(language: language, text: text)
+        case .table(let headers, let rows):
+            ScrollView(.horizontal) {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                    GridRow {
+                        ForEach(Array(headers.enumerated()), id: \.offset) { _, cell in
+                            Text(Self.inline(cell)).fontWeight(.semibold)
+                        }
+                    }
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        GridRow {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                                Text(Self.inline(cell))
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+            }
+            .background(.fill.quaternary, in: .rect(cornerRadius: 12))
+            .accessibilityIdentifier("markdownTable")
+        case .rule:
+            Divider().padding(.vertical, 4)
         }
     }
 
@@ -59,6 +82,12 @@ struct MarkdownText: View {
                 isListItem = true
             case .code(_, let text):
                 line = text
+            case .table(let headers, let rows):
+                line = ([headers] + rows).map { row in
+                    row.map { String(inline($0).characters) }.joined(separator: "\t")
+                }.joined(separator: "\n")
+            case .rule:
+                line = "—"
             }
             if !result.isEmpty {
                 result += isListItem && previousWasListItem ? "\n" : "\n\n"

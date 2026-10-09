@@ -10,7 +10,16 @@
 		0A000000000000000000000D /* RustCodeRemote in Frameworks */ = {isa = PBXBuildFile; productRef = 0A000000000000000000000E /* RustCodeRemote */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+        B10000000000000000000001 = {isa = PBXContainerItemProxy; containerPortal = 0A0000000000000000000001; proxyType = 1; remoteGlobalIDString = 0A0000000000000000000009; remoteInfo = RustCode; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+        B10000000000000000000002 = {isa = PBXTargetDependency; target = 0A0000000000000000000009; targetProxy = B10000000000000000000001; };
+/* End PBXTargetDependency section */
+
 /* Begin PBXFileReference section */
+        B10000000000000000000003 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = RustCodeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A0000000000000000000006 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		0A0000000000000000000007 /* Local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text; path = Local.xcconfig.example; sourceTree = "<group>"; };
 		0A0000000000000000000008 /* RustCode.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RustCode.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -28,6 +37,7 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+        B10000000000000000000004 = {isa = PBXFileSystemSynchronizedRootGroup; path = RustCodeUITests; sourceTree = "<group>"; };
 		0A0000000000000000000004 /* RustCode */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -39,6 +49,7 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+        B10000000000000000000005 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		0A000000000000000000000B /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -54,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000000000000000000017 /* README.md */,
+                B10000000000000000000004,
 				0A0000000000000000000004 /* RustCode */,
 				0A0000000000000000000005 /* Config */,
 				0A0000000000000000000003 /* Products */,
@@ -64,6 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000000000000000000008 /* RustCode.app */,
+                B10000000000000000000003,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -80,6 +93,18 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+        B10000000000000000000008 = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = B10000000000000000000009;
+            buildPhases = (B10000000000000000000006, B10000000000000000000005, B10000000000000000000007);
+            buildRules = ();
+            dependencies = (B10000000000000000000002);
+            fileSystemSynchronizedGroups = (B10000000000000000000004);
+            name = RustCodeUITests;
+            productName = RustCodeUITests;
+            productReference = B10000000000000000000003;
+            productType = "com.apple.product-type.bundle.ui-testing";
+        };
 		0A0000000000000000000009 /* RustCode */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0A0000000000000000000013 /* Build configuration list for PBXNativeTarget "RustCode" */;
@@ -135,12 +160,14 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+                B10000000000000000000008,
 				0A0000000000000000000009 /* RustCode */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+        B10000000000000000000007 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		0A000000000000000000000C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -151,6 +178,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+        B10000000000000000000006 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		0A000000000000000000000A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -161,6 +189,8 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+        B1000000000000000000000A = {isa = XCBuildConfiguration; baseConfigurationReference = 0A0000000000000000000006; buildSettings = {GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.lhagfoss.rustcode.uitests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; TEST_TARGET_NAME = RustCode; CODE_SIGN_STYLE = Automatic;}; name = Debug; };
+        B1000000000000000000000B = {isa = XCBuildConfiguration; baseConfigurationReference = 0A0000000000000000000006; buildSettings = {GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.lhagfoss.rustcode.uitests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; TEST_TARGET_NAME = RustCode; CODE_SIGN_STYLE = Automatic;}; name = Release; };
 		0A0000000000000000000011 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -289,6 +319,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+        B10000000000000000000009 = {isa = XCConfigurationList; buildConfigurations = (B1000000000000000000000A, B1000000000000000000000B); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		0A0000000000000000000010 /* Build configuration list for PBXProject "RustCode" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

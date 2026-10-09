@@ -1,7 +1,7 @@
 import Foundation
 
 /// A block of assistant text, split just far enough for a native transcript: paragraphs,
-/// headings, list items, quotes and fenced code. Inline styling inside a block is left to
+/// headings, list items, quotes, tables and fenced code. Inline styling is left to
 /// `AttributedString(markdown:)`.
 public enum MarkdownBlock: Sendable, Equatable {
     case paragraph(String)
@@ -9,12 +9,14 @@ public enum MarkdownBlock: Sendable, Equatable {
     case listItem(marker: String, text: String)
     case quote(String)
     case code(language: String?, text: String)
+    case table(headers: [String], rows: [[String]])
+    case rule
 
     /// Tolerates text that is still streaming: an unterminated fence is a code block so far.
     public static func parse(_ text: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         var paragraph: [String] = []
-        var code: (language: String?, lines: [String])?
+        var code: (fence: MarkdownFence, lines: [String])?
 
         func flushParagraph() {
             guard !paragraph.isEmpty else { return }
@@ -22,12 +24,17 @@ public enum MarkdownBlock: Sendable, Equatable {
             paragraph.removeAll()
         }
 
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+        let lines = text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            index += 1
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if let open = code {
-                if trimmed.hasPrefix("```") {
-                    blocks.append(.code(language: open.language, text: open.lines.joined(separator: "\n")))
+                if open.fence.closes(line) {
+                    blocks.append(.code(language: open.fence.language, text: open.lines.joined(separator: "\n")))
                     code = nil
                 } else {
                     code?.lines.append(line)
@@ -35,10 +42,25 @@ public enum MarkdownBlock: Sendable, Equatable {
                 continue
             }
 
-            if trimmed.hasPrefix("```") {
+            if let fence = MarkdownFence.opening(line) {
                 flushParagraph()
-                let language = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
-                code = (language.isEmpty ? nil : language, [])
+                code = (fence, [])
+            } else if index < lines.count,
+                      let headers = tableCells(line),
+                      let separators = tableCells(lines[index]),
+                      headers.count == separators.count,
+                      separators.allSatisfy(isTableSeparator) {
+                flushParagraph()
+                index += 1
+                var rows: [[String]] = []
+                while index < lines.count, !startsBlock(lines[index]), let cells = tableCells(lines[index]) {
+                    rows.append(Array((cells + Array(repeating: "", count: headers.count)).prefix(headers.count)))
+                    index += 1
+                }
+                blocks.append(.table(headers: headers, rows: rows))
+            } else if isRule(trimmed) {
+                flushParagraph()
+                blocks.append(.rule)
             } else if trimmed.isEmpty {
                 flushParagraph()
             } else if let heading = heading(in: trimmed) {
@@ -57,9 +79,66 @@ public enum MarkdownBlock: Sendable, Equatable {
 
         flushParagraph()
         if let open = code {
-            blocks.append(.code(language: open.language, text: open.lines.joined(separator: "\n")))
+            blocks.append(.code(language: open.fence.language, text: open.lines.joined(separator: "\n")))
         }
         return blocks
+    }
+
+    private static func isRule(_ line: String) -> Bool {
+        let marks = line.filter { !$0.isWhitespace }
+        guard marks.count >= 3, let first = marks.first, "-*_".contains(first) else { return false }
+        return marks.allSatisfy { $0 == first }
+    }
+
+    private static func startsBlock(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return heading(in: trimmed) != nil || listItem(in: trimmed) != nil
+            || trimmed.hasPrefix(">") || isRule(trimmed) || MarkdownFence.opening(line) != nil
+    }
+
+    private static func isTableSeparator(_ cell: String) -> Bool {
+        let dashes = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+        return dashes.count >= 3 && dashes.allSatisfy { $0 == "-" }
+    }
+
+    /// Pipes escaped with a backslash or inside code spans belong to the cell.
+    private static func tableCells(_ line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        var cells: [String] = []
+        var cell = ""
+        var ticks = 0
+        var hasPipe = false
+        var index = trimmed.startIndex
+        while index < trimmed.endIndex {
+            let character = trimmed[index]
+            let next = trimmed.index(after: index)
+            if character == "\\", next < trimmed.endIndex, trimmed[next] == "|" {
+                cell += "|"
+                index = trimmed.index(after: next)
+                continue
+            }
+            if character == "`" {
+                let run = trimmed[index...].prefix { $0 == "`" }
+                if ticks == 0 { ticks = run.count }
+                else if ticks == run.count { ticks = 0 }
+                cell += run
+                index = trimmed.index(index, offsetBy: run.count)
+                continue
+            }
+            if character == "|", ticks == 0 {
+                hasPipe = true
+                cells.append(cell.trimmingCharacters(in: .whitespaces))
+                cell = ""
+            } else {
+                cell.append(character)
+            }
+            index = next
+        }
+        cells.append(cell.trimmingCharacters(in: .whitespaces))
+        if trimmed.hasPrefix("|") { cells.removeFirst() }
+        if trimmed.hasSuffix("|"), cells.last == "" { cells.removeLast() }
+        return hasPipe && !cells.isEmpty ? cells : nil
     }
 
     private static func heading(in line: String) -> MarkdownBlock? {
@@ -72,12 +151,40 @@ public enum MarkdownBlock: Sendable, Equatable {
 
     private static func listItem(in line: String) -> MarkdownBlock? {
         for bullet in ["- ", "* ", "+ "] where line.hasPrefix(bullet) {
-            return .listItem(marker: "•", text: String(line.dropFirst(2)))
+            let body = String(line.dropFirst(2))
+            if body.hasPrefix("[ ] ") { return .listItem(marker: "☐", text: String(body.dropFirst(4))) }
+            if body.hasPrefix("[x] ") || body.hasPrefix("[X] ") {
+                return .listItem(marker: "☑", text: String(body.dropFirst(4)))
+            }
+            return .listItem(marker: "•", text: body)
         }
         let digits = line.prefix { $0.isNumber }
         guard !digits.isEmpty, digits.count <= 3 else { return nil }
         let rest = line.dropFirst(digits.count)
         guard rest.hasPrefix(". ") || rest.hasPrefix(") ") else { return nil }
         return .listItem(marker: "\(digits).", text: String(rest.dropFirst(2)))
+    }
+}
+
+/// Shared by Markdown and thinking parsing so literal tags inside fences stay literal.
+struct MarkdownFence {
+    let marker: Character
+    let count: Int
+    let language: String?
+
+    static func opening(_ line: String) -> MarkdownFence? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
+        let count = trimmed.prefix { $0 == marker }.count
+        guard count >= 3 else { return nil }
+        let info = trimmed.dropFirst(count).trimmingCharacters(in: .whitespaces)
+        guard marker != "`" || !info.contains("`") else { return nil }
+        return MarkdownFence(marker: marker, count: count, language: info.isEmpty ? nil : info)
+    }
+
+    func closes(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let run = trimmed.prefix { $0 == marker }.count
+        return run >= count && trimmed.dropFirst(run).allSatisfy(\.isWhitespace)
     }
 }

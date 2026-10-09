@@ -48,7 +48,14 @@ private struct AssistantMessage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            MarkdownText(text: assistant.text)
+            ForEach(Array(AssistantBlock.parse(assistant.text, isStreaming: assistant.isStreaming).enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .markdown(let text):
+                    MarkdownText(text: text)
+                case .thinking(let text, let isComplete):
+                    ThinkingBlock(text: text, isThinking: assistant.isStreaming && !isComplete)
+                }
+            }
             if assistant.isStreaming {
                 StreamingIndicator()
             }
@@ -57,7 +64,35 @@ private struct AssistantMessage: View {
         .contextMenu {
             TextActions(text: assistant.text, readableText: MarkdownText.plainText(assistant.text))
         }
-        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ThinkingBlock: View {
+    let text: String
+    let isThinking: Bool
+    @State private var isExpanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            MarkdownText(text: text)
+                .foregroundStyle(.secondary)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+                .fixedSize(horizontal: false, vertical: true)
+                .contextMenu { TextActions(text: text, readableText: MarkdownText.plainText(text)) }
+        } label: {
+            HStack(spacing: 8) {
+                Label("Thinking", systemImage: "brain")
+                if isThinking { ProgressView().controlSize(.mini).accessibilityHidden(true) }
+                Spacer(minLength: 0)
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 44)
+        }
+        .disclosureGroupStyle(ToolDisclosureStyle())
+        .padding(.horizontal, 12)
+        .background(.fill.quaternary, in: .rect(cornerRadius: 12))
     }
 }
 
