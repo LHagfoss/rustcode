@@ -1769,27 +1769,77 @@ fn session_title_tool_schema_bounds_and_rejects_oversized_calls() {
 }
 
 #[test]
-fn large_complete_writes_are_rejected_before_dispatch() {
-    let oversized = ToolCall {
+fn a_complete_24_kib_write_is_validated_and_written() {
+    // Issue #1886: 24,108 bytes of complete content were rejected after the
+    // model had generated them, only because they were over 16 KiB.
+    let workspace = tempfile::tempdir().unwrap();
+    let path = workspace.path().join("src/main.rs");
+    let content = "let x = 1;\n".repeat(24 * 1024 / 11);
+    assert!(content.len() > rustcode_tools::filesystem::MAX_FILE_CHUNK_BYTES);
+    let arguments = serde_json::json!({"path": path, "content": content});
+    let call = ToolCall {
         name: "write_to_file".to_string(),
-        arguments: serde_json::json!({
-            "path": "artifacts/large.txt",
-            "content": "x".repeat(rustcode_tools::filesystem::MAX_FILE_CHUNK_BYTES + 1),
-        }),
+        arguments: arguments.clone(),
         call_id: None,
     };
-    let error = validate_tool_calls(&[oversized], 1)
-        .expect_err("large write_to_file calls must be rejected before dispatch");
-    assert!(error.contains("no file was changed"));
-    assert!(error.contains("write_file_chunk"));
-    assert!(error.contains("next_offset"));
+    validate_tool_calls(&[call], 1).expect("a complete large write must not be rejected");
 
-    let small = ToolCall {
+    set_active_workspace_context(
+        Some(workspace.path().into()),
+        Some(workspace.path().into()),
+        false,
+        Some(crate::config::SandboxMode::Trusted),
+    );
+    let write = execute_with_metadata("write_to_file", &arguments);
+    set_active_workspace_context(None, None, false, None);
+    assert!(write.success, "{}", write.content);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+}
+
+#[test]
+fn a_truncated_24_kib_write_is_rejected_and_never_written() {
+    let workspace = tempfile::tempdir().unwrap();
+    let path = workspace.path().join("src/main.rs");
+    let complete = serde_json::json!({
+        "path": path,
+        "content": "let x = 1;\n".repeat(24 * 1024 / 11),
+    })
+    .to_string();
+    // The provider stops mid-string: the JSON arguments never close.
+    let truncated = &complete[..complete.len() - 4096];
+
+    let arguments = crate::network::parse_native_tool_arguments(truncated);
+    assert!(arguments.get("content").is_none(), "no partial content");
+    let call = ToolCall {
         name: "write_to_file".to_string(),
-        arguments: serde_json::json!({"path": "small.txt", "content": "hello"}),
+        arguments,
         call_id: None,
     };
-    validate_tool_calls(&[small], 1).expect("small complete writes keep the convenience path");
+    let error = validate_tool_calls(&[call], 1).expect_err("a cut-off write must be rejected");
+    assert!(error.contains("malformed arguments"), "{error}");
+    assert!(error.contains("No tool was executed"), "{error}");
+    assert!(!path.exists());
+
+    // The textual protocols see the same cut as an unclosed envelope, which
+    // is continued or reissued and never handed to a handler.
+    let textual = format!("[TOOL_CALLS]write_to_file[ARGS]{truncated}");
+    assert!(has_incomplete_actionable_tool_call(&textual));
+}
+
+#[test]
+fn the_write_tool_spec_states_the_remaining_hard_limit() {
+    let spec = TOOLS
+        .iter()
+        .find(|tool| tool.name == "write_to_file")
+        .expect("tool exists");
+    let limit = format!(
+        "{} KiB of JSON arguments",
+        crate::network::stream_request::MAX_NATIVE_TOOL_ARGUMENT_BYTES / 1024
+    );
+    assert!(spec.description.contains(&limit), "{}", spec.description);
+    assert!(spec.arguments.contains(&limit), "{}", spec.arguments);
+    assert!(!spec.description.contains("16 KiB"));
+    assert!(!spec.arguments.contains("16384"));
 }
 
 #[test]
