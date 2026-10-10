@@ -4,11 +4,12 @@ use unicode_width::UnicodeWidthStr;
 /// Rectangle containing the selectable body of the active read-only info
 /// modal. The geometry mirrors the corresponding render function below, while
 /// excluding panel borders and outer padding from mouse selection and copy.
+/// The final field is the last full viewport offset, or zero for fixed panels.
 pub(in crate::ui) fn panel_selection_surface(
     f: &Frame,
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
-) -> Option<(ratatui::layout::Rect, Vec<bool>)> {
+) -> Option<(ratatui::layout::Rect, Vec<bool>, u16)> {
     if state.show_context_modal() {
         let area = input_anchor_rect(f, input_area, CONTEXT_MODAL_HEIGHT);
         let inner = area.inner(Margin {
@@ -24,7 +25,7 @@ pub(in crate::ui) fn panel_selection_surface(
             ])
             .split(inner);
         let area = chunks[2];
-        return Some((area, vec![false; usize::from(area.height)]));
+        return Some((area, vec![false; usize::from(area.height)], 0));
     }
 
     let height = if state.show_status_modal() {
@@ -56,22 +57,25 @@ pub(in crate::ui) fn panel_selection_surface(
             return None;
         };
         let lines = super::panel::render_panel_content(&panel.content, inner.width as usize);
-        let scroll = usize::from(state.modal_scroll_row());
-        let soft_wrap_before = lines
+        let row_counts = lines
             .iter()
-            .flat_map(|line| {
-                let count = Paragraph::new(line.clone())
+            .map(|line| {
+                Paragraph::new(line.clone())
                     .wrap(Wrap { trim: false })
                     .line_count(body.width.max(1))
-                    .max(1);
-                std::iter::once(false).chain(std::iter::repeat_n(true, count - 1))
+                    .max(1)
             })
+            .collect::<Vec<_>>();
+        let max_scroll_row = super::panel::panel_scroll_limit(row_counts.iter().sum(), body);
+        let scroll = usize::from(state.modal_scroll_row().min(max_scroll_row));
+        let mut visible_wraps = row_counts
+            .into_iter()
+            .flat_map(|count| std::iter::once(false).chain(std::iter::repeat_n(true, count - 1)))
             .skip(scroll)
             .take(usize::from(body.height))
             .collect::<Vec<_>>();
-        let mut visible_wraps = soft_wrap_before;
         visible_wraps.resize(usize::from(body.height), false);
-        return Some((body, visible_wraps));
+        return Some((body, visible_wraps, max_scroll_row));
     } else {
         return None;
     };
@@ -79,7 +83,11 @@ pub(in crate::ui) fn panel_selection_surface(
         vertical: 1,
         horizontal: 2,
     });
-    (inner.width > 0 && inner.height > 0).then_some((inner, vec![false; usize::from(inner.height)]))
+    (inner.width > 0 && inner.height > 0).then_some((
+        inner,
+        vec![false; usize::from(inner.height)],
+        0,
+    ))
 }
 
 pub(in crate::ui) fn render_status_modal(

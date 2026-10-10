@@ -79,6 +79,9 @@ pub(crate) struct TranscriptState {
     pub(crate) panel_selection_area: Option<ratatui::layout::Rect>,
     /// Whether the visible panel body responds to vertical scrolling.
     pub(crate) panel_selection_scrollable: bool,
+    /// Last full viewport of the wrapped command panel in the painted frame.
+    pub(crate) panel_max_scroll_row: u16,
+    pub(crate) task_log_max_scroll_row: usize,
     committed_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Line<'static>>>>>,
     /// For each transcript line of the projection just built, the tool block
     /// it belongs to. `None` while a selection pins the view: the rows painted
@@ -156,6 +159,8 @@ impl Default for TranscriptState {
             panel_selection: super::selection::TranscriptSelection::default(),
             panel_selection_area: None,
             panel_selection_scrollable: false,
+            panel_max_scroll_row: 0,
+            task_log_max_scroll_row: 0,
             committed_cache: None,
             tool_line_flags: None,
             tool_rows: (ratatui::layout::Rect::default(), Vec::new()),

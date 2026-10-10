@@ -8,9 +8,9 @@ pub(in crate::ui) fn render_tasks_panel_modal(
     f: &mut Frame,
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
-) {
+) -> usize {
     let Some(panel) = state.tasks_panel() else {
-        return;
+        return 0;
     };
     let modal_area = input_anchor_rect(f, input_area, TASKS_PANEL_HEIGHT);
     f.render_widget(Clear, modal_area);
@@ -78,14 +78,15 @@ pub(in crate::ui) fn render_tasks_panel_modal(
     );
 
     let height = chunks[2].height as usize;
-    let lines = match &panel.log {
+    let (lines, max_scroll_row) = match &panel.log {
         Some(log) => tasks_panel_log_lines(log, width, height),
-        None => tasks_panel_list_lines(panel, running, width, height),
+        None => (tasks_panel_list_lines(panel, running, width, height), 0),
     };
     f.render_widget(
         Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL())),
         chunks[2],
     );
+    max_scroll_row
 }
 
 fn tasks_panel_label(command: &str, width: usize) -> String {
@@ -169,7 +170,7 @@ fn tasks_panel_log_lines(
     log: &rustcode::controller::TaskLogView,
     width: usize,
     height: usize,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, usize) {
     let muted = Style::default().fg(COLOR_MUTED());
     let mut rows = Vec::new();
     if log.earlier_omitted {
@@ -194,9 +195,14 @@ fn tasks_panel_log_lines(
         }
         rows.extend(wrapped);
     }
-    let scroll = log.scroll.min(rows.len().saturating_sub(height));
+    let max_scroll_row = if width == 0 || height == 0 {
+        0
+    } else {
+        rows.len().saturating_sub(height)
+    };
+    let scroll = log.scroll.min(max_scroll_row);
     let end = rows.len() - scroll;
     rows.drain(..end.saturating_sub(height));
     rows.truncate(height);
-    rows
+    (rows, max_scroll_row)
 }

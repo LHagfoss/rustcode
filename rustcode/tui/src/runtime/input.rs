@@ -455,6 +455,12 @@ fn clear_selection_for_composer_key(
     }
 }
 
+fn scroll_command_panel(row: &mut u16, limit: u16, delta: i16) {
+    // Clamp before moving as well: resizing or replacing content can shrink
+    // the viewport limit while a previous offset is still in flight.
+    *row = (*row).min(limit).saturating_add_signed(delta).min(limit);
+}
+
 /// Let scrollable output panels own wheel input without discarding a text
 /// selection in fixed info panels.
 fn scroll_panel_selection(
@@ -467,11 +473,12 @@ fn scroll_panel_selection(
     }
     if transcript.panel_selection_scrollable {
         transcript.panel_selection.clear();
-        if direction < 0 {
-            *modal_scroll_row = modal_scroll_row.saturating_sub(3);
-        } else {
-            *modal_scroll_row = modal_scroll_row.saturating_add(3);
-        }
+        let step = ui::WHEEL_SCROLL_LINES as i16;
+        scroll_command_panel(
+            modal_scroll_row,
+            transcript.panel_max_scroll_row,
+            if direction < 0 { -step } else { step },
+        );
     }
     true
 }
@@ -1361,13 +1368,18 @@ pub(super) async fn handle_app_event(
                         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
                             s.command_panel = None;
                         }
-                        KeyCode::Up => s.modal_scroll_row = s.modal_scroll_row.saturating_sub(1),
-                        KeyCode::Down => s.modal_scroll_row = s.modal_scroll_row.saturating_add(1),
-                        KeyCode::PageUp => {
-                            s.modal_scroll_row = s.modal_scroll_row.saturating_sub(10)
-                        }
-                        KeyCode::PageDown => {
-                            s.modal_scroll_row = s.modal_scroll_row.saturating_add(10)
+                        KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
+                            let delta = match key.code {
+                                KeyCode::Up => -1,
+                                KeyCode::Down => 1,
+                                KeyCode::PageUp => -10,
+                                _ => 10,
+                            };
+                            scroll_command_panel(
+                                &mut s.modal_scroll_row,
+                                transcript_state.panel_max_scroll_row,
+                                delta,
+                            );
                         }
                         _ => {}
                     }
@@ -2673,8 +2685,8 @@ mod tests {
         insert_clipboard_paste, insert_mcp_edit_paste, insert_question_answer_text,
         is_cmd_copy_chord, is_copy_or_exit_chord, is_keyboard_range_key, is_shift_tab,
         is_transcript_navigation, open_demo_if_requested, picker_selection_for_key,
-        report_selection_copy, return_to_latest_for_key, scroll_panel_selection,
-        selection_owns_key, subagent_picker_action,
+        report_selection_copy, return_to_latest_for_key, scroll_command_panel,
+        scroll_panel_selection, selection_owns_key, subagent_picker_action,
     };
     use crate::ui::{Composer, TranscriptState};
     use crossterm::event::{
@@ -3406,6 +3418,44 @@ mod tests {
             InputFlow::ContinueIteration
         ));
         assert!(app_state.lock().await.ctrl_c_exit_armed());
+    }
+
+    #[test]
+    fn command_panel_wheel_stops_at_bottom_and_reverses_immediately() {
+        let mut transcript = TranscriptState::default();
+        transcript.panel_selection_area = Some(Rect::new(0, 0, 40, 10));
+        transcript.panel_selection_scrollable = true;
+        transcript.panel_max_scroll_row = 7;
+        let mut row = 0;
+        scroll_panel_selection(&mut transcript, &mut row, 1);
+        assert_eq!(row, 1, "each wheel event moves one row");
+        for _ in 0..100 {
+            scroll_panel_selection(&mut transcript, &mut row, 1);
+        }
+        assert_eq!(row, 7);
+        scroll_panel_selection(&mut transcript, &mut row, -1);
+        assert_eq!(row, 6, "no invisible scroll debt at the bottom");
+        transcript.panel_max_scroll_row = 0;
+        scroll_panel_selection(&mut transcript, &mut row, 1);
+        assert_eq!(row, 0, "short or empty replacement content cannot scroll");
+    }
+
+    #[test]
+    fn command_panel_key_steps_clamp_before_and_after_movement() {
+        for step in [1, 10] {
+            let mut row = 0;
+            for _ in 0..100 {
+                scroll_command_panel(&mut row, 23, step);
+            }
+            assert_eq!(row, 23);
+            scroll_command_panel(&mut row, 23, -step);
+            assert_eq!(row, 23 - step as u16);
+            row = u16::MAX;
+            scroll_command_panel(&mut row, 15, -step);
+            assert_eq!(row, 15 - step as u16, "resize clamps before moving up");
+            scroll_command_panel(&mut row, 0, step);
+            assert_eq!(row, 0);
+        }
     }
 
     #[test]

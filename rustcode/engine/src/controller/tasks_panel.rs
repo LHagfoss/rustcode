@@ -88,9 +88,21 @@ pub struct TasksPanelState {
     /// and drops from the running group to the finished one.
     selected_id: Option<String>,
     log: Option<TaskLogView>,
+    log_scroll_limit: Option<usize>,
     /// The open log belongs to a task that was running at the last read.
     log_live: bool,
     log_read_at: Option<Instant>,
+}
+
+impl TasksPanelState {
+    /// Publish the last full viewport offset measured by a frontend. Wrapping
+    /// can make this larger than the number of raw lines in the captured log.
+    pub fn set_log_scroll_limit(&mut self, limit: usize) {
+        if let Some(log) = self.log.as_mut() {
+            self.log_scroll_limit = Some(limit);
+            log.scroll = log.scroll.min(limit);
+        }
+    }
 }
 
 /// What the frontend paints.
@@ -205,8 +217,12 @@ pub fn tasks_panel_input(state: &mut AppState, input: TasksPanelInput) {
             TasksPanelInput::Up | TasksPanelInput::Down => {
                 let older = input == TasksPanelInput::Up;
                 if let Some(log) = panel.log.as_mut() {
+                    let limit = panel
+                        .log_scroll_limit
+                        .unwrap_or_else(|| log.text.lines().count());
+                    log.scroll = log.scroll.min(limit);
                     log.scroll = if older {
-                        log.scroll.saturating_add(1).min(log.text.lines().count())
+                        log.scroll.saturating_add(1).min(limit)
                     } else {
                         log.scroll.saturating_sub(1)
                     };
@@ -227,6 +243,7 @@ pub fn tasks_panel_input(state: &mut AppState, input: TasksPanelInput) {
                     panel.selected = selected;
                     panel.selected_id = Some(row.id.clone());
                     panel.log = Some(read_task_log_view(&session_id, row, 0));
+                    panel.log_scroll_limit = None;
                     panel.log_live = row.is_running();
                     panel.log_read_at = Some(Instant::now());
                 }
@@ -401,6 +418,78 @@ fn log_tail_text(raw: &str, starts_mid_file: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_log_scroll_stops_at_the_oldest_full_viewport() {
+        let mut state = AppState::new();
+        state.tasks_panel = Some(TasksPanelState {
+            log: Some(TaskLogView {
+                task_id: "scroll-bounds".into(),
+                command: "test".into(),
+                text: (0..10).map(|row| format!("row {row}\n")).collect(),
+                earlier_omitted: false,
+                scroll: 0,
+            }),
+            ..Default::default()
+        });
+        // A five-row body can move only five rows into this ten-row log.
+        state.tasks_panel.as_mut().unwrap().set_log_scroll_limit(5);
+        for _ in 0..100 {
+            tasks_panel_input(&mut state, TasksPanelInput::Up);
+        }
+        assert_eq!(
+            state
+                .tasks_panel
+                .as_ref()
+                .unwrap()
+                .log
+                .as_ref()
+                .unwrap()
+                .scroll,
+            5
+        );
+        tasks_panel_input(&mut state, TasksPanelInput::Down);
+        assert_eq!(
+            state
+                .tasks_panel
+                .as_ref()
+                .unwrap()
+                .log
+                .as_ref()
+                .unwrap()
+                .scroll,
+            4
+        );
+        // A narrow body can wrap these same raw lines into many more rows.
+        state.tasks_panel.as_mut().unwrap().set_log_scroll_limit(20);
+        for _ in 0..100 {
+            tasks_panel_input(&mut state, TasksPanelInput::Up);
+        }
+        assert_eq!(
+            state
+                .tasks_panel
+                .as_ref()
+                .unwrap()
+                .log
+                .as_ref()
+                .unwrap()
+                .scroll,
+            20
+        );
+        state.tasks_panel.as_mut().unwrap().set_log_scroll_limit(0);
+        state.tasks_panel.as_mut().unwrap().set_log_scroll_limit(20);
+        assert_eq!(
+            state
+                .tasks_panel
+                .as_ref()
+                .unwrap()
+                .log
+                .as_ref()
+                .unwrap()
+                .scroll,
+            0
+        );
+    }
 
     fn spawn(session: &str, id: &str, command: &str, log: Option<std::path::PathBuf>) {
         let mut spec = rustcode_tasks::TaskSpec::new(
