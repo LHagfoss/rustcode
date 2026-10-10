@@ -1,3 +1,9 @@
+## [v0.64.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.2) - 2026-10-10
+
+### Improvements
+- Bound command-panel and task-log scrolling to visible wrapped content, including after resize, and preserve one-row mouse-wheel scrolling.
+- Expose host-backed model and reasoning-effort controls to remote clients with idle-only changes and reliable request receipts.
+- Include session turn counts when known and thinking-token usage with explicit estimate metadata for the iOS app.
 ## [v0.64.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.1) - 2026-10-10
 
 ### Fixes
