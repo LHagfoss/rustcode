@@ -116,15 +116,20 @@ fn activity(state: &AppState) -> SessionActivity {
     }
 }
 
-/// Configured or advertised values only. An unknown capability is not permission
-/// to invent a provider's effort choices.
+/// Explicit provider catalogs take precedence. Capability-enabled legacy profiles
+/// use the same low/medium/high choices as the terminal effort picker.
 pub(super) fn reasoning_efforts(profile: &crate::config::ModelProfile) -> Vec<String> {
     let mut efforts = vec!["default".to_owned()];
     if profile.supports_reasoning_effort_wire() {
-        let known = profile
-            .reasoning_efforts
-            .clone()
-            .unwrap_or_else(|| profile.reasoning_effort.iter().cloned().collect());
+        let known = profile.reasoning_efforts.clone().unwrap_or_else(|| {
+            let mut values = vec!["low".into(), "medium".into(), "high".into()];
+            if let Some(current) = &profile.reasoning_effort {
+                if !values.contains(current) {
+                    values.push(current.clone());
+                }
+            }
+            values
+        });
         for effort in &known {
             if !effort.is_empty() && !efforts.contains(effort) {
                 efforts.push(effort.clone());
@@ -342,21 +347,29 @@ fn project_tools(state: &AppState, limits: &ProjectionLimits) -> Vec<RemoteTool>
     state
         .live_tool_calls
         .iter()
-        .map(|call| RemoteTool {
-            id: call
-                .provider_call_id
-                .clone()
-                .unwrap_or_else(|| call.key.clone()),
-            name: call.tool_name.clone(),
-            detail: Some(call.target.as_str())
-                .filter(|target| !target.is_empty())
-                .map(|target| label(target, limits)),
-            state: match (&call.finished, call.execution_started) {
-                (Some(finish), _) if finish.success => RemoteToolState::Succeeded,
-                (Some(_), _) => RemoteToolState::Failed,
-                (None, true) => RemoteToolState::Running,
-                (None, false) => RemoteToolState::Preparing,
-            },
+        .filter_map(|call| {
+            // Local live keys identify speculative presentation instances, while
+            // authoritative JSON tools use an argument hash in events. Publishing
+            // the local key creates a second row when that result arrives.
+            let id = call.provider_call_id.as_ref()?;
+            if state.history.iter().any(|message| {
+                message.tool_result.is_some() && message.tool_call_id.as_ref() == Some(id)
+            }) {
+                return None;
+            }
+            Some(RemoteTool {
+                id: id.clone(),
+                name: call.tool_name.clone(),
+                detail: Some(call.target.as_str())
+                    .filter(|target| !target.is_empty())
+                    .map(|target| label(target, limits)),
+                state: match (&call.finished, call.execution_started) {
+                    (Some(finish), _) if finish.success => RemoteToolState::Succeeded,
+                    (Some(_), _) => RemoteToolState::Failed,
+                    (None, true) => RemoteToolState::Running,
+                    (None, false) => RemoteToolState::Preparing,
+                },
+            })
         })
         .collect()
 }
@@ -528,7 +541,7 @@ pub fn project_snapshot(
         })
         .collect();
     let mut snapshot = RemoteSnapshot {
-        commands: Vec::new(),
+        commands: super::ops::command_catalog(),
         session: project_session_info(state, context),
 
         capabilities: vec!["cancel_question".into(), "execute_command".into()],
@@ -576,7 +589,9 @@ pub fn project_snapshot(
     // (which stay fetchable in full through their content IDs).
     let mut first = first;
     while encoded_len(&snapshot) > limits.frame_bytes {
-        if !snapshot.transcript.is_empty() {
+        if !snapshot.commands.is_empty() {
+            snapshot.commands.clear();
+        } else if !snapshot.transcript.is_empty() {
             let drop = snapshot.transcript.len().div_ceil(2);
             snapshot.transcript.drain(..drop);
             first += drop;
@@ -740,12 +755,29 @@ pub fn project_event(
                 state: RemoteToolState::Running,
             },
         }],
-        AgentUiEvent::ToolFinished { id, result } => vec![RemoteEvent::ToolFinished {
-            id: id.clone(),
-            success: result.metadata.success,
-            pending: result.metadata.pending,
-            content: bound_text(&result.content, limits.text_bytes, None),
-        }],
+        AgentUiEvent::ToolFinished { id, result } => vec![
+            // An attachment can begin after the original start event. Repeating
+            // its stable identity upserts the same row and retains the tool name;
+            // clients must never invent a second generic "tool" result row.
+            RemoteEvent::ToolStarted {
+                tool: RemoteTool {
+                    id: id.clone(),
+                    name: result.tool_name.clone(),
+                    detail: result
+                        .metadata
+                        .command
+                        .as_deref()
+                        .map(|command| label(command, limits)),
+                    state: RemoteToolState::Running,
+                },
+            },
+            RemoteEvent::ToolFinished {
+                id: id.clone(),
+                success: result.metadata.success,
+                pending: result.metadata.pending,
+                content: bound_text(&result.content, limits.text_bytes, None),
+            },
+        ],
         AgentUiEvent::SubagentUpdated { id, .. } => state
             .subagents
             .iter()
@@ -804,6 +836,22 @@ mod tests {
             snapshot.settings.is_none(),
             "oversized controls are unavailable, never partially named"
         );
+    }
+
+    #[test]
+    fn enabled_legacy_profiles_offer_terminal_efforts_without_assuming_unknown_capabilities() {
+        let mut profile = crate::config::ModelProfile::default();
+        assert_eq!(reasoning_efforts(&profile), vec!["default"]);
+        profile.reasoning_effort = Some("low".into());
+        assert_eq!(
+            reasoning_efforts(&profile),
+            vec!["default", "low", "medium", "high"]
+        );
+        profile.supports_reasoning_effort = Some(false);
+        assert_eq!(reasoning_efforts(&profile), vec!["default"]);
+        profile.supports_reasoning_effort = Some(true);
+        profile.reasoning_efforts = Some(vec!["high".into(), "max".into()]);
+        assert_eq!(reasoning_efforts(&profile), vec!["default", "high", "max"]);
     }
 
     #[test]
@@ -873,6 +921,65 @@ mod tests {
     }
     use super::*;
     use crate::app::{AppStatus, ChatMessage, ToolConfirmation};
+
+    #[test]
+    fn tool_snapshot_uses_only_authoritative_unrecorded_call_identities() {
+        let mut state = state_with_history(0, 0);
+        state.begin_live_tool_call(None, "run_command", &serde_json::json!({"command":"pwd"}));
+        assert!(project_tools(&state, &ProjectionLimits::default()).is_empty());
+        state.begin_live_tool_call(
+            Some("call-1"),
+            "run_command",
+            &serde_json::json!({"command":"pwd"}),
+        );
+        state.begin_live_tool_call(
+            Some("call-2"),
+            "run_command",
+            &serde_json::json!({"command":"pwd"}),
+        );
+        let mut recorded = ChatMessage::new("tool", "same output").with_tool_result(
+            rustcode_core::ToolResultRecord {
+                tool_name: "run_command".into(),
+                success: true,
+                ..Default::default()
+            },
+        );
+        recorded.tool_call_id = Some("call-1".into());
+        state.history.push(recorded);
+        let tools = project_tools(&state, &ProjectionLimits::default());
+        assert_eq!(
+            tools.len(),
+            1,
+            "distinct calls are retained regardless of equal command/output"
+        );
+        assert_eq!(tools[0].id, "call-2");
+    }
+
+    #[test]
+    fn tool_result_after_late_attachment_restores_name_with_same_identity() {
+        let state = state_with_history(0, 0);
+        let event = AgentUiEvent::ToolFinished {
+            id: "local_arguments".into(),
+            result: crate::network::events::ToolResult {
+                tool_name: "run_command".into(),
+                content: "actual output".into(),
+                diff: None,
+                file_preview: None,
+                metadata: crate::network::events::ToolResultMetadata {
+                    success: true,
+                    command: Some("pwd".into()),
+                    ..Default::default()
+                },
+            },
+        };
+        let events = project_event(&state, &event, &ProjectionLimits::default());
+        assert!(
+            matches!(&events[0], RemoteEvent::ToolStarted { tool } if tool.id == "local_arguments" && tool.name == "run_command")
+        );
+        assert!(
+            matches!(&events[1], RemoteEvent::ToolFinished { id, content, .. } if id == "local_arguments" && content.text == "actual output")
+        );
+    }
 
     #[test]
     fn assistant_timing_survives_snapshot_and_history_projection() {

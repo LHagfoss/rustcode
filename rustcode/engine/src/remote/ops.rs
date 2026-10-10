@@ -255,7 +255,87 @@ fn set_settings(
     Ok(settings)
 }
 
-const REMOTE_COMMAND_HELP: &str = "- `/help` — Show commands\n- `/status` — Session status\n- `/info`, `/about` — About RustCode\n- `/usage` — Token usage\n- `/perf` — Last turn performance\n- `/context` — Context window\n- `/tasks` — Running tasks\n- `/mcp` — Configured server names\n- `/model [profile]` — Show or select an exact model profile\n- `/effort [value]` — Show or select reasoning effort\n- `/title <title>`, `/change_title <title>` — Rename this session\n\nUse the app's `/cancel` command or Stop control to cancel the current turn or questionnaire. Session lifecycle, terminal pickers, authentication, and configuration editing remain terminal-only.";
+/// One catalog shared with terminal autocomplete. Native app actions replace
+/// terminal pickers; commands requiring a host UI remain visible and labelled.
+pub(super) fn command_catalog() -> Vec<super::protocol::RemoteCommandInfo> {
+    let mut commands: Vec<_> = crate::app::suggestion::COMMANDS
+        .iter()
+        .map(|command| {
+            let action = match command.name {
+                "/new" => "new_session",
+                "/model" | "/models" => "model_picker",
+                "/history" | "/resume" | "/exit" | "/quit" => "session_picker",
+                "/copy" => "copy_response",
+                "/help" | "/status" | "/stats" | "/usage" | "/info" | "/about" | "/perf"
+                | "/context" | "/tasks" | "/ps" | "/mcp" | "/effort" | "/change_title"
+                | "/cancel" | "/pwd" | "/skills" | "/tools" | "/archive" | "/memory"
+                | "/prompts" | "/stop" | "/thinking" | "/yolo" | "/verbosity" | "/pi"
+                | "/delegate" | "/session" => "execute",
+                _ => "terminal",
+            };
+            let arguments = matches!(
+                command.name,
+                "/model"
+                    | "/effort"
+                    | "/change_title"
+                    | "/memory"
+                    | "/thinking"
+                    | "/yolo"
+                    | "/verbosity"
+                    | "/delegate"
+            );
+            super::protocol::RemoteCommandInfo {
+                name: command.name.into(),
+                description: if action == "terminal" {
+                    format!("{} · On Mac", command.desc)
+                } else {
+                    command.desc.into()
+                },
+                insertion: format!("{}{}", command.name, if arguments { " " } else { "" }),
+                action: action.into(),
+            }
+        })
+        .collect();
+    commands.push(super::protocol::RemoteCommandInfo {
+        name: "/title".into(),
+        description: "Rename this session".into(),
+        insertion: "/title ".into(),
+        action: "execute".into(),
+    });
+    commands.sort_by(|a, b| a.name.cmp(&b.name));
+    commands
+}
+
+fn remote_command_help() -> String {
+    command_catalog()
+        .iter()
+        .map(|command| format!("- `{}` — {}", command.name, command.description))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn require_idle(state: &AppState) -> Result<(), RemoteError> {
+    if !super::projection::project_settings(state).can_change {
+        Err(error(
+            RemoteErrorCode::Busy,
+            "this setting can only change while idle",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn switch_value(arguments: &str, current: bool) -> Result<bool, RemoteError> {
+    match arguments {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        "toggle" => Ok(!current),
+        _ => Err(error(
+            RemoteErrorCode::InvalidRequest,
+            "Use on, off, or toggle",
+        )),
+    }
+}
 
 /// Explicitly allowed owner commands. Their output is presentation-only and
 /// never enters provider history or the terminal's draft/panel state.
@@ -267,8 +347,8 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
     let command = name.to_ascii_lowercase();
     let settings = super::projection::project_settings(state);
     let (title, output) = match command.as_str() {
-        "/help" if arguments.is_empty() => ("Remote commands", REMOTE_COMMAND_HELP.to_owned()),
-        "/status" if arguments.is_empty() => {
+        "/help" if arguments.is_empty() => ("Remote commands", remote_command_help()),
+        "/status" | "/stats" | "/session" if arguments.is_empty() => {
             ("Status", crate::controller::native_status_report(state))
         }
         "/usage" if arguments.is_empty() => {
@@ -298,7 +378,7 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
                 })
                 .unwrap_or_else(|| "No active model profile.".into()),
         ),
-        "/tasks" if arguments.is_empty() => {
+        "/tasks" | "/ps" if arguments.is_empty() => {
             let tasks = crate::tools::background_task_snapshots(&state.active_session_id);
             (
                 "Tasks",
@@ -327,6 +407,196 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
                     .join("\n")
             },
         ),
+        "/pwd" if arguments.is_empty() => (
+            "Workspace",
+            state
+                .effective_workspace_root()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "No workspace selected.".into()),
+        ),
+        "/skills" if arguments.is_empty() => (
+            "Skills",
+            crate::skills::format_skill_catalog(&crate::skills::discover_skills_for_catalog()),
+        ),
+        "/tools" if arguments.is_empty() => (
+            "Tools",
+            crate::tools::TOOLS
+                .iter()
+                .map(|t| format!("- {} — {}", t.name, t.description))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        "/archive" if arguments.is_empty() => {
+            crate::app::session_controller::SessionController::default()
+                .archive(state)
+                .map_err(|e| RemoteError::new(RemoteErrorCode::InvalidRequest, e.to_string()))?;
+            ("Session", "Session saved.".into())
+        }
+        "/memory" => {
+            let root = state.effective_workspace_root();
+            let args: Vec<_> = arguments.split_whitespace().collect();
+            (
+                "Project memory",
+                crate::memory::command(root.as_deref(), &args)
+                    .unwrap_or_else(|| "Use /memory show, path, add, forget, or reset.".into()),
+            )
+        }
+        "/prompts" if arguments.is_empty() => {
+            let roots = crate::prompt_commands::Roots {
+                workspace: state.effective_workspace_root(),
+                config_dir: crate::config::get_config_dir(),
+            };
+            let entries = crate::prompt_commands::list(&roots)
+                .map_err(|e| RemoteError::new(RemoteErrorCode::InvalidRequest, e.to_string()))?;
+            (
+                "Prompt templates",
+                if entries.is_empty() {
+                    "No prompt templates found.".into()
+                } else {
+                    entries
+                        .iter()
+                        .map(|entry| format!("- {}", entry.path.display()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                },
+            )
+        }
+        "/stop" if arguments.is_empty() => {
+            let result = crate::tools::stop_background_tasks(&state.active_session_id);
+            (
+                "Tasks",
+                format!(
+                    "Stopped: {}. Stop requested: {}. Failed: {}.",
+                    result.stopped, result.requested, result.failed
+                ),
+            )
+        }
+        "/yolo" | "/pi" => {
+            let current = if command == "/yolo" {
+                state.auto_confirm
+            } else {
+                state.config.prompt_improver
+            };
+            let enabled = if arguments.is_empty() {
+                current
+            } else {
+                require_idle(state)?;
+                switch_value(arguments, current)?
+            };
+            if command == "/yolo" {
+                state.auto_confirm = enabled;
+            } else {
+                state.config.prompt_improver = enabled;
+            }
+            (
+                "Session setting",
+                format!("{}: {}", command, if enabled { "on" } else { "off" }),
+            )
+        }
+        "/verbosity" => {
+            use crate::app::state::Verbosity;
+            if !arguments.is_empty() {
+                require_idle(state)?;
+                state.verbosity = match arguments {
+                    "low" => Verbosity::Low,
+                    "high" => Verbosity::High,
+                    "toggle" => match state.verbosity {
+                        Verbosity::Low => Verbosity::High,
+                        Verbosity::High => Verbosity::Low,
+                    },
+                    _ => {
+                        return Err(error(
+                            RemoteErrorCode::InvalidRequest,
+                            "Use low, high, or toggle",
+                        ));
+                    }
+                };
+                state.config.verbosity = state.verbosity.clone();
+            }
+            (
+                "Verbosity",
+                match state.verbosity {
+                    Verbosity::Low => "low",
+                    Verbosity::High => "high",
+                }
+                .into(),
+            )
+        }
+        "/thinking" => {
+            let selected = settings.selected_model;
+            if !arguments.is_empty() {
+                require_idle(state)?;
+            }
+            let profile = state
+                .config
+                .models
+                .iter_mut()
+                .find(|p| p.name == selected)
+                .ok_or_else(|| error(RemoteErrorCode::InvalidRequest, "No active model profile"))?;
+            if !arguments.is_empty() {
+                profile.enable_thinking = match arguments {
+                    "on" => Some(true),
+                    "off" => Some(false),
+                    "default" => None,
+                    _ => {
+                        return Err(error(
+                            RemoteErrorCode::InvalidRequest,
+                            "Use on, off, or default",
+                        ));
+                    }
+                };
+            }
+            (
+                "Thinking",
+                match profile.enable_thinking {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => "default",
+                }
+                .into(),
+            )
+        }
+        "/delegate" => {
+            require_idle(state)?;
+            match arguments {
+                "" | "on" if !state.config.delegation_enabled => {
+                    return Err(error(
+                        RemoteErrorCode::InvalidRequest,
+                        "Subagents are disabled by host configuration",
+                    ));
+                }
+                "" => {
+                    state.delegation_armed = true;
+                    state.delegation_sticky = false;
+                }
+                "on" => {
+                    state.delegation_sticky = true;
+                    state.delegation_armed = false;
+                }
+                "off" => {
+                    state.delegation_sticky = false;
+                    state.delegation_armed = false;
+                    state.delegation_active = false;
+                }
+                _ => {
+                    return Err(error(
+                        RemoteErrorCode::InvalidRequest,
+                        "Use /delegate [on|off]",
+                    ));
+                }
+            }
+            (
+                "Delegation",
+                if arguments.is_empty() {
+                    "Enabled for the next task."
+                } else if arguments == "on" {
+                    "Enabled for this session."
+                } else {
+                    "Disabled."
+                }
+                .into(),
+            )
+        }
         "/model" if arguments.is_empty() => (
             "Model",
             format!(
@@ -371,7 +641,12 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
             ("Model", format!("Selected: {arguments}"))
         }
         "/effort" => {
-            set_settings(state, &settings.selected_model, arguments)?;
+            let effort = match arguments {
+                "off" | "none" => "default",
+                "med" => "medium",
+                value => value,
+            };
+            set_settings(state, &settings.selected_model, effort)?;
             ("Reasoning effort", format!("Selected: {arguments}"))
         }
         "/title" | "/change_title" => {
@@ -563,6 +838,59 @@ mod tests {
     use crate::app::{AppStatus, PendingQuestion, ToolConfirmation, ToolConfirmationResponse};
 
     const SESSION: &str = "remote-ops-session";
+
+    #[test]
+    fn catalog_includes_every_terminal_command_and_labels_native_actions() {
+        let catalog = command_catalog();
+        for command in crate::app::suggestion::COMMANDS {
+            assert!(catalog.iter().any(|remote| remote.name == command.name));
+        }
+        assert_eq!(
+            catalog.iter().find(|c| c.name == "/new").unwrap().action,
+            "new_session"
+        );
+        assert_eq!(
+            catalog.iter().find(|c| c.name == "/login").unwrap().action,
+            "terminal"
+        );
+        assert!(catalog.iter().all(|c| c.insertion.starts_with(&c.name)));
+        let unique: std::collections::HashSet<_> = catalog.iter().map(|c| &c.name).collect();
+        assert_eq!(unique.len(), catalog.len());
+    }
+
+    #[test]
+    fn session_commands_preserve_local_draft_and_guard_busy_mutations() {
+        let mut state = shared_state();
+        state.input_buffer = "unfinished terminal draft".into();
+        let history = state.history.clone();
+        state.config.delegation_enabled = true;
+        execute_command(&mut state, "/delegate on").unwrap();
+        assert!(state.delegation_sticky);
+        execute_command(&mut state, "/delegate off").unwrap();
+        assert!(!state.delegation_sticky);
+        assert!(
+            state.config.delegation_enabled,
+            "session toggles preserve host policy"
+        );
+        execute_command(&mut state, "/yolo off").unwrap();
+        execute_command(&mut state, "/verbosity low").unwrap();
+        state.begin_turn_identity();
+        for command in ["/yolo on", "/pi on", "/verbosity high", "/delegate on"] {
+            assert_eq!(
+                execute_command(&mut state, command).unwrap_err().code,
+                RemoteErrorCode::Busy
+            );
+        }
+        for command in ["/pwd", "/ps", "/session", "/stats", "/tools"] {
+            assert!(matches!(
+                execute_command(&mut state, command),
+                Ok(RemoteResult::CommandExecuted { .. })
+            ));
+        }
+        assert_eq!(state.input_buffer, "unfinished terminal draft");
+        assert_eq!(state.history.len(), history.len());
+        assert!(!state.auto_confirm);
+    }
 
     fn registration() -> SessionRegistration {
         SessionRegistration {
