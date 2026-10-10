@@ -221,6 +221,17 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
     let session = Some(SESSION);
     vec![
         (
+            "set_session_settings",
+            request(
+                "req-0016",
+                session,
+                RemoteOperation::SetSessionSettings {
+                    model: "example-profile".into(),
+                    reasoning_effort: "high".into(),
+                },
+            ),
+        ),
+        (
             "list_sessions",
             request("req-0001", None, RemoteOperation::ListSessions),
         ),
@@ -378,6 +389,19 @@ fn whole(text: &str, content_id: Option<&str>) -> BoundedText {
     }
 }
 
+fn golden_settings() -> RemoteSessionSettings {
+    RemoteSessionSettings {
+        models: vec![RemoteModelOption {
+            id: "example-profile".into(),
+            model: "gpt-5.5".into(),
+            reasoning_efforts: vec!["default".into(), "high".into()],
+        }],
+        selected_model: "example-profile".into(),
+        reasoning_effort: "high".into(),
+        can_change: false,
+    }
+}
+
 fn golden_session_info() -> RemoteSessionInfo {
     RemoteSessionInfo {
         session_id: SESSION.0.to_owned(),
@@ -385,6 +409,7 @@ fn golden_session_info() -> RemoteSessionInfo {
         title: "Fix the failing parser tests".to_owned(),
         workspace: Some("/Users/dev/code/parser".to_owned()),
         model: "gpt-5.5".to_owned(),
+        turn_count: Some(2),
         activity: SessionActivity::AwaitingApproval,
         attention: RemoteAttention {
             approval: true,
@@ -478,6 +503,8 @@ fn golden_messages() -> Vec<RemoteMessage> {
             timestamp: Some("2026-10-09T18:40:25+02:00".to_owned()),
             response_time_ms: Some(12000),
             thought_time_ms: Some(4000),
+            thought_tokens: Some(800),
+            thought_tokens_estimated: Some(true),
             completed_at: Some("2026-10-09T18:40:32+02:00".to_owned()),
             turn: Some(golden_previous_timing()),
         },
@@ -489,6 +516,8 @@ fn golden_messages() -> Vec<RemoteMessage> {
             timestamp: Some("2026-10-09T18:41:00+02:00".to_owned()),
             response_time_ms: None,
             thought_time_ms: None,
+            thought_tokens: None,
+            thought_tokens_estimated: None,
             completed_at: None,
             turn: None,
         },
@@ -511,6 +540,8 @@ fn golden_messages() -> Vec<RemoteMessage> {
             timestamp: Some("2026-10-09T18:41:10+02:00".to_owned()),
             response_time_ms: None,
             thought_time_ms: None,
+            thought_tokens: None,
+            thought_tokens_estimated: None,
             completed_at: None,
             turn: None,
         },
@@ -537,6 +568,7 @@ fn golden_previous_timing() -> RemoteTurnTiming {
 
 fn golden_snapshot() -> RemoteSnapshot {
     RemoteSnapshot {
+        settings: Some(golden_settings()),
         snapshot_id: Some("snapshot-example".to_owned()),
         session: golden_session_info(),
         sequence: 412,
@@ -554,6 +586,8 @@ fn golden_snapshot() -> RemoteSnapshot {
             can_steer: false,
             timing: Some(golden_timing(None)),
             thought_time_ms: Some(4000),
+            thought_tokens: Some(800),
+            thought_tokens_estimated: Some(true),
         }),
         transcript: golden_messages(),
         history_revision: "h2".to_owned(),
@@ -607,6 +641,17 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
     let rejected = Some(ReceiptState::Rejected);
     let applied = Some(ReceiptState::Applied);
     vec![
+        response(
+            "session_settings_updated",
+            "req-0016",
+            Some(ReceiptState::Applied),
+            RemoteResult::SessionSettingsUpdated {
+                settings: RemoteSessionSettings {
+                    can_change: true,
+                    ..golden_settings()
+                },
+            },
+        ),
         response(
             "sessions",
             "req-0001",
@@ -821,6 +866,8 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                 text: "The failure comes from ".to_owned(),
                 timing: Some(golden_timing(None)),
                 thought_time_ms: Some(4000),
+                thought_tokens: Some(800),
+                thought_tokens_estimated: Some(true),
             },
         ),
         event(
@@ -925,6 +972,8 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                 text: String::new(),
                 timing: Some(golden_timing(None)),
                 thought_time_ms: Some(4000),
+                thought_tokens: Some(800),
+                thought_tokens_estimated: Some(true),
             },
         ),
         event(
@@ -955,6 +1004,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         title: "New session".to_owned(),
                         workspace: None,
                         model: "gpt-5.5".to_owned(),
+                        turn_count: Some(0),
                         activity: SessionActivity::Idle,
                         attention: RemoteAttention {
                             approval: false,
@@ -1027,6 +1077,8 @@ mod tests {
             RemoteEvent::TextDelta {
                 timing: None,
                 thought_time_ms: None,
+                thought_tokens: None,
+                thought_tokens_estimated: None,
                 ..
             }
         ));
@@ -1047,11 +1099,18 @@ mod tests {
         }
         let mut snapshot = serde_json::to_value(golden_snapshot()).unwrap();
         snapshot.as_object_mut().unwrap().remove("last_turn");
+        snapshot.as_object_mut().unwrap().remove("settings");
+        snapshot["session"]
+            .as_object_mut()
+            .unwrap()
+            .remove("turn_count");
         let turn = snapshot["turn"].as_object_mut().unwrap();
         turn.remove("timing");
         turn.remove("thought_time_ms");
         let decoded: RemoteSnapshot = serde_json::from_value(snapshot).unwrap();
         assert!(decoded.last_turn.is_none());
+        assert!(decoded.settings.is_none());
+        assert!(decoded.session.turn_count.is_none());
         assert!(decoded.turn.unwrap().timing.is_none());
     }
     use serde_json::Value;
@@ -1305,7 +1364,14 @@ mod tests {
     #[test]
     fn the_schema_rejects_frames_that_are_not_on_the_wire() {
         let schema = schema("request.schema.json");
-        let mut request = serde_json::to_value(&golden_requests()[10].1).unwrap();
+        let mut request = serde_json::to_value(
+            &golden_requests()
+                .into_iter()
+                .find(|(name, _)| *name == "cancel_turn")
+                .unwrap()
+                .1,
+        )
+        .unwrap();
         assert_eq!(request["operation"]["type"], "cancel_turn");
         assert!(validate(&schema, &request, &schema, "$").is_ok());
         request["operation"]["turn_id"] = Value::Null;

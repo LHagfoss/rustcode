@@ -36,6 +36,7 @@ fn info(session_id: &str, epoch: u64) -> RemoteSessionInfo {
         title: format!("title of {session_id}"),
         workspace: None,
         model: "model".to_owned(),
+        turn_count: None,
         activity: SessionActivity::Idle,
         attention: RemoteAttention {
             approval: false,
@@ -47,6 +48,7 @@ fn info(session_id: &str, epoch: u64) -> RemoteSessionInfo {
 
 fn snapshot(session_id: &str, epoch: u64, sequence: u64) -> Box<RemoteSnapshot> {
     Box::new(RemoteSnapshot {
+        settings: None,
         snapshot_id: None,
         session: info(session_id, epoch),
         sequence,
@@ -116,6 +118,8 @@ impl Owner {
                     text: text.to_owned(),
                     timing: None,
                     thought_time_ms: None,
+                    thought_tokens: None,
+                    thought_tokens_estimated: None,
                 },
             },
         }

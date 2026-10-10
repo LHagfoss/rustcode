@@ -861,6 +861,7 @@ fn preserve_profile_settings(existing: &ModelProfile, profile: &mut ModelProfile
     let api_protocol = profile.api_protocol;
     let provider_context_window = profile.provider_context_window;
     let supports_reasoning_effort = profile.supports_reasoning_effort;
+    let reasoning_efforts = profile.reasoning_efforts.clone();
     let max_output_tokens = profile.max_output_tokens;
     let supports_thinking_budget = profile.supports_thinking_budget;
     let hard_effective_limit = profile.hard_effective_limit;
@@ -877,6 +878,7 @@ fn preserve_profile_settings(existing: &ModelProfile, profile: &mut ModelProfile
     profile.api_protocol = api_protocol;
     profile.provider_context_window = provider_context_window;
     profile.supports_reasoning_effort = supports_reasoning_effort;
+    profile.reasoning_efforts = reasoning_efforts;
     profile.supports_thinking_budget = supports_thinking_budget;
     profile.hard_effective_limit = existing
         .hard_effective_limit

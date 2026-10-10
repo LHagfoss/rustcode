@@ -116,6 +116,77 @@ fn activity(state: &AppState) -> SessionActivity {
     }
 }
 
+/// Configured or advertised values only. An unknown capability is not permission
+/// to invent a provider's effort choices.
+pub(super) fn reasoning_efforts(profile: &crate::config::ModelProfile) -> Vec<String> {
+    let mut efforts = vec!["default".to_owned()];
+    if profile.supports_reasoning_effort_wire() {
+        let known = profile
+            .reasoning_efforts
+            .clone()
+            .unwrap_or_else(|| profile.reasoning_effort.iter().cloned().collect());
+        for effort in &known {
+            if !effort.is_empty() && !efforts.contains(effort) {
+                efforts.push(effort.clone());
+            }
+        }
+    }
+    efforts
+}
+
+pub(super) fn project_settings(state: &AppState) -> RemoteSessionSettings {
+    let active = state.active_model_profile();
+    RemoteSessionSettings {
+        models: state
+            .config
+            .models
+            .iter()
+            .map(|profile| RemoteModelOption {
+                id: profile.name.clone(),
+                model: profile.model.clone(),
+                reasoning_efforts: reasoning_efforts(profile),
+            })
+            .collect(),
+        selected_model: active
+            .as_ref()
+            .map(|profile| profile.name.clone())
+            .unwrap_or_default(),
+        reasoning_effort: active
+            .and_then(|profile| profile.reasoning_effort)
+            .unwrap_or_else(|| "default".into()),
+        can_change: state.active_turn_id.is_none()
+            && !state.has_active_turn()
+            && state.pending_queue.is_empty()
+            && state.background_turn_context.is_none(),
+    }
+}
+
+fn session_turn_count(state: &AppState) -> Option<u64> {
+    let mut ids = std::collections::HashSet::new();
+    let mut legacy = 0;
+    for message in state.history.iter() {
+        if message.compaction_boundary.is_some() {
+            return None;
+        }
+        if message.conversation_recap {
+            continue;
+        }
+        if let Some(turn) = &message.turn {
+            ids.insert(turn.turn_id.as_str());
+        } else if message.role == "user" && !message.content.starts_with('/') {
+            legacy += 1;
+        }
+    }
+    if let Some(id) = state.active_turn_id.as_deref() {
+        ids.insert(id);
+    }
+    Some(ids.len() as u64 + legacy)
+}
+
+pub(super) fn live_thought_tokens(state: &AppState) -> Option<u32> {
+    (state.current_thought_tokens > 0).then_some(state.current_thought_tokens)
+}
+
 /// The session-list row for this session.
 pub fn project_session_info(state: &AppState, context: &ProjectionContext) -> RemoteSessionInfo {
     RemoteSessionInfo {
@@ -138,6 +209,7 @@ pub fn project_session_info(state: &AppState, context: &ProjectionContext) -> Re
             .or_else(|| state.effective_workspace_root())
             .map(|path| path.display().to_string()),
         model: state.model_name.clone(),
+        turn_count: session_turn_count(state),
         activity: activity(state),
         attention: RemoteAttention {
             approval: state.pending_tool_confirmation.is_some(),
@@ -312,6 +384,8 @@ fn project_messages(
                 .map(|_| message.timestamp.clone()),
             response_time_ms: message.response_time_ms,
             thought_time_ms: message.thought_time_ms,
+            thought_tokens: message.thought_tokens,
+            thought_tokens_estimated: message.thought_tokens.map(|_| true),
             completed_at: message.completed_at.clone(),
             turn: message.turn.as_ref().map(project_turn_timing),
         })
@@ -417,6 +491,8 @@ pub fn project_snapshot(
         can_steer: state.can_accept_steer(),
         timing: project_active_timing(state),
         thought_time_ms: project_live_thought_time(state),
+        thought_tokens: live_thought_tokens(state),
+        thought_tokens_estimated: live_thought_tokens(state).map(|_| true),
     });
     let pending_prompts = state
         .pending_steers
@@ -444,6 +520,7 @@ pub fn project_snapshot(
         .collect();
     let mut snapshot = RemoteSnapshot {
         session: project_session_info(state, context),
+        settings: Some(project_settings(state)),
         snapshot_id: None,
         sequence: context.sequence,
         generation: context.generation,
@@ -640,6 +717,8 @@ pub fn project_event(
             text: text.clone(),
             timing: project_active_timing(state),
             thought_time_ms: project_live_thought_time(state),
+            thought_tokens: live_thought_tokens(state),
+            thought_tokens_estimated: live_thought_tokens(state).map(|_| true),
         }],
         AgentUiEvent::ToolStarted { name, id, detail } => vec![RemoteEvent::ToolStarted {
             tool: RemoteTool {
@@ -695,6 +774,39 @@ pub fn project_event(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn advertised_efforts_override_stale_configured_effort() {
+        let profile = crate::config::ModelProfile {
+            reasoning_effort: Some("high".into()),
+            reasoning_efforts: Some(vec!["low".into()]),
+            supports_reasoning_effort: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(reasoning_efforts(&profile), vec!["default", "low"]);
+    }
+
+    #[test]
+    fn settings_and_usage_are_authoritative_beyond_the_loaded_tail() {
+        let mut state = state_with_history(0, 0);
+        for _ in 0..5 {
+            let id = state.begin_turn_identity();
+            state.history.push(ChatMessage::new("user", "work"));
+            let mut answer = ChatMessage::new("assistant", "done");
+            answer.thought_tokens = Some(42);
+            state.history.push(answer);
+            state.end_turn_identity(&id);
+        }
+        let limits = ProjectionLimits {
+            transcript_items: 1,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(project_snapshot(&state, &context(), &limits)).unwrap();
+        assert_eq!(json["session"]["turn_count"], 5);
+        assert_eq!(json["transcript"][0]["thought_tokens"], 42);
+        assert_eq!(json["transcript"][0]["thought_tokens_estimated"], true);
+        assert!(json["settings"]["models"].is_array());
+    }
+
     #[test]
     fn remote_client_followups_use_machine_timestamps_and_empty_untitled_sessions() {
         let mut state = state_with_history(0, 0);

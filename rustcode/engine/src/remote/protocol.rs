@@ -93,11 +93,16 @@ pub enum RemoteOperation {
     GetRequestStatus {
         target_request_id: String,
     },
+    /// Atomically select a configured profile and effort while idle.
+    SetSessionSettings {
+        model: String,
+        reasoning_effort: String,
+    },
 }
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 13] = [
+    pub const NAMES: [&'static str; 14] = [
         "list_sessions",
         "subscribe_sessions",
         "attach_session",
@@ -111,6 +116,7 @@ impl RemoteOperation {
         "answer_question",
         "resolve_approval",
         "get_request_status",
+        "set_session_settings",
     ];
 
     pub fn name(&self) -> &'static str {
@@ -128,6 +134,7 @@ impl RemoteOperation {
             Self::AnswerQuestion { .. } => "answer_question",
             Self::ResolveApproval { .. } => "resolve_approval",
             Self::GetRequestStatus { .. } => "get_request_status",
+            Self::SetSessionSettings { .. } => "set_session_settings",
         }
     }
 
@@ -151,6 +158,7 @@ impl RemoteOperation {
                 | Self::CancelTurn { .. }
                 | Self::AnswerQuestion { .. }
                 | Self::ResolveApproval { .. }
+                | Self::SetSessionSettings { .. }
         )
     }
 }
@@ -294,6 +302,9 @@ pub enum RemoteResult {
         batch_id: String,
         choice: ApprovalChoice,
     },
+    SessionSettingsUpdated {
+        settings: RemoteSessionSettings,
+    },
     RequestStatus {
         target_request_id: String,
         receipt: ReceiptState,
@@ -413,6 +424,11 @@ pub enum RemoteEvent {
         timing: Option<RemoteTurnTiming>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thought_time_ms: Option<u64>,
+        /// Estimated from observed reasoning text; absent when unavailable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thought_tokens: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thought_tokens_estimated: Option<bool>,
     },
     ToolStarted {
         tool: RemoteTool,
@@ -508,6 +524,10 @@ pub struct RemoteSessionInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     pub model: String,
+    /// Total logical turns across the full host transcript, including an active turn.
+    /// Absent when an archived prefix prevents an exact total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_count: Option<u64>,
     pub activity: SessionActivity,
     pub attention: RemoteAttention,
     pub health: OwnerHealth,
@@ -564,10 +584,31 @@ pub struct RemoteContentChunk {
     pub next_offset: Option<u64>,
 }
 
+/// Safe session controls: never contains endpoint URLs or credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteSessionSettings {
+    pub models: Vec<RemoteModelOption>,
+    pub selected_model: String,
+    /// `default` means omit the provider effort override, not disable thinking.
+    pub reasoning_effort: String,
+    pub can_change: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteModelOption {
+    /// Exact configured profile name, including account-qualified names.
+    pub id: String,
+    pub model: String,
+    /// `default` plus only explicitly known supported values.
+    pub reasoning_efforts: Vec<String>,
+}
+
 /// Bounded view of one session. `sequence` is the exact watermark: the
 /// snapshot already contains every event up to and including it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<RemoteSessionSettings>,
     pub session: RemoteSessionInfo,
     /// Opaque gateway identity for this snapshot cut, including replacements
     /// at the same sequence. Store alongside the reconnect cursor.
@@ -622,6 +663,11 @@ pub struct RemoteTurn {
     /// Aggregate across thinking blocks in the current assistant segment only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thought_time_ms: Option<u64>,
+    /// Estimated from observed reasoning text; absent when unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_tokens_estimated: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -714,6 +760,11 @@ pub struct RemoteMessage {
     pub response_time_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thought_time_ms: Option<u64>,
+    /// Estimated from observed reasoning text; absent when unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_tokens_estimated: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
     /// Correlation and footer for this message's logical turn, repeated across phases.
@@ -1016,6 +1067,10 @@ mod tests {
             },
             RemoteOperation::GetRequestStatus {
                 target_request_id: String::new(),
+            },
+            RemoteOperation::SetSessionSettings {
+                model: String::new(),
+                reasoning_effort: "default".into(),
             },
         ];
         assert_eq!(operations.len(), RemoteOperation::NAMES.len());

@@ -321,6 +321,9 @@ pub struct ModelProfile {
     /// thinking mode for providers such as Qwen/oMLX.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_reasoning_effort: Option<bool>,
+    /// Provider-advertised or explicitly configured reasoning effort values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<Vec<String>>,
     /// Sampling temperature sent to OpenAI-compatible endpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,

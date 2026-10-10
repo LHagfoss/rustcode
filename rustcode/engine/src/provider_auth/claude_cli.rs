@@ -247,6 +247,13 @@ fn catalog_profiles(models: &Value, account: &AccountStatus) -> Vec<ModelProfile
             supports_reasoning_effort: Some(
                 item.get("supportsEffort").and_then(Value::as_bool) == Some(true),
             ),
+            reasoning_efforts: (item.get("supportsEffort").and_then(Value::as_bool) == Some(true))
+                .then(|| {
+                    EFFORT_LEVELS
+                        .iter()
+                        .map(|effort| (*effort).to_owned())
+                        .collect()
+                }),
             supports_thinking_budget: Some(false),
             ..Default::default()
         });
