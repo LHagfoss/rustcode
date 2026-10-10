@@ -261,7 +261,8 @@ pub(super) async fn render_frame(
     }
     let (content_height, input_area) =
         frame_metrics.expect("render_with_transcript_snapshot must run once");
-    app_state.lock().await.publish_render_metrics(
+    let mut state = app_state.lock().await;
+    if state.publish_render_metrics(
         snapshot.revision(),
         content_height,
         rustcode::app::UiRect::new(
@@ -270,7 +271,16 @@ pub(super) async fn render_frame(
             input_area.width,
             input_area.height,
         ),
-    );
+    ) {
+        if state.command_panel.is_some() {
+            state.modal_scroll_row = state
+                .modal_scroll_row
+                .min(transcript_state.panel_max_scroll_row);
+        }
+        if let Some(panel) = state.tasks_panel.as_mut() {
+            panel.set_log_scroll_limit(transcript_state.task_log_max_scroll_row);
+        }
+    }
     Ok(())
 }
 

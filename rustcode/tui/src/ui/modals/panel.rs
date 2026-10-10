@@ -833,6 +833,16 @@ fn percentage_prefix(value: &str) -> Option<f64> {
         .ok()
 }
 
+/// Last full viewport of a panel, including its wrapped rows.
+pub(super) fn panel_scroll_limit(content_rows: usize, body: ratatui::layout::Rect) -> u16 {
+    if body.width == 0 || body.height == 0 {
+        return 0;
+    }
+    content_rows
+        .saturating_sub(usize::from(body.height))
+        .min(usize::from(u16::MAX)) as u16
+}
+
 /// Scrollable command output, with a full-height surface for remote pairing.
 ///
 /// The panel is an output surface, not a picker: it has no rows to activate, so
@@ -876,10 +886,10 @@ pub(in crate::ui) fn render_command_panel(
             span.style = background.patch(span.style);
         }
     }
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let max_scroll_row = panel_scroll_limit(paragraph.line_count(chunks[2].width), chunks[2]);
     f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((state.modal_scroll_row(), 0)),
+        paragraph.scroll((state.modal_scroll_row().min(max_scroll_row), 0)),
         chunks[2],
     );
     f.render_widget(

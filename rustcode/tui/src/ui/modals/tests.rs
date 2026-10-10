@@ -691,7 +691,13 @@ fn every_inline_picker_shares_the_measurement_rules() {
         ),
         ("mcp", render_mcp_config_modal, MCP_CONFIG_HEIGHT),
         ("command-panel", render_command_panel, COMMAND_PANEL_HEIGHT),
-        ("tasks", render_tasks_panel_modal, TASKS_PANEL_HEIGHT),
+        (
+            "tasks",
+            |f, s, a| {
+                render_tasks_panel_modal(f, s, a);
+            },
+            TASKS_PANEL_HEIGHT,
+        ),
     ];
 
     for (case, composer_width) in [("wide", 100u16), ("narrow", 40u16)] {
@@ -1266,7 +1272,9 @@ fn tasks_panel_text(view: Option<rustcode::controller::TasksPanelView>, width: u
     let snapshot = render_snapshot(&state);
     let mut terminal = Terminal::new(TestBackend::new(width, 22)).unwrap();
     terminal
-        .draw(|frame| render_tasks_panel_modal(frame, &snapshot, Rect::new(0, 20, width, 2)))
+        .draw(|frame| {
+            render_tasks_panel_modal(frame, &snapshot, Rect::new(0, 20, width, 2));
+        })
         .unwrap();
     (0..22)
         .map(|y| {
@@ -1328,7 +1336,9 @@ fn tasks_panel_lists_running_then_finished_with_key_hints() {
     let snapshot = render_snapshot(&state);
     let mut terminal = Terminal::new(TestBackend::new(80, 22)).unwrap();
     terminal
-        .draw(|frame| render_tasks_panel_modal(frame, &snapshot, Rect::new(0, 20, 80, 2)))
+        .draw(|frame| {
+            render_tasks_panel_modal(frame, &snapshot, Rect::new(0, 20, 80, 2));
+        })
         .unwrap();
     let dim = |y: usize| {
         terminal.backend().buffer()[(6, y as u16)]
@@ -1389,6 +1399,41 @@ fn tasks_panel_keeps_the_selection_in_view_and_inside_a_narrow_frame() {
             .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 32),
         "{text}"
     );
+}
+
+#[test]
+fn tasks_panel_log_scroll_limit_tracks_wrapping_and_omission_marker() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let measure = |text: String, width: u16, earlier_omitted: bool| {
+        let mut state = RenderState::new();
+        state.tasks_panel = Some(tasks_panel_view(Some(rustcode::controller::TaskLogView {
+            task_id: "wrapped-log".into(),
+            command: "test".into(),
+            text,
+            earlier_omitted,
+            scroll: usize::MAX,
+        })));
+        let snapshot = render_snapshot(&state);
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        let mut limit = 0;
+        terminal
+            .draw(|frame| {
+                limit = render_tasks_panel_modal(frame, &snapshot, Rect::new(0, 20, width, 2));
+            })
+            .unwrap();
+        limit
+    };
+    let text = "wrapped output ".repeat(100);
+    let wide = measure(text.clone(), 80, false);
+    assert!(
+        wide > 1,
+        "a single raw line must scroll through every wrapped row"
+    );
+    assert!(measure(text.clone(), 40, false) > wide);
+    assert_eq!(measure(text.clone(), 80, true), wide + 1);
+    assert_eq!(measure(text, 4, false), 0);
+    assert_eq!(measure(String::new(), 80, false), 0);
+    assert_eq!(measure("short output".into(), 80, false), 0);
 }
 
 #[test]

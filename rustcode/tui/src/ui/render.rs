@@ -219,6 +219,7 @@ pub(crate) fn render_with_transcript_snapshot(
     transcript: &mut TranscriptState,
 ) -> (u16, ratatui::layout::Rect) {
     theme::set_active_theme(&state.config().theme);
+    transcript.task_log_max_scroll_row = 0;
 
     if state
         .command_panel()
@@ -605,7 +606,7 @@ pub(crate) fn render_with_transcript_snapshot(
         }
 
         if state.tasks_panel().is_some() {
-            render_tasks_panel_modal(f, state, input_box_area);
+            transcript.task_log_max_scroll_row = render_tasks_panel_modal(f, state, input_box_area);
         }
 
         if state.command_panel().is_some() {
@@ -708,9 +709,10 @@ fn refresh_panel_selection(
     input_area: ratatui::layout::Rect,
 ) {
     let panel_selection = panel_selection_surface(f, state, input_area);
-    transcript.panel_selection_area = panel_selection.as_ref().map(|(area, _)| *area);
+    transcript.panel_selection_area = panel_selection.as_ref().map(|(area, _, _)| *area);
     transcript.panel_selection_scrollable = state.command_panel().is_some();
-    if let Some((area, soft_wrap_before)) = panel_selection {
+    transcript.panel_max_scroll_row = panel_selection.as_ref().map_or(0, |(_, _, limit)| *limit);
+    if let Some((area, soft_wrap_before, _)) = panel_selection {
         transcript
             .panel_selection
             .refresh_view(area, f.buffer(), &soft_wrap_before, 0);

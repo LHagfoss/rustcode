@@ -1382,6 +1382,82 @@ fn remote_panel_uses_the_full_viewport_and_restores_the_composer_on_close() {
 }
 
 #[test]
+fn command_panel_overscroll_keeps_short_content_visible_after_resize() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "Help",
+        content: "Last visible row".into(),
+    });
+    state.modal_scroll_row = u16::MAX;
+    let mut transcript = TranscriptState::default();
+    for (width, height) in [(40, 12), (80, 24)] {
+        let rendered =
+            render_state_to_text_with_transcript(&mut state, &mut transcript, width, height);
+        assert!(rendered.contains("Last visible row"), "{rendered}");
+    }
+}
+
+#[test]
+fn command_panel_overscroll_retains_the_last_wrapped_row() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "Help",
+        content: format!(
+            "{}\n\nTHE LAST ROW",
+            "Long wrapped paragraph with several words. ".repeat(100)
+        ),
+    });
+    state.modal_scroll_row = u16::MAX;
+    let mut transcript = TranscriptState::default();
+    for (width, height) in [(40, 12), (80, 24)] {
+        let rendered =
+            render_state_to_text_with_transcript(&mut state, &mut transcript, width, height);
+        assert!(rendered.contains("THE LAST ROW"), "{rendered}");
+        assert!(transcript.panel_max_scroll_row > 0);
+    }
+}
+
+#[test]
+fn command_panel_limit_tracks_wrapping_empty_content_and_viewport_resize() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.command_panel = Some(rustcode::controller::CommandPanel {
+        title: "Remote",
+        content: (0..60)
+            .map(|row| format!("Row {row:02}  content\n"))
+            .collect(),
+    });
+    let mut transcript = TranscriptState::default();
+    render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+    let small_limit = transcript.panel_max_scroll_row;
+    assert!(small_limit > 0);
+    render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 48);
+    assert_eq!(small_limit - transcript.panel_max_scroll_row, 24);
+
+    state.command_panel.as_mut().unwrap().content = "Word wrapped content. ".repeat(100);
+    render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+    let wide_limit = transcript.panel_max_scroll_row;
+    render_state_to_text_with_transcript(&mut state, &mut transcript, 40, 24);
+    assert!(transcript.panel_max_scroll_row > wide_limit);
+
+    for content in ["", "Short content"] {
+        state.command_panel.as_mut().unwrap().content = content.into();
+        render_state_to_text_with_transcript(&mut state, &mut transcript, 40, 24);
+        assert_eq!(transcript.panel_max_scroll_row, 0);
+    }
+    state.command_panel.as_mut().unwrap().content = "Word wrapped content. ".repeat(100);
+    for (width, height) in [(4, 24), (40, 4)] {
+        render_state_to_text_with_transcript(&mut state, &mut transcript, width, height);
+        assert_eq!(transcript.panel_max_scroll_row, 0, "zero-size panel body");
+    }
+    state.command_panel = None;
+    render_state_to_text_with_transcript(&mut state, &mut transcript, 40, 24);
+    assert_eq!(transcript.panel_max_scroll_row, 0);
+}
+
+#[test]
 fn command_output_panel_scrolls_wrapped_content_on_short_terminals() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = RenderState::new();
