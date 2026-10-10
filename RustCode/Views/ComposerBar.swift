@@ -3,7 +3,7 @@ import SwiftUI
 import PhotosUI
 import UIKit
 
-/// The message field and its send or stop button, as one floating glass control.
+/// The message field and its controls, in one rounded composer.
 struct ComposerBar<Accessory: View, Controls: View>: View {
     @Environment(RemoteStore.self) private var store
     @Environment(ChatDrafts.self) private var drafts
@@ -62,7 +62,10 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                     isFocused = false
                     showsActions = true
                 } label: {
-                    Image(systemName: "plus").font(.system(size: 18, weight: .regular)).frame(width: buttonSize, height: buttonSize)
+                    Image(systemName: "plus")
+                        .font(.title3)
+                        .frame(width: buttonSize, height: buttonSize)
+                        .background(.fill.tertiary, in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Chat actions")
                 .disabled(isSending || isImporting)
@@ -76,11 +79,11 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                     queueButton
                 } else { sendButton }
             }
-            .padding(.horizontal, 8).padding(.bottom, 6)
+            .padding(.horizontal, 8).padding(.bottom, 8)
         }
         .contentShape(shape)
-        .glassSurface(in: shape)
-        .background(Color(uiColor: .secondarySystemBackground), in: shape)
+        .background(ChatSurface.composer, in: shape)
+        .overlay { shape.stroke(.separator.opacity(0.45), lineWidth: 0.5).allowsHitTesting(false) }
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
         .sensoryFeedback(.stop, trigger: stopCount)
         .sheet(isPresented: $showsActions, onDismiss: performNextAction) {
@@ -254,7 +257,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
 
     private func circle(_ symbol: String, fill: AnyShapeStyle, foreground: Color) -> some View {
         Image(systemName: symbol)
-            .font(.subheadline.weight(.bold))
+            .font(.title3.weight(.medium))
             .foregroundStyle(foreground)
             .frame(width: buttonSize, height: buttonSize)
             .background(fill, in: .circle)

@@ -13,13 +13,13 @@ extension EnvironmentValues {
 
 struct SessionsView: View {
     @Environment(RemoteStore.self) private var store
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var drafts = ChatDrafts()
     @State private var showsSettings = LaunchOptions.current.presentsSettings
     @State private var unpairsAfterSettings = false
     @State private var showsSidebar = false
+    @State private var showsNewSession = false
     @GestureState(resetTransaction: Transaction(animation: UIAccessibility.isReduceMotionEnabled ? nil : .snappy(duration: 0.25)))
     private var drawerDrag = DrawerDrag()
     @State private var dismissedKeyboardForDrag = false
@@ -36,7 +36,24 @@ struct SessionsView: View {
                     let progress = offset / width
                     let obscured = showsSidebar || offset > 0
                     ZStack(alignment: .leading) {
-                        Color(uiColor: .systemBackground).ignoresSafeArea()
+                        NavigationStack {
+                            chat
+                                .background(ChatSurface.background.ignoresSafeArea())
+                                .toolbarBackground(ChatSurface.background, for: .navigationBar)
+                                .toolbarBackground(.visible, for: .navigationBar)
+                                .disabled(obscured)
+                                .environment(\.isChatObscured, obscured)
+                        }
+                        .accessibilityHidden(obscured)
+
+                        if obscured {
+                            Button { closeSidebar() } label: {
+                                Color.black.opacity(0.35 * progress).ignoresSafeArea()
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Close sessions")
+                        }
+
                         NavigationStack {
                             SessionSidebar(showsSettings: $showsSettings, didSelect: closeSidebar)
                                 .toolbar {
@@ -47,41 +64,15 @@ struct SessionsView: View {
                                 }
                         }
                         .frame(width: width)
-                        .offset(x: -32 * (1 - progress))
-                        .opacity(progress)
+                        .background(ChatSurface.sidebar.ignoresSafeArea())
+                        .shadow(color: .black.opacity(0.2 * progress), radius: 16, x: 6)
+                        .offset(x: offset - width)
+                        .opacity(obscured ? 1 : 0)
                         .allowsHitTesting(showsSidebar)
                         .accessibilityHidden(!showsSidebar)
                         .accessibilityIdentifier("sessionSidebar")
                         .accessibilityAction(.escape, closeSidebar)
-
-                        NavigationStack {
-                            chat
-                                .background(colorScheme == .dark ? Color(white: 0.07) : Color(uiColor: .systemBackground))
-                                .disabled(showsSidebar)
-                                .accessibilityHidden(obscured)
-                                .environment(\.isChatObscured, obscured)
-                        }
-                        .background(Color(uiColor: .secondarySystemBackground))
-                        .overlay {
-                            if obscured {
-                                Button { closeSidebar() } label: {
-                                    Color.black.opacity(0.12 * progress).ignoresSafeArea()
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Close sessions")
-                            }
-                        }
-                        .clipShape(.rect(cornerRadius: 28 * progress))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 28 * progress)
-                                .stroke(.white.opacity(0.08 * progress), lineWidth: 0.5)
-                                .allowsHitTesting(false)
-                        }
-                        .shadow(color: .black.opacity(0.3 * progress), radius: 16, x: -4)
-                        .offset(x: offset)
-                        .accessibilityHidden(obscured)
                     }
-                    .clipped()
                     .simultaneousGesture(drawerGesture(width: width, opening: !showsSidebar))
                     .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: showsSidebar)
                     .onChange(of: showsSidebar) { _, open in sidebarFocused = open }
@@ -91,16 +82,20 @@ struct SessionsView: View {
                 NavigationSplitView(columnVisibility: $columns) {
                     SessionSidebar(showsSettings: $showsSettings)
                         .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
-                } detail: { chat }
+                } detail: {
+                    chat
+                        .background(ChatSurface.background.ignoresSafeArea())
+                        .toolbarBackground(ChatSurface.background, for: .navigationBar)
+                }
                 .toolbar(removing: .sidebarToggle)
             }
         }
+        .background(ChatSurface.background.ignoresSafeArea())
         .environment(drafts)
         .environment(\.openSessionSidebar, OpenSessionSidebarAction { toggle in
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             if sizeClass == .compact { showsSidebar = true } else { columns = toggle && columns == .all ? .detailOnly : .all }
         })
-        .onAppear { if store.selectedSessionID == nil { showsSidebar = true } }
         .onChange(of: store.selectedSessionID) { _, selected in
             if selected != nil { showsSidebar = false }
         }
@@ -111,6 +106,7 @@ struct SessionsView: View {
         }) {
             SettingsView { unpairsAfterSettings = true }
         }
+        .sheet(isPresented: $showsNewSession) { NewSessionView() }
     }
 
     @ViewBuilder
@@ -119,11 +115,26 @@ struct SessionsView: View {
             TranscriptView(presentsAttentionOnAppear: presentsAttentionOnLaunch)
         } else {
             ContentUnavailableView {
-                Label("Choose a Session", systemImage: "bubble.left.and.text.bubble.right")
+                Label("RustCode", systemImage: "bubble.left.and.text.bubble.right")
             } description: {
-                Text("Open your sessions or start a new conversation on your Mac.")
+                Text("Start a conversation on your Mac, or continue one from your sessions.")
             } actions: {
-                Button("Show sessions", systemImage: "sidebar.left") { showsSidebar = true; columns = .all }
+                Button("Start a new session", systemImage: "square.and.pencil") { showsNewSession = true }
+                    .brandProminentButtonStyle()
+                    .disabled(store.connection != .connected)
+            }
+            .navigationTitle("RustCode")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Show sessions", systemImage: "line.3.horizontal") { showsSidebar = true; columns = .all }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Settings", systemImage: "gearshape") { showsSettings = true }
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                ConnectionStatusBar()
             }
         }
     }
@@ -162,7 +173,10 @@ struct SessionsView: View {
             }
     }
 
-    private func closeSidebar() { showsSidebar = false }
+    private func closeSidebar() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        showsSidebar = false
+    }
 }
 
 private struct SessionSidebar: View {
@@ -180,10 +194,32 @@ private struct SessionSidebar: View {
         }
     }
 
-
     var body: some View {
-        List {
-            Section {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search sessions", text: $query)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .accessibilityLabel("Search sessions")
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear session search")
+                }
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, query.isEmpty ? 14 : 0)
+            .frame(minHeight: 44)
+            .background(.fill.tertiary, in: .rect(cornerRadius: 12))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
+            List {
                 ForEach(sessions) { session in
                     Button {
                         store.select(session.id)
@@ -191,51 +227,62 @@ private struct SessionSidebar: View {
                     } label: {
                         SessionRow(session: session, badge: store.badges.badge(for: session))
                             .foregroundStyle(.primary)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                session.id == store.selectedSessionID ? Color.primary.opacity(0.07) : Color.clear,
+                                in: .rect(cornerRadius: 12)
+                            )
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
-                    .listRowBackground(session.id == store.selectedSessionID ? Color.accentColor.opacity(0.12) : Color.clear)
-                        .contextMenu {
-                            Button("Copy Title", systemImage: "doc.on.doc") {
-                                Clipboard.copy(session.displayTitle)
-                            }
-                            Button("Copy Workspace Path", systemImage: "folder") {
-                                Clipboard.copy(session.workspace)
-                            }
-                            if session.id == store.selectedSessionID {
-                                Button("Detach", systemImage: "eye.slash") {
-                                    store.detach()
-                                }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12))
+                    .contextMenu {
+                        Button("Copy Title", systemImage: "doc.on.doc") {
+                            Clipboard.copy(session.displayTitle)
+                        }
+                        Button("Copy Workspace Path", systemImage: "folder") {
+                            Clipboard.copy(session.workspace)
+                        }
+                        if session.id == store.selectedSessionID {
+                            Button("Detach", systemImage: "eye.slash") {
+                                store.detach()
                             }
                         }
-                        .swipeActions(edge: .trailing) {
-                            // Detaching only stops following the session from this device.
-                            if session.id == store.selectedSessionID {
-                                Button("Detach", systemImage: "eye.slash") {
-                                    store.detach()
-                                }
-                                .tint(.gray)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        // Detaching only stops following the session from this device.
+                        if session.id == store.selectedSessionID {
+                            Button("Detach", systemImage: "eye.slash") {
+                                store.detach()
                             }
+                            .tint(.gray)
                         }
+                    }
                 }
-            } footer: {
-                if !sessions.isEmpty {
-                    Text("Start a session here, or share one from your Mac with /\u{2060}remote.")
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+            .refreshable {
+                await store.refreshSessions()
+            }
+            .overlay {
+                // Not hit-testable, so the empty list underneath can still be pulled to refresh.
+                if store.sessions.isEmpty {
+                    emptyState.allowsHitTesting(false)
+                } else if sessions.isEmpty {
+                    ContentUnavailableView.search(text: query)
                 }
             }
         }
-        .refreshable {
-            await store.refreshSessions()
-        }
-        .overlay {
-            // Not hit-testable, so the empty list underneath can still be pulled to refresh.
-            if store.sessions.isEmpty {
-                emptyState.allowsHitTesting(false)
-            } else if sessions.isEmpty {
-                ContentUnavailableView.search(text: query)
-            }
-        }
-        .searchable(text: $query, prompt: "Search sessions")
+        .background(ChatSurface.sidebar.ignoresSafeArea())
         .navigationTitle("Sessions")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(ChatSurface.sidebar, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("New Session", systemImage: "square.and.pencil") {
@@ -252,7 +299,7 @@ private struct SessionSidebar: View {
         .sheet(isPresented: $showsNewSession) {
             NewSessionView()
         }
-        .floatingBottomBar {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             ConnectionStatusBar()
         }
     }

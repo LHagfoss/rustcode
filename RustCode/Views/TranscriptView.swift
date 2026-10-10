@@ -235,12 +235,14 @@ struct TranscriptView: View {
                 Text(current?.model ?? store.selectedSession?.model ?? "Model")
                     .lineLimit(1).truncationMode(.middle)
                 if let effort = settings?.reasoningEffort, effort != "default" {
-                    Text("· \(effort.capitalized)").foregroundStyle(.secondary)
+                    Text(effort.capitalized).foregroundStyle(.secondary)
                 }
-                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
             }
             .font(.subheadline.weight(.medium))
-            .frame(minHeight: 44).contentShape(.rect)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .background(.fill.tertiary, in: .capsule)
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Model and effort")

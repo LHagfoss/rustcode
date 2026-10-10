@@ -4,6 +4,54 @@ import XCTest
 final class InputAndTranscriptTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testLaunchWithoutSelectionKeepsChatAsTheMainScreen() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Start a new session"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Show sessions"].isHittable)
+        XCTAssertFalse(app.navigationBars["Sessions"].isHittable)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Chat landing without an automatic sidebar"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.buttons["Show sessions"].tap()
+        XCTAssertTrue(app.navigationBars["Sessions"].waitForExistence(timeout: 3))
+        app.navigationBars["Sessions"].buttons["Close sessions"].tap()
+        XCTAssertTrue(app.buttons["Start a new session"].isHittable)
+    }
+
+    func testSidebarSearchStaysAboveResultsAndDismissesWithTheDrawer() {
+        let app = launchChat(draft: "Keep my search draft")
+        app.buttons["Show sessions"].tap()
+        let search = app.textFields["Search sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Draft release notes")).firstMatch
+        XCTAssertLessThan(search.frame.maxY, row.frame.minY)
+        search.tap()
+        search.typeText("Page the session store")
+        XCTAssertFalse(row.exists)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Page the session store")).firstMatch.exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Sidebar search above filtered sessions with keyboard"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.navigationBars["Sessions"].buttons["Close sessions"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my search draft")
+    }
+
+    func testTappingOutsideTheDrawerReturnsToTheSameChat() {
+        let app = launchChat(draft: "Keep my backdrop draft")
+        app.buttons["Show sessions"].tap()
+        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Model and effort"].isHittable)
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my backdrop draft")
+    }
+
     func testLeavingHostDismissesSettingsBeforeShowingPairing() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoSettings"]

@@ -1,6 +1,15 @@
 import SwiftUI
 import UIKit
 
+enum ChatSurface {
+    /// Continue the transcript's charcoal through the status bar and home indicator.
+    static let background = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.07, alpha: 1) : .systemBackground
+    })
+    static let sidebar = Color(uiColor: .secondarySystemBackground)
+    static let composer = Color(uiColor: .tertiarySystemBackground)
+}
+
 // Colours come from the asset catalog, which generates `.brandFill` and `.attention`:
 //
 // - `AccentColor`: the logo's slate blue, for text and symbols. Lighter in dark mode.

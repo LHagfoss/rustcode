@@ -78,6 +78,8 @@ The composer combines the current model and thinking effort in one control. Tap 
 for a native sheet with model search and an effort picker. Changes become available
 when the turn is idle and appear after host confirmation. The session menu opens a
 sidebar for finding and switching chats without backing out of the current session.
+On iPhone, chat stays the main screen even before a session is selected. The sessions
+drawer keeps search above the list and closes by selection, a left swipe, or a tap outside.
 After updating RustCode, the background gateway follows the installed binary. Reopen
 older terminal sessions once to load new session capabilities; app-created sessions
 use the current host binary.
