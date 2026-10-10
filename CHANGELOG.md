@@ -1,3 +1,9 @@
+## [v0.64.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.3) - 2026-10-10
+
+### Fixes
+- Support remote slash commands for session status, usage, model and effort settings, and titles without submitting model prompts.
+- Let remote clients cancel an entire questionnaire with the same behavior as terminal Escape, bound to the current question identity.
+- Advertise remote command capabilities and document gateway restart requirements after upgrades.
 ## [v0.64.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.2) - 2026-10-10
 
 ### Improvements
