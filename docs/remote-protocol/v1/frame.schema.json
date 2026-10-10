@@ -821,6 +821,13 @@
     "RemoteMessageTool": {
       "description": "Set on a tool-result message.",
       "properties": {
+        "call_id": {
+          "description": "Correlates the persisted result with its live tool events, never a message identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "detail": {
           "description": "Short human label, e.g. the file or command.",
           "type": [
