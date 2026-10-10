@@ -1,3 +1,8 @@
+## [v0.64.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.5) - 2026-10-10
+
+### Features
+- Support real JPEG and PNG attachments from paired mobile clients, with bounded resumable uploads and existing multimodal model handling.
+- Validate image contents and keep uploads scoped to the authenticated device and session.
 ## [v0.64.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.4) - 2026-10-10
 
 ### Features
