@@ -8,19 +8,27 @@ import Testing
         #expect(!scanner.shouldRun)
         scanner.update(visible: true, active: true)
         #expect(scanner.shouldRun)
+        #expect(scanner.isStarting)
+        #expect(!scanner.needsPreviewRecovery, "Configuration is not a stalled preview")
+        scanner.sessionStarted()
+        #expect(!scanner.isStarting)
         #expect(scanner.needsPreviewRecovery)
     }
 
     @Test func backgroundingClearsPreviewAndDefersRecoveryUntilReturn() {
         var scanner = PairingScannerLifecycle()
         scanner.update(visible: true, active: true)
+        scanner.sessionStarted()
         scanner.previewChanged(true)
         #expect(!scanner.needsPreviewRecovery)
         scanner.update(visible: true, active: false)
         #expect(!scanner.shouldRun)
         #expect(!scanner.needsPreviewRecovery)
         scanner.previewChanged(true) // An old queued callback must not mark the paused camera ready.
+        scanner.sessionStarted() // Neither may a queued startup callback.
         scanner.update(visible: true, active: true)
+        #expect(!scanner.needsPreviewRecovery)
+        scanner.sessionStarted()
         #expect(scanner.needsPreviewRecovery)
         scanner.previewChanged(true)
         #expect(!scanner.needsPreviewRecovery)

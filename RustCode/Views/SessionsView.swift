@@ -244,7 +244,7 @@ private struct SessionSidebar: View {
             .padding(.leading, 14)
             .padding(.trailing, query.isEmpty ? 14 : 0)
             .frame(minHeight: 44)
-            .background(.fill.tertiary, in: .rect(cornerRadius: 12))
+            .glassSurface(in: .capsule, interactive: true)
             .padding(.horizontal, 16)
             .padding(.top, 8)
 

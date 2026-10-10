@@ -11,7 +11,7 @@ struct PairingView: View {
     @State private var showsScanner = false
     @State private var scannedPayload: String?
     @State private var discovery = NearbyHostDiscovery()
-    @FocusState private var addressFocused: Bool
+    @State private var addressFocused = false
     @State private var codeFocused = false
 
     private var isPairing: Bool { store.pairing == .pairing }
@@ -40,6 +40,7 @@ struct PairingView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            .background { PairingKeyboardDismissal(dismiss: dismissKeyboard) }
             .navigationTitle("Connect to Mac")
             .navigationBarTitleDisplayMode(.inline)
             .softNavigationChrome()
@@ -52,11 +53,6 @@ struct PairingView: View {
                     .accessibilityLabel("Try the Demo")
                     .accessibilityHint("Opens sample sessions without connecting to a Mac")
                     .disabled(isPairing)
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { dismissKeyboard() }
-                        .accessibilityLabel("Dismiss pairing keyboard")
                 }
             }
             .onChange(of: addressFocused) { _, focused in
@@ -114,7 +110,8 @@ struct PairingView: View {
         .controlSize(.regular)
         .frame(minHeight: 44)
         .disabled(isPairing)
-        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        .listRowBackground(Color.clear)
     }
 
     private var nearbySection: some View {
@@ -149,6 +146,7 @@ struct PairingView: View {
                     }
                     .frame(minHeight: 44)
                     .contentShape(.rect)
+                    .background { PairingKeyboardDismissal.PreservesFocus() }
                 }
                 .buttonStyle(.plain)
                 .disabled(isPairing)
@@ -168,16 +166,8 @@ struct PairingView: View {
     private var manualSection: some View {
         Section {
             HStack(spacing: 12) {
-                Text("Address")
-                TextField("Address and port", text: $address, prompt: Text("192.168.1.20:17879"))
-                    .textContentType(.URL)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.next)
-                    .focused($addressFocused)
-                    .onSubmit(focusCode)
-                    .accessibilityLabel("Host address and port")
+                Text("Address").onTapGesture(perform: dismissKeyboard)
+                PairingAddressField(text: $address, isFocused: $addressFocused, onNext: focusCode)
                 PasteButton(payloadType: String.self) { values in
                     if let value = values.first { address = value.trimmingCharacters(in: .whitespacesAndNewlines) }
                 }
@@ -185,7 +175,7 @@ struct PairingView: View {
                 .accessibilityLabel("Paste address or QR payload")
             }
             HStack(spacing: 12) {
-                Text("Code")
+                Text("Code").onTapGesture(perform: dismissKeyboard)
                 PairingCodeField(text: $code, isFocused: $codeFocused)
                 PasteButton(payloadType: String.self) { values in
                     if let value = values.first {

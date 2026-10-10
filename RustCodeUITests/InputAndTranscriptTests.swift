@@ -149,6 +149,67 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertEqual(code.value as? String, "1234-5678")
     }
 
+    func testPairingOutsideTapDismissesEachKeyboardWithoutLosingInput() {
+        let app = XCUIApplication()
+        app.launch()
+        let address = app.textFields["Host address and port"]
+        XCTAssertTrue(address.waitForExistence(timeout: 5))
+        address.tap()
+        address.typeText("192.168.1.20:17879")
+        app.staticTexts["Nearby Macs"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        let code = app.textFields["Pairing code"]
+        code.tap()
+        code.typeText("12345678")
+        app.staticTexts["Nearby Macs"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(address.value as? String, "192.168.1.20:17879")
+        XCTAssertEqual(code.value as? String, "1234-5678")
+    }
+
+    func testPairingAddressDoneUsesNativeToolbar() {
+        let app = XCUIApplication()
+        app.launch()
+        let address = app.textFields["Host address and port"]
+        XCTAssertTrue(address.waitForExistence(timeout: 5))
+        address.tap()
+        address.typeText("192.168.1.20:17879")
+        let toolbar = app.toolbars["Pairing keyboard toolbar"]
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(toolbar.frame.width, app.frame.width * 0.9)
+        toolbar.buttons["Dismiss pairing keyboard"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(address.value as? String, "192.168.1.20:17879")
+    }
+
+    func testPairingInputRowWhitespaceDismissesKeyboard() {
+        let app = XCUIApplication()
+        app.launch()
+        let address = app.textFields["Host address and port"]
+        XCTAssertTrue(address.waitForExistence(timeout: 5))
+        address.tap()
+        address.typeText("192.168.1.20:17879")
+        // Inside the Form row, just above the field's editing bounds.
+        address.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: -6)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(address.value as? String, "192.168.1.20:17879")
+    }
+
+    func testPairingOutsideDismissalDoesNotBlockConnectValidation() {
+        let app = XCUIApplication()
+        app.launch()
+        let address = app.textFields["Host address and port"]
+        XCTAssertTrue(address.waitForExistence(timeout: 5))
+        address.tap()
+        address.typeText("localhost")
+        app.keyboards.buttons["Next:"].tap()
+        app.textFields["Pairing code"].typeText("12345678")
+        app.buttons["Dismiss pairing keyboard"].tap()
+        app.buttons["Connect"].tap()
+        XCTAssertTrue(app.staticTexts["Include the port, for example 192.168.1.20:17879."].waitForExistence(timeout: 3))
+    }
+
     func testPairingScannerCanCloseAndReopenWithoutLosingTypedCode() {
         let app = XCUIApplication()
         app.launch()

@@ -69,6 +69,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                     Image(systemName: "plus")
                         .font(.title3)
                         .frame(width: buttonSize, height: buttonSize)
+                        .background(.fill.tertiary, in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Chat actions")
                 .disabled(isSending || isImporting)

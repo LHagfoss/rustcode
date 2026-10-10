@@ -252,9 +252,10 @@ struct TranscriptView: View {
                 }
             }
             .font(.subheadline.weight(.medium))
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 12)
             .frame(minHeight: 44)
             .contentShape(.capsule)
+            .background(.fill.tertiary, in: .capsule)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Model and effort")

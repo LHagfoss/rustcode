@@ -1,6 +1,7 @@
 import AVFoundation
 import SwiftUI
 import RustCodeRemote
+import OSLog
 
 /// Scans one QR code and hands back its text. Falls back to an explanation where the
 /// camera cannot be used (Simulator, denied access, restricted devices).
@@ -137,8 +138,9 @@ private final class ScannerController: UIViewController {
     private let loading = UIActivityIndicatorView(style: .large)
     private var previewObservation: NSKeyValueObservation?
     private var previewTimeout: Task<Void, Never>?
+    private let logger = Logger(subsystem: "com.lhagfoss.rustcode", category: "PairingCamera")
     private lazy var capture = QRCodeCapture(
-        onStart: { [weak self] in self?.view.setNeedsLayout() },
+        onStart: { [weak self] in self?.captureStarted() },
         onCode: { [weak self] in self?.deliver($0) },
         onFailure: { [weak self] in self?.reportFailure($0) }
     )
@@ -223,18 +225,36 @@ private final class ScannerController: UIViewController {
         updatePreviewLoading()
     }
 
+    private func captureStarted() {
+        guard lifecycle.shouldRun else { return }
+        view.setNeedsLayout()
+        previewTimeout?.cancel()
+        previewTimeout = nil
+        lifecycle.sessionStarted()
+        lifecycle.previewChanged(preview.isPreviewing)
+        updatePreviewLoading()
+    }
+
     private func updatePreviewLoading() {
-        if !lifecycle.needsPreviewRecovery {
-            loading.stopAnimating()
+        if lifecycle.shouldRun && !lifecycle.hasPreview { loading.startAnimating() }
+        else { loading.stopAnimating() }
+        if !lifecycle.shouldRun || lifecycle.hasPreview {
             previewTimeout?.cancel()
             previewTimeout = nil
         } else {
-            loading.startAnimating()
             guard previewTimeout == nil else { return }
+            // Cold camera startup gets its own bound. Once startRunning returns,
+            // captureStarted replaces this with the shorter preview watchdog.
+            let starting = lifecycle.isStarting
             previewTimeout = Task { @MainActor [weak self] in
-                do { try await Task.sleep(for: .seconds(8)) } catch { return }
-                guard let self, lifecycle.needsPreviewRecovery else { return }
-                reportFailure("The camera preview did not start. Tap Try Again, or close other camera apps and retry.")
+                do { try await Task.sleep(for: .seconds(starting ? 20 : 8)) } catch { return }
+                guard let self, lifecycle.shouldRun, !lifecycle.hasPreview else { return }
+                // Read the layer again: a delayed observation must not replace a
+                // working camera with an error screen.
+                lifecycle.previewChanged(preview.isPreviewing)
+                guard !lifecycle.hasPreview else { updatePreviewLoading(); return }
+                logger.error("Preview timeout: running=\(self.capture.session.isRunning) connected=\(self.preview.connection != nil) enabled=\(self.preview.connection?.isEnabled ?? false) active=\(self.preview.connection?.isActive ?? false) attached=\(self.view.window != nil) width=\(self.preview.bounds.width) height=\(self.preview.bounds.height)")
+                reportFailure("The camera did not begin showing video. Try Again, or enter the code manually.")
             }
         }
     }
