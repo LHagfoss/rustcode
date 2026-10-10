@@ -279,6 +279,12 @@ pub enum DaemonCommands {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum RemoteCommands {
+    /// Own a mobile-created session without a terminal
+    #[command(hide = true)]
+    SessionOwner {
+        #[arg(long)]
+        session_id: String,
+    },
     /// Run the gateway in the foreground
     Serve {
         /// Address to bind (auto selects Wi-Fi/Ethernet; plain LAN traffic is not encrypted)

@@ -221,6 +221,24 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
     let session = Some(SESSION);
     vec![
         (
+            "list_directories",
+            request(
+                "req-folders",
+                None,
+                RemoteOperation::ListDirectories { path: None },
+            ),
+        ),
+        (
+            "create_session",
+            request(
+                "req-create",
+                None,
+                RemoteOperation::CreateSession {
+                    path: Some("~/projects".into()),
+                },
+            ),
+        ),
+        (
             "cancel_question",
             request(
                 "req-0017",
@@ -690,6 +708,28 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                     can_change: true,
                     ..golden_settings()
                 },
+            },
+        ),
+        response(
+            "directories",
+            "req-folders",
+            None,
+            RemoteResult::Directories {
+                path: "/Users/example".into(),
+                parent: Some("/Users".into()),
+                directories: vec![RemoteDirectory {
+                    name: "projects".into(),
+                    path: "/Users/example/projects".into(),
+                }],
+                truncated: false,
+            },
+        ),
+        response(
+            "session_created",
+            "req-create",
+            Some(ReceiptState::Applied),
+            RemoteResult::SessionCreated {
+                session: golden_session_info(),
             },
         ),
         response(

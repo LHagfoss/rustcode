@@ -517,6 +517,13 @@ impl SessionHub {
     }
 
     /// Shared sessions and the devices attached to each.
+    pub fn session_info(&self, id: &str) -> Option<RemoteSessionInfo> {
+        self.state()
+            .sessions
+            .get(id)
+            .map(|session| session.info.clone())
+    }
+
     pub fn summary(&self) -> Vec<SessionSummary> {
         let state = self.state();
         let mut sessions: Vec<SessionSummary> = state

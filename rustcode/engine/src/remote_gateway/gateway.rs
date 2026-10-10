@@ -663,6 +663,7 @@ fn status(shared: &Shared, registration: &GatewayRegistration, started: Instant)
         .collect();
     connections.sort_by_key(|(id, _)| *id);
     GatewayStatus {
+        version: registration.version.clone(),
         pid: registration.pid,
         process_start_time: registration.process_start_time,
         instance_id: registration.instance_id.clone(),

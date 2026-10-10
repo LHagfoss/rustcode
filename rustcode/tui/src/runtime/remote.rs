@@ -482,11 +482,10 @@ pub(super) async fn apply_terminal_answer(
     pending
 }
 
-#[cfg(test)]
 impl AppRuntime {
     /// What one iteration of [`AppRuntime::run`] does for remote sharing and
     /// the prompt queue, without a terminal.
-    async fn run_remote_iteration(&mut self) {
+    pub(crate) async fn run_remote_iteration(&mut self) {
         let command = self.app_state.lock().await.remote_command.take();
         while let Ok(event) = self.agent_ui_event_receiver.try_recv() {
             self.remote.observe(&event);

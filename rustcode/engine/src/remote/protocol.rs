@@ -147,7 +147,7 @@ impl RemoteOperation {
             Self::DetachSession => "detach_session",
             Self::GetHistory { .. } => "get_history",
             Self::GetContent { .. } => "get_content",
-            Self::CreateSession { .. } | Self::SubmitPrompt { .. } => "submit_prompt",
+            Self::SubmitPrompt { .. } => "submit_prompt",
             Self::Steer { .. } => "steer",
             Self::Queue { .. } => "queue",
             Self::CancelQuestion { .. } => "cancel_question",
@@ -178,7 +178,8 @@ impl RemoteOperation {
     pub fn is_mutation(&self) -> bool {
         matches!(
             self,
-            Self::SubmitPrompt { .. }
+            Self::CreateSession { .. }
+                | Self::SubmitPrompt { .. }
                 | Self::Steer { .. }
                 | Self::Queue { .. }
                 | Self::CancelQuestion { .. }

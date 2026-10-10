@@ -246,6 +246,10 @@ async fn run_remote_command(
     let config_dir = rustcode::config::get_config_dir().ok_or("config directory unavailable")?;
     let lifecycle = RemoteLifecycle::new(&config_dir);
     match command {
+        RemoteCommands::SessionOwner { session_id } => {
+            hydrate_shell_provider_keys();
+            AppRuntime::run_detached_session(&config_dir, session_id).await?;
+        }
         RemoteCommands::Serve {
             bind,
             port,
@@ -280,10 +284,15 @@ async fn run_remote_command(
                 remote::format_status(lifecycle.status().await?.as_ref())
             );
         }
-        RemoteCommands::Stop => match lifecycle.stop().await? {
-            Some(status) => println!("Remote gateway stopped (pid {}).", status.pid),
-            None => println!("Remote gateway is not running."),
-        },
+        RemoteCommands::Stop => {
+            std::fs::create_dir_all(config_dir.join("remote"))?;
+            std::fs::write(config_dir.join("remote/disabled"), "explicitly stopped")?;
+            rustcode::remote_gateway::service::uninstall(&config_dir).await?;
+            match lifecycle.stop().await? {
+                Some(status) => println!("Remote gateway stopped (pid {}).", status.pid),
+                None => println!("Remote gateway is not running."),
+            }
+        }
     }
     Ok(())
 }
@@ -376,6 +385,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // login shell once at startup so profiles, MCP servers, and tool shells
     // all see the same values the user's terminal sees.
     hydrate_shell_provider_keys();
+    #[cfg(unix)]
+    if cli_args.command.is_none() && !cli_args.update && !cli_args.acp && cli_args.prompt.is_none()
+    {
+        tokio::spawn(async {
+            if let Err(error) = rustcode::remote_gateway::service::resume_enabled().await {
+                eprintln!("Could not restore remote gateway: {error:#}");
+            }
+        });
+    }
 
     let model_override = cli_args.model.clone();
 

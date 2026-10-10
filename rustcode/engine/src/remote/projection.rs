@@ -528,6 +528,7 @@ pub fn project_snapshot(
         })
         .collect();
     let mut snapshot = RemoteSnapshot {
+        commands: Vec::new(),
         session: project_session_info(state, context),
 
         capabilities: vec!["cancel_question".into(), "execute_command".into()],

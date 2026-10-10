@@ -61,6 +61,8 @@ pub enum ControlResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayStatus {
+    #[serde(default)]
+    pub version: String,
     pub pid: u32,
     pub process_start_time: u64,
     /// Changes on every gateway start.
