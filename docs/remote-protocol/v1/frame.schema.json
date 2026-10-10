@@ -176,6 +176,29 @@
       ],
       "type": "object"
     },
+    "RemoteCommandInfo": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "insertion": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "insertion",
+        "action"
+      ],
+      "type": "object"
+    },
     "RemoteContentChunk": {
       "properties": {
         "content_id": {
@@ -209,6 +232,21 @@
         "offset",
         "text",
         "total_bytes"
+      ],
+      "type": "object"
+    },
+    "RemoteDirectory": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path"
       ],
       "type": "object"
     },
@@ -982,6 +1020,55 @@
     "RemoteResult": {
       "oneOf": [
         {
+          "properties": {
+            "directories": {
+              "items": {
+                "$ref": "#/$defs/RemoteDirectory"
+              },
+              "type": "array"
+            },
+            "parent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "directories",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "directories",
+            "truncated"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/RemoteSessionInfo"
+            },
+            "type": {
+              "const": "session_created",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/RemoteError",
           "properties": {
             "type": {
@@ -1415,6 +1502,12 @@
           "description": "Optional operations implemented by this session owner.",
           "items": {
             "type": "string"
+          },
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "$ref": "#/$defs/RemoteCommandInfo"
           },
           "type": "array"
         },
