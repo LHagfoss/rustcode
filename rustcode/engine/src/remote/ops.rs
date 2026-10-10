@@ -85,6 +85,30 @@ pub async fn apply_session_mutation(
         return Err(stale_session());
     }
     match &request.operation {
+        #[cfg(unix)]
+        RemoteOperation::UploadImage { .. } => {
+            let state = state.lock().await;
+            if state.active_session_id != registration.session_id {
+                return Err(stale_session());
+            }
+            ensure_image_support(&state)?;
+            let device = request.authenticated_device_id.clone().ok_or_else(|| {
+                error(
+                    RemoteErrorCode::InvalidRequest,
+                    "image uploads require an authenticated device",
+                )
+            })?;
+            let root = super::images::root(&registration.session_id).map_err(image_error)?;
+            let operation = request.operation.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                super::images::upload(&root, &device, &operation)
+            })
+            .await
+            .map_err(|e| image_error(e.into()))?
+            .map_err(image_error)?;
+            Ok(SessionMutation::done(result))
+        }
+
         RemoteOperation::SetSessionSettings {
             model,
             reasoning_effort,
@@ -120,13 +144,34 @@ pub async fn apply_session_mutation(
         }
 
         RemoteOperation::SubmitPrompt { prompt } => {
-            accept_prompt(state, registration, prompt, PromptDisposition::Started).await
+            accept_prompt(
+                state,
+                registration,
+                prompt,
+                request.authenticated_device_id.as_deref(),
+                PromptDisposition::Started,
+            )
+            .await
         }
         RemoteOperation::Queue { prompt } => {
-            accept_prompt(state, registration, prompt, PromptDisposition::Queued).await
+            accept_prompt(
+                state,
+                registration,
+                prompt,
+                request.authenticated_device_id.as_deref(),
+                PromptDisposition::Queued,
+            )
+            .await
         }
         RemoteOperation::Steer { prompt } => {
-            accept_prompt(state, registration, prompt, PromptDisposition::Steered).await
+            accept_prompt(
+                state,
+                registration,
+                prompt,
+                request.authenticated_device_id.as_deref(),
+                PromptDisposition::Steered,
+            )
+            .await
         }
         RemoteOperation::CancelTurn { turn_id } => {
             ensure_session(state, registration).await?;
@@ -764,10 +809,52 @@ async fn ensure_session(
 
 /// Queue or steer a remote prompt. The session check, the running-turn check
 /// and the enqueue share one lock, and the terminal's draft is not touched.
+#[cfg(unix)]
+fn image_error(error: anyhow::Error) -> RemoteError {
+    RemoteError::new(
+        RemoteErrorCode::InvalidRequest,
+        format!("Image attachment: {error:#}"),
+    )
+}
+
+#[cfg(unix)]
+fn ensure_image_support(state: &AppState) -> Result<(), RemoteError> {
+    if state
+        .active_model_profile()
+        .is_some_and(|profile| profile.image_input_supported() == Some(true))
+    {
+        return Ok(());
+    }
+    if let Some(fallback) = state.vision_model_profile() {
+        if fallback.image_input_supported() == Some(false) {
+            return Err(error(
+                RemoteErrorCode::UnsupportedOperation,
+                "The configured vision_model does not support images; choose a vision-capable profile on the Mac",
+            ));
+        }
+        if fallback
+            .credential
+            .as_ref()
+            .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+        {
+            return Err(error(
+                RemoteErrorCode::UnsupportedOperation,
+                "Use the vision-capable ChatGPT model as the main model, or configure an API-key vision_model on the Mac",
+            ));
+        }
+        return Ok(());
+    }
+    Err(error(
+        RemoteErrorCode::UnsupportedOperation,
+        "Select a vision-capable model or configure vision_model on the Mac before attaching images",
+    ))
+}
+
 async fn accept_prompt(
     state: &Arc<Mutex<AppState>>,
     registration: &SessionRegistration,
     prompt: &str,
+    device: Option<&str>,
     disposition: PromptDisposition,
 ) -> Result<SessionMutation, RemoteError> {
     let prompt = prompt.trim();
@@ -791,6 +878,14 @@ async fn accept_prompt(
     if state.active_session_id != registration.session_id {
         return Err(stale_session());
     }
+    #[cfg(unix)]
+    if rustcode_core::paste::expand(prompt).contains("![image](file://") {
+        ensure_image_support(&state)?;
+        let root = super::images::root(&registration.session_id).map_err(image_error)?;
+        super::images::validate_prompt(&root, device, prompt).map_err(image_error)?;
+    }
+    #[cfg(not(unix))]
+    let _ = device;
     let running = state.has_active_turn() || !state.pending_queue.is_empty();
     let mode = match disposition {
         PromptDisposition::Started if running => {
@@ -838,6 +933,32 @@ mod tests {
     use crate::app::{AppStatus, PendingQuestion, ToolConfirmation, ToolConfirmationResponse};
 
     const SESSION: &str = "remote-ops-session";
+
+    #[cfg(unix)]
+    #[test]
+    fn image_support_requires_a_vision_model_or_valid_fallback() {
+        let mut state = shared_state();
+        state.config.models.clear();
+        state.config.vision_model = None;
+        assert_eq!(
+            ensure_image_support(&state).unwrap_err().code,
+            RemoteErrorCode::UnsupportedOperation
+        );
+        state.config.models = vec![crate::config::ModelProfile {
+            name: "vision".into(),
+            model: "vision".into(),
+            supports_vision: Some(true),
+            ..Default::default()
+        }];
+        state.config.vision_model = Some("vision".into());
+        ensure_image_support(&state).unwrap();
+        state.config.models[0].supports_vision = Some(false);
+        assert!(ensure_image_support(&state).is_err());
+        state.config.models[0].supports_vision = Some(true);
+        state.model_name = "vision".into();
+        state.config.vision_model = None;
+        ensure_image_support(&state).unwrap();
+    }
 
     #[test]
     fn catalog_includes_every_terminal_command_and_labels_native_actions() {
@@ -907,6 +1028,7 @@ mod tests {
 
     fn request(operation: RemoteOperation) -> RemoteRequest {
         RemoteRequest {
+            authenticated_device_id: None,
             protocol_version: REMOTE_PROTOCOL_VERSION,
             request_id: "r-1".to_owned(),
             session_id: Some(SESSION.to_owned()),

@@ -616,7 +616,12 @@ impl Client {
 
     /// Decide one request from the gateway. Returns the answer when there is
     /// one already.
-    fn accept(&mut self, id: u64, device_id: String, request: RemoteRequest) -> Option<OwnerFrame> {
+    fn accept(
+        &mut self,
+        id: u64,
+        device_id: String,
+        mut request: RemoteRequest,
+    ) -> Option<OwnerFrame> {
         let answer = |response| Some(OwnerFrame::Reply { id, response });
         let request_id = request.request_id.clone();
         if let RemoteOperation::GetRequestStatus { target_request_id } = &request.operation {
@@ -630,6 +635,7 @@ impl Client {
                 },
             ));
         }
+        request.authenticated_device_id = Some(device_id.clone());
         let mutation = request.operation.is_mutation();
         let waiter = (self.generation, id);
         let key = mutation.then(|| (device_id, request_id.clone()));
@@ -886,6 +892,7 @@ mod tests {
 
     fn prompt(request_id: &str, text: &str) -> RemoteRequest {
         RemoteRequest {
+            authenticated_device_id: None,
             protocol_version: REMOTE_PROTOCOL_VERSION,
             request_id: request_id.to_owned(),
             session_id: Some("s".to_owned()),

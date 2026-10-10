@@ -201,6 +201,7 @@ fn request(
     operation: RemoteOperation,
 ) -> RemoteRequest {
     RemoteRequest {
+        authenticated_device_id: None,
         protocol_version: REMOTE_PROTOCOL_VERSION,
         request_id: request_id.to_owned(),
         session_id: session.map(|(session_id, _)| session_id.to_owned()),
@@ -220,6 +221,20 @@ const BATCH: &str = "controller:48213:7";
 pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
     let session = Some(SESSION);
     vec![
+        (
+            "upload_image",
+            request(
+                "req-image-0",
+                session,
+                RemoteOperation::UploadImage {
+                    attachment_id: "a1b2-image".into(),
+                    mime_type: "image/png".into(),
+                    offset: 0,
+                    total_bytes: 68,
+                    data_base64: "iVBORw0KGgo=".into(),
+                },
+            ),
+        ),
         (
             "list_directories",
             request(
@@ -682,6 +697,32 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
     let rejected = Some(ReceiptState::Rejected);
     let applied = Some(ReceiptState::Applied);
     vec![
+        response(
+            "image_uploaded",
+            "req-image-0",
+            applied,
+            RemoteResult::ImageUploaded {
+                attachment_id: "a1b2-image".into(),
+                next_offset: 68,
+                total_bytes: 68,
+                complete: true,
+                prompt_reference: Some(
+                    "![image](file:///private/session/remote-images/device/a1b2-image.png)".into(),
+                ),
+            },
+        ),
+        response(
+            "image_upload_progress",
+            "req-image-1",
+            applied,
+            RemoteResult::ImageUploaded {
+                attachment_id: "a1b2-image".into(),
+                next_offset: 8,
+                total_bytes: 68,
+                complete: false,
+                prompt_reference: None,
+            },
+        ),
         response(
             "question_cancelled",
             "req-0017",

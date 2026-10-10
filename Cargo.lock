@@ -7210,6 +7210,7 @@ dependencies = [
  "globset",
  "hex",
  "ignore",
+ "image",
  "jsonwebtoken",
  "keyring",
  "libc",

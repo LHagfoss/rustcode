@@ -11,6 +11,8 @@
 //! `docs/remote-protocol/v1/`; `contract::tests` fails when they drift.
 
 pub mod contract;
+#[cfg(unix)]
+mod images;
 pub mod ops;
 pub mod owner;
 pub mod projection;

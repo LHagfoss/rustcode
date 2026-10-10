@@ -701,6 +701,7 @@ mod tests {
     fn request(registration: &SessionRegistration, operation: RemoteOperation) -> RemoteRequest {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         RemoteRequest {
+            authenticated_device_id: None,
             protocol_version: REMOTE_PROTOCOL_VERSION,
             request_id: format!("req-{}", NEXT.fetch_add(1, Ordering::Relaxed)),
             session_id: Some(registration.session_id.clone()),
