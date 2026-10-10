@@ -22,6 +22,13 @@ skills and workflow recipes, subject to higher-priority system instructions.
   If local changes prevent a safe pull, preserve them and explain the limitation.
 - Commit explicit paths, push the task branch and open a PR. Inspect any checks.
   When the user asks for a PR, leave it open; merge when they authorize merging.
+- The user has authorized auto-merge for new PRs. Enable it after required checks
+  pass, then sync the local checkout after the merge.
+- Publish a new native app release for each PR: bump `MARKETING_VERSION` and
+  `CURRENT_PROJECT_VERSION` in both build configurations, then tag the merged
+  commit as `v<VERSION>`. Verify the release workflow and its assets. Use
+  `.github/workflows/release.yml` and `Scripts/build-ios-release.sh`; this app
+  does not use the Rust host's release script. Do not install on a phone unless asked.
 - After an authorized merge, return to `main` and run
   `git pull --ff-only origin main`. Confirm local HEAD matches `origin/main`
   and report the working-tree state.

@@ -9,6 +9,7 @@ struct PairingView: View {
     @State private var code = ""
     @State private var addressError: String?
     @State private var showsScanner = false
+    @State private var scannedPayload: String?
     @State private var discovery = NearbyHostDiscovery()
     @FocusState private var focus: Field?
 
@@ -25,47 +26,60 @@ struct PairingView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 28) {
-                        header
-                        scanSection
-                        nearbySection
-                        manualSection.id("manual-entry")
-                        if case .failed(let message) = store.pairing {
-                            Label(message, systemImage: "exclamationmark.circle")
-                                .font(.subheadline)
-                                .foregroundStyle(.red)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityLabel("Pairing failed. \(message)")
-                        }
-                        demoSection
+            Form {
+                Section {
+                    header
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                Section {
+                    scanSection
+                } footer: {
+                    Text("On your Mac, run /remote in RustCode. Use the same Wi-Fi, then scan the QR code or choose your Mac below.")
+                }
+                nearbySection
+                manualSection
+                if case .failed(let message) = store.pairing {
+                    Section {
+                        Label(message, systemImage: "exclamationmark.circle")
+                            .font(.subheadline)
+                            .foregroundStyle(.red)
+                            .accessibilityLabel("Pairing failed. \(message)")
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 32)
-                    .frame(maxWidth: 520)
-                    .frame(maxWidth: .infinity)
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
-                    guard focus != nil else { return }
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("manual-entry", anchor: .top) }
-                }
-                .onAppear {
-                    if address.isEmpty { address = recentAddress }
-                    discovery.start()
-                }
-                .onDisappear { discovery.stop() }
-                .sheet(isPresented: $showsScanner) {
-                    QRScannerSheet { payload in
-                        showsScanner = false
-                        Task {
-                            await store.pair(.scanned(payload), deviceName: UIDevice.current.name)
-                            if let host = store.host { recentAddress = host.address.description }
-                        }
-                    }
+                Section {
+                    demoSection
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("Connect to Mac")
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                if address.isEmpty { address = recentAddress }
+                discovery.start()
+            }
+            .onDisappear { discovery.stop() }
+            .sheet(isPresented: $showsScanner, onDismiss: pairScannedPayload) {
+                QRScannerSheet { payload in
+                    scannedPayload = payload
+                    showsScanner = false
+                }
+            }
+            .sensoryFeedback(.selection, trigger: showsScanner) { _, presented in presented }
+            .sensoryFeedback(trigger: store.pairing) { old, new in
+                guard old == .pairing else { return nil }
+                if case .failed = new { return .error }
+                return nil
+            }
+        }
+    }
+
+    private func pairScannedPayload() {
+        guard let payload = scannedPayload else { return }
+        scannedPayload = nil
+        Task {
+            await store.pair(.scanned(payload), deviceName: UIDevice.current.name)
+            if let host = store.host { recentAddress = host.address.description }
         }
     }
 
@@ -74,205 +88,151 @@ struct PairingView: View {
             Image(.logo)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 92, height: 92)
-                .clipShape(.rect(cornerRadius: 22))
+                .frame(width: 56, height: 56)
+                .clipShape(.rect(cornerRadius: 14))
                 .accessibilityHidden(true)
             Text("RustCode Remote")
-                .font(.largeTitle.bold())
+                .font(.title2.bold())
             Text("Watch and continue your terminal sessions from your iPhone.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 
     private var scanSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label {
-                Text("Connect your iPhone and Mac to the same Wi-Fi. Run **/remote** in a RustCode session on your Mac, then choose your Mac below or scan its QR code.")
-            } icon: {
-                Image(systemName: "1.circle.fill").foregroundStyle(.tint)
-            }
-            .font(.subheadline)
-
-            Button {
-                focus = nil
-                store.clearPairingError()
-                showsScanner = true
-            } label: {
-                Label("Scan Pairing Code", systemImage: "qrcode.viewfinder")
-                    .frame(maxWidth: .infinity)
-            }
-            .brandProminentButtonStyle()
-            .controlSize(.large)
-            .disabled(isPairing)
+        Button {
+            focus = nil
+            store.clearPairingError()
+            showsScanner = true
+        } label: {
+            Label("Scan Pairing Code", systemImage: "qrcode.viewfinder")
+                .frame(maxWidth: .infinity)
         }
+        .brandProminentButtonStyle()
+        .controlSize(.large)
+        .disabled(isPairing)
     }
 
     private var nearbySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text("Nearby Macs")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                if discovery.isSearching {
-                    ProgressView().controlSize(.small)
-                        .accessibilityLabel("Searching for nearby Macs")
-                } else {
-                    Button("Search Again") {
-                        discovery.stop()
-                        discovery.start()
-                    }
-                    .font(.subheadline)
-                }
-            }
+        Section {
             if let error = discovery.error {
-                Text(error).font(.footnote).foregroundStyle(.secondary)
+                Text(error).font(.subheadline).foregroundStyle(.secondary)
             } else if discovery.hosts.isEmpty {
-                Text("Searching on your Wi-Fi… You can also scan a QR code or enter an address below.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    if discovery.isSearching { ProgressView() }
+                    Text("Looking for Macs on your Wi-Fi…")
+                        .foregroundStyle(.secondary)
+                }
             }
             ForEach(discovery.hosts) { host in
                 Button {
+                    if address != host.address { code = "" }
                     address = host.address
                     addressError = nil
                     store.clearPairingError()
                     focus = .code
                 } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: "desktopcomputer")
-                            .font(.title3)
-                            .foregroundStyle(.tint)
+                        Image(systemName: "desktopcomputer").foregroundStyle(.tint)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(host.name).font(.body.weight(.medium))
-                                .foregroundStyle(.primary)
+                            Text(host.name).foregroundStyle(.primary)
                             Text(host.address).font(.caption).foregroundStyle(.secondary)
                                 .lineLimit(1).truncationMode(.middle)
                         }
                         Spacer(minLength: 4)
-                        Image(systemName: address == host.address ? "checkmark.circle.fill" : "chevron.right")
+                        Image(systemName: address == host.address ? "checkmark" : "chevron.right")
                             .foregroundStyle(.tint)
                     }
                     .frame(minHeight: 44)
-                    .padding(12)
-                    .background(.fill.quaternary, in: .rect(cornerRadius: 16))
                 }
                 .buttonStyle(.plain)
                 .disabled(isPairing)
-                .accessibilityHint("Selects this Mac. Enter its pairing code to connect.")
+                .accessibilityHint("Enter the code shown by /remote on this Mac to connect.")
             }
+            if discovery.error != nil {
+                Button("Search Again") { discovery.stop(); discovery.start() }
+            }
+        } header: {
+            Text("Nearby Macs")
+        } footer: {
+            Text("Choosing a Mac fills in its address. Enter its /remote pairing code below. You only pair once.")
         }
+        .sensoryFeedback(.selection, trigger: address) { _, _ in focus == .code }
     }
 
     private var manualSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Or enter it manually")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if focus != nil {
-                    Button { focus = nil } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .frame(width: 44, height: 44)
+        Section {
+            HStack(spacing: 12) {
+                Text("Address")
+                TextField("Address and port", text: $address, prompt: Text("192.168.1.20:17879"))
+                    .textContentType(.URL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.next)
+                    .focused($focus, equals: .address)
+                    .onSubmit { focus = .code }
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Host address and port")
+                PasteButton(payloadType: String.self) { values in
+                    if let value = values.first { address = value.trimmingCharacters(in: .whitespacesAndNewlines) }
+                }
+                .labelStyle(.iconOnly).controlSize(.small)
+                .accessibilityLabel("Paste address or QR payload")
+            }
+            HStack(spacing: 12) {
+                Text("Code")
+                TextField("Pairing code", text: $code, prompt: Text("1234-5678"))
+                    .textContentType(.oneTimeCode)
+                    .keyboardType(.asciiCapable)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.go)
+                    .focused($focus, equals: .code)
+                    .onSubmit(pairManually)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Pairing code")
+                PasteButton(payloadType: String.self) { values in
+                    if let value = values.first {
+                        code = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        focus = .code
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Dismiss pairing keyboard")
                 }
+                .labelStyle(.iconOnly).controlSize(.small)
+                .accessibilityLabel("Paste pairing code")
             }
-
-            VStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Address and port").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        PasteButton(payloadType: String.self) { values in
-                            if let value = values.first { address = value.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        }
-                        .labelStyle(.iconOnly)
-                        .controlSize(.small)
-                        .accessibilityLabel("Paste address or QR payload")
-                    }
-                    TextField("192.168.1.20:17879", text: $address)
-                        .textContentType(.URL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.next)
-                        .focused($focus, equals: .address)
-                        .onSubmit { focus = .code }
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .accessibilityLabel("Host address and port")
+            if focus != nil {
+                Button { focus = nil } label: {
+                    Label("Dismiss Keyboard", systemImage: "keyboard.chevron.compact.down")
+                        .frame(minHeight: 44)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background {
-                    Color.clear.contentShape(.rect).onTapGesture { focus = .address }
-                }
-                Divider().padding(.leading, 14)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Pairing code").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        PasteButton(payloadType: String.self) { values in
-                            if let value = values.first {
-                                code = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                                focus = .code
-                            }
-                        }
-                        .labelStyle(.iconOnly)
-                        .controlSize(.small)
-                        .accessibilityLabel("Paste pairing code")
-                    }
-                    TextField("1234-5678", text: $code)
-                        .textContentType(.oneTimeCode)
-                        .keyboardType(.asciiCapableNumberPad)
-                        .autocorrectionDisabled()
-                        .font(code.isEmpty ? .body : .body.monospaced())
-                        .submitLabel(.go)
-                        .focused($focus, equals: .code)
-                        .onSubmit(pairManually)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .accessibilityLabel("Pairing code")
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background {
-                    Color.clear.contentShape(.rect).onTapGesture { focus = .code }
-                }
+                .accessibilityLabel("Dismiss pairing keyboard")
             }
-            .background(.fill.quaternary, in: .rect(cornerRadius: 16))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(focus == nil ? Color.clear : Color.accentColor.opacity(0.5), lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
-
-            if let addressError {
-                Text(addressError)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            } else if let parsedAddress {
-                Label(parsedAddress.protection.explanation, systemImage: parsedAddress.protection.symbolName)
-                    .font(.footnote)
-                    .foregroundStyle(parsedAddress.protection.isEncrypted ? Color.secondary : Color.attention)
-            }
-
             Button(action: pairManually) {
                 HStack(spacing: 8) {
                     if isPairing { ProgressView() }
-                    Text(isPairing ? "Pairing…" : "Pair")
+                    Text(isPairing ? "Connecting…" : "Connect")
                 }
                 .frame(maxWidth: .infinity)
             }
-            .secondaryButtonStyle()
+            .brandProminentButtonStyle()
             .controlSize(.large)
             .disabled(isPairing || address.isEmpty || (code.isEmpty && !address.hasPrefix("{")))
-
-            Text("The address and code are shown under the QR code. A pasted QR payload works in the address field too.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        } header: {
+            Text(discovery.hosts.first { $0.address == address }.map { "Connect to \($0.name)" } ?? "Address and pairing code")
+        } footer: {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Use the eight-digit code shown by /remote, not your Mac password. The dash is optional. You can also paste the QR payload into the address field.")
+                if let addressError {
+                    Text(addressError).foregroundStyle(.red)
+                } else if let parsedAddress {
+                    Label(parsedAddress.protection.explanation, systemImage: parsedAddress.protection.symbolName)
+                        .foregroundStyle(parsedAddress.protection.isEncrypted ? Color.secondary : Color.attention)
+                }
+            }
         }
         .onChange(of: address) { addressError = nil }
     }

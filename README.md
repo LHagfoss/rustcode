@@ -318,9 +318,10 @@ Simulator, build without that flag (or just press Run in Xcode).
 
 The transcript shows host-reported response and thought time, logical-turn work time,
 completion timestamps, and completed, cancelled or failed outcomes when available.
-Work time excludes waits for user input and gaps between runs. Missing timings stay absent;
-reconnecting retains the snapshot ID alongside the replay sequence so replaced histories
-resynchronise safely.
+Work time excludes waits for user input and gaps between runs. Missing timings stay absent.
+Reconnecting refreshes the bounded session snapshot so missed activity appears without
+replaying historical haptics. New live turns and attention requests give feedback while
+the chat is visible and the app is active.
 
 ## The wire boundary
 

@@ -95,7 +95,9 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         .contentShape(shape)
         .glassSurface(in: shape)
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
-        .sensoryFeedback(.stop, trigger: stopCount)
+        .sensoryFeedback(.impact(weight: .medium, intensity: 0.8), trigger: stopCount)
+        .sensoryFeedback(.selection, trigger: showsActions)
+        .sensoryFeedback(.success, trigger: images.count) { old, new in new > old }
         .sheet(isPresented: $showsFolder) { NewSessionView() }
         .fullScreenCover(isPresented: $showsCamera) {
             CameraPhotoPicker { result in
@@ -137,9 +139,6 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                 .focused($isFocused)
                 .disabled(isSending || isImporting)
                 .frame(maxWidth: .infinity, minHeight: buttonSize)
-                .background {
-                    Color.clear.contentShape(.rect).onTapGesture { isFocused = true }
-                }
                 .accessibilityLabel(isRunning ? "Message to queue" : "Message")
         }
         .padding(.leading, 18)
@@ -154,7 +153,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     }
 
     private var completion: String? {
-        guard isFocused, text == trimmed, trimmed.count > 1,
+        guard isFocused, trimmed.hasPrefix("/"), text == trimmed, trimmed.count > 1,
               let first = matchingCommands.first else { return nil }
         let value = commandText(first)
         return value.count > trimmed.count ? value : nil

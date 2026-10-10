@@ -10,6 +10,12 @@ struct QRScannerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var access: Access = .checking
+    @State private var retryCount = 0
+
+    private struct AccessCheck: Equatable {
+        var phase: ScenePhase
+        var retry: Int
+    }
 
     private enum Access {
         case checking
@@ -26,7 +32,7 @@ struct QRScannerSheet: View {
                 case .checking:
                     ProgressView()
                 case .ready:
-                    QRScanner(onScan: onScan, onFailure: { access = .failed($0) })
+                    QRScanner(isActive: scenePhase == .active, onScan: onScan, onFailure: { access = .failed($0) })
                         .ignoresSafeArea(edges: .bottom)
                         .overlay(alignment: .bottom) {
                             Text("Point the camera at the QR code shown by /remote")
@@ -54,15 +60,17 @@ struct QRScannerSheet: View {
                     } description: {
                         Text(message)
                     } actions: {
-                        Button("Try Again") { Task { access = .checking; access = await resolveAccess() } }
+                        Button("Try Again") { access = .checking; retryCount += 1 }
                         Button("Enter Code Manually") { dismiss() }
                     }
                 case .unsupported:
-                    ContentUnavailableView(
-                        "Scanning Unavailable",
-                        systemImage: "qrcode.viewfinder",
-                        description: Text("This device cannot scan codes. Enter the address and code manually.")
-                    )
+                    ContentUnavailableView {
+                        Label("Scanning Unavailable", systemImage: "qrcode.viewfinder")
+                    } description: {
+                        Text("This device cannot scan codes. Enter the address and code manually.")
+                    } actions: {
+                        Button("Enter Code Manually") { dismiss() }
+                    }
                 }
             }
             .navigationTitle("Scan Pairing Code")
@@ -72,12 +80,14 @@ struct QRScannerSheet: View {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .task { access = await resolveAccess() }
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .active {
-                    access = .checking
-                    Task { access = await resolveAccess() }
-                }
+            .task(id: AccessCheck(phase: scenePhase, retry: retryCount)) {
+                guard scenePhase == .active else { return }
+                // Permission prompts and app switching change scenePhase. Keep a ready
+                // camera alive rather than replacing its controller on every return.
+                if case .ready = access { return }
+                let resolved = await resolveAccess()
+                guard !Task.isCancelled else { return }
+                access = resolved
             }
         }
     }
@@ -97,6 +107,7 @@ struct QRScannerSheet: View {
 }
 
 private struct QRScanner: UIViewControllerRepresentable {
+    let isActive: Bool
     let onScan: (String) -> Void
     let onFailure: (String) -> Void
 
@@ -104,10 +115,12 @@ private struct QRScanner: UIViewControllerRepresentable {
         ScannerController(onScan: onScan, onFailure: onFailure)
     }
 
-    func updateUIViewController(_ controller: ScannerController, context: Context) {}
+    func updateUIViewController(_ controller: ScannerController, context: Context) {
+        controller.setActive(isActive)
+    }
 
     static func dismantleUIViewController(_ controller: ScannerController, coordinator: ()) {
-        controller.scanner.stopScanning()
+        controller.setActive(false)
     }
 }
 
@@ -116,7 +129,7 @@ private struct QRScanner: UIViewControllerRepresentable {
 private final class ScannerController: UIViewController, DataScannerViewControllerDelegate {
     let scanner = DataScannerViewController(
         recognizedDataTypes: [.barcode(symbologies: [.qr])],
-        qualityLevel: .accurate,
+        qualityLevel: .balanced,
         recognizesMultipleItems: false,
         isGuidanceEnabled: false,
         isHighlightingEnabled: true
@@ -125,6 +138,8 @@ private final class ScannerController: UIViewController, DataScannerViewControll
     private let onScan: (String) -> Void
     private let onFailure: (String) -> Void
     private var hasDelivered = false
+    private var isActive = false
+    private var isVisible = false
 
     init(onScan: @escaping (String) -> Void, onFailure: @escaping (String) -> Void) {
         self.onScan = onScan
@@ -162,22 +177,43 @@ private final class ScannerController: UIViewController, DataScannerViewControll
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        do { try scanner.startScanning() }
-        catch { reportFailure() }
+        isVisible = true
+        updateScanning()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
+        isVisible = false
         scanner.stopScanning()
         super.viewWillDisappear(animated)
     }
 
     func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) {
-        reportFailure()
+        // Backgrounding temporarily makes the camera unavailable. Resume it on return.
+        if isActive && isVisible && UIApplication.shared.applicationState == .active { reportFailure() }
+    }
+
+    func setActive(_ active: Bool) {
+        isActive = active
+        updateScanning()
+    }
+
+    private func updateScanning() {
+        guard isActive, isVisible, !hasDelivered else {
+            scanner.stopScanning()
+            return
+        }
+        guard !scanner.isScanning else { return }
+        do { try scanner.startScanning() }
+        catch { reportFailure() }
     }
 
     private func reportFailure() {
         scanner.stopScanning()
-        onFailure("Scanning is unavailable right now. Try again, or enter the address and pairing code manually.")
+        // Defer the SwiftUI state change out of representable updates.
+        Task { @MainActor [weak self] in
+            guard let self, isActive, isVisible, !hasDelivered else { return }
+            onFailure("Scanning is unavailable right now. Try again, or enter the address and pairing code manually.")
+        }
     }
 
     func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
@@ -193,11 +229,12 @@ private final class ScannerController: UIViewController, DataScannerViewControll
     }
 
     private func deliver(_ items: [RecognizedItem]) {
-        guard !hasDelivered else { return }
+        guard isActive, isVisible, !hasDelivered else { return }
         for case .barcode(let barcode) in items {
             if let payload = barcode.payloadStringValue, !payload.isEmpty {
                 hasDelivered = true
                 scanner.stopScanning()
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
                 onScan(payload)
                 return
             }

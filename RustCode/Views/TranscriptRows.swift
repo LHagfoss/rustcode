@@ -167,6 +167,7 @@ private struct ThinkingBlock: View {
             .frame(minHeight: 44)
         }
         .disclosureGroupStyle(ToolDisclosureStyle())
+        .sensoryFeedback(.selection, trigger: isExpanded)
         .padding(.horizontal, 12)
         .background(.fill.quaternary, in: .rect(cornerRadius: 12))
     }

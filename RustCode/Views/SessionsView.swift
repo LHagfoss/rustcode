@@ -103,6 +103,8 @@ struct SessionsView: View {
         .background(ChatSurface.background.ignoresSafeArea())
         .environment(drafts)
         .tint(.primary)
+        .sensoryFeedback(.selection, trigger: showsSidebar)
+        .sensoryFeedback(.selection, trigger: store.selectedSessionID)
         .environment(\.openSessionSidebar, OpenSessionSidebarAction { toggle in
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             if sizeClass == .compact { showsSidebar = true } else { columns = toggle && columns == .all ? .detailOnly : .all }

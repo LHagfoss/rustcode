@@ -5,6 +5,7 @@ struct TranscriptView: View {
     @Environment(RemoteStore.self) private var store
     @Environment(\.openSessionSidebar) private var openSessions
     @Environment(\.isChatObscured) private var isChatObscured
+    @Environment(\.scenePhase) private var scenePhase
     @State private var sheet: AttentionSheet?
     @State private var selectable: SelectableText?
     @State private var showsRequests = false
@@ -67,6 +68,18 @@ struct TranscriptView: View {
         .onChange(of: store.attached?.pendingQuestion?.id) { reconcileSheet() }
         .onChange(of: store.attached?.pendingApproval?.batchID) { reconcileSheet() }
         .onAppear { reconcileSheet() }
+        .sensoryFeedback(.selection, trigger: showsModels)
+        .sensoryFeedback(trigger: store.chatFeedback) { _, feedback in
+            guard scenePhase == .active, !isChatObscured, store.connection == .connected,
+                  let feedback, feedback.session == store.attached?.session else { return nil }
+            switch feedback.kind {
+            case .started: return .impact(weight: .light, intensity: 0.6)
+            case .completed: return .success
+            case .cancelled: return .impact(weight: .medium, intensity: 0.8)
+            case .failed: return .error
+            case .attention: return .warning
+            }
+        }
         .onChange(of: store.selectedSession?.ref) { _, _ in
             followsLatest = true
             isDraggingTranscript = false

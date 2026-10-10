@@ -42,6 +42,7 @@ public final class RemoteStore {
     public private(set) var selectedSessionID: String?
     /// Snapshot of the selected session, kept current by applying its updates.
     public private(set) var attached: SessionSnapshot?
+    public private(set) var chatFeedback: ChatFeedback?
     public private(set) var isLoadingHistory = false
     public private(set) var isCreatingSession = false
     public private(set) var isUploadingImages = false
@@ -717,22 +718,24 @@ public final class RemoteStore {
 
     private func resyncAfterConnect() {
         if let selectedSessionID {
-            startAttachment(selectedSessionID)
+            // The protocol marks the beginning of replay, but not its end. A fresh
+            // bounded snapshot gives feedback a live baseline after reconnecting.
+            startAttachment(selectedSessionID, freshSnapshot: true)
         }
         for (id, _) in pendingMutations {
             Task { await checkStatus(of: id) }
         }
     }
 
-    private func startAttachment(_ sessionID: String) {
+    private func startAttachment(_ sessionID: String, freshSnapshot: Bool = false) {
         attachTask?.cancel()
         attachTask = Task { [weak self] in
-            await self?.runAttachment(sessionID)
+            await self?.runAttachment(sessionID, freshSnapshot: freshSnapshot)
         }
     }
 
-    private func runAttachment(_ sessionID: String) async {
-        var wantsSnapshot = false
+    private func runAttachment(_ sessionID: String, freshSnapshot: Bool) async {
+        var wantsSnapshot = freshSnapshot
         var resyncs = 0
         while !Task.isCancelled, connection == .connected, selectedSessionID == sessionID, resyncs < 5,
               let ref = sessions.first(where: { $0.id == sessionID })?.ref {
@@ -758,9 +761,14 @@ public final class RemoteStore {
                 var lostUpdates = false
                 for try await update in attachment.updates {
                     guard !Task.isCancelled else { return }
-                    if case .gap = attached?.apply(update) {
+                    let feedback = attached.flatMap { ChatFeedback.kind(for: update, previous: $0) }
+                    let outcome = attached?.apply(update)
+                    if case .gap = outcome {
                         lostUpdates = true
                         break
+                    }
+                    if outcome == .applied, let feedback {
+                        chatFeedback = ChatFeedback(session: ref, revision: (chatFeedback?.revision ?? 0) &+ 1, kind: feedback)
                     }
                     retireObservedMutations()
                 }

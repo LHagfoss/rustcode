@@ -26,6 +26,8 @@ private actor StubClient: RemoteClient {
     /// Instance IDs reported by successive connects; the last one repeats.
     var instanceIDs: [String] = ["instance-1"]
     var snapshot: SessionSnapshot?
+    var replayOnResume: [SessionUpdate] = []
+    func set(replayOnResume: [SessionUpdate]) { self.replayOnResume = replayOnResume }
     var contentChunks: [String] = []
     private(set) var contentCalls: [UInt64] = []
 
@@ -39,6 +41,7 @@ private actor StubClient: RemoteClient {
         return stream
     }
     func emit(_ receipt: RequestReceipt) { receiptContinuation?.yield(receipt) }
+    func emit(_ update: SessionUpdate) { updates?.yield(update) }
     private(set) var questionCancelCalls = 0
     func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
         questionCancelCalls += 1
@@ -155,6 +158,10 @@ private actor StubClient: RemoteClient {
             continuation.yield(update(session, sequence, .assistantDelta(itemID: "a", text: "\(sequence) ")))
         }
         updates = continuation
+        if resumeAfter != nil, !replayOnResume.isEmpty {
+            for update in replayOnResume { continuation.yield(update) }
+            return SessionAttachment(start: .resumed, updates: stream)
+        }
         return SessionAttachment(
             start: .snapshot(snapshot ?? SessionSnapshot(session: session, sequence: 10)),
             updates: stream
@@ -221,6 +228,56 @@ private final class DelayLog: Sendable {
 @MainActor
 @Suite struct RemoteStoreTests {
     private let delays = DelayLog()
+
+    @Test func liveFeedbackIsEmittedOnceWithoutSnapshotOrTextFeedback() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected && !store.sessions.isEmpty })
+        store.select("s1")
+        #expect(await waitUntil { store.attached?.sequence == 10 })
+        #expect(store.chatFeedback == nil)
+        guard let ref = store.attached?.session else { Issue.record("Session did not attach"); return }
+        await client.emit(SessionUpdate(session: ref, sequence: 11, event: .turnStarted(turnID: "t")))
+        #expect(await waitUntil { store.chatFeedback?.kind == .started })
+        let firstRevision = store.chatFeedback?.revision
+        await client.emit(SessionUpdate(session: ref, sequence: 12, event: .responseDelta("Hello")))
+        #expect(await waitUntil { store.attached?.sequence == 12 })
+        #expect(store.chatFeedback?.revision == firstRevision)
+        let finish = SessionUpdate(session: ref, sequence: 13, event: .turnFinished(turnID: "t", outcome: .completed))
+        await client.emit(finish)
+        #expect(await waitUntil { store.chatFeedback?.kind == .completed })
+        let completedFeedback = store.chatFeedback
+        await client.emit(finish)
+        await client.publishSnapshot(SessionSnapshot(session: ref, sequence: 20))
+        #expect(await waitUntil { store.attached?.sequence == 20 })
+        #expect(store.chatFeedback == completedFeedback)
+        await store.unpair()
+    }
+
+    @Test func reconnectSkipsHistoricalFeedbackAndStillReportsNewLiveEvents() async {
+        let client = StubClient()
+        let ref = makeSession("s1").ref
+        await client.set(snapshot: SessionSnapshot(session: ref, activeTurnID: "old", sequence: 10))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected && !store.sessions.isEmpty })
+        store.select("s1")
+        #expect(await waitUntil { store.attached?.sequence == 10 })
+        await store.suspend()
+        await client.set(snapshot: SessionSnapshot(session: ref, sequence: 11,
+            lastTurn: TurnTiming(turnID: "old", outcome: "completed")))
+        await client.set(replayOnResume: [SessionUpdate(session: ref, sequence: 11,
+            event: .turnFinished(turnID: "old", outcome: .completed))])
+        store.resume()
+        #expect(await waitUntil { store.attached?.sequence == 11 })
+        #expect(store.chatFeedback == nil)
+        await client.emit(SessionUpdate(session: ref, sequence: 12, event: .turnStarted(turnID: "new")))
+        #expect(await waitUntil { store.chatFeedback?.kind == .started })
+        await client.emit(SessionUpdate(session: ref, sequence: 13, event: .turnFinished(turnID: "new", outcome: .completed)))
+        #expect(await waitUntil { store.chatFeedback?.kind == .completed })
+        await store.unpair()
+    }
 
     private func makeStore(
         _ client: StubClient,
@@ -408,8 +465,8 @@ private final class DelayLog: Sendable {
         store.resume()
         #expect(await waitUntil { store.connection == .connected })
         #expect(await waitUntil { await client.attachCalls.count == 2 })
-        // Same registration: the reattach offers the last applied sequence for replay.
-        #expect(await client.attachCalls == [nil, 10])
+        // A fresh baseline separates historical activity from new live feedback.
+        #expect(await client.attachCalls == [nil, nil])
     }
 
     @Test func unpairingRemovesTheTokenAndCachedHostData() async {

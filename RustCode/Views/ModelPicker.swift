@@ -67,6 +67,8 @@ struct ModelPicker: View {
             }
             .searchable(text: $query, isPresented: $isSearching, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search models")
             .scrollDismissesKeyboard(.interactively)
+            .sensoryFeedback(.selection, trigger: store.attached?.settings?.selectedModel)
+            .sensoryFeedback(.selection, trigger: store.attached?.settings?.reasoningEffort)
             .navigationTitle("Model & Effort")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }

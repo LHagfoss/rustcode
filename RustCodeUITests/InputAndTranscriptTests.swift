@@ -138,11 +138,35 @@ final class InputAndTranscriptTests: XCTestCase {
         address.typeText("192.168.1.20:17879")
         app.keyboards.buttons["Next:"].tap()
         let code = app.textFields["Pairing code"]
-        code.typeText("12345678")
+        XCTAssertTrue(app.keyboards.keys["a"].exists, "Pairing must allow the normal keyboard, including punctuation")
+        code.typeText("1234-5678")
         app.buttons["Dismiss pairing keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertEqual(address.value as? String, "192.168.1.20:17879")
-        XCTAssertEqual(code.value as? String, "12345678")
+        XCTAssertEqual(code.value as? String, "1234-5678")
+    }
+
+    func testPairingScannerCanCloseAndReopenWithoutLosingTypedCode() {
+        let app = XCUIApplication()
+        app.launch()
+        let code = app.textFields["Pairing code"]
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        code.tap()
+        code.typeText("1234-5678")
+        app.buttons["Dismiss pairing keyboard"].tap()
+        for _ in 0..<2 {
+            let scan = app.buttons["Scan Pairing Code"]
+            if !scan.isHittable { app.swipeDown() }
+            scan.tap()
+            XCTAssertTrue(app.staticTexts["Scanning Unavailable"].waitForExistence(timeout: 5))
+            app.buttons["Enter Code Manually"].tap()
+            XCTAssertTrue(app.navigationBars["Scan Pairing Code"].waitForNonExistence(timeout: 3))
+        }
+        if !code.isHittable { app.swipeUp() }
+        XCTAssertEqual(code.value as? String, "1234-5678")
+        code.tap()
+        code.typeText("9")
+        XCTAssertEqual(code.value as? String, "1234-56789")
     }
 
     func testPairingUsesInlinePasteAndNoFloatingToolbar() {
