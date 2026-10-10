@@ -2,6 +2,8 @@ import RustCodeRemote
 import SwiftUI
 import PhotosUI
 import UIKit
+import AVFoundation
+import UniformTypeIdentifiers
 
 /// The message field and its controls, in one rounded glass composer.
 struct ComposerBar<Accessory: View, Controls: View>: View {
@@ -21,6 +23,8 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     @State private var showsActions = false
     @State private var showsFolder = false
     @State private var showsPhotos = false
+    @State private var showsFiles = false
+    @State private var showsCamera = false
     @State private var hadKeyboard = false
     @State private var nextAction: ChatAction?
     @State private var photoItems: [PhotosPickerItem] = []
@@ -65,12 +69,19 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                     Image(systemName: "plus")
                         .font(.title3)
                         .frame(width: buttonSize, height: buttonSize)
-                        .background(.fill.tertiary, in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Chat actions")
                 .disabled(isSending || isImporting)
-                controls().disabled(isSending || isImporting)
+                .popover(isPresented: $showsActions, arrowEdge: .bottom) {
+                    ChatActionsMenu(hadKeyboard: hadKeyboard, isRunning: isRunning) { action in
+                        nextAction = action
+                        showsActions = false
+                    }
+                    .presentationCompactAdaptation(.popover)
+                    .onDisappear(perform: performNextAction)
+                }
                 Spacer(minLength: 0)
+                controls().disabled(isSending || isImporting)
                 if isSending || isImporting || store.isUploadingImages {
                     ProgressView().frame(width: buttonSize, height: buttonSize).accessibilityLabel("Preparing message")
                 } else if isRunning && trimmed.isEmpty && images.isEmpty {
@@ -85,13 +96,18 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         .glassSurface(in: shape)
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
         .sensoryFeedback(.stop, trigger: stopCount)
-        .sheet(isPresented: $showsActions, onDismiss: performNextAction) {
-            ChatActionsSheet(hadKeyboard: hadKeyboard, isRunning: isRunning) { action in
-                nextAction = action
-                showsActions = false
-            }
-        }
         .sheet(isPresented: $showsFolder) { NewSessionView() }
+        .fullScreenCover(isPresented: $showsCamera) {
+            CameraPhotoPicker { result in
+                showsCamera = false
+                switch result {
+                case .success(let data): if let data { importCameraPhoto(data) }
+                case .failure(let error): store.notice = error.localizedDescription
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.image], allowsMultipleSelection: true, onCompletion: importFiles)
         .photosPicker(isPresented: $showsPhotos, selection: $photoItems, maxSelectionCount: max(1, 4 - images.count), matching: .images)
         .onChange(of: photoItems) { _, items in importPhotos(items) }
         #if DEBUG
@@ -300,13 +316,88 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             isFocused = false
         case .stop:
             Task { await store.cancelTurn() }
-        case .image:
-            guard store.supportsImageUpload else {
-                store.notice = "Update RustCode on your Mac to attach images to this session."
-                return
-            }
-            guard images.count < 4 else { store.notice = "You can attach up to four images to a message."; return }
+        case .photos:
+            guard canAttachImage() else { return }
             showsPhotos = true
+        case .files:
+            guard canAttachImage() else { return }
+            showsFiles = true
+        case .camera:
+            guard canAttachImage() else { return }
+            Task { await openCamera() }
+        }
+    }
+
+    private func canAttachImage() -> Bool {
+        guard store.supportsImageUpload else {
+            store.notice = "Update RustCode on your Mac to attach images to this session."
+            return false
+        }
+        guard images.count < 4 else {
+            store.notice = "You can attach up to four images to a message."
+            return false
+        }
+        return true
+    }
+
+    private func openCamera() async {
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            store.notice = "The camera is unavailable on this device. Choose Photos or Files to attach an image."
+            return
+        }
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        let allowed: Bool
+        if status == .notDetermined {
+            allowed = await AVCaptureDevice.requestAccess(for: .video)
+        } else {
+            allowed = status == .authorized
+        }
+        guard allowed else {
+            store.notice = "Allow camera access in Settings to take a photo, or choose Photos or Files."
+            return
+        }
+        showsCamera = true
+    }
+
+    private func importCameraPhoto(_ data: Data) {
+        guard !isImporting, images.count < 4 else { return }
+        isImporting = true
+        Task {
+            defer { isImporting = false }
+            do {
+                let image = try await Task.detached { try PromptImageImport.prepare(data) }.value
+                images.append(image)
+            } catch { store.notice = error.localizedDescription }
+        }
+    }
+
+    private func importFiles(_ result: Result<[URL], Error>) {
+        guard !isImporting else { return }
+        do {
+            let urls = try result.get()
+            guard !urls.isEmpty else { return }
+            let remaining = 4 - images.count
+            isImporting = true
+            Task {
+                defer { isImporting = false }
+                do {
+                    let imported = try await Task.detached {
+                        try urls.prefix(remaining).map { url in
+                            let scoped = url.startAccessingSecurityScopedResource()
+                            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                            guard size <= 40 * 1024 * 1024 else { throw PromptImageImport.ImportError.tooLarge }
+                            return try PromptImageImport.prepare(Data(contentsOf: url, options: .mappedIfSafe))
+                        }
+                    }.value
+                    images.append(contentsOf: imported)
+                    if urls.count > remaining {
+                        store.notice = "You can attach up to four images. Only the first \(remaining) selected files were added."
+                    }
+                } catch { store.notice = error.localizedDescription }
+            }
+        } catch {
+            if (error as NSError).code != NSUserCancelledError { store.notice = error.localizedDescription }
         }
     }
 

@@ -6,7 +6,9 @@ enum ChatSurface {
     static let background = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark ? UIColor(white: 0.07, alpha: 1) : .systemBackground
     })
-    static let sidebar = Color(uiColor: .secondarySystemBackground)
+    static let sidebar = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .black : .systemBackground
+    })
 }
 
 // Colours come from the asset catalog, which generates `.brandFill` and `.attention`:

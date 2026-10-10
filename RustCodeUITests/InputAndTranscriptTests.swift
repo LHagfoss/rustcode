@@ -4,6 +4,52 @@ import XCTest
 final class InputAndTranscriptTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testAttachmentMenuDismissalPreservesDraftAndComposerControls() {
+        let app = launchChat(draft: "Keep my attachment menu draft")
+        app.buttons["Chat actions"].tap()
+        XCTAssertTrue(app.buttons["Camera"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Photos"].isHittable)
+        XCTAssertTrue(app.buttons["Files"].isHittable)
+        XCTAssertTrue(app.buttons["Slash Commands"].isHittable)
+        XCTAssertTrue(app.buttons["Choose Folder"].isHittable)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Glass attachment menu above the composer"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.2)).tap()
+        XCTAssertTrue(app.buttons["Photos"].waitForNonExistence(timeout: 3))
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my attachment menu draft")
+        XCTAssertTrue(app.buttons["Model and effort"].isHittable)
+        XCTAssertTrue(app.buttons["Send message"].isHittable)
+    }
+
+    func testImageFilePickerCancellationPreservesDraft() {
+        let app = launchChat(draft: "Keep my file draft")
+        app.buttons["Chat actions"].tap()
+        let files = app.buttons["Files"]
+        XCTAssertTrue(files.waitForExistence(timeout: 3))
+        files.tap()
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my file draft")
+        XCTAssertTrue(app.buttons["Model and effort"].isHittable)
+    }
+
+    func testUnavailableCameraExplainsAlternativesWithoutLosingDraft() {
+        let app = launchChat(draft: "Keep my camera draft")
+        app.buttons["Chat actions"].tap()
+        let camera = app.buttons["Camera"]
+        XCTAssertTrue(camera.waitForExistence(timeout: 3))
+        camera.tap()
+        let notice = app.alerts.firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertTrue(notice.staticTexts["The camera is unavailable on this device. Choose Photos or Files to attach an image."].exists)
+        notice.buttons["OK"].tap()
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my camera draft")
+    }
+
     func testLaunchWithoutSelectionKeepsChatAsTheMainScreen() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
@@ -475,8 +521,8 @@ final class InputAndTranscriptTests: XCTestCase {
     func testImagePickerCancellationPreservesMessageDraft() {
         let app = launchChat(draft: "Keep my image draft")
         app.buttons["Chat actions"].tap()
-        XCTAssertTrue(app.navigationBars["Chat Actions"].waitForExistence(timeout: 3))
-        app.buttons["Add Image"].tap()
+        XCTAssertTrue(app.buttons["Photos"].waitForExistence(timeout: 3))
+        app.buttons["Photos"].tap()
         let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Close"])).firstMatch
         XCTAssertTrue(close.waitForExistence(timeout: 5))
         let screenshot = XCTAttachment(screenshot: app.screenshot())

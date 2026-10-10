@@ -31,7 +31,7 @@ struct SessionsView: View {
         Group {
             if sizeClass == .compact {
                 GeometryReader { geometry in
-                    let width = min(geometry.size.width * 0.84, 360)
+                    let width = min(geometry.size.width * 0.8, 360)
                     let offset = min(width, max(0, (showsSidebar ? width : 0) + drawerDrag.offset))
                     let progress = offset / width
                     let obscured = showsSidebar || offset > 0
@@ -72,11 +72,17 @@ struct SessionsView: View {
                                 .accessibilityLabel("Close sessions")
                             }
                         }
+                        .clipShape(ChatScreenShape(
+                            radius: 32 * progress,
+                            topInset: geometry.safeAreaInsets.top,
+                            bottomInset: geometry.safeAreaInsets.bottom
+                        ))
                         .shadow(color: .black.opacity(0.2 * progress), radius: 16, x: -4)
                         // Keep the chat at its full width and move its header, transcript,
                         // and composer together with the menu throughout the gesture.
                         .offset(x: offset)
                     }
+                    .background(ChatSurface.sidebar.ignoresSafeArea())
                     .simultaneousGesture(drawerGesture(width: width, opening: !showsSidebar))
                     .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: showsSidebar)
                     .onChange(of: showsSidebar) { _, open in sidebarFocused = open }
@@ -96,6 +102,7 @@ struct SessionsView: View {
         }
         .background(ChatSurface.background.ignoresSafeArea())
         .environment(drafts)
+        .tint(.primary)
         .environment(\.openSessionSidebar, OpenSessionSidebarAction { toggle in
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             if sizeClass == .compact { showsSidebar = true } else { columns = toggle && columns == .all ? .detailOnly : .all }
@@ -180,6 +187,23 @@ struct SessionsView: View {
     private func closeSidebar() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         showsSidebar = false
+    }
+}
+
+/// Include the status-bar and home-indicator backgrounds in the rounded chat mask.
+private struct ChatScreenShape: Shape {
+    var radius: CGFloat
+    var topInset: CGFloat
+    var bottomInset: CGFloat
+    var animatableData: CGFloat {
+        get { radius }
+        set { radius = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        UnevenRoundedRectangle(topLeadingRadius: radius, bottomLeadingRadius: radius)
+            .path(in: CGRect(x: rect.minX, y: rect.minY - topInset,
+                             width: rect.width, height: rect.height + topInset + bottomInset))
     }
 }
 

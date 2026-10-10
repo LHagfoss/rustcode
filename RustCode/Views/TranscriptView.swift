@@ -239,9 +239,8 @@ struct TranscriptView: View {
                 }
             }
             .font(.subheadline.weight(.medium))
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 6)
             .frame(minHeight: 44)
-            .background(.fill.tertiary, in: .capsule)
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)

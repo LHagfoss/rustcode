@@ -110,13 +110,15 @@ with results displayed outside model history. `/cancel` targets the current ques
 or turn. Commands that still require the Mac interface are marked **On Mac** and keep
 your draft when selected; listing a command does not imply mobile execution support.
 
-The `+` button opens a native Chat Actions sheet: **New Session**, **Slash Commands**,
-**Choose Folder**, and **Add Image**. Pick up to four photos, preview or remove them,
-then send with or without a written message. Photos are downsampled to 2048 pixels,
+The `+` button opens an anchored glass menu with **Camera**, **Photos**, and **Files**,
+plus **New Session**, **Slash Commands**, and **Choose Folder**. Files accepts images;
+other document uploads are not supported by the host. Attach up to four images,
+preview or remove them, then send with or without a written message. Images are downsampled to 2048 pixels,
 converted to JPEG without location metadata, and uploaded to the paired Mac before the
 prompt is submitted. Upload failures preserve the draft. This requires RustCode 0.64.5
 and a vision-capable model or a configured vision fallback. Internal attachment paths
 appear as attachment labels in chat; copying retains the original message.
+The model and effort picker sits on the right of the composer, beside send, queue or stop.
 
 Effort choices come from the host:
 explicit provider catalogs take precedence, while legacy profiles with reasoning-effort

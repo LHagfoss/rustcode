@@ -262,7 +262,7 @@
 				INFOPLIST_FILE = RustCode/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = RustCode;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSCameraUsageDescription = "RustCode uses the camera to scan the pairing code shown by /remote in your terminal.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "RustCode uses the camera to scan pairing codes and attach photos to your messages.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "RustCode connects to the RustCode session host on your local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -295,7 +295,7 @@
 				INFOPLIST_FILE = RustCode/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = RustCode;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSCameraUsageDescription = "RustCode uses the camera to scan the pairing code shown by /remote in your terminal.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "RustCode uses the camera to scan pairing codes and attach photos to your messages.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "RustCode connects to the RustCode session host on your local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
