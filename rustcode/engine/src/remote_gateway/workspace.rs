@@ -363,6 +363,7 @@ mod tests {
     #[test]
     fn mobile_creation_uses_the_normal_chronological_session_identity() {
         let request = RemoteRequest {
+            authenticated_device_id: None,
             protocol_version: REMOTE_PROTOCOL_VERSION,
             request_id: "new".into(),
             session_id: None,
@@ -387,6 +388,7 @@ mod tests {
     async fn completed_creation_replays_after_directory_removal() {
         let config = tempfile::tempdir().unwrap();
         let request = RemoteRequest {
+            authenticated_device_id: None,
             protocol_version: REMOTE_PROTOCOL_VERSION,
             request_id: "create-1".into(),
             session_id: None,

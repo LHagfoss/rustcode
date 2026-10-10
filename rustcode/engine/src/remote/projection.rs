@@ -550,7 +550,11 @@ pub fn project_snapshot(
         commands: super::ops::command_catalog(),
         session: project_session_info(state, context),
 
-        capabilities: vec!["cancel_question".into(), "execute_command".into()],
+        capabilities: vec![
+            "cancel_question".into(),
+            "execute_command".into(),
+            "upload_image".into(),
+        ],
         settings: bound_settings(project_settings(state), limits.frame_bytes / 4),
         snapshot_id: None,
         sequence: context.sequence,

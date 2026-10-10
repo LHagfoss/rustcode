@@ -599,3 +599,29 @@ mobile sessions immediately use the installed owner version. Automatic network
 selection is retained in the login service instead of persisting a temporary
 Wi-Fi/DHCP address; explicitly configured bind and advertised addresses remain
 explicit.
+
+### Image attachments
+
+Owners advertising `upload_image` accept authenticated, session-scoped JPEG/PNG
+uploads. Send `attachment_id` (1–64 ASCII letters/digits, hyphens or underscores),
+`mime_type`, byte `offset`, `total_bytes`, and `data_base64` in an `upload_image`
+operation. Each decoded chunk is at most 128 KiB, each image at most 8 MiB and
+4096 × 4096 pixels. Full image decoding checks the actual format and pixel limits.
+An owner rejects uploads when neither the selected model nor a configured vision
+fallback can handle images; selecting another model does not submit a turn.
+
+`image_uploaded` replies contain `attachment_id`, `next_offset`, `total_bytes`,
+and `complete`. Only the final reply includes `prompt_reference`. Append that
+exact reference to the ordinary submit/queue/steer prompt. This uses the same real
+multimodal provider input as terminal image paste; uploading itself never starts
+a turn. Keep request IDs stable per image and offset when retrying. Replayed chunks
+return their original progress even after completion; changed metadata or bytes
+are rejected. The app should resize large photos before uploading.
+
+Files are private (0700 directories, 0600 files) under the session's artifacts,
+with a separate authenticated-device namespace. Wire input cannot supply device
+identity or a destination path. Prompt references to incomplete uploads, other
+sessions/devices, or arbitrary host files are rejected. A prompt may contain at
+most eight images. Each session reserves at most 64 MiB and 256 attachments;
+abandoned partial uploads expire after one hour and are removed on the next
+upload. Completed images remain alongside session history for replay.

@@ -345,6 +345,7 @@ mod tests {
 
     fn request(request_id: &str) -> RemoteRequest {
         RemoteRequest {
+            authenticated_device_id: None,
             protocol_version: REMOTE_PROTOCOL_VERSION,
             request_id: request_id.to_owned(),
             session_id: Some("owner-link-session".to_owned()),

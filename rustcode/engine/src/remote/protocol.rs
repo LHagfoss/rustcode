@@ -24,6 +24,10 @@ pub const MAX_REQUEST_ID_BYTES: usize = 128;
 /// travels in the frame.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteRequest {
+    /// Set by the authenticated owner connector; never accepted from the wire.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub authenticated_device_id: Option<String>,
     pub protocol_version: u32,
     /// Client-chosen, unique per device and registration epoch. Reusing it
     /// with the same payload returns the original outcome.
@@ -73,6 +77,14 @@ pub enum RemoteOperation {
         offset: u64,
         max_bytes: u32,
     },
+    /// Upload one bounded image chunk without starting a turn.
+    UploadImage {
+        attachment_id: String,
+        mime_type: String,
+        offset: u64,
+        total_bytes: u64,
+        data_base64: String,
+    },
     /// Start a turn. Rejected with `busy` while the session is running.
     SubmitPrompt {
         prompt: String,
@@ -116,7 +128,7 @@ pub enum RemoteOperation {
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 18] = [
+    pub const NAMES: [&'static str; 19] = [
         "list_sessions",
         "list_directories",
         "create_session",
@@ -125,6 +137,7 @@ impl RemoteOperation {
         "detach_session",
         "get_history",
         "get_content",
+        "upload_image",
         "submit_prompt",
         "steer",
         "queue",
@@ -147,6 +160,7 @@ impl RemoteOperation {
             Self::DetachSession => "detach_session",
             Self::GetHistory { .. } => "get_history",
             Self::GetContent { .. } => "get_content",
+            Self::UploadImage { .. } => "upload_image",
             Self::SubmitPrompt { .. } => "submit_prompt",
             Self::Steer { .. } => "steer",
             Self::Queue { .. } => "queue",
@@ -179,6 +193,7 @@ impl RemoteOperation {
         matches!(
             self,
             Self::CreateSession { .. }
+                | Self::UploadImage { .. }
                 | Self::SubmitPrompt { .. }
                 | Self::Steer { .. }
                 | Self::Queue { .. }
@@ -284,6 +299,14 @@ pub enum ReceiptState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RemoteResult {
+    ImageUploaded {
+        attachment_id: String,
+        next_offset: u64,
+        total_bytes: u64,
+        complete: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_reference: Option<String>,
+    },
     Directories {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1083,6 +1106,22 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_device_identity_cannot_be_supplied_on_the_wire() {
+        let request = decode_request(r#"{"protocol_version":1,"request_id":"r","authenticated_device_id":"forged","operation":{"type":"list_sessions"}}"#).unwrap();
+        assert_eq!(request.authenticated_device_id, None);
+        let trusted = RemoteRequest {
+            authenticated_device_id: Some("trusted".into()),
+            ..request
+        };
+        assert!(
+            serde_json::to_value(trusted)
+                .unwrap()
+                .get("authenticated_device_id")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn operation_names_match_the_wire_tags() {
         let operations = [
             RemoteOperation::ListSessions,
@@ -1099,6 +1138,13 @@ mod tests {
                 content_id: String::new(),
                 offset: 0,
                 max_bytes: 1,
+            },
+            RemoteOperation::UploadImage {
+                attachment_id: String::new(),
+                mime_type: String::new(),
+                offset: 0,
+                total_bytes: 1,
+                data_base64: String::new(),
             },
             RemoteOperation::SubmitPrompt {
                 prompt: String::new(),

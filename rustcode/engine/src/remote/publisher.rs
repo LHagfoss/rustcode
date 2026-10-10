@@ -568,6 +568,7 @@ mod tests {
             &mut cancel,
             &registration,
             &super::super::RemoteRequest {
+                authenticated_device_id: None,
                 protocol_version: REMOTE_PROTOCOL_VERSION,
                 request_id: "settings-test".into(),
                 session_id: Some(registration.session_id.clone()),

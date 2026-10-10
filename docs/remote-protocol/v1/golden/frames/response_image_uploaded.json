@@ -1,0 +1,14 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-image-0",
+  "receipt": "applied",
+  "result": {
+    "type": "image_uploaded",
+    "attachment_id": "a1b2-image",
+    "next_offset": 68,
+    "total_bytes": 68,
+    "complete": true,
+    "prompt_reference": "![image](file:///private/session/remote-images/device/a1b2-image.png)"
+  }
+}
