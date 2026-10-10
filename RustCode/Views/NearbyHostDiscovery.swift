@@ -22,6 +22,13 @@ final class NearbyHostDiscovery: NSObject {
         hosts = []
         error = nil
         isSearching = true
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-pairingNearbyHost") {
+            hosts = [Host(id: "fixture", name: "Fixture Mac", address: "fixture.local:17879")]
+            isSearching = false
+            return
+        }
+        #endif
         let browser = NetServiceBrowser()
         browser.delegate = self
         self.browser = browser

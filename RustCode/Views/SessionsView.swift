@@ -31,9 +31,9 @@ struct SessionsView: View {
         Group {
             if sizeClass == .compact {
                 GeometryReader { geometry in
-                    let width = min(geometry.size.width * 0.8, 360)
+                    let width = min(max(0, geometry.size.width * 0.8), 360)
                     let offset = min(width, max(0, (showsSidebar ? width : 0) + drawerDrag.offset))
-                    let progress = offset / width
+                    let progress = width > 0 ? offset / width : 0
                     let obscured = showsSidebar || offset > 0
                     ZStack(alignment: .leading) {
                         NavigationStack {
@@ -57,8 +57,7 @@ struct SessionsView: View {
                         NavigationStack {
                             chat
                                 .background(ChatSurface.background.ignoresSafeArea())
-                                .toolbarBackground(ChatSurface.background, for: .navigationBar)
-                                .toolbarBackground(.visible, for: .navigationBar)
+                                .softNavigationChrome()
                                 .disabled(obscured)
                                 .environment(\.isChatObscured, obscured)
                         }
@@ -95,7 +94,7 @@ struct SessionsView: View {
                 } detail: {
                     chat
                         .background(ChatSurface.background.ignoresSafeArea())
-                        .toolbarBackground(ChatSurface.background, for: .navigationBar)
+                        .softNavigationChrome()
                 }
                 .toolbar(removing: .sidebarToggle)
             }
@@ -311,8 +310,7 @@ private struct SessionSidebar: View {
         .background(ChatSurface.sidebar.ignoresSafeArea())
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(ChatSurface.sidebar, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .softNavigationChrome()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("New Session", systemImage: "square.and.pencil") {

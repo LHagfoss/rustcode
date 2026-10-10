@@ -47,6 +47,18 @@ extension View {
         }
     }
 
+    /// Keep navigation controls over the system's progressive scroll-edge blur,
+    /// without a separate material panel or separator behind the whole header.
+    @ViewBuilder
+    func softNavigationChrome() -> some View {
+        if #available(iOS 26, *) {
+            toolbarBackground(.hidden, for: .navigationBar)
+                .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
+    }
+
     /// The main action of a screen, filled with the brand colour.
     @ViewBuilder
     func brandProminentButtonStyle() -> some View {

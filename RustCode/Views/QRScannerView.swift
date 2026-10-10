@@ -1,6 +1,6 @@
 import AVFoundation
 import SwiftUI
-import VisionKit
+import RustCodeRemote
 
 /// Scans one QR code and hands back its text. Falls back to an explanation where the
 /// camera cannot be used (Simulator, denied access, restricted devices).
@@ -11,11 +11,6 @@ struct QRScannerSheet: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var access: Access = .checking
     @State private var retryCount = 0
-
-    private struct AccessCheck: Equatable {
-        var phase: ScenePhase
-        var retry: Int
-    }
 
     private enum Access {
         case checking
@@ -30,7 +25,7 @@ struct QRScannerSheet: View {
             Group {
                 switch access {
                 case .checking:
-                    ProgressView()
+                    ProgressView("Opening Camera…")
                 case .ready:
                     QRScanner(isActive: scenePhase == .active, onScan: onScan, onFailure: { access = .failed($0) })
                         .ignoresSafeArea(edges: .bottom)
@@ -73,27 +68,35 @@ struct QRScannerSheet: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Scan Pairing Code")
             .navigationBarTitleDisplayMode(.inline)
+            .softNavigationChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .task(id: AccessCheck(phase: scenePhase, retry: retryCount)) {
-                guard scenePhase == .active else { return }
-                // Permission prompts and app switching change scenePhase. Keep a ready
-                // camera alive rather than replacing its controller on every return.
+            .task(id: retryCount) {
+                // A permission prompt makes the scene inactive. Do not cancel that
+                // permission request; scene changes only pause/resume capture.
                 if case .ready = access { return }
                 let resolved = await resolveAccess()
                 guard !Task.isCancelled else { return }
                 access = resolved
             }
+            .onChange(of: scenePhase) { _, phase in
+                // Returning from Settings can grant permission without reopening
+                // this sheet. Only refresh a denied result, not a pending prompt.
+                guard phase == .active, case .denied = access else { return }
+                access = .checking
+                retryCount += 1
+            }
         }
     }
 
     private func resolveAccess() async -> Access {
-        guard DataScannerViewController.isSupported else { return .unsupported }
+        guard AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil else { return .unsupported }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             break
@@ -102,7 +105,7 @@ struct QRScannerSheet: View {
         default:
             return .denied
         }
-        return DataScannerViewController.isAvailable ? .ready : .failed("The camera is temporarily unavailable. Close other camera apps and try again, or enter the code manually.")
+        return .ready
     }
 }
 
@@ -124,22 +127,22 @@ private struct QRScanner: UIViewControllerRepresentable {
     }
 }
 
-/// Start after presentation, when VisionKit has a camera surface. Keep the visual
-/// target and recognition region identical, including after rotation.
-private final class ScannerController: UIViewController, DataScannerViewControllerDelegate {
-    let scanner = DataScannerViewController(
-        recognizedDataTypes: [.barcode(symbologies: [.qr])],
-        qualityLevel: .balanced,
-        recognizesMultipleItems: false,
-        isGuidanceEnabled: false,
-        isHighlightingEnabled: true
-    )
-    private let guide = CAShapeLayer()
+/// Own the preview surface directly. Camera configuration and startup run on a
+/// serial background queue; presentation, preview readiness and delivery stay here.
+private final class ScannerController: UIViewController {
     private let onScan: (String) -> Void
     private let onFailure: (String) -> Void
-    private var hasDelivered = false
-    private var isActive = false
-    private var isVisible = false
+    private var lifecycle = PairingScannerLifecycle()
+    private let guide = CAShapeLayer()
+    private let loading = UIActivityIndicatorView(style: .large)
+    private var previewObservation: NSKeyValueObservation?
+    private var previewTimeout: Task<Void, Never>?
+    private lazy var capture = QRCodeCapture(
+        onStart: { [weak self] in self?.view.setNeedsLayout() },
+        onCode: { [weak self] in self?.deliver($0) },
+        onFailure: { [weak self] in self?.reportFailure($0) }
+    )
+    private lazy var preview = AVCaptureVideoPreviewLayer(session: capture.session)
 
     init(onScan: @escaping (String) -> Void, onFailure: @escaping (String) -> Void) {
         self.onScan = onScan
@@ -151,93 +154,103 @@ private final class ScannerController: UIViewController, DataScannerViewControll
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        addChild(scanner)
-        view.addSubview(scanner.view)
-        scanner.didMove(toParent: self)
-        scanner.delegate = self
+        view.backgroundColor = .black
+        preview.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(preview)
         guide.fillColor = UIColor.clear.cgColor
         guide.strokeColor = UIColor.white.cgColor
         guide.lineWidth = 3
-        scanner.overlayContainerView.layer.addSublayer(guide)
-        scanner.view.accessibilityLabel = "Position the pairing QR code inside the square"
+        view.layer.addSublayer(guide)
+        view.accessibilityLabel = "Position the pairing QR code inside the square"
+        loading.color = .white
+        loading.accessibilityLabel = "Starting camera preview"
+        view.addSubview(loading)
+        loading.startAnimating()
+        previewObservation = preview.observe(\.isPreviewing, options: [.initial, .new]) { [weak self] _, change in
+            let ready = change.newValue ?? false
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                lifecycle.previewChanged(ready)
+                updatePreviewLoading()
+            }
+        }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        scanner.view.frame = view.bounds
-        let available = scanner.view.bounds.inset(by: scanner.view.safeAreaInsets)
-        let side = min(320, min(available.width * 0.78, available.height * 0.65))
-        let target = CGRect(x: available.midX - side / 2, y: available.midY - side / 2, width: side, height: side)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        preview.frame = view.bounds
+        let orientation = view.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
+        let angle: CGFloat = switch orientation {
+        case .landscapeLeft: 0
+        case .landscapeRight: 180
+        case .portraitUpsideDown: 270
+        default: 90
+        }
+        if let connection = preview.connection, connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
+        let available = view.bounds.inset(by: view.safeAreaInsets)
+        let side = min(320, min(available.width * 0.78, available.height * 0.65))
+        let target = CGRect(x: available.midX - side / 2, y: available.midY - side / 2, width: side, height: side)
         guide.path = UIBezierPath(roundedRect: target, cornerRadius: 16).cgPath
+        loading.center = CGPoint(x: available.midX, y: available.midY)
         CATransaction.commit()
-        scanner.regionOfInterest = target
+        capture.setRegion(preview.metadataOutputRectConverted(fromLayerRect: target))
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        isVisible = true
-        updateScanning()
+        lifecycle.update(visible: true, active: lifecycle.isActive)
+        updateCapture()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
-        isVisible = false
-        scanner.stopScanning()
+        lifecycle.update(visible: false, active: lifecycle.isActive)
+        updateCapture()
         super.viewWillDisappear(animated)
     }
 
-    func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) {
-        // Backgrounding temporarily makes the camera unavailable. Resume it on return.
-        if isActive && isVisible && UIApplication.shared.applicationState == .active { reportFailure() }
-    }
-
     func setActive(_ active: Bool) {
-        isActive = active
-        updateScanning()
+        guard active != lifecycle.isActive else { return }
+        lifecycle.update(visible: lifecycle.isVisible, active: active)
+        updateCapture()
     }
 
-    private func updateScanning() {
-        guard isActive, isVisible, !hasDelivered else {
-            scanner.stopScanning()
-            return
-        }
-        guard !scanner.isScanning else { return }
-        do { try scanner.startScanning() }
-        catch { reportFailure() }
+    private func updateCapture() {
+        capture.setRunning(lifecycle.shouldRun)
+        updatePreviewLoading()
     }
 
-    private func reportFailure() {
-        scanner.stopScanning()
-        // Defer the SwiftUI state change out of representable updates.
-        Task { @MainActor [weak self] in
-            guard let self, isActive, isVisible, !hasDelivered else { return }
-            onFailure("Scanning is unavailable right now. Try again, or enter the address and pairing code manually.")
-        }
-    }
-
-    func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
-        deliver(addedItems)
-    }
-
-    func dataScanner(_ dataScanner: DataScannerViewController, didUpdate updatedItems: [RecognizedItem], allItems: [RecognizedItem]) {
-        deliver(updatedItems)
-    }
-
-    func dataScanner(_ dataScanner: DataScannerViewController, didTapOn item: RecognizedItem) {
-        deliver([item])
-    }
-
-    private func deliver(_ items: [RecognizedItem]) {
-        guard isActive, isVisible, !hasDelivered else { return }
-        for case .barcode(let barcode) in items {
-            if let payload = barcode.payloadStringValue, !payload.isEmpty {
-                hasDelivered = true
-                scanner.stopScanning()
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                onScan(payload)
-                return
+    private func updatePreviewLoading() {
+        if !lifecycle.needsPreviewRecovery {
+            loading.stopAnimating()
+            previewTimeout?.cancel()
+            previewTimeout = nil
+        } else {
+            loading.startAnimating()
+            guard previewTimeout == nil else { return }
+            previewTimeout = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .seconds(8)) } catch { return }
+                guard let self, lifecycle.needsPreviewRecovery else { return }
+                reportFailure("The camera preview did not start. Tap Try Again, or close other camera apps and retry.")
             }
         }
+    }
+
+    private func reportFailure(_ message: String) {
+        guard lifecycle.shouldRun else { return }
+        capture.setRunning(false)
+        previewTimeout?.cancel()
+        previewTimeout = nil
+        onFailure(message)
+    }
+
+    private func deliver(_ payload: String) {
+        guard lifecycle.accept(payload) else { return }
+        updateCapture()
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        onScan(payload)
     }
 }

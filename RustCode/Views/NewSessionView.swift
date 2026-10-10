@@ -79,6 +79,7 @@ struct NewSessionView: View {
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("New Session")
             .navigationBarTitleDisplayMode(.inline)
+            .softNavigationChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

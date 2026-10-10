@@ -138,8 +138,11 @@ final class InputAndTranscriptTests: XCTestCase {
         address.typeText("192.168.1.20:17879")
         app.keyboards.buttons["Next:"].tap()
         let code = app.textFields["Pairing code"]
-        XCTAssertTrue(app.keyboards.keys["a"].exists, "Pairing must allow the normal keyboard, including punctuation")
-        code.typeText("1234-5678")
+        XCTAssertTrue(app.keyboards.keys["1"].exists)
+        XCTAssertFalse(app.keyboards.keys["a"].exists, "The eight-digit code uses a number pad")
+        code.typeText("1234")
+        XCTAssertEqual(code.value as? String, "1234-")
+        code.typeText("5678")
         app.buttons["Dismiss pairing keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertEqual(address.value as? String, "192.168.1.20:17879")
@@ -152,7 +155,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let code = app.textFields["Pairing code"]
         XCTAssertTrue(code.waitForExistence(timeout: 5))
         code.tap()
-        code.typeText("1234-5678")
+        code.typeText("12345678")
         app.buttons["Dismiss pairing keyboard"].tap()
         for _ in 0..<2 {
             let scan = app.buttons["Scan Pairing Code"]
@@ -166,10 +169,12 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertEqual(code.value as? String, "1234-5678")
         code.tap()
         code.typeText("9")
-        XCTAssertEqual(code.value as? String, "1234-56789")
+        XCTAssertEqual(code.value as? String, "1234-5678", "Entry is limited to eight digits")
+        code.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
+        XCTAssertEqual(code.value as? String, "123", "Backspace must pass the automatic dash")
     }
 
-    func testPairingUsesInlinePasteAndNoFloatingToolbar() {
+    func testPairingUsesInlinePasteAndKeyboardDone() {
         let app = XCUIApplication()
         app.launch()
         let address = app.textFields["Host address and port"]
@@ -182,8 +187,52 @@ final class InputAndTranscriptTests: XCTestCase {
         screenshot.name = "Pairing inline controls with keyboard"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        XCTAssertFalse(app.toolbars.buttons["Next"].exists)
-        XCTAssertFalse(app.toolbars.buttons["Done"].exists)
+        app.buttons["Dismiss pairing keyboard"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+    }
+
+    func testPairingNearbyMacFocusesCodeAndKeepsConnectCompact() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-pairingNearbyHost"]
+        app.launch()
+        let mac = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Fixture Mac")).firstMatch
+        XCTAssertTrue(mac.waitForExistence(timeout: 5))
+        let demo = app.buttons["Try the Demo"]
+        XCTAssertTrue(demo.waitForExistence(timeout: 3))
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: demo)], timeout: 3) == .completed, "Demo belongs in the header")
+        let connect = app.buttons["Connect"]
+        XCTAssertTrue(connect.isHittable, "The complete pairing form should fit without scrolling")
+        XCTAssertLessThanOrEqual(connect.frame.height, 52)
+        mac.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.keyboards.keys["1"].exists)
+        XCTAssertFalse(app.keyboards.keys["a"].exists)
+        XCTAssertEqual(app.textFields["Host address and port"].value as? String, "fixture.local:17879")
+        let code = app.textFields["Pairing code"]
+        code.typeText("01234567")
+        XCTAssertEqual(code.value as? String, "0123-4567")
+        app.buttons["Dismiss pairing keyboard"].tap()
+        XCTAssertTrue(connect.isEnabled)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Compact pairing form with selected Mac"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testPairingNearbyMacKeepsCodeFocusWhenChangingAddress() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-pairingNearbyHost"]
+        app.launch()
+        let code = app.textFields["Pairing code"]
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        code.tap()
+        code.typeText("1234")
+        let mac = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Fixture Mac")).firstMatch
+        mac.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        code.typeText("01234567")
+        XCTAssertEqual(code.value as? String, "0123-4567")
+        XCTAssertEqual(app.textFields["Host address and port"].value as? String, "fixture.local:17879")
     }
 
     func testLongResponseUsesCompactPreviewAndSelectionSheet() {
