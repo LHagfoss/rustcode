@@ -73,6 +73,23 @@ pub async fn start(
     })
     .await
     .context("another gateway launcher is still starting")??;
+    let mut effective = launcher.clone();
+    if let Some(status) = lifecycle.status().await? {
+        if let Ok(address) = status.listen_address.parse::<std::net::SocketAddr>() {
+            effective
+                .bind
+                .get_or_insert_with(|| address.ip().to_string());
+            effective.port.get_or_insert(address.port());
+        }
+        if effective.advertise.is_none() {
+            if let Ok(address) = url::Url::parse(&format!("ws://{}", status.advertised_address)) {
+                effective.advertise = address.host_str().map(str::to_owned);
+            } else if let Ok(address) = status.advertised_address.parse::<std::net::SocketAddr>() {
+                effective.advertise = Some(address.ip().to_string());
+            }
+        }
+    }
+    let launcher = &effective;
     #[cfg(target_os = "macos")]
     if installed_program(&launcher.program) {
         let home = PathBuf::from(std::env::var_os("HOME").context("home directory unavailable")?);

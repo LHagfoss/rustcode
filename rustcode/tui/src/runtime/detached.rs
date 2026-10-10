@@ -33,7 +33,8 @@ impl AppRuntime {
             tokio::select! { _=interval.tick()=>{}, _=tokio::signal::ctrl_c()=>break, _=terminate.recv()=>break }
             // Removing a test/config owner directory is an explicit lease withdrawal.
             if !owners.exists() {
-                break;
+                runtime.current_cancel_token.cancel();
+                return Ok(());
             }
             while let Ok(event) = subscription.try_recv() {
                 apply_background_task_event(&runtime.app_state, event).await;
