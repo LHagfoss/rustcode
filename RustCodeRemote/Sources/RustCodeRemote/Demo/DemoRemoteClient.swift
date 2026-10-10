@@ -21,6 +21,7 @@ public actor DemoRemoteClient: RemoteClient {
     private var outcomes: [RequestID: ReceiptState] = [:]
     private var isConnected = false
     private var counter = 0
+    private var createdSessions: [RequestID: SessionSummary] = [:]
 
     public static let approvalSessionID = "demo-backoff"
     public static let questionSessionID = "demo-store"
@@ -41,9 +42,10 @@ public actor DemoRemoteClient: RemoteClient {
             seed.append(chain)
         }
         for var session in seed {
+            session.state.commands = Self.commandCatalog
             session.state.capabilities = ["cancel_question", "execute_command"]
             session.state.settings = SessionSettings(models: [
-                .init(id: "demo-balanced", model: "demo-model", reasoningEfforts: ["default", "medium", "high"]),
+                .init(id: "demo-balanced", model: "demo-model", reasoningEfforts: ["default", "low", "medium", "high"]),
                 .init(id: "demo-fast", model: "demo-fast-model", reasoningEfforts: ["default"])
             ], selectedModel: "demo-balanced", reasoningEffort: "default", canChange: !session.state.isRunning)
             // The demo owns its complete transcript, including the older history page.
@@ -95,6 +97,29 @@ public actor DemoRemoteClient: RemoteClient {
         listContinuation = continuation
         continuation.yield(summaries)
         return stream
+    }
+
+    public func browseDirectories(path: String?) async throws -> DirectoryListing {
+        guard isConnected else { throw RemoteError.notConnected }
+        let path = path ?? "/Users/demo"
+        let children = path == "/Users/demo" ? [RemoteDirectory(name: "Projects", path: "/Users/demo/Projects")] : []
+        return DirectoryListing(path: path, parent: path == "/" ? nil : URL(fileURLWithPath: path).deletingLastPathComponent().path, directories: children)
+    }
+
+    public func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary {
+        guard isConnected else { throw RemoteError.notConnected }
+        if let created = createdSessions[requestID] { return created }
+        let ref = SessionRef(sessionID: "demo-created-\(UUID().uuidString)", registrationEpoch: 1)
+        let summary = SessionSummary(ref: ref, title: "", workspace: directory ?? "/Users/demo", model: "demo-model", turnCount: 0)
+        var state = SessionSnapshot(session: ref)
+        state.settings = sessions[Self.idleSessionID]?.state.settings
+        state.commands = Self.commandCatalog
+        state.capabilities = ["cancel_question", "execute_command"]
+        sessions[ref.sessionID] = Session(summary: summary, state: state)
+        order.insert(ref.sessionID, at: 0)
+        createdSessions[requestID] = summary
+        listContinuation?.yield(summaries)
+        return summary
     }
 
     public func refreshSessions() async throws {

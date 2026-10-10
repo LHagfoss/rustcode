@@ -24,3 +24,15 @@ public struct SessionSettings: Hashable, Sendable {
         self.canChange = canChange
     }
 }
+
+/// The terminal's command catalog, including actions presented natively by the app.
+public struct SessionCommandChoice: Codable, Hashable, Sendable, Identifiable {
+    public var name: String
+    public var description: String
+    public var insertion: String
+    public var action: String
+    public var id: String { name }
+    public init(name: String, description: String, insertion: String, action: String = "execute") {
+        self.name = name; self.description = description; self.insertion = insertion; self.action = action
+    }
+}

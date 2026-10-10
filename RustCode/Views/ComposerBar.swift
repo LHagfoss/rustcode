@@ -8,6 +8,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     /// Whether the running turn accepts steering.
     var canSteer = true
     let isEnabled: Bool
+    var runCommand: (String) async -> Bool
     @ViewBuilder var accessory: () -> Accessory
     @ViewBuilder var controls: () -> Controls
 
@@ -54,12 +55,29 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField(isRunning ? "Queue a message" : "Message", text: $text, axis: .vertical)
                 .lineLimit(1...6)
+                .font(trimmed.hasPrefix("/") ? .body.monospaced() : .body)
+                .overlay(alignment: .leading) {
+                    if let completion {
+                        (Text(text).foregroundColor(.clear) + Text(completion.dropFirst(text.count)).foregroundColor(.secondary.opacity(0.55)))
+                            .font(.body.monospaced()).lineLimit(1)
+                            .allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
                 .focused($isFocused)
                 .frame(maxWidth: .infinity, minHeight: buttonSize)
                 .background {
                     Color.clear.contentShape(.rect).onTapGesture { isFocused = true }
                 }
                 .accessibilityLabel(isRunning ? "Message to queue" : "Message")
+
+            if let completion, isFocused {
+                Button { text = completion } label: {
+                    Image(systemName: "arrow.right.to.line").frame(width: buttonSize, height: buttonSize)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Complete command")
+                .accessibilityHint(completion)
+            }
 
             if isFocused {
                 Button {
@@ -94,42 +112,69 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         .animation(.snappy(duration: 0.2), value: isRunning)
     }
 
+    private var matchingCommands: [SessionCommandChoice] {
+        guard !trimmed.contains(where: \.isWhitespace) else { return [] }
+        return commands.filter { commandText($0).hasPrefix(trimmed.lowercased()) }
+    }
+
+    private var completion: String? {
+        guard isFocused, text == trimmed, trimmed.count > 1,
+              let first = matchingCommands.first else { return nil }
+        let value = commandText(first)
+        return value.count > trimmed.count ? value : nil
+    }
+
+    private func commandText(_ choice: SessionCommandChoice) -> String {
+        choice.name.hasPrefix("/") ? choice.name : "/" + choice.name
+    }
+
     private var commandSuggestions: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if store.attached?.capabilities.contains("execute_command") != true {
-                Text("Slash commands need an updated RustCode session and remote gateway.")
-                    .font(.footnote).foregroundStyle(.secondary).padding(12)
-            } else if !trimmed.contains(where: \.isWhitespace) {
-                ForEach(suggestions.filter { $0.0.hasPrefix(trimmed.lowercased()) }.prefix(4), id: \.0) { command, detail in
-                    Button {
-                        text = command + (command == "/model" || command == "/effort" || command == "/title" ? " " : "")
-                    } label: {
-                        HStack {
-                            Text(command).font(.body.monospaced())
-                            Text(detail).font(.footnote).foregroundStyle(.secondary)
-                            Spacer()
-                            Image(systemName: "arrow.up.left").foregroundStyle(.secondary)
+            if !matchingCommands.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(matchingCommands) { choice in
+                            Button {
+                                text = choice.insertion.isEmpty ? commandText(choice) : choice.insertion
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Text(commandText(choice)).font(.subheadline.monospaced())
+                                    Text(choice.description).font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    Image(systemName: choice.action == "terminal" ? "desktopcomputer" : "arrow.up.left")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 14).frame(minHeight: 44)
+                                .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(commandText(choice))
+                            .accessibilityHint(choice.description)
                         }
-                        .padding(.horizontal, 16).frame(minHeight: 44)
-                        .contentShape(.rect)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(command)
-                    .accessibilityHint(detail)
                 }
+                .frame(height: min(CGFloat(matchingCommands.count) * 44, 176))
+                .scrollDismissesKeyboard(.never)
+                .accessibilityIdentifier("commandSuggestions")
                 Divider().padding(.horizontal, 14)
             }
         }
     }
 
-    private let suggestions = [
-        ("/help", "All commands"), ("/model", "View or change model"),
-        ("/effort", "Thinking effort"), ("/cancel", "Stop the current task"),
-        ("/status", "Session status"), ("/context", "Context window"),
-        ("/usage", "Token usage"), ("/tasks", "Background tasks"),
-        ("/mcp", "Configured MCP servers"), ("/title", "Rename session"),
-        ("/info", "About RustCode"), ("/perf", "Performance")
-    ]
+    private var commands: [SessionCommandChoice] {
+        if let commands = store.attached?.commands, !commands.isEmpty { return commands }
+        return [
+            ("/help", "All commands", "execute"), ("/model", "Choose a model", "model_picker"),
+            ("/new", "New session", "new_session"), ("/history", "Sessions", "session_picker"),
+            ("/copy", "Copy last response", "copy_response"), ("/effort", "Thinking effort", "execute"),
+            ("/cancel", "Stop the current task", "execute"), ("/status", "Session status", "execute"),
+            ("/context", "Context window", "execute"), ("/usage", "Token usage", "execute"),
+            ("/tasks", "Background tasks", "execute"), ("/mcp", "Configured MCP servers", "execute"),
+            ("/title", "Rename session", "execute"), ("/info", "About RustCode", "execute"),
+            ("/perf", "Performance", "execute")
+        ].map { SessionCommandChoice(name: $0.0, description: $0.1, insertion: $0.0, action: $0.2) }
+    }
 
     private var sendButton: some View {
         Button {
@@ -206,7 +251,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         Task {
             // Give the text back if it certainly did not reach the session.
             let accepted = message.hasPrefix("/")
-                ? await store.executeCommand(message)
+                ? await runCommand(message)
                 : await store.send(message, mode: mode)
             if !accepted, text.isEmpty {
                 text = message

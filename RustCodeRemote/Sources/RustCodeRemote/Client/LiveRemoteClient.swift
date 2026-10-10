@@ -126,6 +126,20 @@ public actor LiveRemoteClient: RemoteClient {
         }
     }
 
+    public func browseDirectories(path: String?) async throws -> DirectoryListing {
+        let reply = try await request(.listDirectories(path: path))
+        guard case .directories(let listing) = reply else { throw Self.unexpected(reply) }
+        return listing
+    }
+
+    public func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary {
+        mutations.insert(requestID)
+        defer { mutations.remove(requestID) }
+        let reply = try await request(.createSession(path: directory), id: requestID)
+        guard case .sessionCreated(let session) = reply else { throw Self.unexpected(reply) }
+        return session
+    }
+
     public func refreshSessions() async throws {
         guard sessionsContinuation != nil else { throw RemoteError.notConnected }
         // The reply's list is delivered through the stream already handed out.

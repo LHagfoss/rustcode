@@ -44,6 +44,9 @@ public protocol RemoteClient: Sendable {
 
     /// Asks for the list again. The answer arrives through the stream `subscribeSessions`
     /// returned.
+    func browseDirectories(path: String?) async throws -> DirectoryListing
+    func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary
+
     func refreshSessions() async throws
 
     /// - Parameter resumeAfter: the last sequence already applied for this exact registration,
@@ -90,6 +93,8 @@ public protocol RemoteClient: Sendable {
 }
 
 public extension RemoteClient {
+    func browseDirectories(path: String?) async throws -> DirectoryListing { throw RemoteError.rejected(.unsupportedOperation) }
+    func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary { throw RemoteError.rejected(.unsupportedOperation) }
     func receiptUpdates() async -> AsyncStream<RequestReceipt> { AsyncStream { $0.finish() } }
     func executeCommand(_ command: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt { RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation)) }
     func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt { RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation)) }

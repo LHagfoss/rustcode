@@ -70,6 +70,7 @@ public struct SessionSnapshot: Sendable, Equatable {
     public var activeTurnID: String?
     public var activeTurnTiming: TurnTiming?
     public var lastTurn: TurnTiming?
+    public var commands: [SessionCommandChoice]
     public var capabilities: Set<String>
     public var settings: SessionSettings?
     public var snapshotID: String?
@@ -103,7 +104,8 @@ public struct SessionSnapshot: Sendable, Equatable {
         lastTurn: TurnTiming? = nil,
         snapshotID: String? = nil,
         settings: SessionSettings? = nil,
-        capabilities: Set<String> = []
+        capabilities: Set<String> = [],
+        commands: [SessionCommandChoice] = []
     ) {
         self.session = session
         self.items = items
@@ -113,6 +115,7 @@ public struct SessionSnapshot: Sendable, Equatable {
         self.snapshotID = snapshotID
         self.settings = settings
         self.capabilities = capabilities
+        self.commands = commands
         self.canSteer = canSteer
         self.pendingQuestion = pendingQuestion
         self.pendingApproval = pendingApproval
@@ -188,6 +191,7 @@ public struct SessionSnapshot: Sendable, Equatable {
                 ))
             }
         case .toolFinished(let itemID, let succeeded, let isPending, let output, let isOutputTruncated):
+            if itemID.hasPrefix("tool:"), hasRecordedTool(String(itemID.dropFirst(5))) { return }
             let index = items.lastIndex { $0.id == itemID }
             var tool = ToolCall(name: "tool", summary: "", status: .running)
             if let index, case .tool(let existing) = items[index].content {
@@ -274,7 +278,17 @@ public struct SessionSnapshot: Sendable, Equatable {
 
     /// Replaces the item with the same ID or appends a new one. A new item ends the
     /// response text before it: the turn has moved on to something else.
+    private func hasRecordedTool(_ callID: String) -> Bool {
+        guard let activeTurnID else { return false }
+        return items.contains { item in
+            guard item.turnTiming?.turnID == activeTurnID, case .tool(let tool) = item.content else { return false }
+            return tool.isTranscriptRecord && tool.status != .running && tool.callID == callID
+        }
+    }
+
     private mutating func upsert(_ item: TranscriptItem) {
+        if case .tool(let tool) = item.content, !tool.isTranscriptRecord,
+           let callID = tool.callID, hasRecordedTool(callID) { return }
         if let index = items.lastIndex(where: { $0.id == item.id }) {
             items[index] = item
         } else {

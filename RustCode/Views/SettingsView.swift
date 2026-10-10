@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(RemoteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var confirmsUnpair = false
+    var onUnpair: () -> Void
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -48,7 +49,7 @@ struct SettingsView: View {
                         }
                     } footer: {
                         if !store.isDemo {
-                            Text("Removes the device token from the keychain. To also revoke it on the host, run “rustcode remote revoke \(store.host?.device.id.prefix(8) ?? "<device>")” there.")
+                            Text("Disconnects this iPhone. Sessions keep running on your Mac.")
                         }
                     }
                 }
@@ -58,7 +59,7 @@ struct SettingsView: View {
                 } header: {
                     Text("About")
                 } footer: {
-                    Text("RustCode Remote controls sessions you share with /remote from a RustCode terminal. Sessions keep running on your Mac; closing this app never cancels work. To share a session, run /remote in it; to stop, run /remote off.")
+                    Text("Start sessions from this app or share terminal sessions with /remote. Sessions keep running on your Mac when you close the app. Use /remote off to stop sharing a terminal session.")
                 }
             }
             .navigationTitle("Settings")
@@ -68,11 +69,11 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .confirmationDialog(
+            .alert(
                 "Unpair from \(store.host?.name ?? "this host")?",
-                isPresented: $confirmsUnpair,
-                titleVisibility: .visible
+                isPresented: $confirmsUnpair
             ) {
+                Button("Cancel", role: .cancel) {}
                 Button("Unpair", role: .destructive, action: unpair)
             } message: {
                 Text("You will need a new pairing code from the terminal to connect again.")
@@ -81,9 +82,8 @@ struct SettingsView: View {
     }
 
     private func unpair() {
-        Task {
-            await store.unpair()
-            dismiss()
-        }
+        // Let the Settings presentation finish closing before replacing the root with pairing.
+        onUnpair()
+        dismiss()
     }
 }

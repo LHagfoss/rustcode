@@ -9,6 +9,7 @@ struct PairingView: View {
     @State private var code = ""
     @State private var addressError: String?
     @State private var showsScanner = false
+    @State private var discovery = NearbyHostDiscovery()
     @FocusState private var focus: Field?
 
     private enum Field {
@@ -29,6 +30,7 @@ struct PairingView: View {
                     VStack(spacing: 28) {
                         header
                         scanSection
+                        nearbySection
                         manualSection.id("manual-entry")
                         if case .failed(let message) = store.pairing {
                             Label(message, systemImage: "exclamationmark.circle")
@@ -49,7 +51,11 @@ struct PairingView: View {
                     guard focus != nil else { return }
                     withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("manual-entry", anchor: .top) }
                 }
-                .onAppear { if address.isEmpty { address = recentAddress } }
+                .onAppear {
+                    if address.isEmpty { address = recentAddress }
+                    discovery.start()
+                }
+                .onDisappear { discovery.stop() }
                 .sheet(isPresented: $showsScanner) {
                     QRScannerSheet { payload in
                         showsScanner = false
@@ -83,7 +89,7 @@ struct PairingView: View {
     private var scanSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label {
-                Text("Connect your iPhone and Mac to the same Wi-Fi. Run **/remote** in a RustCode session on your Mac, then scan its QR code.")
+                Text("Connect your iPhone and Mac to the same Wi-Fi. Run **/remote** in a RustCode session on your Mac, then choose your Mac below or scan its QR code.")
             } icon: {
                 Image(systemName: "1.circle.fill").foregroundStyle(.tint)
             }
@@ -100,6 +106,62 @@ struct PairingView: View {
             .brandProminentButtonStyle()
             .controlSize(.large)
             .disabled(isPairing)
+        }
+    }
+
+    private var nearbySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Nearby Macs")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if discovery.isSearching {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel("Searching for nearby Macs")
+                } else {
+                    Button("Search Again") {
+                        discovery.stop()
+                        discovery.start()
+                    }
+                    .font(.subheadline)
+                }
+            }
+            if let error = discovery.error {
+                Text(error).font(.footnote).foregroundStyle(.secondary)
+            } else if discovery.hosts.isEmpty {
+                Text("Searching on your Wi-Fi… You can also scan a QR code or enter an address below.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(discovery.hosts) { host in
+                Button {
+                    address = host.address
+                    addressError = nil
+                    store.clearPairingError()
+                    focus = .code
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "desktopcomputer")
+                            .font(.title3)
+                            .foregroundStyle(.tint)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(host.name).font(.body.weight(.medium))
+                                .foregroundStyle(.primary)
+                            Text(host.address).font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: address == host.address ? "checkmark.circle.fill" : "chevron.right")
+                            .foregroundStyle(.tint)
+                    }
+                    .frame(minHeight: 44)
+                    .padding(12)
+                    .background(.fill.quaternary, in: .rect(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+                .disabled(isPairing)
+                .accessibilityHint("Selects this Mac. Enter its pairing code to connect.")
+            }
         }
     }
 

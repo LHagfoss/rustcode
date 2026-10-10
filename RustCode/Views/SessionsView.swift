@@ -4,6 +4,7 @@ import SwiftUI
 struct SessionsView: View {
     @Environment(RemoteStore.self) private var store
     @State private var showsSettings = LaunchOptions.current.presentsSettings
+    @State private var unpairsAfterSettings = false
     var presentsAttentionOnLaunch = false
 
     var body: some View {
@@ -20,8 +21,12 @@ struct SessionsView: View {
                 )
             }
         }
-        .sheet(isPresented: $showsSettings) {
-            SettingsView()
+        .sheet(isPresented: $showsSettings, onDismiss: {
+            guard unpairsAfterSettings else { return }
+            unpairsAfterSettings = false
+            Task { await store.unpair() }
+        }) {
+            SettingsView { unpairsAfterSettings = true }
         }
     }
 }
@@ -30,6 +35,7 @@ private struct SessionSidebar: View {
     @Environment(RemoteStore.self) private var store
     @Binding var showsSettings: Bool
     @State private var query = ""
+    @State private var showsNewSession = false
 
     private var sessions: [SessionSummary] {
         let query = query.trimmingCharacters(in: .whitespaces)
@@ -74,7 +80,7 @@ private struct SessionSidebar: View {
                 }
             } footer: {
                 if !sessions.isEmpty {
-                    Text("Sessions appear here while they are shared with /\u{2060}remote and their terminal stays open.")
+                    Text("Start a session here, or share one from your Mac with /\u{2060}remote.")
                 }
             }
         }
@@ -93,10 +99,19 @@ private struct SessionSidebar: View {
         .navigationTitle("Sessions")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Button("New Session", systemImage: "square.and.pencil") {
+                    showsNewSession = true
+                }
+                .disabled(store.connection != .connected)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button("Settings", systemImage: "gearshape") {
                     showsSettings = true
                 }
             }
+        }
+        .sheet(isPresented: $showsNewSession) {
+            NewSessionView()
         }
         .floatingBottomBar {
             ConnectionStatusBar()
@@ -108,9 +123,9 @@ private struct SessionSidebar: View {
         switch store.connection {
         case .connected:
             ContentUnavailableView(
-                "No Shared Sessions",
+                "No Sessions Yet",
                 systemImage: "terminal",
-                description: Text("Run /\u{2060}remote in a RustCode session on \(store.host?.name ?? "your Mac").")
+                description: Text("Tap New Session to choose a folder on \(store.host?.name ?? "your Mac"), or share an existing session with /\u{2060}remote.")
             )
         case .connecting:
             ProgressView("Connecting…")
@@ -139,13 +154,18 @@ private struct SessionRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if let turns = session.turnCount {
+                    Text("\(turns) \(turns == 1 ? "turn" : "turns")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 8)
             indicator
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(session.displayTitle), \(statusDescription)")
+        .accessibilityLabel("\(session.displayTitle), \(statusDescription)\(session.turnCount.map { ", \($0) turns" } ?? "")")
     }
 
     @ViewBuilder

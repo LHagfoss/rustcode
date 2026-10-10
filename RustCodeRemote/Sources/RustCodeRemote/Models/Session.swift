@@ -142,6 +142,10 @@ public struct ToolCall: Hashable, Sendable {
         case failed
     }
 
+    /// Canonical host event identity, when supplied by the protocol.
+    public var callID: String?
+    /// Durable transcript records remain authoritative over delayed live events.
+    public var isTranscriptRecord: Bool
     public var name: String
     public var summary: String
     public var input: String?
@@ -156,8 +160,12 @@ public struct ToolCall: Hashable, Sendable {
         input: String? = nil,
         output: String? = nil,
         status: Status,
-        isOutputTruncated: Bool = false
+        isOutputTruncated: Bool = false,
+        callID: String? = nil,
+        isTranscriptRecord: Bool = false
     ) {
+        self.callID = callID
+        self.isTranscriptRecord = isTranscriptRecord
         self.name = name
         self.summary = summary
         self.input = input

@@ -4,6 +4,17 @@ import XCTest
 final class InputAndTranscriptTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testLeavingHostDismissesSettingsBeforeShowingPairing() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSettings"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Exit Demo"].waitForExistence(timeout: 5))
+        app.buttons["Exit Demo"].tap()
+        XCTAssertTrue(app.textFields["Host address and port"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Settings"].exists)
+        XCTAssertTrue(app.buttons["Try the Demo"].exists)
+    }
+
     func testPairingKeyboardCanAdvanceAndDismissWithoutLosingInput() {
         let app = XCUIApplication()
         app.launch()
@@ -191,7 +202,7 @@ final class InputAndTranscriptTests: XCTestCase {
         model.tap()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "demo-fast-model")).firstMatch.tap()
         XCTAssertEqual(model.value as? String, "demo-fast-model")
-        XCTAssertTrue(app.staticTexts["sessionTurnCount"].exists)
+        XCTAssertFalse(app.staticTexts["sessionTurnCount"].exists)
     }
 
     func testQuestionCanCancelWithoutSendingAnAnswer() {
@@ -206,7 +217,7 @@ final class InputAndTranscriptTests: XCTestCase {
     }
 
     func testSlashSuggestionsRunHelpWithoutSendingAModelPrompt() {
-        let app = launchChat(draft: "/")
+        let app = launchChat(draft: "/he")
         let help = app.buttons["/help"]
         XCTAssertTrue(help.waitForExistence(timeout: 5))
         help.tap()
@@ -249,6 +260,67 @@ final class InputAndTranscriptTests: XCTestCase {
         app.navigationBars["Question"].buttons["Cancel questions"].tap()
         XCTAssertTrue(app.navigationBars["Question"].waitForNonExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Stop the running turn"].exists)
+    }
+
+    func testSlashAutocompleteCompletesInputAndListScrollsWithinBounds() {
+        let app = launchChat(draft: "/he")
+        let complete = app.buttons["Complete command"]
+        XCTAssertTrue(complete.waitForExistence(timeout: 5))
+        complete.tap()
+        XCTAssertEqual(composer(in: app).value as? String, "/help")
+        app.terminate()
+        app.launchArguments = ["-demo", "-demoSession", "idle", "-demoDraft", "/", "-demoFocusComposer"]
+        app.launch()
+        composer(in: app).tap()
+        let suggestions = app.scrollViews["commandSuggestions"]
+        XCTAssertTrue(suggestions.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(suggestions.frame.height, 180)
+        suggestions.swipeUp()
+        suggestions.swipeUp()
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Scrollable compact slash commands"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        XCTAssertTrue(app.buttons["Run command"].isHittable)
+    }
+
+    func testSlashModelOpensBoundedSearchablePicker() {
+        let app = launchChat(draft: "/model")
+        app.buttons["Run command"].tap()
+        let search = app.textFields["Search models"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        let choices = app.scrollViews["modelChoices"]
+        XCTAssertLessThanOrEqual(choices.frame.height, 300)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Bounded model picker"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        search.tap()
+        search.typeText("fast")
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "demo-fast-model")).firstMatch.tap()
+        XCTAssertTrue(search.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["Model"].value as? String, "demo-fast-model")
+        XCTAssertFalse(app.staticTexts["You: /model"].exists)
+    }
+
+    func testHistoryCommandShowsSessionsAndNewSessionBrowsesFolders() {
+        let app = launchChat(draft: "/history")
+        app.buttons["Run command"].tap()
+        let create = app.buttons["New Session"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        create.tap()
+        let path = app.textFields["Session folder path"]
+        XCTAssertTrue(path.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Home Folder"].exists)
+        let start = app.buttons["Start session in selected folder"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "New session folder picker"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        start.tap()
+        XCTAssertTrue(app.navigationBars["New Session"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Model"].waitForExistence(timeout: 5))
     }
 
     private func launchChat(draft: String) -> XCUIApplication {

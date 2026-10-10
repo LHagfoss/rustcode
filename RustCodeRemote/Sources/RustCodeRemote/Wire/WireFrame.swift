@@ -57,6 +57,8 @@ public enum WireReceiptState: String, Sendable, Equatable, CaseIterable {
 public indirect enum WireResult: Codable, Equatable, Sendable {
     case error(WireError)
     case sessions(Sessions)
+    case directories(DirectoryListing)
+    case sessionCreated(SessionCreated)
     case attached(Attached)
     case resumed(Resumed)
     case detached
@@ -73,9 +75,11 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
     case unknown(type: String, JSONValue)
 
     public static let knownTypes: Set<String> = [
-        "error", "sessions", "attached", "resumed", "detached", "history", "content",
+        "directories", "session_created", "error", "sessions", "attached", "resumed", "detached", "history", "content",
         "session_settings_updated", "prompt_accepted", "turn_cancelled", "question_answered", "question_cancelled", "command_executed", "approval_resolved", "request_status",
     ]
+
+    public struct SessionCreated: Codable, Equatable, Sendable { public var session: WireSessionInfo }
 
     public struct Sessions: Codable, Equatable, Sendable {
         public var gatewayID: String
@@ -169,6 +173,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         switch self {
         case .error: "error"
         case .sessions: "sessions"
+        case .directories: "directories"
+        case .sessionCreated: "session_created"
         case .attached: "attached"
         case .resumed: "resumed"
         case .detached: "detached"
@@ -191,6 +197,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         switch type {
         case "error": self = .error(try WireError(from: decoder))
         case "sessions": self = .sessions(try Sessions(from: decoder))
+        case "directories": self = .directories(try DirectoryListing(from: decoder))
+        case "session_created": self = .sessionCreated(try SessionCreated(from: decoder))
         case "attached": self = .attached(try Attached(from: decoder))
         case "resumed": self = .resumed(try Resumed(from: decoder))
         case "detached": self = .detached
@@ -212,6 +220,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         let payload: (any Encodable)? = switch self {
         case .error(let payload): payload
         case .sessions(let payload): payload
+        case .directories(let payload): payload
+        case .sessionCreated(let payload): payload
         case .attached(let payload): payload
         case .resumed(let payload): payload
         case .detached: nil
@@ -584,6 +594,7 @@ public struct WireContentChunk: Codable, Equatable, Sendable {
 // MARK: - Snapshot
 
 public struct WireSnapshot: Codable, Equatable, Sendable {
+    public var commands: [SessionCommandChoice]? = nil
     public var capabilities: [String]? = nil
     public var settings: WireSessionSettings? = nil
     public var snapshotID: String? = nil
@@ -609,6 +620,7 @@ public struct WireSnapshot: Codable, Equatable, Sendable {
         case turn
         case transcript
         case capabilities
+        case commands
         case settings
         case snapshotID = "snapshot_id"
         case lastTurn = "last_turn"
@@ -785,10 +797,15 @@ public struct WireMessage: Codable, Equatable, Sendable {
 }
 
 public struct WireMessageTool: Codable, Equatable, Sendable {
+    public var callID: String? = nil
     public var name: String
     public var detail: String?
     public var success: Bool
     public var pending: Bool
+    enum CodingKeys: String, CodingKey {
+        case name, detail, success, pending
+        case callID = "call_id"
+    }
 }
 
 public struct WireHistoryPage: Codable, Equatable, Sendable {

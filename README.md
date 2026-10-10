@@ -6,8 +6,8 @@ iPhone over the same LAN or a NetBird VPN, and then watch the session's live out
 continue it from the phone: send prompts, stop a turn, answer the agent's questions and
 approve or deny the actions it asks permission for.
 
-The session keeps running in the terminal on the Mac. The phone is a second screen and
-keyboard for it; closing the app never cancels work.
+Start a session in a folder on your Mac from the phone, or control an existing terminal
+session. App-created sessions run in the background; closing the app never cancels work.
 
 ## Status
 
@@ -57,7 +57,8 @@ the automatic LAN flow is for a network you trust (see [Network security](#netwo
 `/remote` shows a QR code, the address and an eight-digit code. In the app tap **Scan
 Pairing Code** and point the camera at the QR code. The first time, iOS asks for camera
 access and, on a LAN, for local-network access; allow both. Without a camera, type the
-address (`192.168.1.20:17879`) and the code instead. Native Paste buttons accept an
+address (`192.168.1.20:17879`) and the code instead. Nearby Macs also appear automatically
+on the same Wi-Fi: choose one and enter its pairing code. Native Paste buttons accept an
 address/QR payload or the pairing code. The app remembers the last successfully paired
 address, never the one-time code. Nearby-machine discovery is not available yet.
 The scanner shows a square target and offers a retry if camera startup fails.
@@ -94,12 +95,25 @@ questions advance in the same sheet. Cancel questions ends the chain and turn, m
 Esc in the terminal. Approval failures keep their sheet open. Unconfirmed actions occupy
 one review row, and repeated Stop taps cannot resend the same cancellation.
 
-Type `/` for command suggestions. Supported commands are `/help`, `/status`, `/info`,
-`/about`, `/usage`, `/perf`, `/context`, `/tasks`, `/mcp`, `/model [profile]`,
-`/effort [value]`, `/title <title>` (also `/change_title`) and `/cancel`. Results appear
-in the transcript without entering model history. `/cancel` targets the current
-question or turn. Session lifecycle, authentication and configuration-editing commands
-remain terminal-only; unsupported commands show a rejection and preserve your draft.
+Tap **New Session** in the sessions list to start in your Mac's Home folder, browse a
+project directory, or enter an absolute path. Turn totals appear on session rows.
+
+Type `/` for the host's complete terminal command catalog in a compact, scrollable list.
+Typing a prefix shows an inline completion; tap the completion arrow or a suggestion to
+fill the draft. `/new [folder]`, `/history`, `/model`, `/models`, and `/copy` have native
+app actions. Informational commands and supported session settings run on the host,
+with results displayed outside model history. `/cancel` targets the current question
+or turn. Commands that still require the Mac interface are marked **On Mac** and keep
+your draft when selected; listing a command does not imply mobile execution support.
+
+Tap the model name for a bounded, searchable picker. Effort choices come from the host:
+explicit provider catalogs take precedence, while legacy profiles with reasoning-effort
+support offer the terminal's low, medium and high choices. Settings change while idle.
+
+Once remote sharing is enabled, installed macOS builds manage a per-user background
+service that restarts at login and follows upgrades. `rustcode remote stop` explicitly
+disables that service. QR/manual pairing and explicit NetBird addresses remain available;
+automatic discovery is limited to the local network.
 
 ## Requirements
 

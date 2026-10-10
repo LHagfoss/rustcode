@@ -12,10 +12,12 @@ final class FakeModelServer: Sendable {
     private let listener: NWListener
     private let chunkDelay: Duration
     private let askQuestions: Bool
+    private let jsonCommand: String?
     private let hasAsked = Mutex(false)
 
-    init(chunkDelay: Duration = .milliseconds(120), askQuestions: Bool = false) throws {
+    init(chunkDelay: Duration = .milliseconds(120), askQuestions: Bool = false, jsonCommand: String? = nil) throws {
         self.askQuestions = askQuestions
+        self.jsonCommand = jsonCommand
         self.chunkDelay = chunkDelay
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -38,7 +40,7 @@ final class FakeModelServer: Sendable {
                 }
                 if isFirst { continuation.resume(with: result) }
             }
-            listener.newConnectionHandler = { [weak self, chunkDelay, askQuestions] connection in
+            listener.newConnectionHandler = { [weak self, chunkDelay, askQuestions, jsonCommand] connection in
                 guard let self else { connection.cancel(); return }
                 connection.start(queue: .global())
                 Self.readRequest(on: connection, received: Data()) { body in
@@ -46,11 +48,11 @@ final class FakeModelServer: Sendable {
                     let tools = request?["tools"] as? [[String: Any]] ?? []
                     let advertisesQuestions = tools.contains { ($0["function"] as? [String: Any])?["name"] as? String == "ask_question" }
                     let asksNow = self.hasAsked.withLock { asked in
-                        guard askQuestions, advertisesQuestions, !asked else { return false }
+                        guard ((askQuestions && advertisesQuestions) || (jsonCommand != nil && body.contains("Run the command") && body.contains("run_command"))), !asked else { return false }
                         asked = true
                         return true
                     }
-                    Task { await Self.streamReply(on: connection, delay: chunkDelay, askQuestions: asksNow) }
+                    Task { await Self.streamReply(on: connection, delay: chunkDelay, askQuestions: asksNow && askQuestions, jsonCommand: asksNow ? jsonCommand : nil) }
                 }
             }
             listener.start(queue: .global())
@@ -85,7 +87,7 @@ final class FakeModelServer: Sendable {
         }
     }
 
-    private static func streamReply(on connection: NWConnection, delay: Duration, askQuestions: Bool) async {
+    private static func streamReply(on connection: NWConnection, delay: Duration, askQuestions: Bool, jsonCommand: String?) async {
         func send(_ text: String) async {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in continuation.resume() })
@@ -96,6 +98,16 @@ final class FakeModelServer: Sendable {
                 + "\"choices\":[{\"index\":0,\"delta\":\(delta),\"finish_reason\":\(finish)}]}\n\n"
         }
         await send("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
+        if let jsonCommand {
+            let call: [String: Any] = ["name": "run_command", "arguments": ["command": jsonCommand]]
+            let callText = "```json\n" + String(decoding: try! JSONSerialization.data(withJSONObject: call), as: UTF8.self) + "\n```"
+            let delta = String(decoding: try! JSONSerialization.data(withJSONObject: ["role": "assistant", "content": callText]), as: UTF8.self)
+            await send(chunk(delta))
+            await send(chunk("{}", finish: "\"stop\""))
+            await send("data: [DONE]\n\n")
+            connection.cancel()
+            return
+        }
         if askQuestions {
             let arguments: [String: Any] = ["questions": (1...3).map { ["header": "Question \($0)", "question": "Pick option for question \($0)", "options": ["First", "Second"]] }]
             let argumentsString = String(decoding: try! JSONSerialization.data(withJSONObject: arguments), as: UTF8.self)

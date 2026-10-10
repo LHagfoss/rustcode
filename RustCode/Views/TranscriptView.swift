@@ -7,6 +7,7 @@ struct TranscriptView: View {
     @State private var selectable: SelectableText?
     @State private var showsRequests = false
     @State private var showsHostUpdate = false
+    @State private var showsModels = false
     @State private var hasAutoPresented = false
     @State private var followsLatest = true
     @State private var isDraggingTranscript = false
@@ -47,10 +48,10 @@ struct TranscriptView: View {
             }
         }
         .sheet(isPresented: $showsRequests) { RequestStatusSheet() }
-        .alert("Restart the remote gateway", isPresented: $showsHostUpdate) {
+        .alert("Update RustCode on your Mac", isPresented: $showsHostUpdate) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("This connection isn’t providing model or effort controls. Update RustCode and restart its remote gateway on your Mac, then reconnect. A gateway left running from before an update can hide new controls.")
+            Text("This host isn’t providing model or effort controls. Update RustCode on your Mac and reopen its session. Current versions update the background service automatically.")
         }
         .sheet(item: $selectable) { selectable in
             SelectTextSheet(text: selectable.text)
@@ -182,6 +183,7 @@ struct TranscriptView: View {
                 isRunning: snapshot.isRunning,
                 canSteer: snapshot.canSteer,
                 isEnabled: store.connection == .connected,
+                runCommand: runCommand,
                 accessory: {
                     if let approval = snapshot.pendingApproval {
                         AttentionAccessory(
@@ -225,26 +227,15 @@ struct TranscriptView: View {
         HStack(spacing: 8) {
             if let settings = snapshot.settings {
                 let current = settings.models.first { $0.id == settings.selectedModel }
-                Menu {
-                    if !settings.canChange { Text("Available after the current turn stops") }
-                    ForEach(settings.models, id: \.id) { choice in
-                        Button {
-                            let effort = choice.reasoningEfforts.contains(settings.reasoningEffort)
-                                ? settings.reasoningEffort : "default"
-                            Task { await store.setSessionSettings(model: choice.id, reasoningEffort: effort) }
-                        } label: {
-                            if choice.id == settings.selectedModel {
-                                Label(choice.id == choice.model ? choice.model : "\(choice.model) · \(choice.id)", systemImage: "checkmark")
-                            } else { Text(choice.id == choice.model ? choice.model : "\(choice.model) · \(choice.id)") }
-                        }
-                        .disabled(!settings.canChange || store.connection != .connected || hasPendingSettings)
-                    }
-                } label: {
+                Button { isComposerFocused = false; showsModels = true } label: {
                     Label(current?.model ?? (store.selectedSession?.model ?? "Model"), systemImage: "chevron.down")
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: 180, minHeight: 44)
                         .contentShape(.rect)
+                }
+                .popover(isPresented: $showsModels, arrowEdge: .bottom) {
+                    ModelPicker().presentationCompactAdaptation(.popover)
                 }
                 .accessibilityLabel("Model")
                 .accessibilityValue(current?.model ?? (store.selectedSession?.model ?? "Model"))
@@ -277,11 +268,6 @@ struct TranscriptView: View {
                 Button { showsHostUpdate = true } label: { Label("Effort", systemImage: "brain").frame(minHeight: 44).contentShape(.rect) }
                     .accessibilityLabel("Thinking effort")
             }
-            if let count = store.selectedSession?.turnCount {
-                Text("\(count) \(count == 1 ? "turn" : "turns")")
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("sessionTurnCount")
-            }
         }
         .font(.caption.weight(.medium))
         .controlSize(.regular)
@@ -289,6 +275,53 @@ struct TranscriptView: View {
         .fixedSize(horizontal: true, vertical: false)
         .frame(minHeight: 44)
         .padding(.horizontal, 6)
+    }
+
+    private func runCommand(_ command: String) async -> Bool {
+        let parts = command.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+        let name = String(parts.first ?? "").lowercased()
+        let argument = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let catalog = store.attached?.commands.first { choice in
+            (choice.name.hasPrefix("/") ? choice.name : "/" + choice.name) == name
+        }
+        let action = catalog?.action ?? {
+            switch name {
+            case "/new": "new_session"
+            case "/model", "/models": "model_picker"
+            case "/history": "session_picker"
+            case "/copy": "copy_response"
+            default: "execute"
+            }
+        }()
+        switch action {
+        case "new_session":
+            return await store.createSession(directory: argument.isEmpty ? store.selectedSession?.workspace : argument)
+        case "model_picker" where argument.isEmpty:
+            guard store.attached?.settings != nil else { showsHostUpdate = true; return false }
+            showsModels = true
+            return true
+        case "session_picker":
+            store.select(nil)
+            return true
+        case "copy_response":
+            guard let response = store.attached?.items.reversed().compactMap({ item -> String? in
+                if case .assistant(let text) = item.content { return text.text }
+                return nil
+            }).first else {
+                store.notice = "There is no response to copy yet."
+                return false
+            }
+            Clipboard.copy(response)
+            return true
+        case "terminal":
+            store.notice = "\(name) needs the terminal on your Mac. \(catalog?.description ?? "")"
+            return false
+        case "execute", "model_picker":
+            return await store.executeCommand(command)
+        default:
+            store.notice = "This command needs a newer version of the app. Update the app or use \(name) on your Mac."
+            return false
+        }
     }
 
     private var hasPendingSettings: Bool {

@@ -66,6 +66,8 @@ struct LineCodec: RemoteCodec {
         case .pair: "pair"
         case .authenticate: "authenticate"
         case .subscribeSessions: "subscribe"
+        case .listDirectories: "directories"
+        case .createSession: "create-session"
         case .attachSession(_, let resume):
             resume.map { "attach:\($0.origin.gatewayID)/\($0.origin.instanceID ?? "-")@\($0.lastSequence)" } ?? "attach"
         case .detachSession: "detach"

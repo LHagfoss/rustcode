@@ -99,6 +99,7 @@
             "content_id": "message:h2:61"
           },
           "tool": {
+            "call_id": "call-parser-tests",
             "name": "run_command",
             "detail": "cargo test parser",
             "success": false,

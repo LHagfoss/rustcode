@@ -100,6 +100,10 @@ public struct WireCodec: RemoteCodec {
         switch command {
         case .pair, .authenticate:
             preconditionFailure("handshake frames are not protocol requests")
+        case .listDirectories(let path):
+            return WireRequest(requestID: requestID.rawValue, operation: .listDirectories(.init(path: path)))
+        case .createSession(let path):
+            return WireRequest(requestID: requestID.rawValue, operation: .createSession(.init(path: path)))
         case .subscribeSessions:
             return WireRequest(requestID: requestID.rawValue, operation: .subscribeSessions)
         case .attachSession(let session, let resume):
@@ -269,6 +273,9 @@ public struct WireCodec: RemoteCodec {
                 return .failure(.outcomeUnknown)
             }
             return .failure(remoteError(error))
+        case .directories(let listing): return .directories(listing)
+        case .sessionCreated(let created):
+            return receipt == .applied ? .sessionCreated(summary(created.session)) : .receipt(receipt == .received ? .received : .unknown)
         case .sessions(let sessions):
             return .sessions(sessions.sessions.map(summary))
         case .attached(let attached):
@@ -503,7 +510,8 @@ public struct WireCodec: RemoteCodec {
             lastTurn: wire.lastTurn.map(timing),
             snapshotID: wire.snapshotID,
             settings: wire.settings.map { $0.domain },
-            capabilities: Set(wire.capabilities ?? [])
+            capabilities: Set(wire.capabilities ?? []),
+            commands: wire.commands ?? []
         )
     }
 
@@ -519,7 +527,8 @@ public struct WireCodec: RemoteCodec {
                 summary: tool.detail ?? "",
                 output: text.isEmpty ? nil : text,
                 status: tool.pending ? .running : tool.success ? .succeeded : .failed,
-                isOutputTruncated: message.content.truncated
+                isOutputTruncated: message.content.truncated,
+                callID: tool.callID, isTranscriptRecord: true
             )))
         }
         switch message.role {
@@ -551,7 +560,7 @@ public struct WireCodec: RemoteCodec {
         return TranscriptItem(id: toolItemID(tool.id), .tool(ToolCall(
             name: tool.name,
             summary: tool.detail ?? "",
-            status: status
+            status: status, callID: tool.id
         )))
     }
 

@@ -13,6 +13,8 @@ public enum RemoteCommand: Sendable, Equatable {
     /// First frame of every other connection. Answered by `.handshake(.authenticated)`.
     case authenticate(device: DeviceIdentity, deviceToken: String)
     case subscribeSessions
+    case listDirectories(path: String?)
+    case createSession(path: String?)
     case attachSession(SessionRef, resume: ResumeCursor?)
     case detachSession(SessionRef)
     case getHistory(SessionRef, before: HistoryCursor, limit: Int)
@@ -110,6 +112,8 @@ public enum HandshakeReply: Sendable, Equatable {
 public enum RemoteReply: Sendable, Equatable {
     case handshake(HandshakeReply)
     case sessions([SessionSummary])
+    case directories(DirectoryListing)
+    case sessionCreated(SessionSummary)
     /// `origin` is what a later resume cursor for this session has to name.
     case attached(SessionAttachment.Start, origin: ReplayOrigin)
     case detached

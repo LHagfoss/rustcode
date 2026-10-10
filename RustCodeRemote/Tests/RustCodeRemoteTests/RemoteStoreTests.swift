@@ -5,6 +5,17 @@ import Testing
 
 /// A client whose behaviour each test scripts directly.
 private actor StubClient: RemoteClient {
+    var creationDelay: Duration = .zero
+    func set(creationDelay: Duration) { self.creationDelay = creationDelay }
+    private(set) var creationCalls: [RequestID] = []
+    var creationResults: [Result<SessionSummary, RemoteError>] = []
+    func set(creationResults: [Result<SessionSummary, RemoteError>]) { self.creationResults = creationResults }
+    func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary {
+        creationCalls.append(requestID)
+        let result = creationResults.removeFirst()
+        try await Task.sleep(for: creationDelay)
+        return try result.get()
+    }
     var connectResults: [Result<Void, RemoteError>] = []
     var submitResult: Result<ReceiptState, RemoteError> = .success(.applied)
     var answerResult: Result<ReceiptState, RemoteError> = .success(.applied)
@@ -209,6 +220,56 @@ private final class DelayLog: Sendable {
             sleep: { [delays] delay in delays.append(delay) },
             randomUnit: { 0.5 }
         )
+    }
+
+    @Test func oldCreationCannotSelectSessionAfterRepairingSameGateway() async {
+        let client = StubClient()
+        await client.set(creationDelay: .milliseconds(100))
+        await client.set(creationResults: [.success(makeSession("old-created"))])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        let pending = Task { await store.createSession(directory: "/work") }
+        #expect(await waitUntil { await client.creationCalls.count == 1 })
+        await store.unpair()
+        await store.pair(.manual(address: HostAddress(host: "localhost", port: 7878), code: "123456"), deviceName: "Test")
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await pending.value == false)
+        #expect(store.selectedSessionID == nil)
+        #expect(!store.sessions.contains { $0.id == "old-created" })
+        #expect(!store.isCreatingSession)
+        await store.unpair()
+    }
+
+    @Test func uncertainCreationRetriesSameIdentityAndSelectsConfirmedSession() async {
+        let client = StubClient()
+        await client.set(creationResults: [.failure(.timeout), .success(makeSession("new"))])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await store.createSession(directory: "/work") == false)
+        #expect(await store.createSession(directory: "/different") == false)
+        #expect(await client.creationCalls.count == 1)
+        #expect(await store.createSession(directory: "/work"))
+        let requests = await client.creationCalls
+        #expect(requests.count == 2)
+        #expect(requests[0] == requests[1])
+        #expect(store.selectedSessionID == "new")
+        #expect(await waitUntil { store.attached?.session.sessionID == "new" })
+        await store.unpair()
+    }
+
+    @Test func rejectedCreationAllowsChoosingAnotherFolder() async {
+        let client = StubClient()
+        await client.set(creationResults: [.failure(.rejected(.unsupportedOperation)), .success(makeSession("new"))])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await store.createSession(directory: "/missing") == false)
+        #expect(await store.createSession(directory: "/exists"))
+        let requests = await client.creationCalls
+        #expect(requests[0] != requests[1])
+        await store.unpair()
     }
 
     // MARK: Pairing and connection

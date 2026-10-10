@@ -36,6 +36,8 @@ public struct WireRequest: Codable, Equatable, Sendable {
 public enum WireOperation: Codable, Equatable, Sendable {
     case listSessions
     case subscribeSessions
+    case listDirectories(DirectoryPath)
+    case createSession(DirectoryPath)
     case attachSession(AttachSession)
     case detachSession
     case getHistory(GetHistory)
@@ -54,10 +56,12 @@ public enum WireOperation: Codable, Equatable, Sendable {
 
     /// Every `operation.type` this build knows.
     public static let knownTypes: Set<String> = [
-        "list_sessions", "subscribe_sessions", "attach_session", "detach_session", "get_history",
+        "list_directories", "create_session", "list_sessions", "subscribe_sessions", "attach_session", "detach_session", "get_history",
         "get_content", "submit_prompt", "steer", "queue", "cancel_turn", "answer_question",
         "resolve_approval", "get_request_status", "set_session_settings", "execute_command", "cancel_question",
     ]
+
+    public struct DirectoryPath: Codable, Equatable, Sendable { public var path: String? }
 
     public struct AttachSession: Codable, Equatable, Sendable {
         public var resume: WireResumeCursor?
@@ -135,6 +139,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
         switch self {
         case .listSessions: "list_sessions"
         case .subscribeSessions: "subscribe_sessions"
+        case .listDirectories: "list_directories"
+        case .createSession: "create_session"
         case .attachSession: "attach_session"
         case .detachSession: "detach_session"
         case .getHistory: "get_history"
@@ -158,6 +164,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
         switch type {
         case "list_sessions": self = .listSessions
         case "subscribe_sessions": self = .subscribeSessions
+        case "list_directories": self = .listDirectories(try DirectoryPath(from: decoder))
+        case "create_session": self = .createSession(try DirectoryPath(from: decoder))
         case "attach_session": self = .attachSession(try AttachSession(from: decoder))
         case "detach_session": self = .detachSession
         case "get_history": self = .getHistory(try GetHistory(from: decoder))
@@ -179,6 +187,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
     public func encode(to encoder: any Encoder) throws {
         let payload: (any Encodable)? = switch self {
         case .listSessions, .subscribeSessions, .detachSession: nil
+        case .listDirectories(let payload), .createSession(let payload): payload
         case .attachSession(let payload): payload
         case .getHistory(let payload): payload
         case .getContent(let payload): payload

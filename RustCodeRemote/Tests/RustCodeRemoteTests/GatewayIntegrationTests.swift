@@ -17,8 +17,8 @@ struct GatewayIntegrationTests {
 
         /// - Parameter configFile: contents of `config.toml` for this configuration directory,
         ///   which a terminal session started with it will also use.
-        init(configFile: String? = nil, bind: String? = "127.0.0.1") async throws {
-            binary = try #require(ProcessInfo.processInfo.environment["RUSTCODE_GATEWAY_BIN"])
+        init(configFile: String? = nil, bind: String? = "127.0.0.1", binary: String? = nil) async throws {
+            self.binary = try #require(binary ?? ProcessInfo.processInfo.environment["RUSTCODE_GATEWAY_BIN"])
             // The gateway's control socket lives under the configuration directory, and a
             // Unix socket path has to stay short.
             configuration = URL(fileURLWithPath: "/tmp/rcgw-\(UUID().uuidString.prefix(8))")
@@ -29,10 +29,10 @@ struct GatewayIntegrationTests {
             port = Int.random(in: 20000...40000)
 
             process = Process()
-            process.executableURL = URL(fileURLWithPath: binary)
+            process.executableURL = URL(fileURLWithPath: self.binary)
             process.arguments = ["remote", "serve", "--port", "\(port)"]
             if let bind { process.arguments! += ["--bind", bind] }
-            process.environment = ["RUSTCODE_CONFIG_DIR": configuration.path, "PATH": "/usr/bin:/bin"]
+            process.environment = ["RUSTCODE_CONFIG_DIR": configuration.path, "PATH": "/usr/bin:/bin", "HOME": FileManager.default.homeDirectoryForCurrentUser.path]
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             try process.run()
@@ -46,10 +46,14 @@ struct GatewayIntegrationTests {
 
         @discardableResult
         func run(_ arguments: String...) throws -> String {
+            try runUsing(binary, arguments: arguments)
+        }
+
+        func runUsing(_ executable: String, arguments: [String]) throws -> String {
             let command = Process()
-            command.executableURL = URL(fileURLWithPath: binary)
+            command.executableURL = URL(fileURLWithPath: executable)
             command.arguments = arguments
-            command.environment = ["RUSTCODE_CONFIG_DIR": configuration.path, "PATH": "/usr/bin:/bin"]
+            command.environment = ["RUSTCODE_CONFIG_DIR": configuration.path, "PATH": "/usr/bin:/bin", "HOME": FileManager.default.homeDirectoryForCurrentUser.path]
             let output = Pipe()
             command.standardOutput = output
             command.standardError = output
@@ -78,6 +82,26 @@ struct GatewayIntegrationTests {
 
     private func makeClient() -> LiveRemoteClient {
         LiveRemoteClient(codec: WireCodec(), requestTimeout: .seconds(5))
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["RUSTCODE_OLD_GATEWAY_BIN"] != nil), .timeLimit(.minutes(2)))
+    func upgradingBackgroundGatewayKeepsPairingAndAddress() async throws {
+        let old = try #require(ProcessInfo.processInfo.environment["RUSTCODE_OLD_GATEWAY_BIN"])
+        let current = try #require(ProcessInfo.processInfo.environment["RUSTCODE_GATEWAY_BIN"])
+        let gateway = try await Gateway(configFile: "version = 1\n[remote]\nbind = \"127.0.0.1\"\n", binary: old)
+        defer { gateway.stop() }
+        let client = makeClient()
+        let credential = try await client.pair(.scanned(try gateway.pairingChallenge().payload), deviceName: "Upgrade test")
+        let before = try await client.connect(using: credential)
+        await client.disconnect()
+        _ = try gateway.runUsing(current, arguments: ["remote", "start"])
+        let after = try await client.connect(using: credential)
+        #expect(after.gatewayID == before.gatewayID)
+        #expect(after.instanceID != before.instanceID)
+        #expect(credential.host.address.port == gateway.port)
+        var sessions = try await client.subscribeSessions().makeAsyncIterator()
+        #expect(try await sessions.next() == [])
+        await client.disconnect()
     }
 
     /// Opt in on a Mac with a reachable LAN; do not make isolated CI require Wi-Fi.
