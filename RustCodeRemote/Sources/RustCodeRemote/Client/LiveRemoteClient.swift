@@ -172,6 +172,11 @@ public actor LiveRemoteClient: RemoteClient {
 
     // MARK: Mutations
 
+    public func setSessionSettings(model: String, reasoningEffort: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        try await mutate(.setSessionSettings(session, model: model, reasoningEffort: reasoningEffort), id: requestID)
+    }
+
+
     public func submit(_ text: String, to session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
         try await mutate(.submitPrompt(session, text: text), id: requestID)
     }

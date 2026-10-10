@@ -10,6 +10,7 @@
       "title": "Fix the failing parser tests",
       "workspace": "/Users/dev/code/parser",
       "model": "gpt-5.5",
+      "turn_count": 2,
       "activity": "awaiting_approval",
       "attention": {
         "approval": true,
@@ -22,6 +23,7 @@
       "registration_epoch": 1,
       "title": "New session",
       "model": "gpt-5.5",
+      "turn_count": 0,
       "activity": "idle",
       "attention": {
         "approval": false,

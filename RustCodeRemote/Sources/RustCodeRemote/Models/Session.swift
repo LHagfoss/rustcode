@@ -44,6 +44,11 @@ public struct SessionSummary: Identifiable, Hashable, Sendable {
     public var model: String
     public var activity: SessionActivity
     public var attention: SessionAttention
+    /// The host's total logical turns, independent of the bounded transcript window.
+    public var turnCount: UInt64?
+    public var displayTitle: String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Session \(id.prefix(8))" : title
+    }
     public var health: SessionHealth
 
     public var id: String { ref.sessionID }
@@ -55,7 +60,8 @@ public struct SessionSummary: Identifiable, Hashable, Sendable {
         model: String,
         activity: SessionActivity = .idle,
         attention: SessionAttention = SessionAttention(),
-        health: SessionHealth = .healthy
+        health: SessionHealth = .healthy,
+        turnCount: UInt64? = nil
     ) {
         self.ref = ref
         self.title = title
@@ -64,6 +70,7 @@ public struct SessionSummary: Identifiable, Hashable, Sendable {
         self.activity = activity
         self.attention = attention
         self.health = health
+        self.turnCount = turnCount
     }
 }
 
@@ -104,6 +111,8 @@ public struct AssistantText: Hashable, Sendable {
     public var text: String
     public var isStreaming: Bool
     public var responseTimeMilliseconds: UInt64?
+    public var thoughtTokens: UInt32?
+    public var thoughtTokensEstimated: Bool?
     public var thoughtTimeMilliseconds: UInt64?
     public var timestamp: String?
     public var completedAt: String?
@@ -112,11 +121,13 @@ public struct AssistantText: Hashable, Sendable {
 
     public init(text: String, isStreaming: Bool = false, responseTimeMilliseconds: UInt64? = nil,
                 thoughtTimeMilliseconds: UInt64? = nil, timestamp: String? = nil,
-                completedAt: String? = nil, turn: TurnTiming? = nil, metadata: [String: JSONValue] = [:]) {
+                completedAt: String? = nil, thoughtTokens: UInt32? = nil, thoughtTokensEstimated: Bool? = nil, turn: TurnTiming? = nil, metadata: [String: JSONValue] = [:]) {
         self.text = text
         self.isStreaming = isStreaming
         self.responseTimeMilliseconds = responseTimeMilliseconds
         self.thoughtTimeMilliseconds = thoughtTimeMilliseconds
+        self.thoughtTokens = thoughtTokens
+        self.thoughtTokensEstimated = thoughtTokensEstimated
         self.timestamp = timestamp
         self.completedAt = completedAt
         self.turn = turn

@@ -2,6 +2,7 @@ import Foundation
 
 public enum TimingPresentation {
     public static func duration(_ milliseconds: UInt64) -> String {
+        if milliseconds < 1000 { return "\(milliseconds)ms" }
         let seconds = milliseconds / 1000
         if seconds < 60 { return "\(seconds)s" }
         if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
@@ -22,11 +23,14 @@ public enum TimingPresentation {
 
     /// The host reports a single aggregate for the assistant segment. Display it on
     /// the first thinking disclosure, even when that segment has several phases.
-    public static func thinkingLabel(at index: Int, in blocks: [AssistantBlock], milliseconds: UInt64?) -> String? {
+    public static func thinkingLabel(at index: Int, in blocks: [AssistantBlock], milliseconds: UInt64?, tokens: UInt32? = nil, estimated: Bool? = nil) -> String? {
         guard blocks.indices.contains(index), case .thinking = blocks[index] else { return nil }
         let first = blocks.firstIndex { if case .thinking = $0 { true } else { false } }
-        guard first == index, let milliseconds else { return "Thinking" }
-        return "Thinking · \(duration(milliseconds))"
+        guard first == index else { return "Thinking" }
+        var parts = ["Thinking"]
+        if let milliseconds { parts.append(duration(milliseconds)) }
+        if let tokens { parts.append("\(estimated == true ? "~" : "")\(tokens) tokens") }
+        return parts.joined(separator: " · ")
     }
 
     /// Last correlated transcript entry owns the logical-turn footer. Metadata on a

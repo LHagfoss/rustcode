@@ -6,6 +6,8 @@ struct TranscriptView: View {
     @State private var sheet: AttentionSheet?
     @State private var selectable: SelectableText?
     @State private var hasAutoPresented = false
+    @State private var followsLatest = true
+    @State private var isDraggingTranscript = false
     @FocusState private var isComposerFocused: Bool
     var presentsAttentionOnAppear = false
 
@@ -24,7 +26,7 @@ struct TranscriptView: View {
                 )
             }
         }
-        .navigationTitle(store.selectedSession?.title ?? "Session")
+        .navigationTitle(store.selectedSession?.displayTitle ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let session = store.selectedSession {
@@ -37,7 +39,7 @@ struct TranscriptView: View {
         .sheet(item: $sheet) { sheet in
             switch sheet {
             case .question(let question):
-                QuestionSheet(question: question)
+                QuestionSheet(question: question).id(question.id)
             case .approval(let approval):
                 ApprovalSheet(batchID: approval.batchID, initial: approval)
             }
@@ -48,6 +50,11 @@ struct TranscriptView: View {
         .onChange(of: store.attached?.pendingQuestion?.id) { reconcileSheet() }
         .onChange(of: store.attached?.pendingApproval?.batchID) { reconcileSheet() }
         .onAppear { reconcileSheet() }
+        .onChange(of: store.selectedSession?.ref) { _, _ in
+            followsLatest = true
+            isDraggingTranscript = false
+            hasAutoPresented = false
+        }
         #if DEBUG
         .task(id: store.attached?.items.isEmpty) {
             guard LaunchOptions.current.presentsSelectText, selectable == nil else { return }
@@ -63,7 +70,7 @@ struct TranscriptView: View {
         Menu {
             Section("\(session.workspace) · \(session.model)") {
                 if let snapshot = store.attached, !snapshot.items.isEmpty {
-                    ShareLink(item: snapshot.plainText(title: session.title)) {
+                    ShareLink(item: snapshot.plainText(title: session.displayTitle)) {
                         Label("Share Transcript", systemImage: "square.and.arrow.up")
                     }
                 }
@@ -78,52 +85,67 @@ struct TranscriptView: View {
 
     private func transcript(_ snapshot: SessionSnapshot) -> some View {
         let footers = TimingPresentation.footerOwners(items: snapshot.items, lastTurn: snapshot.lastTurn)
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                if snapshot.historyCursor != nil {
-                    Button {
-                        Task { await store.loadEarlierHistory() }
-                    } label: {
-                        if store.isLoadingHistory {
-                            ProgressView()
-                        } else {
-                            Text("Load Earlier Messages")
+        return ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if snapshot.historyCursor != nil {
+                        Button {
+                            followsLatest = false
+                            Task { await store.loadEarlierHistory() }
+                        } label: {
+                            if store.isLoadingHistory {
+                                ProgressView()
+                            } else {
+                                Text("Load Earlier Messages")
+                            }
                         }
+                        .font(.footnote.weight(.medium))
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                        .disabled(store.isLoadingHistory)
                     }
-                    .font(.footnote.weight(.medium))
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity)
-                    .disabled(store.isLoadingHistory)
+                    ForEach(snapshot.items) { item in
+                        TranscriptRow(item: item, footer: footers[item.id])
+                    }
+                    if isThinking(snapshot) {
+                        StreamingIndicator()
+                    }
+                    SessionActivityView(snapshot: snapshot)
+                    Color.clear.frame(height: 1).id("transcript-end")
                 }
-                ForEach(snapshot.items) { item in
-                    TranscriptRow(item: item, footer: footers[item.id])
-                }
-                if isThinking(snapshot) {
-                    StreamingIndicator()
-                }
-                SessionActivityView(snapshot: snapshot)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 16)
-            .frame(maxWidth: 760, alignment: .leading)
-            .frame(maxWidth: .infinity)
-        }
-        // Open at the latest message and follow new output, but keep a short transcript
-        // at the top of the screen instead of pinning it to the composer.
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .sizeChanges)
-        .defaultScrollAnchor(.top, for: .alignment)
-        .scrollDismissesKeyboard(.immediately)
-        .onScrollPhaseChange { _, phase in
-            if phase == .interacting { isComposerFocused = false }
-        }
-        .accessibilityIdentifier("transcript")
-        // Keep the editable field in a stable safe-area inset. safeAreaBar relocates
-        // its content as the keyboard changes, which breaks the field's focus binding.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            composerDock
+            // Opening the keyboard must not jump a reader to the end. Follow output
+            // only while already at the tail and not editing a message.
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.top, for: .sizeChanges)
+            .defaultScrollAnchor(.top, for: .alignment)
+            .scrollDismissesKeyboard(.interactively)
+            .onScrollPhaseChange { _, phase in
+                isDraggingTranscript = phase == .interacting || phase == .decelerating
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom >= geometry.contentSize.height - 60
+            } action: { _, atBottom in
+                if isDraggingTranscript { followsLatest = atBottom }
+            }
+            .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
+            .onChange(of: snapshot.items) { _, _ in
+                if followsLatest && !isComposerFocused && !isDraggingTranscript {
+                    proxy.scrollTo("transcript-end", anchor: .bottom)
+                }
+            }
+            .accessibilityIdentifier("transcript")
+            // Keep the editable field in a stable safe-area inset. safeAreaBar relocates
+            // its content as the keyboard changes, which breaks the field's focus binding.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                composerDock
+            }
         }
     }
 
@@ -153,6 +175,7 @@ struct TranscriptView: View {
                             action: "Answer"
                         ) { sheet = .question(question) }
                     }
+                    sessionControls(snapshot)
                     ComposerBar(
                         isRunning: snapshot.isRunning,
                         canSteer: snapshot.canSteer,
@@ -166,6 +189,78 @@ struct TranscriptView: View {
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }
+    }
+
+    @ViewBuilder
+    private func sessionControls(_ snapshot: SessionSnapshot) -> some View {
+        ViewThatFits(in: .horizontal) {
+            controlsRow(snapshot)
+            ScrollView(.horizontal) { controlsRow(snapshot) }.scrollIndicators(.hidden)
+        }
+    }
+
+    private func controlsRow(_ snapshot: SessionSnapshot) -> some View {
+        HStack(spacing: 8) {
+            if let settings = snapshot.settings {
+                let current = settings.models.first { $0.id == settings.selectedModel }
+                Menu {
+                    ForEach(settings.models, id: \.id) { choice in
+                        Button {
+                            let effort = choice.reasoningEfforts.contains(settings.reasoningEffort)
+                                ? settings.reasoningEffort : "default"
+                            Task { await store.setSessionSettings(model: choice.id, reasoningEffort: effort) }
+                        } label: {
+                            if choice.id == settings.selectedModel {
+                                Label(choice.model, systemImage: "checkmark")
+                            } else { Text(choice.model) }
+                        }
+                    }
+                } label: {
+                    Label(current?.model ?? (store.selectedSession?.model ?? "Model"), systemImage: "chevron.down")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 180)
+                }
+                .accessibilityLabel("Model")
+                .accessibilityValue(current?.model ?? (store.selectedSession?.model ?? "Model"))
+                .disabled(!settings.canChange || store.connection != .connected || hasPendingSettings)
+
+                Menu {
+                    ForEach(current?.reasoningEfforts ?? [], id: \.self) { effort in
+                        Button {
+                            Task { await store.setSessionSettings(model: settings.selectedModel, reasoningEffort: effort) }
+                        } label: {
+                            if effort == settings.reasoningEffort {
+                                Label(effort.capitalized, systemImage: "checkmark")
+                            } else { Text(effort.capitalized) }
+                        }
+                    }
+                } label: {
+                    Label(settings.reasoningEffort.capitalized, systemImage: "brain")
+                }
+                .accessibilityLabel("Thinking effort")
+                .accessibilityValue(settings.reasoningEffort)
+                .disabled(!settings.canChange || store.connection != .connected || hasPendingSettings
+                    || (current?.reasoningEfforts.count ?? 0) < 2)
+            } else {
+                Text((store.selectedSession?.model ?? "Model")).foregroundStyle(.secondary)
+            }
+            if let count = store.selectedSession?.turnCount {
+                Text("\(count) \(count == 1 ? "turn" : "turns")")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("sessionTurnCount")
+            }
+        }
+        .font(.caption.weight(.medium))
+        .controlSize(.regular)
+        .secondaryButtonStyle()
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(minHeight: 44)
+        .padding(.horizontal, 6)
+    }
+
+    private var hasPendingSettings: Bool {
+        store.visibleRequests.contains { $0.kind == .settings && ($0.phase == .sending || $0.isUncertain) }
     }
 
     /// A turn is running but nothing on screen shows it: no streaming text, no running tool

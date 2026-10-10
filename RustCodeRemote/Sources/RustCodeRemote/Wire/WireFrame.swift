@@ -62,6 +62,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
     case detached
     case history(WireHistoryPage)
     case content(WireContentChunk)
+    case sessionSettingsUpdated(SessionSettingsUpdated)
     case promptAccepted(PromptAccepted)
     case turnCancelled(TurnCancelled)
     case questionAnswered(QuestionAnswered)
@@ -71,7 +72,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
 
     public static let knownTypes: Set<String> = [
         "error", "sessions", "attached", "resumed", "detached", "history", "content",
-        "prompt_accepted", "turn_cancelled", "question_answered", "approval_resolved", "request_status",
+        "session_settings_updated", "prompt_accepted", "turn_cancelled", "question_answered", "approval_resolved", "request_status",
     ]
 
     public struct Sessions: Codable, Equatable, Sendable {
@@ -116,6 +117,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
             case nextSequence = "next_sequence"
         }
     }
+
+    public struct SessionSettingsUpdated: Codable, Equatable, Sendable { public var settings: WireSessionSettings }
 
     public struct PromptAccepted: Codable, Equatable, Sendable {
         public var disposition: WireOpen<WirePromptDisposition>
@@ -169,6 +172,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .detached: "detached"
         case .history: "history"
         case .content: "content"
+        case .sessionSettingsUpdated: "session_settings_updated"
         case .promptAccepted: "prompt_accepted"
         case .turnCancelled: "turn_cancelled"
         case .questionAnswered: "question_answered"
@@ -188,6 +192,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case "detached": self = .detached
         case "history": self = .history(try WireHistoryPage(from: decoder))
         case "content": self = .content(try WireContentChunk(from: decoder))
+        case "session_settings_updated": self = .sessionSettingsUpdated(try SessionSettingsUpdated(from: decoder))
         case "prompt_accepted": self = .promptAccepted(try PromptAccepted(from: decoder))
         case "turn_cancelled": self = .turnCancelled(try TurnCancelled(from: decoder))
         case "question_answered": self = .questionAnswered(try QuestionAnswered(from: decoder))
@@ -206,6 +211,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .detached: nil
         case .history(let payload): payload
         case .content(let payload): payload
+        case .sessionSettingsUpdated(let payload): payload
         case .promptAccepted(let payload): payload
         case .turnCancelled(let payload): payload
         case .questionAnswered(let payload): payload
@@ -321,10 +327,14 @@ public enum WireEvent: Codable, Equatable, Sendable {
     public struct TextDelta: Codable, Equatable, Sendable {
         public var text: String
         public var timing: WireTurnTiming? = nil
+        public var thoughtTokens: UInt32? = nil
+        public var thoughtTokensEstimated: Bool? = nil
         public var thoughtTimeMilliseconds: UInt64? = nil
 
         enum CodingKeys: String, CodingKey {
             case text, timing
+            case thoughtTokens = "thought_tokens"
+            case thoughtTokensEstimated = "thought_tokens_estimated"
             case thoughtTimeMilliseconds = "thought_time_ms"
         }
     }
@@ -495,6 +505,7 @@ public struct WireSessionInfo: Codable, Equatable, Sendable {
     public var model: String
     public var activity: WireOpen<WireSessionActivity>
     public var attention: WireAttention
+    public var turnCount: UInt64? = nil
     public var health: WireOpen<WireOwnerHealth>
 
     enum CodingKeys: String, CodingKey {
@@ -506,6 +517,7 @@ public struct WireSessionInfo: Codable, Equatable, Sendable {
         case activity
         case attention
         case health
+        case turnCount = "turn_count"
     }
 }
 
@@ -564,6 +576,7 @@ public struct WireContentChunk: Codable, Equatable, Sendable {
 // MARK: - Snapshot
 
 public struct WireSnapshot: Codable, Equatable, Sendable {
+    public var settings: WireSessionSettings? = nil
     public var snapshotID: String? = nil
     public var lastTurn: WireTurnTiming? = nil
     public var session: WireSessionInfo
@@ -586,6 +599,7 @@ public struct WireSnapshot: Codable, Equatable, Sendable {
         case generation
         case turn
         case transcript
+        case settings
         case snapshotID = "snapshot_id"
         case lastTurn = "last_turn"
         case historyRevision = "history_revision"
@@ -615,6 +629,8 @@ public struct WireOmitted: Codable, Equatable, Sendable {
 
 public struct WireTurn: Codable, Equatable, Sendable {
     public var timing: WireTurnTiming? = nil
+    public var thoughtTokens: UInt32? = nil
+    public var thoughtTokensEstimated: Bool? = nil
     public var thoughtTimeMilliseconds: UInt64? = nil
     public var turnID: String
     public var liveResponse: WireBoundedText
@@ -624,6 +640,8 @@ public struct WireTurn: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case turnID = "turn_id"
         case timing
+        case thoughtTokens = "thought_tokens"
+        case thoughtTokensEstimated = "thought_tokens_estimated"
         case thoughtTimeMilliseconds = "thought_time_ms"
         case liveResponse = "live_response"
         case tools
@@ -698,6 +716,8 @@ public struct WireMessage: Codable, Equatable, Sendable {
     public var tool: WireMessageTool?
     public var timestamp: String?
     public var responseTimeMilliseconds: UInt64? = nil
+    public var thoughtTokens: UInt32? = nil
+    public var thoughtTokensEstimated: Bool? = nil
     public var thoughtTimeMilliseconds: UInt64? = nil
     public var completedAt: String? = nil
     public var turn: WireTurnTiming? = nil
@@ -710,6 +730,8 @@ public struct WireMessage: Codable, Equatable, Sendable {
         case tool
         case timestamp, turn
         case responseTimeMilliseconds = "response_time_ms"
+        case thoughtTokens = "thought_tokens"
+        case thoughtTokensEstimated = "thought_tokens_estimated"
         case thoughtTimeMilliseconds = "thought_time_ms"
         case completedAt = "completed_at"
     }
@@ -723,10 +745,12 @@ public struct WireMessage: Codable, Equatable, Sendable {
         timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
         responseTimeMilliseconds = try container.decodeIfPresent(UInt64.self, forKey: .responseTimeMilliseconds)
         thoughtTimeMilliseconds = try container.decodeIfPresent(UInt64.self, forKey: .thoughtTimeMilliseconds)
+        thoughtTokens = try container.decodeIfPresent(UInt32.self, forKey: .thoughtTokens)
+        thoughtTokensEstimated = try container.decodeIfPresent(Bool.self, forKey: .thoughtTokensEstimated)
         completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
         turn = try container.decodeIfPresent(WireTurnTiming.self, forKey: .turn)
         var fields = try decoder.singleValueContainer().decode([String: JSONValue].self)
-        for key in ["message_id", "role", "content", "tool", "timestamp", "response_time_ms", "thought_time_ms", "completed_at", "turn"] {
+        for key in ["message_id", "role", "content", "tool", "timestamp", "response_time_ms", "thought_time_ms", "thought_tokens", "thought_tokens_estimated", "completed_at", "turn"] {
             fields.removeValue(forKey: key)
         }
         metadata = fields
@@ -743,6 +767,8 @@ public struct WireMessage: Codable, Equatable, Sendable {
         try container.encodeIfPresent(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(responseTimeMilliseconds, forKey: .responseTimeMilliseconds)
         try container.encodeIfPresent(thoughtTimeMilliseconds, forKey: .thoughtTimeMilliseconds)
+        try container.encodeIfPresent(thoughtTokens, forKey: .thoughtTokens)
+        try container.encodeIfPresent(thoughtTokensEstimated, forKey: .thoughtTokensEstimated)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)
         try container.encodeIfPresent(turn, forKey: .turn)
     }
@@ -824,4 +850,26 @@ public struct WirePendingPrompt: Codable, Equatable, Sendable {
 public enum WirePendingPromptKind: String, Sendable, Equatable, CaseIterable {
     case steer
     case queue
+}
+
+public struct WireSessionSettings: Codable, Equatable, Sendable {
+    public struct Model: Codable, Equatable, Sendable {
+        public var id: String
+        public var model: String
+        public var reasoningEfforts: [String]
+        enum CodingKeys: String, CodingKey { case id, model; case reasoningEfforts = "reasoning_efforts" }
+    }
+    public var models: [Model]
+    public var selectedModel: String
+    public var reasoningEffort: String
+    public var canChange: Bool
+    enum CodingKeys: String, CodingKey {
+        case models
+        case selectedModel = "selected_model"
+        case reasoningEffort = "reasoning_effort"
+        case canChange = "can_change"
+    }
+    var domain: SessionSettings {
+        SessionSettings(models: models.map { .init(id: $0.id, model: $0.model, reasoningEfforts: $0.reasoningEfforts) }, selectedModel: selectedModel, reasoningEffort: reasoningEffort, canChange: canChange)
+    }
 }

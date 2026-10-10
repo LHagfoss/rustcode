@@ -8,92 +8,146 @@ struct QuestionSheet: View {
 
     @State private var selection: Set<String> = []
     @State private var freeText = ""
+    @State private var usesCustomAnswer = false
+    @State private var submissionFailed = false
+    @FocusState private var isAnswerFocused: Bool
     @State private var isSubmitting = false
 
     private var answer: QuestionAnswer {
         QuestionAnswer(
-            selectedOptionIDs: question.options.map(\.id).filter(selection.contains),
-            text: freeText.isEmpty ? nil : freeText
+            selectedOptionIDs: usesCustomAnswer ? [] : question.options.map(\.id).filter(selection.contains),
+            text: usesCustomAnswer ? freeText.trimmingCharacters(in: .whitespacesAndNewlines) : nil
         )
     }
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if !question.header.isEmpty || question.chainLength > 1 {
-                            Text(caption)
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.secondary)
+            ScrollViewReader { proxy in
+                List {
+                    Section {
+                        VStack(alignment: .leading, spacing: 6) {
+                            if !question.header.isEmpty || question.chainLength > 1 {
+                                Text(caption)
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(question.prompt)
+                                .font(.headline)
+                                .textSelection(.enabled)
                         }
-                        Text(question.prompt)
-                            .font(.headline)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 4, bottom: 8, trailing: 4))
                     }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 4, bottom: 8, trailing: 4))
-                }
-                Section {
-                    ForEach(question.options) { option in
-                        Button {
-                            toggle(option.id)
-                        } label: {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(option.label)
-                                        .foregroundStyle(.primary)
-                                    if let detail = option.detail {
-                                        Text(detail)
-                                            .font(.footnote)
-                                            .foregroundStyle(.secondary)
+                    Section {
+                        ForEach(question.options) { option in
+                            Button {
+                                toggle(option.id)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(option.label)
+                                            .foregroundStyle(.primary)
+                                        if let detail = option.detail {
+                                            Text(detail)
+                                                .font(.footnote)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer(minLength: 8)
+                                    Image(systemName: !usesCustomAnswer && selection.contains(option.id) ? "checkmark.circle.fill" : "circle")
+                                        .font(.title3)
+                                        .foregroundStyle(!usesCustomAnswer && selection.contains(option.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                                }
+                                .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(!usesCustomAnswer && selection.contains(option.id) ? .isSelected : [])
+                        }
+                    } footer: {
+                        if question.allowsMultipleSelection {
+                            Text("You can choose more than one.")
+                        }
+                    }
+                    if question.allowsFreeText {
+                        Section {
+                            Button {
+                                if usesCustomAnswer { isAnswerFocused = true }
+                                usesCustomAnswer = true
+                            } label: {
+                                HStack {
+                                    Text("Write your own answer").foregroundStyle(.primary)
+                                    Spacer()
+                                    Image(systemName: usesCustomAnswer ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(usesCustomAnswer ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                                }
+                                .frame(minHeight: 44)
+                                .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(usesCustomAnswer ? .isSelected : [])
+                            if usesCustomAnswer {
+                                TextField("Your answer", text: $freeText, axis: .vertical)
+                                    .lineLimit(3...8)
+                                    .focused($isAnswerFocused)
+                                    .accessibilityLabel("Your answer")
+                                    .id("custom-answer")
+                                    .task {
+                                        // Focus after the conditional field has joined the view tree.
+                                        await Task.yield()
+                                        isAnswerFocused = true
+                                    }
+                            }
+                        } footer: {
+                            if usesCustomAnswer {
+                                HStack {
+                                    Text("Your written answer will be sent.")
+                                    Spacer()
+                                    if isAnswerFocused {
+                                        Button { isAnswerFocused = false } label: {
+                                            Image(systemName: "keyboard.chevron.compact.down")
+                                                .frame(width: 44, height: 44)
+                                        }
+                                        .accessibilityLabel("Dismiss answer keyboard")
                                     }
                                 }
-                                Spacer(minLength: 8)
-                                Image(systemName: selection.contains(option.id) ? "checkmark.circle.fill" : "circle")
-                                    .font(.title3)
-                                    .foregroundStyle(selection.contains(option.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
                             }
-                            .contentShape(.rect)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selection.contains(option.id) ? .isSelected : [])
                     }
-                } footer: {
-                    if question.allowsMultipleSelection {
-                        Text("You can choose more than one.")
-                    }
-                }
-                if question.allowsFreeText {
-                    Section {
-                        TextField("Your answer", text: $freeText, axis: .vertical)
-                            .lineLimit(1...5)
-                    } header: {
-                        Text("Or answer in your own words")
-                    } footer: {
-                        if !freeText.isEmpty, !selection.isEmpty {
-                            Text("Your own answer is sent instead of the selected option.")
+                    if submissionFailed {
+                        Section {
+                            Text("Your answer wasn’t sent. Your draft is still here; check the connection and try again.")
+                                .foregroundStyle(.red)
                         }
                     }
                 }
-            }
-            #if DEBUG
-            .onAppear {
-                if LaunchOptions.current.selectsFirstOption, let first = question.options.first {
-                    selection = [first.id]
+                .scrollDismissesKeyboard(.interactively)
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                    guard isAnswerFocused else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("custom-answer", anchor: .center) }
                 }
-            }
-            #endif
-            .sensoryFeedback(.selection, trigger: selection)
-            .sensoryFeedback(.success, trigger: isSubmitting) { _, isSubmitting in isSubmitting }
-            .navigationTitle("Question")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Later") { dismiss() }
+                .onChange(of: isAnswerFocused) { _, focused in
+                    if focused { proxy.scrollTo("custom-answer", anchor: .center) }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Send") { submit() }
-                        .disabled(answer.isEmpty || isSubmitting)
+                .onAppear { usesCustomAnswer = question.options.isEmpty && question.allowsFreeText }
+                #if DEBUG
+                .onAppear {
+                    if LaunchOptions.current.selectsFirstOption, let first = question.options.first {
+                        selection = [first.id]
+                    }
+                }
+                #endif
+                .sensoryFeedback(.selection, trigger: selection)
+                .sensoryFeedback(.success, trigger: isSubmitting) { _, isSubmitting in isSubmitting }
+                .navigationTitle("Question")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Later") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Send") { submit() }
+                            .disabled(answer.isEmpty || isSubmitting || store.connection != .connected || hasPendingAnswer)
+                    }
                 }
             }
         }
@@ -105,7 +159,19 @@ struct QuestionSheet: View {
         return [question.header, position].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
+    private var hasPendingAnswer: Bool {
+        store.visibleRequests.contains { $0.kind == .answer && ($0.phase == .sending || $0.isUncertain) }
+    }
+
     private func toggle(_ id: String) {
+        isAnswerFocused = false
+        submissionFailed = false
+        if usesCustomAnswer {
+            usesCustomAnswer = false
+            if !question.allowsMultipleSelection { selection.removeAll() }
+            selection.insert(id)
+            return
+        }
         if selection.contains(id) {
             selection.remove(id)
         } else {
@@ -115,11 +181,19 @@ struct QuestionSheet: View {
     }
 
     private func submit() {
+        guard !isSubmitting, !answer.isEmpty, !hasPendingAnswer else { return }
+        let submittedAnswer = answer
+        isAnswerFocused = false
         isSubmitting = true
+        submissionFailed = false
         Task {
-            await store.answer(question, with: answer)
+            let accepted = await store.answer(question, with: submittedAnswer)
             isSubmitting = false
-            dismiss()
+            if accepted {
+                dismiss()
+            } else {
+                submissionFailed = true
+            }
         }
     }
 }

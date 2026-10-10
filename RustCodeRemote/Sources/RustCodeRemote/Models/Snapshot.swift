@@ -25,6 +25,7 @@ public enum SessionEvent: Sendable, Equatable {
     case turnStarted(turnID: String)
     case timingChanged(TurnTiming, thoughtTimeMilliseconds: UInt64?)
     case thoughtTimeChanged(UInt64)
+    case thoughtTokensChanged(UInt32, estimated: Bool?)
     /// A nil `turnID` ends whichever turn is running.
     case turnFinished(turnID: String?, outcome: TurnOutcome)
     case questionChanged(PendingQuestion?)
@@ -69,6 +70,7 @@ public struct SessionSnapshot: Sendable, Equatable {
     public var activeTurnID: String?
     public var activeTurnTiming: TurnTiming?
     public var lastTurn: TurnTiming?
+    public var settings: SessionSettings?
     public var snapshotID: String?
     /// Whether the running turn accepts steering. Only a snapshot says so.
     public var canSteer: Bool
@@ -98,7 +100,8 @@ public struct SessionSnapshot: Sendable, Equatable {
         historyCursor: HistoryCursor? = nil,
         activeTurnTiming: TurnTiming? = nil,
         lastTurn: TurnTiming? = nil,
-        snapshotID: String? = nil
+        snapshotID: String? = nil,
+        settings: SessionSettings? = nil
     ) {
         self.session = session
         self.items = items
@@ -106,6 +109,7 @@ public struct SessionSnapshot: Sendable, Equatable {
         self.activeTurnTiming = activeTurnTiming ?? activeTurnID.map { TurnTiming(turnID: $0) }
         self.lastTurn = lastTurn
         self.snapshotID = snapshotID
+        self.settings = settings
         self.canSteer = canSteer
         self.pendingQuestion = pendingQuestion
         self.pendingApproval = pendingApproval
@@ -197,6 +201,12 @@ public struct SessionSnapshot: Sendable, Equatable {
             } else {
                 subagents.append(item)
             }
+        case .thoughtTokensChanged(let tokens, let estimated):
+            guard let index = items.indices.last, case .assistant(var assistant) = items[index].content,
+                  assistant.isStreaming else { return }
+            assistant.thoughtTokens = tokens
+            assistant.thoughtTokensEstimated = estimated
+            items[index].content = .assistant(assistant)
         case .thoughtTimeChanged(let milliseconds):
             guard let index = items.indices.last, case .assistant(var assistant) = items[index].content,
                   assistant.isStreaming else { return }

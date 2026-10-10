@@ -30,7 +30,15 @@ public actor DemoRemoteClient: RemoteClient {
     ///   fast as the scheduler allows, which is what tests want.
     public init(pace: Duration = .milliseconds(45)) {
         self.pace = pace
-        for session in Self.seed() {
+        for var session in Self.seed() {
+            session.state.settings = SessionSettings(models: [
+                .init(id: "demo-balanced", model: "demo-model", reasoningEfforts: ["default", "medium", "high"]),
+                .init(id: "demo-fast", model: "demo-fast-model", reasoningEfforts: ["default"])
+            ], selectedModel: "demo-balanced", reasoningEffort: "default", canChange: !session.state.isRunning)
+            // The demo owns its complete transcript, including the older history page.
+            session.summary.turnCount = UInt64((session.olderHistory + session.state.items).filter {
+                if case .user = $0.content { return true }; return false
+            }.count)
             sessions[session.summary.id] = session
             order.append(session.summary.id)
         }
@@ -142,6 +150,24 @@ public actor DemoRemoteClient: RemoteClient {
     }
 
     // MARK: Mutations
+
+    public func setSessionSettings(model: String, reasoningEffort: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        try once(requestID, in: session) { current in
+            guard !current.state.isRunning else { return .rejected(.busy) }
+            guard var settings = current.state.settings,
+                  let choice = settings.models.first(where: { $0.id == model }),
+                  choice.reasoningEfforts.contains(reasoningEffort) else { return .rejected(.unsupportedOperation) }
+            settings.selectedModel = model
+            settings.reasoningEffort = reasoningEffort
+            var snapshot = current.state
+            snapshot.settings = settings
+            snapshot.sequence += 1
+            emit(session.sessionID, .replaced(snapshot))
+            sessions[session.sessionID]?.summary.model = choice.model
+            listContinuation?.yield(summaries)
+            return .applied
+        }
+    }
 
     public func submit(_ text: String, to session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
         try once(requestID, in: session) { current in
@@ -271,6 +297,11 @@ public actor DemoRemoteClient: RemoteClient {
         guard var session = sessions[sessionID] else { return }
         let update = SessionUpdate(session: session.state.session, sequence: session.state.sequence + 1, event: event)
         session.state.apply(update)
+        if case .turnStarted = event {
+            if let count = sessions[sessionID]?.summary.turnCount { sessions[sessionID]?.summary.turnCount = count + 1 }
+        }
+        let canChange = !session.state.isRunning
+        session.state.settings?.canChange = canChange
         sessions[sessionID]?.state = session.state
         session.updates?.yield(update)
     }
@@ -663,8 +694,9 @@ public actor DemoRemoteClient: RemoteClient {
                         - [ ] Tag the release
                         """,
                     responseTimeMilliseconds: 12000,
-                    thoughtTimeMilliseconds: 4000,
+                    thoughtTimeMilliseconds: 420,
                     completedAt: "2026-10-09T18:40:32+02:00",
+                    thoughtTokens: 96, thoughtTokensEstimated: true,
                     turn: TurnTiming(turnID: "demo-notes", startedAt: "2026-10-09T18:40:00+02:00",
                         endedAt: "2026-10-09T18:40:32+02:00", elapsedWorkMilliseconds: 32000,
                         outcome: "completed")

@@ -313,6 +313,17 @@ public final class RemoteStore {
         }
     }
 
+    @discardableResult
+    public func setSessionSettings(model: String, reasoningEffort: String) async -> Bool {
+        guard let snapshot = attached, !snapshot.isRunning,
+              let settings = snapshot.settings, settings.canChange,
+              let choice = settings.models.first(where: { $0.id == model }),
+              choice.reasoningEfforts.contains(reasoningEffort) else { return false }
+        return await perform(.settings, in: snapshot.session) { client, id in
+            try await client.setSessionSettings(model: model, reasoningEffort: reasoningEffort, in: snapshot.session, requestID: id)
+        }
+    }
+
     /// Cancels the turn the user is looking at, by its ID.
     public func cancelTurn() async {
         guard let snapshot = attached, let turnID = snapshot.activeTurnID else { return }

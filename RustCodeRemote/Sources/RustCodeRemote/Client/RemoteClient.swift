@@ -61,6 +61,8 @@ public protocol RemoteClient: Sendable {
         maxBytes: Int
     ) async throws -> ContentChunk
 
+    func setSessionSettings(model: String, reasoningEffort: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
+
     /// Idle-only. Rejected with `.busy` while a turn is running.
     func submit(_ text: String, to session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
     func steer(_ text: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
@@ -82,4 +84,10 @@ public protocol RemoteClient: Sendable {
 
     /// Looks up the outcome of an earlier mutation. Never creates or repeats a command.
     func getRequestStatus(_ requestID: RequestID, in session: SessionRef) async throws -> RequestReceipt
+}
+
+public extension RemoteClient {
+    func setSessionSettings(model: String, reasoningEffort: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation))
+    }
 }

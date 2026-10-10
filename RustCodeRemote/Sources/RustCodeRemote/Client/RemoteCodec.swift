@@ -17,6 +17,7 @@ public enum RemoteCommand: Sendable, Equatable {
     case detachSession(SessionRef)
     case getHistory(SessionRef, before: HistoryCursor, limit: Int)
     case getContent(SessionRef, contentID: String, offset: UInt64, maxBytes: Int)
+    case setSessionSettings(SessionRef, model: String, reasoningEffort: String)
     case submitPrompt(SessionRef, text: String)
     case steer(SessionRef, text: String)
     case queue(SessionRef, text: String)

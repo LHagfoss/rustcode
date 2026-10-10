@@ -65,6 +65,7 @@ public struct TrackedRequest: Identifiable, Sendable, Equatable {
         case submit(String)
         case steer(String)
         case queue(String)
+        case settings
         case cancel
         case answer
         case approval
@@ -101,7 +102,7 @@ public struct TrackedRequest: Identifiable, Sendable, Equatable {
     public var text: String? {
         switch kind {
         case .submit(let text), .steer(let text), .queue(let text): text
-        case .cancel, .answer, .approval: nil
+        case .settings, .cancel, .answer, .approval: nil
         }
     }
 }

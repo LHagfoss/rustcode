@@ -48,7 +48,7 @@ struct SelectTextSheet: View {
                     }
                 }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
         // Opaque, so the transcript behind does not show through the text being selected.
         .presentationBackground(.background)
     }
@@ -91,5 +91,24 @@ struct TextActions: View {
         ShareLink(item: text) {
             Label("Share…", systemImage: "square.and.arrow.up")
         }
+    }
+}
+
+/// A bounded preview keeps a long answer from shrinking behind its action menu.
+struct MessageActionPreview: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Message actions", systemImage: "text.bubble")
+                .font(.subheadline.weight(.semibold))
+            Text(String(text.prefix(400)))
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+        }
+        .padding(16)
+        .frame(width: 280, alignment: .leading)
+        .background(.background)
     }
 }

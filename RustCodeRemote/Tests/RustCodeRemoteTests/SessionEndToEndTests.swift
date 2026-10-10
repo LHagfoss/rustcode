@@ -28,6 +28,16 @@ struct SessionEndToEndTests {
         model = "fake"
         context_window = 128000
         supports_vision = false
+        supports_reasoning_effort = true
+        reasoning_efforts = ["low", "high"]
+
+        [[models]]
+        name = "fake-fast"
+        url = "http://127.0.0.1:\(modelPort)/v1/chat/completions"
+        model = "fake-fast"
+        context_window = 128000
+        supports_vision = false
+        supports_reasoning_effort = false
         """
     }
 
@@ -73,6 +83,7 @@ struct SessionEndToEndTests {
         let session = try #require(shared.first)
         #expect(shared.count == 1)
         #expect(session.model == "fake")
+        #expect(session.turnCount == 0)
         #expect(session.activity == .idle)
         #expect(session.health == .healthy)
         #expect(session.workspace.hasSuffix("workspace"))
@@ -88,6 +99,30 @@ struct SessionEndToEndTests {
         #expect(state.session == session.ref)
         #expect(!state.isRunning)
         var updates = attachment.updates.makeAsyncIterator()
+        let settings = try #require(state.settings)
+        #expect(settings.selectedModel == "fake")
+        #expect(settings.reasoningEffort == "default")
+        #expect(settings.canChange)
+        #expect(settings.models.first { $0.id == "fake" }?.reasoningEfforts == ["default", "low", "high"])
+        #expect(settings.models.first { $0.id == "fake-fast" }?.reasoningEfforts == ["default"])
+
+        // Profile and effort changes arrive through authoritative replacement snapshots.
+        let switchID = RequestID()
+        let switched = try await client.setSessionSettings(model: "fake-fast", reasoningEffort: "default", in: session.ref, requestID: switchID)
+        #expect(switched.state == .applied)
+        while state.settings?.selectedModel != "fake-fast", let update = try await updates.next() {
+            #expect(state.apply(update) == .applied)
+        }
+        #expect(state.settings?.selectedModel == "fake-fast")
+        #expect(try await client.getRequestStatus(switchID, in: session.ref).state == .applied)
+        let restored = try await client.setSessionSettings(model: "fake", reasoningEffort: "high", in: session.ref, requestID: RequestID())
+        #expect(restored.state == .applied)
+        while state.settings?.selectedModel != "fake" || state.settings?.reasoningEffort != "high",
+              let update = try await updates.next() {
+            #expect(state.apply(update) == .applied)
+        }
+        #expect(state.settings?.selectedModel == "fake")
+        #expect(state.settings?.reasoningEffort == "high")
 
         // A slash command from the phone is refused, and never runs.
         let slash = try await client.submit("/exit", to: session.ref, requestID: RequestID())
@@ -114,6 +149,8 @@ struct SessionEndToEndTests {
                     queued = true
                     let busy = try await client.submit("Too early", to: session.ref, requestID: RequestID())
                     #expect(busy.state == .rejected(.busy))
+                    let busySettings = try await client.setSessionSettings(model: "fake-fast", reasoningEffort: "default", in: session.ref, requestID: RequestID())
+                    #expect(busySettings.state == .rejected(.busy))
                     let id = RequestID()
                     queueID = id
                     let queuedReceipt = try await client.queue("And again", in: session.ref, requestID: id)
@@ -156,13 +193,19 @@ struct SessionEndToEndTests {
         await client.disconnect()
         try await client.connect(using: credential)
         lists = try await client.subscribeSessions().makeAsyncIterator()
-        #expect(try await list(&lists) { !$0.isEmpty }.first?.ref == session.ref)
+        let completedSessions = try await list(&lists) { sessions in
+            sessions.first?.turnCount == 2 && sessions.first?.activity == .idle
+        }
+        #expect(completedSessions.first?.ref == session.ref)
+        #expect(completedSessions.first?.model == "fake")
+        #expect(completedSessions.first?.turnCount == 2)
         let resumed = try await client.attach(session.ref, resumeAfter: state.sequence)
         switch resumed.start {
         case .resumed:
             break
         case .snapshot(let fresh):
-            // Also valid: the gateway may answer a resume with a snapshot.
+            // Also valid: control availability changes at turn completion publish a
+            // new snapshot cut, so the earlier event cursor may no longer be replayable.
             #expect(fresh.sequence >= state.sequence)
             state = fresh
         }
@@ -174,6 +217,9 @@ struct SessionEndToEndTests {
             Issue.record("expected a snapshot")
             return
         }
+        #expect(after.settings?.selectedModel == "fake")
+        #expect(after.settings?.reasoningEffort == "high")
+        #expect(after.settings?.canChange == true)
         let transcript = after.items.compactMap { item -> String? in
             switch item.content {
             case .user(let text): "user: \(text)"

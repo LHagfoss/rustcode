@@ -90,6 +90,24 @@ private struct AssistantMessage: View {
         AssistantBlock.parse(assistant.text, isStreaming: assistant.isStreaming)
     }
 
+    private var readableText: String {
+        blocks.map { block in
+            switch block {
+            case .markdown(let text): MarkdownText.plainText(text)
+            case .thinking(let text, _): "Thinking\n" + MarkdownText.plainText(text)
+            }
+        }.joined(separator: "\n\n")
+    }
+
+    private var previewText: String {
+        for case .markdown(let text) in blocks {
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return MarkdownText.plainText(text)
+            }
+        }
+        return readableText
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
@@ -99,7 +117,8 @@ private struct AssistantMessage: View {
                 case .thinking(let text, let isComplete):
                     ThinkingBlock(text: text, isThinking: assistant.isStreaming && !isComplete,
                         title: TimingPresentation.thinkingLabel(at: index, in: blocks,
-                            milliseconds: assistant.thoughtTimeMilliseconds) ?? "Thinking")
+                            milliseconds: assistant.thoughtTimeMilliseconds,
+                            tokens: assistant.thoughtTokens, estimated: assistant.thoughtTokensEstimated) ?? "Thinking")
                 }
             }
             if assistant.isStreaming {
@@ -112,7 +131,9 @@ private struct AssistantMessage: View {
         }
         .contentShape(.contextMenuPreview, .rect(cornerRadius: 12))
         .contextMenu {
-            TextActions(text: assistant.text, readableText: MarkdownText.plainText(assistant.text))
+            TextActions(text: assistant.text, readableText: readableText)
+        } preview: {
+            MessageActionPreview(text: previewText)
         }
     }
 }
@@ -130,7 +151,9 @@ private struct ThinkingBlock: View {
                 .padding(.top, 8)
                 .padding(.bottom, 12)
                 .fixedSize(horizontal: false, vertical: true)
-                .contextMenu { TextActions(text: text, readableText: MarkdownText.plainText(text)) }
+                .contextMenu { TextActions(text: text, readableText: MarkdownText.plainText(text)) } preview: {
+                    MessageActionPreview(text: MarkdownText.plainText(text))
+                }
         } label: {
             HStack(spacing: 8) {
                 Label(title, systemImage: "brain")

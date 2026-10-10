@@ -35,7 +35,7 @@ private struct SessionSidebar: View {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return store.sessions }
         return store.sessions.filter { session in
-            [session.title, session.workspace, session.model].contains { $0.localizedStandardContains(query) }
+            [session.displayTitle, session.workspace, session.model].contains { $0.localizedStandardContains(query) }
         }
     }
 
@@ -51,7 +51,7 @@ private struct SessionSidebar: View {
                         .tag(session.id)
                         .contextMenu {
                             Button("Copy Title", systemImage: "doc.on.doc") {
-                                Clipboard.copy(session.title)
+                                Clipboard.copy(session.displayTitle)
                             }
                             Button("Copy Workspace Path", systemImage: "folder") {
                                 Clipboard.copy(session.workspace)
@@ -131,7 +131,7 @@ private struct SessionRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.title)
+                Text(session.displayTitle)
                     .font(.body.weight(.medium))
                     .lineLimit(2)
                 Text("\(session.workspace) · \(session.model)")
@@ -145,7 +145,7 @@ private struct SessionRow: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(session.title), \(statusDescription)")
+        .accessibilityLabel("\(session.displayTitle), \(statusDescription)")
     }
 
     @ViewBuilder

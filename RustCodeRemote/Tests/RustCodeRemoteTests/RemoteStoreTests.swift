@@ -7,6 +7,7 @@ import Testing
 private actor StubClient: RemoteClient {
     var connectResults: [Result<Void, RemoteError>] = []
     var submitResult: Result<ReceiptState, RemoteError> = .success(.applied)
+    var answerResult: Result<ReceiptState, RemoteError> = .success(.applied)
     var statusResult: Result<ReceiptState, RemoteError> = .success(.unknown)
     var sessions: [SessionSummary] = [makeSession("s1")]
     /// Sequences of the updates each successive attach delivers after its snapshot.
@@ -27,6 +28,7 @@ private actor StubClient: RemoteClient {
 
     func set(connectResults: [Result<Void, RemoteError>]) { self.connectResults = connectResults }
     func set(submitResult: Result<ReceiptState, RemoteError>) { self.submitResult = submitResult }
+    func set(answerResult: Result<ReceiptState, RemoteError>) { self.answerResult = answerResult }
     func set(statusResult: Result<ReceiptState, RemoteError>) { self.statusResult = statusResult }
     func set(attachScripts: [[UInt64]]) { self.attachScripts = attachScripts }
     func set(instanceIDs: [String]) { self.instanceIDs = instanceIDs }
@@ -132,7 +134,7 @@ private actor StubClient: RemoteClient {
     }
 
     func answerQuestion(_ questionID: String, with answer: QuestionAnswer, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
-        RequestReceipt(requestID: requestID, state: .applied)
+        RequestReceipt(requestID: requestID, state: try answerResult.get())
     }
 
     func resolveApproval(batchID: String, decision: ApprovalDecision, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
@@ -595,6 +597,57 @@ private final class DelayLog: Sendable {
         #expect(await waitUntil { store.attached != nil })
         #expect(await store.send("   ") == false)
         #expect(await client.submitCalls.isEmpty)
+    }
+
+    @Test func controlsRequireHostMetadataAndUseAuthoritativeSnapshotUpdates() async {
+        let legacy = makeStore(StubClient())
+        legacy.bootstrap()
+        #expect(await waitUntil { legacy.connection == .connected })
+        legacy.select("s1")
+        #expect(await waitUntil { legacy.attached != nil })
+        #expect(await legacy.setSessionSettings(model: "invented", reasoningEffort: "high") == false)
+
+        let store = makeStore(StubClient())
+        await store.startDemo(deviceName: "Phone")
+        #expect(await waitUntil { store.sessions.count == 3 })
+        store.select(DemoRemoteClient.idleSessionID)
+        #expect(await waitUntil { store.attached?.settings != nil })
+        let total = store.selectedSession?.turnCount
+        #expect(total != nil)
+        await store.loadEarlierHistory()
+        #expect(store.selectedSession?.turnCount == total)
+        #expect(await store.setSessionSettings(model: "demo-fast", reasoningEffort: "high") == false)
+        #expect(await store.setSessionSettings(model: "demo-fast", reasoningEffort: "default"))
+        #expect(await waitUntil { store.attached?.settings?.selectedModel == "demo-fast" })
+        #expect(store.attached?.settings?.reasoningEffort == "default")
+        #expect(store.visibleRequests.isEmpty)
+    }
+
+    @Test func answeringDistinguishesDefiniteFailureFromUncertainDelivery() async {
+        let question = PendingQuestion(id: "question", prompt: "Choose", options: [.init(id: "A", label: "A")])
+        let client = StubClient()
+        await client.set(snapshot: SessionSnapshot(session: LineCodec.session, pendingQuestion: question))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached?.pendingQuestion != nil })
+        let answer = QuestionAnswer(selectedOptionIDs: ["A"])
+
+        await client.set(answerResult: .success(.rejected(.invalidAnswer)))
+        #expect(await store.answer(question, with: answer) == false)
+        #expect(store.attached?.pendingQuestion == question)
+        #expect(store.visibleRequests.isEmpty)
+        #expect(store.notice == RemoteRejection.invalidAnswer.message)
+
+        await client.set(answerResult: .failure(.notConnected))
+        #expect(await store.answer(question, with: answer) == false)
+        #expect(store.attached?.pendingQuestion == question)
+
+        await client.set(answerResult: .failure(.timeout))
+        #expect(await store.answer(question, with: answer))
+        #expect(store.attached?.pendingQuestion == question)
+        #expect(store.visibleRequests.last?.isUncertain == true)
     }
 
     // MARK: Demo host

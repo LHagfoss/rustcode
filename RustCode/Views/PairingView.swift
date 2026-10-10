@@ -5,6 +5,7 @@ import UIKit
 struct PairingView: View {
     @Environment(RemoteStore.self) private var store
     @State private var address = ""
+    @AppStorage("recentPairingAddress") private var recentAddress = ""
     @State private var code = ""
     @State private var addressError: String?
     @State private var showsScanner = false
@@ -23,41 +24,40 @@ struct PairingView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 28) {
-                    header
-                    scanSection
-                    manualSection
-                    if case .failed(let message) = store.pairing {
-                        Label(message, systemImage: "exclamationmark.circle")
-                            .font(.subheadline)
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("Pairing failed. \(message)")
-                    }
-                    demoSection
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 32)
-                .frame(maxWidth: 520)
-                .frame(maxWidth: .infinity)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    if focus != nil {
-                        if focus == .address {
-                            Button("Next") { focus = .code }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 28) {
+                        header
+                        scanSection
+                        manualSection.id("manual-entry")
+                        if case .failed(let message) = store.pairing {
+                            Label(message, systemImage: "exclamationmark.circle")
+                                .font(.subheadline)
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityLabel("Pairing failed. \(message)")
                         }
-                        Spacer()
-                        Button("Done") { focus = nil }
+                        demoSection
                     }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 32)
+                    .frame(maxWidth: 520)
+                    .frame(maxWidth: .infinity)
                 }
-            }
-            .sheet(isPresented: $showsScanner) {
-                QRScannerSheet { payload in
-                    showsScanner = false
-                    Task { await store.pair(.scanned(payload), deviceName: UIDevice.current.name) }
+                .scrollDismissesKeyboard(.interactively)
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                    guard focus != nil else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("manual-entry", anchor: .top) }
+                }
+                .onAppear { if address.isEmpty { address = recentAddress } }
+                .sheet(isPresented: $showsScanner) {
+                    QRScannerSheet { payload in
+                        showsScanner = false
+                        Task {
+                            await store.pair(.scanned(payload), deviceName: UIDevice.current.name)
+                            if let host = store.host { recentAddress = host.address.description }
+                        }
+                    }
                 }
             }
         }
@@ -105,13 +105,33 @@ struct PairingView: View {
 
     private var manualSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Or enter it manually")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("Or enter it manually")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if focus != nil {
+                    Button { focus = nil } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss pairing keyboard")
+                }
+            }
 
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Address and port").font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Text("Address and port").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        PasteButton(payloadType: String.self) { values in
+                            if let value = values.first { address = value.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .controlSize(.small)
+                        .accessibilityLabel("Paste address or QR payload")
+                    }
                     TextField("192.168.1.20:17879", text: $address)
                         .textContentType(.URL)
                         .keyboardType(.URL)
@@ -130,10 +150,22 @@ struct PairingView: View {
                 }
                 Divider().padding(.leading, 14)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Pairing code").font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Text("Pairing code").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        PasteButton(payloadType: String.self) { values in
+                            if let value = values.first {
+                                code = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                                focus = .code
+                            }
+                        }
+                        .labelStyle(.iconOnly)
+                        .controlSize(.small)
+                        .accessibilityLabel("Paste pairing code")
+                    }
                     TextField("1234-5678", text: $code)
                         .textContentType(.oneTimeCode)
-                        .keyboardType(.numbersAndPunctuation)
+                        .keyboardType(.asciiCapableNumberPad)
                         .autocorrectionDisabled()
                         .font(code.isEmpty ? .body : .body.monospaced())
                         .submitLabel(.go)
@@ -148,7 +180,12 @@ struct PairingView: View {
                     Color.clear.contentShape(.rect).onTapGesture { focus = .code }
                 }
             }
-            .background(.fill.quaternary, in: .rect(cornerRadius: 14))
+            .background(.fill.quaternary, in: .rect(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(focus == nil ? Color.clear : Color.accentColor.opacity(0.5), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
 
             if let addressError {
                 Text(addressError)
@@ -200,7 +237,10 @@ struct PairingView: View {
         let pasted = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if pasted.hasPrefix("{") {
             focus = nil
-            Task { await store.pair(.scanned(pasted), deviceName: UIDevice.current.name) }
+            Task {
+                await store.pair(.scanned(pasted), deviceName: UIDevice.current.name)
+                if let host = store.host { recentAddress = host.address.description }
+            }
             return
         }
         do {
@@ -208,7 +248,10 @@ struct PairingView: View {
             let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !code.isEmpty else { return }
             focus = nil
-            Task { await store.pair(.manual(address: parsed, code: code), deviceName: UIDevice.current.name) }
+            Task {
+                await store.pair(.manual(address: parsed, code: code), deviceName: UIDevice.current.name)
+                if store.host != nil { recentAddress = parsed.description }
+            }
         } catch {
             addressError = switch error {
             case .empty: "Enter the address shown under the QR code."

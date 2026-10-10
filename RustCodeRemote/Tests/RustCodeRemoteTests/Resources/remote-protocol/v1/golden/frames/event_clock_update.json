@@ -13,6 +13,8 @@
       "started_at": "2026-10-09T18:41:00+02:00",
       "elapsed_work_ms": 12000
     },
-    "thought_time_ms": 4000
+    "thought_time_ms": 4000,
+    "thought_tokens": 800,
+    "thought_tokens_estimated": true
   }
 }

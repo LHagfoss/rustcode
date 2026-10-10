@@ -8,7 +8,13 @@ import Testing
         #expect(TimingPresentation.turnLabel(TurnTiming(turnID: "t", outcome: "future")) == "Outcome: future")
         #expect(TimingPresentation.turnLabel(TurnTiming(turnID: "t", startedAt: "2026-10-09T18:41:00+02:00")) == "Working")
         #expect(TimingPresentation.duration(61000) == "1m 1s")
-        #expect(TimingPresentation.duration(0) == "0s")
+        #expect(TimingPresentation.duration(0) == "0ms")
+    }
+
+    @Test func subsecondThinkingPreservesMilliseconds() {
+        #expect(TimingPresentation.duration(420) == "420ms")
+        #expect(TimingPresentation.duration(999) == "999ms")
+        #expect(TimingPresentation.duration(1000) == "1s")
     }
 
     @Test func thinkingAggregateAppearsOnceAcrossMultipleThinkingBlocks() {

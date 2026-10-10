@@ -55,7 +55,10 @@ the automatic LAN flow is for a network you trust (see [Network security](#netwo
 `/remote` shows a QR code, the address and an eight-digit code. In the app tap **Scan
 Pairing Code** and point the camera at the QR code. The first time, iOS asks for camera
 access and, on a LAN, for local-network access; allow both. Without a camera, type the
-address (`192.168.1.20:17879`) and the code instead.
+address (`192.168.1.20:17879`) and the code instead. Native Paste buttons accept an
+address/QR payload or the pairing code. The app remembers the last successfully paired
+address, never the one-time code. Nearby-machine discovery is not available yet.
+The scanner shows a square target and offers a retry if camera startup fails.
 
 The session appears in the app's list as soon as it is shared. `/remote off` stops
 sharing it; closing the terminal ends it. `rustcode remote devices` lists paired devices
@@ -65,6 +68,23 @@ pairing screen.
 A pairing code lasts two minutes and works once. If pairing reports an expired or invalid
 code, run `/remote` or `rustcode remote pair` again and scan the fresh code. After too many
 wrong attempts the host locks pairing for a few minutes and the app says for how long.
+
+## Session controls and input
+
+The controls above the composer show the current model and thinking effort. Available
+choices come from the host; changes are idle-only and appear after host confirmation.
+Older hosts without the settings capability show the model without editable menus.
+Blank titles use `Session <short ID>`. Turn totals come from the complete host session;
+unknown totals (including some compacted sessions) are omitted.
+
+Thinking durations below one second use milliseconds. Thinking-token counts use `~`
+when the host identifies them as estimates. Missing usage is not presented as zero.
+Touch and hold a response for a compact Copy/Select Text/Share menu; Select Text opens
+an expanded native text view. Drag the transcript down to dismiss the keyboard
+interactively, or tap its content. Opening the keyboard preserves your reading position.
+
+Questions distinguish selected options from a written answer. Switching modes preserves
+the written draft; a failed submission leaves the answer available to retry.
 
 ## Requirements
 

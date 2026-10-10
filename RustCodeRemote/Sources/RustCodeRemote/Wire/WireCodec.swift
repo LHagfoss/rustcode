@@ -122,6 +122,8 @@ public struct WireCodec: RemoteCodec {
                 offset: offset,
                 maxBytes: UInt32(clamping: maxBytes)
             )))
+        case .setSessionSettings(let session, let model, let effort):
+            return scoped(session, .setSessionSettings(.init(model: model, reasoningEffort: effort)))
         case .submitPrompt(let session, let text):
             return scoped(session, .submitPrompt(.init(prompt: text)))
         case .steer(let session, let text):
@@ -291,7 +293,7 @@ public struct WireCodec: RemoteCodec {
                 totalBytes: chunk.totalBytes,
                 nextOffset: chunk.nextOffset
             ))
-        case .promptAccepted, .turnCancelled, .questionAnswered, .approvalResolved:
+        case .sessionSettingsUpdated, .promptAccepted, .turnCancelled, .questionAnswered, .approvalResolved:
             return .receipt(receipt == .received ? .received : .applied)
         case .requestStatus(let status):
             return .receipt(receiptState(status))
@@ -365,6 +367,7 @@ public struct WireCodec: RemoteCodec {
             } else if let thought = delta.thoughtTimeMilliseconds {
                 changes.append(.thoughtTimeChanged(thought))
             }
+            if let tokens = delta.thoughtTokens { changes.append(.thoughtTokensChanged(tokens, estimated: delta.thoughtTokensEstimated)) }
             return update(changes)
         case .toolStarted(let started):
             return update([.itemAppended(toolItem(started.tool))])
@@ -440,7 +443,8 @@ public struct WireCodec: RemoteCodec {
                 pendingQuestions: info.attention.question ? 1 : 0,
                 pendingApprovals: info.attention.approval ? 1 : 0
             ),
-            health: info.health.known == .live ? .healthy : .degraded
+            health: info.health.known == .live ? .healthy : .degraded,
+            turnCount: info.turnCount
         )
     }
 
@@ -454,6 +458,7 @@ public struct WireCodec: RemoteCodec {
                     id: "response:\(turn.turnID)",
                     .assistant(AssistantText(text: turn.liveResponse.text, isStreaming: true,
                         thoughtTimeMilliseconds: turn.thoughtTimeMilliseconds,
+                        thoughtTokens: turn.thoughtTokens, thoughtTokensEstimated: turn.thoughtTokensEstimated,
                         turn: turn.timing.map(timing) ?? TurnTiming(turnID: turn.turnID)))
                 ))
             }
@@ -489,7 +494,8 @@ public struct WireCodec: RemoteCodec {
             historyCursor: wire.historyCursor.map { HistoryCursor($0) },
             activeTurnTiming: wire.turn?.timing.map(timing),
             lastTurn: wire.lastTurn.map(timing),
-            snapshotID: wire.snapshotID
+            snapshotID: wire.snapshotID,
+            settings: wire.settings.map { $0.domain }
         )
     }
 
@@ -513,7 +519,7 @@ public struct WireCodec: RemoteCodec {
         case "assistant": return entry(.assistant(AssistantText(
             text: text, responseTimeMilliseconds: message.responseTimeMilliseconds,
             thoughtTimeMilliseconds: message.thoughtTimeMilliseconds, timestamp: message.timestamp,
-            completedAt: message.completedAt, turn: message.turn.map(timing), metadata: message.metadata
+            completedAt: message.completedAt, thoughtTokens: message.thoughtTokens, thoughtTokensEstimated: message.thoughtTokensEstimated, turn: message.turn.map(timing), metadata: message.metadata
         )))
         // `role` is a free string on the wire; anything else is shown without a speaker.
         default: return entry(.notice(text))
