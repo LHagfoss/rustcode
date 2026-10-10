@@ -3,13 +3,14 @@ import SwiftUI
 
 struct QuestionSheet: View {
     @Environment(RemoteStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
     let question: PendingQuestion
 
     @State private var selection: Set<String> = []
     @State private var freeText = ""
     @State private var usesCustomAnswer = false
-    @State private var submissionFailed = false
+    @State private var submissionFailure: String?
+    @State private var awaitingNextQuestion = false
+    @State private var isCancelling = false
     @FocusState private var isAnswerFocused: Bool
     @State private var isSubmitting = false
 
@@ -113,9 +114,9 @@ struct QuestionSheet: View {
                             }
                         }
                     }
-                    if submissionFailed {
+                    if let submissionFailure {
                         Section {
-                            Text("Your answer wasn’t sent. Your draft is still here; check the connection and try again.")
+                            Text(submissionFailure)
                                 .foregroundStyle(.red)
                         }
                     }
@@ -142,11 +143,13 @@ struct QuestionSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Later") { dismiss() }
+                        Button("Cancel", role: .destructive) { cancelQuestions() }
+                            .accessibilityLabel("Cancel questions")
+                            .disabled(isCancelling || store.connection != .connected || store.isQuestionCancellationPending(question.id))
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Send") { submit() }
-                            .disabled(answer.isEmpty || isSubmitting || store.connection != .connected || hasPendingAnswer)
+                        Button(question.position < question.chainLength ? "Next" : "Send") { submit() }
+                            .disabled(answer.isEmpty || isSubmitting || awaitingNextQuestion || store.connection != .connected || hasPendingAnswer)
                     }
                 }
             }
@@ -160,12 +163,12 @@ struct QuestionSheet: View {
     }
 
     private var hasPendingAnswer: Bool {
-        store.visibleRequests.contains { $0.kind == .answer && ($0.phase == .sending || $0.isUncertain) }
+        store.isQuestionPending(question.id)
     }
 
     private func toggle(_ id: String) {
         isAnswerFocused = false
-        submissionFailed = false
+        submissionFailure = nil
         if usesCustomAnswer {
             usesCustomAnswer = false
             if !question.allowsMultipleSelection { selection.removeAll() }
@@ -185,15 +188,28 @@ struct QuestionSheet: View {
         let submittedAnswer = answer
         isAnswerFocused = false
         isSubmitting = true
-        submissionFailed = false
+        submissionFailure = nil
         Task {
             let accepted = await store.answer(question, with: submittedAnswer)
             isSubmitting = false
             if accepted {
-                dismiss()
+                // The host advances the sheet to the next question, or closes it when
+                // the chain ends. A receipt alone must not hide an unanswered question.
+                awaitingNextQuestion = !store.isQuestionPending(question.id)
             } else {
-                submissionFailed = true
+                submissionFailure = "Your answer wasn’t sent. Your draft is still here; check the connection and try again."
             }
+        }
+    }
+
+    private func cancelQuestions() {
+        guard !isCancelling, !store.isQuestionCancellationPending(question.id) else { return }
+        isAnswerFocused = false
+        isCancelling = true
+        Task {
+            let accepted = await store.cancelQuestion(question)
+            isCancelling = false
+            if !accepted { submissionFailure = "Couldn’t cancel these questions. Check the connection; an older remote gateway may need restarting on your Mac." }
         }
     }
 }
@@ -209,6 +225,7 @@ struct ApprovalSheet: View {
 
     @State private var isSubmitting = false
     @State private var decision: ApprovalDecision?
+    @State private var submissionFailed = false
 
     private var approval: PendingApproval {
         if let current = store.attached?.pendingApproval, current.batchID == batchID { return current }
@@ -219,6 +236,13 @@ struct ApprovalSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    if submissionFailed {
+                        Text("The action wasn’t confirmed. Review the connection and try again.")
+                            .foregroundStyle(.red)
+                    }
+                    if store.isApprovalPending(batchID) {
+                        Label("Waiting for your Mac…", systemImage: "clock").foregroundStyle(.secondary)
+                    }
                     ForEach(approval.items) { item in
                         VStack(alignment: .leading, spacing: 8) {
                             Label(item.title, systemImage: "terminal")
@@ -267,7 +291,7 @@ struct ApprovalSheet: View {
                     .disabled(!approval.canBeResolved)
                 }
                 .controlSize(.large)
-                .disabled(isSubmitting)
+                .disabled(isSubmitting || store.isApprovalPending(batchID) || store.connection != .connected)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
             }
@@ -318,12 +342,14 @@ struct ApprovalSheet: View {
     }
 
     private func resolve(_ decision: ApprovalDecision) {
+        guard !isSubmitting, !store.isApprovalPending(batchID) else { return }
         self.decision = decision
         isSubmitting = true
+        submissionFailed = false
         Task {
-            await store.resolve(approval, decision: decision)
+            let accepted = await store.resolve(approval, decision: decision)
             isSubmitting = false
-            dismiss()
+            if !accepted { submissionFailed = true }
         }
     }
 }

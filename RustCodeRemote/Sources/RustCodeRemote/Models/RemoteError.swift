@@ -65,7 +65,7 @@ extension RemoteRejection {
         case .staleApproval: "That approval was already resolved."
         case .staleTurn: "That turn has already ended."
         case .staleSession: "The session is no longer shared."
-        case .unsupportedOperation: "The host does not support that from a remote device."
+        case .unsupportedOperation: "This action is not supported remotely. Use /help for available commands, or use the host terminal. Update and restart the RustCode gateway if a supported command is missing."
         case .other(let code, let message): message ?? "The host rejected the request (\(code))."
         }
     }

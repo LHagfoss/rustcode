@@ -11,8 +11,11 @@ final class FakeModelServer: Sendable {
 
     private let listener: NWListener
     private let chunkDelay: Duration
+    private let askQuestions: Bool
+    private let hasAsked = Mutex(false)
 
-    init(chunkDelay: Duration = .milliseconds(120)) throws {
+    init(chunkDelay: Duration = .milliseconds(120), askQuestions: Bool = false) throws {
+        self.askQuestions = askQuestions
         self.chunkDelay = chunkDelay
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -35,10 +38,19 @@ final class FakeModelServer: Sendable {
                 }
                 if isFirst { continuation.resume(with: result) }
             }
-            listener.newConnectionHandler = { [chunkDelay] connection in
+            listener.newConnectionHandler = { [weak self, chunkDelay, askQuestions] connection in
+                guard let self else { connection.cancel(); return }
                 connection.start(queue: .global())
-                Self.readRequest(on: connection, received: Data()) {
-                    Task { await Self.streamReply(on: connection, delay: chunkDelay) }
+                Self.readRequest(on: connection, received: Data()) { body in
+                    let request = (try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? [String: Any]
+                    let tools = request?["tools"] as? [[String: Any]] ?? []
+                    let advertisesQuestions = tools.contains { ($0["function"] as? [String: Any])?["name"] as? String == "ask_question" }
+                    let asksNow = self.hasAsked.withLock { asked in
+                        guard askQuestions, advertisesQuestions, !asked else { return false }
+                        asked = true
+                        return true
+                    }
+                    Task { await Self.streamReply(on: connection, delay: chunkDelay, askQuestions: asksNow) }
                 }
             }
             listener.start(queue: .global())
@@ -50,7 +62,7 @@ final class FakeModelServer: Sendable {
     }
 
     /// Reads until the headers and the announced body are in.
-    private static func readRequest(on connection: NWConnection, received: Data, then respond: @escaping @Sendable () -> Void) {
+    private static func readRequest(on connection: NWConnection, received: Data, then respond: @escaping @Sendable (String) -> Void) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, isComplete, error in
             var received = received
             received.append(data ?? Data())
@@ -61,7 +73,7 @@ final class FakeModelServer: Sendable {
                     .first { $0.hasPrefix("content-length:") }
                     .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
                 if text[headerEnd.upperBound...].utf8.count >= length {
-                    respond()
+                    respond(String(text[headerEnd.upperBound...]))
                     return
                 }
             }
@@ -73,7 +85,7 @@ final class FakeModelServer: Sendable {
         }
     }
 
-    private static func streamReply(on connection: NWConnection, delay: Duration) async {
+    private static func streamReply(on connection: NWConnection, delay: Duration, askQuestions: Bool) async {
         func send(_ text: String) async {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in continuation.resume() })
@@ -84,6 +96,16 @@ final class FakeModelServer: Sendable {
                 + "\"choices\":[{\"index\":0,\"delta\":\(delta),\"finish_reason\":\(finish)}]}\n\n"
         }
         await send("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
+        if askQuestions {
+            let arguments: [String: Any] = ["questions": (1...3).map { ["header": "Question \($0)", "question": "Pick option for question \($0)", "options": ["First", "Second"]] }]
+            let argumentsString = String(decoding: try! JSONSerialization.data(withJSONObject: arguments), as: UTF8.self)
+            let delta: [String: Any] = ["role": "assistant", "tool_calls": [["index": 0, "id": "call_questions", "type": "function", "function": ["name": "ask_question", "arguments": argumentsString]]]]
+            await send(chunk(String(decoding: try! JSONSerialization.data(withJSONObject: delta), as: UTF8.self)))
+            await send(chunk("{}", finish: "\"tool_calls\""))
+            await send("data: [DONE]\n\n")
+            connection.cancel()
+            return
+        }
         for (index, word) in reply.enumerated() {
             let role = index == 0 ? "\"role\":\"assistant\"," : ""
             await send(chunk("{\(role)\"content\":\"\(word)\"}"))

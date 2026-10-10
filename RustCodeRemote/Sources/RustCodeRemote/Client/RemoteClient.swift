@@ -35,6 +35,7 @@ public protocol RemoteClient: Sendable {
     /// `RemoteError.unauthorized` when the token was revoked.
     @discardableResult
     func connect(using credential: StoredCredential) async throws -> ConnectionIdentity
+    func receiptUpdates() async -> AsyncStream<RequestReceipt>
     func disconnect() async
 
     /// The live shared sessions of the host: the current list first, then every change.
@@ -61,6 +62,8 @@ public protocol RemoteClient: Sendable {
         maxBytes: Int
     ) async throws -> ContentChunk
 
+    func executeCommand(_ command: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
+    func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
     func setSessionSettings(model: String, reasoningEffort: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
 
     /// Idle-only. Rejected with `.busy` while a turn is running.
@@ -87,6 +90,9 @@ public protocol RemoteClient: Sendable {
 }
 
 public extension RemoteClient {
+    func receiptUpdates() async -> AsyncStream<RequestReceipt> { AsyncStream { $0.finish() } }
+    func executeCommand(_ command: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt { RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation)) }
+    func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt { RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation)) }
     func setSessionSettings(model: String, reasoningEffort: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
         RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation))
     }

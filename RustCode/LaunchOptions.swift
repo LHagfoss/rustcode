@@ -4,7 +4,7 @@ import RustCodeRemote
 /// Launch arguments for demos and screenshots.
 ///
 /// - `-demo`: start in demo mode instead of the pairing screen.
-/// - `-demoSession approval|question|idle`: open that demo session straight away.
+/// - `-demoSession approval|question|questions|idle`: open that demo session straight away.
 /// - `-demoSheet`: present the session's pending question or approval once it appears.
 ///
 /// Debug builds only, for screenshots of states the Simulator cannot be driven into:
@@ -34,6 +34,7 @@ struct LaunchOptions {
             demoSessionID = switch arguments[index + 1] {
             case "approval": DemoRemoteClient.approvalSessionID
             case "question": DemoRemoteClient.questionSessionID
+            case "questions": DemoRemoteClient.questionsSessionID
             case "idle": DemoRemoteClient.idleSessionID
             default: nil
             }

@@ -2,12 +2,14 @@ import RustCodeRemote
 import SwiftUI
 
 /// The message field and its send or stop button, as one floating glass control.
-struct ComposerBar: View {
+struct ComposerBar<Accessory: View, Controls: View>: View {
     @Environment(RemoteStore.self) private var store
     let isRunning: Bool
     /// Whether the running turn accepts steering.
     var canSteer = true
     let isEnabled: Bool
+    @ViewBuilder var accessory: () -> Accessory
+    @ViewBuilder var controls: () -> Controls
 
     @State private var text = ""
     @State private var sendCount = 0
@@ -22,11 +24,33 @@ struct ComposerBar: View {
     }
 
     private var shape: RoundedRectangle {
-        // A capsule while the field is one line; the corners stay put as it grows.
-        .rect(cornerRadius: (buttonSize + inset * 2) / 2)
+        .rect(cornerRadius: 26)
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            accessory()
+            if isFocused && trimmed.hasPrefix("/") { commandSuggestions }
+            inputRow
+            controls().padding(.horizontal, 8).padding(.bottom, 4)
+        }
+        .contentShape(shape)
+        .glassSurface(in: shape)
+        .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
+        .sensoryFeedback(.stop, trigger: stopCount)
+        #if DEBUG
+        .task {
+            let options = LaunchOptions.current
+            if let draft = options.composerDraft { text = draft }
+            if options.focusesComposer {
+                try? await Task.sleep(for: .milliseconds(600))
+                isFocused = true
+            }
+        }
+        #endif
+    }
+
+    private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField(isRunning ? "Queue a message" : "Message", text: $text, axis: .vertical)
                 .lineLimit(1...6)
@@ -50,7 +74,9 @@ struct ComposerBar: View {
                 .accessibilityLabel("Dismiss keyboard")
             }
 
-            if isRunning {
+            if trimmed.hasPrefix("/") {
+                sendButton
+            } else if isRunning {
                 if !trimmed.isEmpty {
                     queueButton
                         .transition(.scale.combined(with: .opacity))
@@ -65,24 +91,45 @@ struct ComposerBar: View {
         .padding(.leading, 18)
         .padding(.trailing, inset)
         .padding(.vertical, inset)
-        .contentShape(shape)
-        .glassSurface(in: shape)
         .animation(.snappy(duration: 0.2), value: isRunning)
-        .animation(.snappy(duration: 0.2), value: trimmed.isEmpty)
-        .disabled(!isEnabled)
-        .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
-        .sensoryFeedback(.stop, trigger: stopCount)
-        #if DEBUG
-        .task {
-            let options = LaunchOptions.current
-            if let draft = options.composerDraft { text = draft }
-            if options.focusesComposer {
-                try? await Task.sleep(for: .milliseconds(600))
-                isFocused = true
+    }
+
+    private var commandSuggestions: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if store.attached?.capabilities.contains("execute_command") != true {
+                Text("Slash commands need an updated RustCode session and remote gateway.")
+                    .font(.footnote).foregroundStyle(.secondary).padding(12)
+            } else if !trimmed.contains(where: \.isWhitespace) {
+                ForEach(suggestions.filter { $0.0.hasPrefix(trimmed.lowercased()) }.prefix(4), id: \.0) { command, detail in
+                    Button {
+                        text = command + (command == "/model" || command == "/effort" || command == "/title" ? " " : "")
+                    } label: {
+                        HStack {
+                            Text(command).font(.body.monospaced())
+                            Text(detail).font(.footnote).foregroundStyle(.secondary)
+                            Spacer()
+                            Image(systemName: "arrow.up.left").foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 16).frame(minHeight: 44)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(command)
+                    .accessibilityHint(detail)
+                }
+                Divider().padding(.horizontal, 14)
             }
         }
-        #endif
     }
+
+    private let suggestions = [
+        ("/help", "All commands"), ("/model", "View or change model"),
+        ("/effort", "Thinking effort"), ("/cancel", "Stop the current task"),
+        ("/status", "Session status"), ("/context", "Context window"),
+        ("/usage", "Token usage"), ("/tasks", "Background tasks"),
+        ("/mcp", "Configured MCP servers"), ("/title", "Rename session"),
+        ("/info", "About RustCode"), ("/perf", "Performance")
+    ]
 
     private var sendButton: some View {
         Button {
@@ -91,8 +138,8 @@ struct ComposerBar: View {
             circle("arrow.up", isProminent: !trimmed.isEmpty)
         }
         .buttonStyle(.plain)
-        .disabled(trimmed.isEmpty)
-        .accessibilityLabel("Send message")
+        .disabled(trimmed.isEmpty || !isEnabled)
+        .accessibilityLabel(trimmed.hasPrefix("/") ? "Run command" : "Send message")
     }
 
     /// While a turn runs, a tap queues; the menu offers steering instead.
@@ -112,6 +159,7 @@ struct ComposerBar: View {
             send(.queue)
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
         .accessibilityLabel("Queue message")
         .accessibilityHint("Touch and hold for steering")
     }
@@ -121,10 +169,15 @@ struct ComposerBar: View {
             stopCount += 1
             Task { await store.cancelTurn() }
         } label: {
-            circle("stop.fill", fill: AnyShapeStyle(.red), foreground: .white)
+            if store.hasPendingCancellation {
+                ProgressView().frame(width: buttonSize, height: buttonSize)
+            } else {
+                circle("stop.fill", fill: AnyShapeStyle(.red), foreground: .white)
+            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Stop the running turn")
+        .disabled(!isEnabled || store.hasPendingCancellation)
+        .accessibilityLabel(store.hasPendingCancellation ? "Stopping the running turn" : "Stop the running turn")
     }
 
     private func circle(_ symbol: String, isProminent: Bool) -> some View {
@@ -152,112 +205,12 @@ struct ComposerBar: View {
         sendCount += 1
         Task {
             // Give the text back if it certainly did not reach the session.
-            if await !store.send(message, mode: mode), text.isEmpty {
+            let accepted = message.hasPrefix("/")
+                ? await store.executeCommand(message)
+                : await store.send(message, mode: mode)
+            if !accepted, text.isEmpty {
                 text = message
             }
-        }
-    }
-}
-
-/// A pending approval or question, attached to the top of the composer.
-struct AttentionAccessory: View {
-    let symbol: String
-    let title: String
-    let detail: String
-    let action: String
-    let perform: () -> Void
-
-    var body: some View {
-        Button(action: perform) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.attention)
-                    .symbolEffect(.pulse, options: .repeating)
-                titleText
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(action)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(.brandFill, in: .capsule)
-                    .fixedSize()
-            }
-            .padding(.leading, 14)
-            .padding(.trailing, 6)
-            .padding(.vertical, 6)
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
-        .glassSurface(in: .capsule, interactive: true)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title). \(detail)")
-        .accessibilityHint(action)
-        .accessibilityAddTraits(.isButton)
-    }
-
-    private var titleText: some View {
-        Text(title)
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(1)
-            .layoutPriority(1)
-    }
-}
-
-/// A request whose outcome is not known to be applied. An uncertain one is never sent
-/// again automatically: the user checks its status or dismisses it.
-struct RequestStatusRow: View {
-    @Environment(RemoteStore.self) private var store
-    let request: TrackedRequest
-
-    var body: some View {
-        HStack(spacing: 10) {
-            if request.phase == .sending {
-                ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: "questionmark.circle")
-                    .foregroundStyle(.attention)
-                    .accessibilityHidden(true)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.footnote.weight(.semibold))
-                if let text = request.text {
-                    Text(text)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: 8)
-            if request.isUncertain {
-                Button("Check") {
-                    Task { await store.checkStatus(of: request.id) }
-                }
-                .accessibilityLabel("Check whether the request was applied")
-                Button("Dismiss", systemImage: "xmark") {
-                    store.dismissRequest(request.id)
-                }
-                .labelStyle(.iconOnly)
-            }
-        }
-        .font(.footnote)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .glassSurface(in: .rect(cornerRadius: 20))
-    }
-
-    private var title: String {
-        switch request.phase {
-        case .sending: "Sending…"
-        case .settled(.received): "Delivered, waiting for the session"
-        case .settled(.unknown): "Not confirmed. Check the transcript before sending again."
-        case .notSent(let reason): reason
-        case .settled: "Sent"
         }
     }
 }

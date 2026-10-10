@@ -17,6 +17,8 @@ public enum RemoteCommand: Sendable, Equatable {
     case detachSession(SessionRef)
     case getHistory(SessionRef, before: HistoryCursor, limit: Int)
     case getContent(SessionRef, contentID: String, offset: UInt64, maxBytes: Int)
+    case executeCommand(SessionRef, command: String)
+    case cancelQuestion(SessionRef, questionID: String)
     case setSessionSettings(SessionRef, model: String, reasoningEffort: String)
     case submitPrompt(SessionRef, text: String)
     case steer(SessionRef, text: String)
@@ -115,6 +117,7 @@ public enum RemoteReply: Sendable, Equatable {
     case content(ContentChunk)
     /// A mutation's receipt, or the answer to `getRequestStatus`. A `received` receipt may be
     /// followed by a final one for the same request.
+    case commandExecuted(SessionCommandResult)
     case receipt(ReceiptState)
     case failure(RemoteError)
     /// A result this version of the app does not know.

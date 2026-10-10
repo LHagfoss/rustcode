@@ -122,6 +122,10 @@ public struct WireCodec: RemoteCodec {
                 offset: offset,
                 maxBytes: UInt32(clamping: maxBytes)
             )))
+        case .executeCommand(let session, let command):
+            return scoped(session, .executeCommand(.init(command: command)))
+        case .cancelQuestion(let session, let questionID):
+            return scoped(session, .cancelQuestion(.init(questionID: questionID)))
         case .setSessionSettings(let session, let model, let effort):
             return scoped(session, .setSessionSettings(.init(model: model, reasoningEffort: effort)))
         case .submitPrompt(let session, let text):
@@ -293,9 +297,12 @@ public struct WireCodec: RemoteCodec {
                 totalBytes: chunk.totalBytes,
                 nextOffset: chunk.nextOffset
             ))
-        case .sessionSettingsUpdated, .promptAccepted, .turnCancelled, .questionAnswered, .approvalResolved:
-            return .receipt(receipt == .received ? .received : .applied)
+        case .commandExecuted(let result):
+            return receipt == .applied ? .commandExecuted(result) : .receipt(receipt == .received ? .received : .unknown)
+        case .questionCancelled, .sessionSettingsUpdated, .promptAccepted, .turnCancelled, .questionAnswered, .approvalResolved:
+            return .receipt(receipt == .unknown ? .unknown : receipt == .received ? .received : .applied)
         case .requestStatus(let status):
+            if status.receipt.known == .applied, case .commandExecuted(let result) = status.result { return .commandExecuted(result) }
             return .receipt(receiptState(status))
         case .unknown(let type, _):
             return .unknown(type)
@@ -495,7 +502,8 @@ public struct WireCodec: RemoteCodec {
             activeTurnTiming: wire.turn?.timing.map(timing),
             lastTurn: wire.lastTurn.map(timing),
             snapshotID: wire.snapshotID,
-            settings: wire.settings.map { $0.domain }
+            settings: wire.settings.map { $0.domain },
+            capabilities: Set(wire.capabilities ?? [])
         )
     }
 

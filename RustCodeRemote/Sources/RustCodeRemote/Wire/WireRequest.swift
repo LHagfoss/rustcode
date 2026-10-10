@@ -40,6 +40,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
     case detachSession
     case getHistory(GetHistory)
     case getContent(GetContent)
+    case executeCommand(ExecuteCommand)
+    case cancelQuestion(CancelQuestion)
     case setSessionSettings(SetSessionSettings)
     case submitPrompt(Prompt)
     case steer(Prompt)
@@ -54,7 +56,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
     public static let knownTypes: Set<String> = [
         "list_sessions", "subscribe_sessions", "attach_session", "detach_session", "get_history",
         "get_content", "submit_prompt", "steer", "queue", "cancel_turn", "answer_question",
-        "resolve_approval", "get_request_status", "set_session_settings",
+        "resolve_approval", "get_request_status", "set_session_settings", "execute_command", "cancel_question",
     ]
 
     public struct AttachSession: Codable, Equatable, Sendable {
@@ -78,6 +80,11 @@ public enum WireOperation: Codable, Equatable, Sendable {
         }
     }
 
+    public struct ExecuteCommand: Codable, Equatable, Sendable { public var command: String }
+    public struct CancelQuestion: Codable, Equatable, Sendable {
+        public var questionID: String
+        enum CodingKeys: String, CodingKey { case questionID = "question_id" }
+    }
     public struct SetSessionSettings: Codable, Equatable, Sendable {
         public var model: String
         public var reasoningEffort: String
@@ -132,6 +139,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case .detachSession: "detach_session"
         case .getHistory: "get_history"
         case .getContent: "get_content"
+        case .executeCommand: "execute_command"
+        case .cancelQuestion: "cancel_question"
         case .setSessionSettings: "set_session_settings"
         case .submitPrompt: "submit_prompt"
         case .steer: "steer"
@@ -153,6 +162,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case "detach_session": self = .detachSession
         case "get_history": self = .getHistory(try GetHistory(from: decoder))
         case "get_content": self = .getContent(try GetContent(from: decoder))
+        case "execute_command": self = .executeCommand(try ExecuteCommand(from: decoder))
+        case "cancel_question": self = .cancelQuestion(try CancelQuestion(from: decoder))
         case "set_session_settings": self = .setSessionSettings(try SetSessionSettings(from: decoder))
         case "submit_prompt": self = .submitPrompt(try Prompt(from: decoder))
         case "steer": self = .steer(try Prompt(from: decoder))
@@ -171,6 +182,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case .attachSession(let payload): payload
         case .getHistory(let payload): payload
         case .getContent(let payload): payload
+        case .executeCommand(let payload): payload
+        case .cancelQuestion(let payload): payload
         case .setSessionSettings(let payload): payload
         case .submitPrompt(let payload), .steer(let payload), .queue(let payload): payload
         case .cancelTurn(let payload): payload

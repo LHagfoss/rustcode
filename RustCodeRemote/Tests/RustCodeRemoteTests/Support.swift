@@ -71,6 +71,8 @@ struct LineCodec: RemoteCodec {
         case .detachSession: "detach"
         case .getHistory: "history"
         case .getContent: "content"
+        case .executeCommand: "command"
+        case .cancelQuestion: "cancel-question"
         case .setSessionSettings: "settings"
         case .submitPrompt: "submit"
         case .steer: "steer"

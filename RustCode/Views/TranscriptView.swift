@@ -5,6 +5,8 @@ struct TranscriptView: View {
     @Environment(RemoteStore.self) private var store
     @State private var sheet: AttentionSheet?
     @State private var selectable: SelectableText?
+    @State private var showsRequests = false
+    @State private var showsHostUpdate = false
     @State private var hasAutoPresented = false
     @State private var followsLatest = true
     @State private var isDraggingTranscript = false
@@ -43,6 +45,12 @@ struct TranscriptView: View {
             case .approval(let approval):
                 ApprovalSheet(batchID: approval.batchID, initial: approval)
             }
+        }
+        .sheet(isPresented: $showsRequests) { RequestStatusSheet() }
+        .alert("Restart the remote gateway", isPresented: $showsHostUpdate) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This connection isn’t providing model or effort controls. Update RustCode and restart its remote gateway on your Mac, then reconnect. A gateway left running from before an update can hide new controls.")
         }
         .sheet(item: $selectable) { selectable in
             SelectTextSheet(text: selectable.text)
@@ -113,6 +121,19 @@ struct TranscriptView: View {
                         StreamingIndicator()
                     }
                     SessionActivityView(snapshot: snapshot)
+                    if let result = store.commandResult {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text(result.title).font(.headline).accessibilityIdentifier("commandOutputTitle")
+                                Spacer()
+                                Button("Dismiss command output", systemImage: "xmark") { store.dismissCommandResult() }
+                                    .labelStyle(.iconOnly).frame(width: 44, height: 44)
+                            }
+                            MarkdownText(text: result.output)
+                                .contextMenu { TextActions(text: result.output, readableText: MarkdownText.plainText(result.output)) }
+                        }
+                        .id("command-output")
+                    }
                     Color.clear.frame(height: 1).id("transcript-end")
                 }
                 .padding(.horizontal, 16)
@@ -135,6 +156,9 @@ struct TranscriptView: View {
                 if isDraggingTranscript { followsLatest = atBottom }
             }
             .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
+            .onChange(of: store.commandResult) { _, result in
+                if result != nil { proxy.scrollTo("command-output", anchor: .top) }
+            }
             .onChange(of: snapshot.items) { _, _ in
                 if followsLatest && !isComposerFocused && !isDraggingTranscript {
                     proxy.scrollTo("transcript-end", anchor: .bottom)
@@ -154,36 +178,34 @@ struct TranscriptView: View {
     @ViewBuilder
     private var composerDock: some View {
         if let snapshot = store.attached {
-            GlassGroup(spacing: 8) {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(store.visibleRequests) { request in
-                        RequestStatusRow(request: request)
-                    }
+            ComposerBar(
+                isRunning: snapshot.isRunning,
+                canSteer: snapshot.canSteer,
+                isEnabled: store.connection == .connected,
+                accessory: {
                     if let approval = snapshot.pendingApproval {
                         AttentionAccessory(
-                            symbol: "hand.raised.fill",
-                            title: "Approval needed",
-                            detail: approval.items.first?.title ?? "Review the action",
-                            action: "Review"
-                        ) { sheet = .approval(approval) }
-                    }
-                    if let question = snapshot.pendingQuestion {
+                            symbol: "hand.raised.fill", title: "Approval needed",
+                            detail: approval.items.first?.title ?? "Review the action", action: "Review",
+                            cancelLabel: "Deny action", isPending: store.isApprovalPending(approval.batchID),
+                            cancel: { Task { await store.resolve(approval, decision: .deny) } }
+                        ) { isComposerFocused = false; sheet = .approval(approval) }
+                    } else if let question = snapshot.pendingQuestion {
                         AttentionAccessory(
                             symbol: "questionmark.bubble.fill",
-                            title: "Question",
-                            detail: question.prompt,
-                            action: "Answer"
-                        ) { sheet = .question(question) }
+                            title: question.chainLength > 1 ? "Question \(question.position) of \(question.chainLength)" : "Question",
+                            detail: question.prompt, action: "Answer",
+                            isPending: store.isQuestionCancellationPending(question.id),
+                            cancel: { Task { await store.cancelQuestion(question) } }
+                        ) { isComposerFocused = false; sheet = .question(question) }
                     }
-                    sessionControls(snapshot)
-                    ComposerBar(
-                        isRunning: snapshot.isRunning,
-                        canSteer: snapshot.canSteer,
-                        isEnabled: store.connection == .connected,
-                        isFocused: $isComposerFocused
-                    )
-                }
-            }
+                    if !store.visibleRequests.isEmpty {
+                        RequestStatusSummary(requests: store.visibleRequests) { showsRequests = true }
+                    }
+                },
+                controls: { sessionControls(snapshot) },
+                isFocused: $isComposerFocused
+            )
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: 760)
@@ -204,6 +226,7 @@ struct TranscriptView: View {
             if let settings = snapshot.settings {
                 let current = settings.models.first { $0.id == settings.selectedModel }
                 Menu {
+                    if !settings.canChange { Text("Available after the current turn stops") }
                     ForEach(settings.models, id: \.id) { choice in
                         Button {
                             let effort = choice.reasoningEfforts.contains(settings.reasoningEffort)
@@ -211,21 +234,23 @@ struct TranscriptView: View {
                             Task { await store.setSessionSettings(model: choice.id, reasoningEffort: effort) }
                         } label: {
                             if choice.id == settings.selectedModel {
-                                Label(choice.model, systemImage: "checkmark")
-                            } else { Text(choice.model) }
+                                Label(choice.id == choice.model ? choice.model : "\(choice.model) · \(choice.id)", systemImage: "checkmark")
+                            } else { Text(choice.id == choice.model ? choice.model : "\(choice.model) · \(choice.id)") }
                         }
+                        .disabled(!settings.canChange || store.connection != .connected || hasPendingSettings)
                     }
                 } label: {
                     Label(current?.model ?? (store.selectedSession?.model ?? "Model"), systemImage: "chevron.down")
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(maxWidth: 180)
+                        .frame(maxWidth: 180, minHeight: 44)
+                        .contentShape(.rect)
                 }
                 .accessibilityLabel("Model")
                 .accessibilityValue(current?.model ?? (store.selectedSession?.model ?? "Model"))
-                .disabled(!settings.canChange || store.connection != .connected || hasPendingSettings)
 
                 Menu {
+                    if !settings.canChange { Text("Available after the current turn stops") }
                     ForEach(current?.reasoningEfforts ?? [], id: \.self) { effort in
                         Button {
                             Task { await store.setSessionSettings(model: settings.selectedModel, reasoningEffort: effort) }
@@ -234,16 +259,23 @@ struct TranscriptView: View {
                                 Label(effort.capitalized, systemImage: "checkmark")
                             } else { Text(effort.capitalized) }
                         }
+                        .disabled(!settings.canChange || store.connection != .connected || hasPendingSettings)
                     }
                 } label: {
-                    Label(settings.reasoningEffort.capitalized, systemImage: "brain")
+                    Label(settings.reasoningEffort.capitalized, systemImage: "brain").frame(minHeight: 44).contentShape(.rect)
                 }
                 .accessibilityLabel("Thinking effort")
                 .accessibilityValue(settings.reasoningEffort)
-                .disabled(!settings.canChange || store.connection != .connected || hasPendingSettings
-                    || (current?.reasoningEfforts.count ?? 0) < 2)
+
             } else {
-                Text((store.selectedSession?.model ?? "Model")).foregroundStyle(.secondary)
+                Button { showsHostUpdate = true } label: {
+                    Label(store.selectedSession?.model ?? "Model", systemImage: "chevron.down")
+                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 180, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .accessibilityLabel("Model")
+                Button { showsHostUpdate = true } label: { Label("Effort", systemImage: "brain").frame(minHeight: 44).contentShape(.rect) }
+                    .accessibilityLabel("Thinking effort")
             }
             if let count = store.selectedSession?.turnCount {
                 Text("\(count) \(count == 1 ? "turn" : "turns")")
@@ -253,14 +285,14 @@ struct TranscriptView: View {
         }
         .font(.caption.weight(.medium))
         .controlSize(.regular)
-        .secondaryButtonStyle()
+        .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
         .frame(minHeight: 44)
         .padding(.horizontal, 6)
     }
 
     private var hasPendingSettings: Bool {
-        store.visibleRequests.contains { $0.kind == .settings && ($0.phase == .sending || $0.isUncertain) }
+        store.hasPendingSettings
     }
 
     /// A turn is running but nothing on screen shows it: no streaming text, no running tool
@@ -279,8 +311,9 @@ struct TranscriptView: View {
     private func reconcileSheet() {
         let snapshot = store.attached
         switch sheet {
-        case .question(let question) where snapshot?.pendingQuestion?.id != question.id:
-            sheet = nil
+        case .question:
+            if let next = snapshot?.pendingQuestion { sheet = .question(next) }
+            else { sheet = nil }
         case .approval(let approval) where snapshot?.pendingApproval?.batchID != approval.batchID:
             sheet = nil
         default:
@@ -389,7 +422,7 @@ enum AttentionSheet: Identifiable {
 
     var id: String {
         switch self {
-        case .question(let question): "question-\(question.id)"
+        case .question: "question"
         case .approval(let approval): "approval-\(approval.batchID)"
         }
     }

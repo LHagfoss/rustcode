@@ -70,6 +70,7 @@ public struct SessionSnapshot: Sendable, Equatable {
     public var activeTurnID: String?
     public var activeTurnTiming: TurnTiming?
     public var lastTurn: TurnTiming?
+    public var capabilities: Set<String>
     public var settings: SessionSettings?
     public var snapshotID: String?
     /// Whether the running turn accepts steering. Only a snapshot says so.
@@ -101,7 +102,8 @@ public struct SessionSnapshot: Sendable, Equatable {
         activeTurnTiming: TurnTiming? = nil,
         lastTurn: TurnTiming? = nil,
         snapshotID: String? = nil,
-        settings: SessionSettings? = nil
+        settings: SessionSettings? = nil,
+        capabilities: Set<String> = []
     ) {
         self.session = session
         self.items = items
@@ -110,6 +112,7 @@ public struct SessionSnapshot: Sendable, Equatable {
         self.lastTurn = lastTurn
         self.snapshotID = snapshotID
         self.settings = settings
+        self.capabilities = capabilities
         self.canSteer = canSteer
         self.pendingQuestion = pendingQuestion
         self.pendingApproval = pendingApproval

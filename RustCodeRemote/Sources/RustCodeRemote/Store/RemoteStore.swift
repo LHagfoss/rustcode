@@ -50,7 +50,49 @@ public final class RemoteStore {
     public private(set) var receipts = ReceiptLedger()
 
     /// A message for the user about the last thing that went wrong. Views clear it once shown.
+    public private(set) var commandResult: SessionCommandResult?
+    public func dismissCommandResult() { commandResult = nil }
+    public func isApprovalPending(_ batchID: String) -> Bool {
+        guard let session = attached?.session else { return false }
+        return isPending("approval:\(batchID)", in: session)
+    }
     public var notice: String?
+    private struct PendingMutation {
+        var session: SessionRef
+        var key: String
+        var blocksDuplicate = true
+        var desiredModel: String?
+        var desiredEffort: String?
+    }
+    private var pendingMutations: [RequestID: PendingMutation] = [:]
+    @ObservationIgnored private var performing: Set<RequestID> = []
+    @ObservationIgnored private var finalReceipts: [RequestID: RequestReceipt] = [:]
+    @ObservationIgnored private var receiptTask: Task<Void, Never>?
+
+    public var hasPendingSettings: Bool {
+        guard let session = attached?.session else { return false }
+        return isPending("settings", in: session)
+    }
+
+    public var hasPendingCancellation: Bool {
+        guard let snapshot = attached, let turn = snapshot.activeTurnID else { return false }
+        return isPending("cancel:\(turn)", in: snapshot.session)
+    }
+
+    public func isQuestionPending(_ questionID: String) -> Bool {
+        guard let session = attached?.session else { return false }
+        return isPending("question:\(questionID)", in: session) || isQuestionCancellationPending(questionID)
+    }
+
+    public func isQuestionCancellationPending(_ questionID: String) -> Bool {
+        guard let session = attached?.session else { return false }
+        return isPending("cancel-question:\(questionID)", in: session)
+            || (attached?.pendingQuestion?.id == questionID && hasPendingCancellation)
+    }
+
+    private func isPending(_ key: String, in session: SessionRef) -> Bool {
+        pendingMutations.values.contains { $0.session == session && $0.key == key && $0.blocksDuplicate }
+    }
 
     @ObservationIgnored private let liveClient: any RemoteClient
     @ObservationIgnored private let makeDemoClient: @Sendable () -> any RemoteClient
@@ -224,6 +266,7 @@ public final class RemoteStore {
             Task { await client.detach(previous) }
         }
         attached = nil
+        commandResult = nil
         selectedSessionID = sessionID
         if let sessionID {
             badges.markSeen(sessionID)
@@ -296,6 +339,7 @@ public final class RemoteStore {
     public func send(_ text: String, mode: SendMode = .automatic) async -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let snapshot = attached else { return false }
+        if text.hasPrefix("/") { return await executeCommand(text) }
         let session = snapshot.session
         switch mode {
         case .automatic where !snapshot.isRunning:
@@ -314,29 +358,67 @@ public final class RemoteStore {
     }
 
     @discardableResult
+    public func executeCommand(_ command: String) async -> Bool {
+        guard let snapshot = attached else { return false }
+        if command.trimmingCharacters(in: .whitespacesAndNewlines) == "/cancel" {
+            if let question = snapshot.pendingQuestion { return await cancelQuestion(question) }
+            guard snapshot.activeTurnID != nil, !hasPendingCancellation else { return false }
+            return await cancelTurn()
+        }
+        guard snapshot.capabilities.contains("execute_command") else {
+            notice = "This connection does not support remote slash commands. Update RustCode and restart its remote gateway on your Mac, then reconnect."
+            return false
+        }
+        return await perform(.command(command), in: snapshot.session, key: "command:\(command)") { client, id in
+            try await client.executeCommand(command, in: snapshot.session, requestID: id)
+        }
+    }
+
+    @discardableResult
+    public func cancelQuestion(_ question: PendingQuestion) async -> Bool {
+        guard let snapshot = attached, snapshot.pendingQuestion?.id == question.id else { return false }
+        guard snapshot.capabilities.contains("cancel_question") else {
+            // Older hosts expose only turn cancellation. The captured turn ID gives the
+            // same Escape behavior without risking cancellation of a newer turn.
+            guard let turnID = snapshot.activeTurnID else {
+                notice = "The host did not provide a turn ID. Cancel this question in the host terminal."
+                return false
+            }
+            return await perform(.cancelQuestion, in: snapshot.session, key: "cancel:\(turnID)") { client, id in
+                try await client.cancel(turnID: turnID, in: snapshot.session, requestID: id)
+            }
+        }
+        let key = snapshot.activeTurnID.map { "cancel:\($0)" } ?? "cancel-question:\(question.id)"
+        return await perform(.cancelQuestion, in: snapshot.session, key: key) { client, id in
+            try await client.cancelQuestion(question.id, in: snapshot.session, requestID: id)
+        }
+    }
+
+    @discardableResult
     public func setSessionSettings(model: String, reasoningEffort: String) async -> Bool {
         guard let snapshot = attached, !snapshot.isRunning,
               let settings = snapshot.settings, settings.canChange,
               let choice = settings.models.first(where: { $0.id == model }),
               choice.reasoningEfforts.contains(reasoningEffort) else { return false }
-        return await perform(.settings, in: snapshot.session) { client, id in
+        return await perform(.settings, in: snapshot.session, key: "settings", desiredModel: model, desiredEffort: reasoningEffort) { client, id in
             try await client.setSessionSettings(model: model, reasoningEffort: reasoningEffort, in: snapshot.session, requestID: id)
         }
     }
 
     /// Cancels the turn the user is looking at, by its ID.
-    public func cancelTurn() async {
-        guard let snapshot = attached, let turnID = snapshot.activeTurnID else { return }
+    @discardableResult
+    public func cancelTurn() async -> Bool {
+        guard let snapshot = attached, let turnID = snapshot.activeTurnID else { return false }
         let session = snapshot.session
-        await perform(.cancel, in: session) { client, id in
+        return await perform(.cancel, in: session, key: "cancel:\(turnID)") { client, id in
             try await client.cancel(turnID: turnID, in: session, requestID: id)
         }
     }
 
     @discardableResult
     public func answer(_ question: PendingQuestion, with answer: QuestionAnswer) async -> Bool {
-        guard let session = attached?.session, !answer.isEmpty else { return false }
-        return await perform(.answer, in: session) { client, id in
+        guard let session = attached?.session, !answer.isEmpty, !isQuestionCancellationPending(question.id) else { return false }
+        return await perform(.answer, in: session, key: "question:\(question.id)") { client, id in
             try await client.answerQuestion(question.id, with: answer, in: session, requestID: id)
         }
     }
@@ -351,14 +433,14 @@ public final class RemoteStore {
             notice = "The full details of this action have not loaded yet."
             return false
         }
-        return await perform(.approval, in: session) { client, id in
+        return await perform(.approval, in: session, key: "approval:\(approval.batchID)") { client, id in
             try await client.resolveApproval(batchID: approval.batchID, decision: decision, in: session, requestID: id)
         }
     }
 
     /// Asks the host what became of an uncertain request. Never sends the request again.
     public func checkStatus(of requestID: RequestID) async {
-        guard let request = receipts.requests.first(where: { $0.id == requestID }) else { return }
+        guard let request = pendingMutations[requestID] else { return }
         do {
             let receipt = try await client.getRequestStatus(requestID, in: request.session)
             settle(receipt)
@@ -390,10 +472,14 @@ public final class RemoteStore {
         sessions = []
         selectedSessionID = nil
         attached = nil
+        commandResult = nil
         snapshotInstanceID = nil
         currentInstanceID = nil
         badges.removeAll()
         receipts.removeAll()
+        pendingMutations.removeAll()
+        finalReceipts.removeAll()
+        receiptTask?.cancel()
     }
 
     private func startConnection() {
@@ -415,6 +501,14 @@ public final class RemoteStore {
                 try Task.checkCancellation()
                 currentInstanceID = identity.instanceID
                 adoptHostName(identity.hostName, for: credential)
+                let receiptStream = await client.receiptUpdates()
+                receiptTask?.cancel()
+                receiptTask = Task { [weak self] in
+                    for await receipt in receiptStream {
+                        guard !Task.isCancelled else { return }
+                        self?.settle(receipt)
+                    }
+                }
                 let lists = try await client.subscribeSessions()
                 try Task.checkCancellation()
                 connection = .connected
@@ -498,6 +592,7 @@ public final class RemoteStore {
             // No longer shared (`/remote off`, terminal exit or a new session identity).
             attachTask?.cancel()
             attached = nil
+        commandResult = nil
             self.selectedSessionID = nil
             notice = "That session is no longer shared."
             return
@@ -513,8 +608,8 @@ public final class RemoteStore {
         if let selectedSessionID {
             startAttachment(selectedSessionID)
         }
-        for request in receipts.uncertain {
-            Task { await checkStatus(of: request.id) }
+        for (id, _) in pendingMutations {
+            Task { await checkStatus(of: id) }
         }
     }
 
@@ -540,6 +635,7 @@ public final class RemoteStore {
                 switch attachment.start {
                 case .snapshot(let snapshot):
                     attached = snapshot
+                    retireObservedMutations()
                     snapshotInstanceID = currentInstanceID
                 case .resumed:
                     guard attached?.session == ref else {
@@ -555,6 +651,7 @@ public final class RemoteStore {
                         lostUpdates = true
                         break
                     }
+                    retireObservedMutations()
                 }
                 // The stream ending without a gap means the connection went; the connection
                 // loop attaches again once it is back.
@@ -565,6 +662,7 @@ public final class RemoteStore {
             } catch RemoteError.sessionClosed(let reason) {
                 guard !Task.isCancelled, selectedSessionID == sessionID else { return }
                 attached = nil
+                commandResult = nil
                 selectedSessionID = nil
                 notice = reason
                 return
@@ -580,32 +678,79 @@ public final class RemoteStore {
     private func perform(
         _ kind: TrackedRequest.Kind,
         in session: SessionRef,
+        key: String? = nil,
+        desiredModel: String? = nil,
+        desiredEffort: String? = nil,
         _ operation: (any RemoteClient, RequestID) async throws -> RequestReceipt
     ) async -> Bool {
         guard connection == .connected else {
             notice = RemoteError.notConnected.localizedDescription
             return false
         }
+        let key = key ?? "\(kind)"
+        guard !isPending(key, in: session) else { return false }
         // One ID for the life of the request, so the host can deduplicate it and its
         // outcome can still be looked up after a disconnect.
         let id = RequestID()
+        pendingMutations[id] = PendingMutation(session: session, key: key, desiredModel: desiredModel, desiredEffort: desiredEffort)
+        performing.insert(id)
+        defer { finalReceipts[id] = nil; performing.remove(id) }
         receipts.begin(TrackedRequest(id: id, session: session, kind: kind))
         do {
-            return settle(try await operation(client, id))
+            let result = try await operation(client, id)
+            let accepted = settle(finalReceipts[id] ?? result)
+            if pendingMutations[id] != nil { reconcileLater(id) }
+            return accepted
         } catch RemoteError.notConnected {
+            pendingMutations[id] = nil
             receipts.dismiss(id)
             notice = RemoteError.notConnected.localizedDescription
             return false
         } catch {
             // Sent, but no answer: it may or may not have been applied. Never resend.
+            if let final = finalReceipts[id] { return settle(final) }
             receipts.markUncertain(id)
+            reconcileLater(id)
             return true
+        }
+    }
+
+    /// An authoritative snapshot can show that a target no longer exists or that settings
+    /// match. This releases the duplicate guard without claiming to know the request receipt.
+    private func retireObservedMutations() {
+        guard let snapshot = attached else { return }
+        for (id, pending) in pendingMutations where pending.session == snapshot.session {
+            let key = pending.key
+            let retired = (key.hasPrefix("cancel:") && key != "cancel:\(snapshot.activeTurnID ?? "")")
+                || (key.hasPrefix("question:") && key != "question:\(snapshot.pendingQuestion?.id ?? "")")
+                || (key.hasPrefix("cancel-question:") && key != "cancel-question:\(snapshot.pendingQuestion?.id ?? "")")
+                || (key.hasPrefix("approval:") && key != "approval:\(snapshot.pendingApproval?.batchID ?? "")")
+                || (key == "settings" && snapshot.settings?.selectedModel == pending.desiredModel
+                    && snapshot.settings?.reasoningEffort == pending.desiredEffort)
+            if retired { pendingMutations[id]?.blocksDuplicate = false }
+        }
+    }
+
+    /// Bounded read-only probes, never a replay of the operation. Late receipts also settle it.
+    private func reconcileLater(_ id: RequestID) {
+        Task { [weak self] in
+            for delay in [1, 3, 10] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, self.pendingMutations[id] != nil, self.connection == .connected else { return }
+                await self.checkStatus(of: id)
+            }
         }
     }
 
     /// - Returns: false when the owner rejected the request.
     @discardableResult
     private func settle(_ receipt: RequestReceipt) -> Bool {
+        if let result = receipt.commandResult,
+           pendingMutations[receipt.requestID]?.session == attached?.session { commandResult = result }
+        if receipt.state.isFinal {
+            if performing.contains(receipt.requestID) { finalReceipts[receipt.requestID] = receipt }
+            pendingMutations[receipt.requestID] = nil
+        }
         if case .rejected(let rejection) = receipt.state {
             receipts.dismiss(receipt.requestID)
             notice = rejection.message

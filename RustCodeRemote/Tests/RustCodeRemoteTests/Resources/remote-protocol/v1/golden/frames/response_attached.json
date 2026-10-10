@@ -7,6 +7,10 @@
     "gateway_id": "gw-8e1f4b7a",
     "instance_id": "inst-41c07d92",
     "snapshot": {
+      "capabilities": [
+        "cancel_question",
+        "execute_command"
+      ],
       "settings": {
         "models": [
           {

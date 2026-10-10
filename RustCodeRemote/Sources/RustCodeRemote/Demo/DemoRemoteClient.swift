@@ -24,13 +24,24 @@ public actor DemoRemoteClient: RemoteClient {
 
     public static let approvalSessionID = "demo-backoff"
     public static let questionSessionID = "demo-store"
+    public static let questionsSessionID = "demo-questions"
     public static let idleSessionID = "demo-notes"
 
     /// - Parameter pace: the delay between streamed chunks. `.zero` makes scripts run as
     ///   fast as the scheduler allows, which is what tests want.
-    public init(pace: Duration = .milliseconds(45)) {
+    public init(pace: Duration = .milliseconds(45), includeQuestionChain: Bool = false) {
         self.pace = pace
-        for var session in Self.seed() {
+        var seed = Self.seed()
+        if includeQuestionChain, var chain = seed.first(where: { $0.summary.id == Self.questionSessionID }) {
+            let ref = SessionRef(sessionID: Self.questionsSessionID, registrationEpoch: 1)
+            chain.summary.ref = ref
+            chain.summary.title = "Three follow-up questions"
+            chain.state.session = ref
+            chain.state.pendingQuestion?.chainLength = 3
+            seed.append(chain)
+        }
+        for var session in seed {
+            session.state.capabilities = ["cancel_question", "execute_command"]
             session.state.settings = SessionSettings(models: [
                 .init(id: "demo-balanced", model: "demo-model", reasoningEfforts: ["default", "medium", "high"]),
                 .init(id: "demo-fast", model: "demo-fast-model", reasoningEfforts: ["default"])
@@ -216,6 +227,25 @@ public actor DemoRemoteClient: RemoteClient {
         }
     }
 
+    public func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        try once(requestID, in: session) { current in
+            guard current.state.pendingQuestion?.id == questionID else { return .rejected(.staleQuestion) }
+            emit(session.sessionID, .questionChanged(nil))
+            current.turnTask?.cancel()
+            sessions[session.sessionID]?.turnTask = nil
+            sessions[session.sessionID]?.queued.removeAll()
+            emit(session.sessionID, .turnFinished(turnID: current.state.activeTurnID, outcome: .cancelled))
+            publishSummaries()
+            return .applied
+        }
+    }
+
+    public func executeCommand(_ command: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        let receipt = try once(requestID, in: session) { _ in .applied }
+        return RequestReceipt(requestID: requestID, state: receipt.state,
+            commandResult: SessionCommandResult(command: command, title: "Demo command", output: "Command handled locally by the demo host: `\(command)`"))
+    }
+
     public func answerQuestion(
         _ questionID: String,
         with answer: QuestionAnswer,
@@ -232,8 +262,18 @@ public actor DemoRemoteClient: RemoteClient {
             }
             let labels = question.options.filter { answer.selectedOptionIDs.contains($0.id) }.map(\.label)
             let reply = (labels + [answer.text].compactMap { $0 }.filter { !$0.isEmpty }).joined(separator: ", ")
-            emit(session.sessionID, .questionChanged(nil))
             emit(session.sessionID, .itemAppended(TranscriptItem(id: nextID("user"), .user(reply))))
+            if session.sessionID == Self.questionsSessionID, questionID != "question-demo-3" {
+                var next = question
+                next.position = question.position + 1
+                next.id = questionID == "question-demo-1" ? "question-demo-2" : "question-demo-3"
+                next.header = next.id == "question-demo-2" ? "Migration" : "Validation"
+                next.prompt = next.id == "question-demo-2" ? "How should existing sessions be migrated?" : "Which validation should run first?"
+                emit(session.sessionID, .questionChanged(next))
+                publishSummaries()
+                return .applied
+            }
+            emit(session.sessionID, .questionChanged(nil))
             publishSummaries()
             startTask(in: session.sessionID) { await $0.runAfterAnswer(reply, in: session.sessionID) }
             return .applied

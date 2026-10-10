@@ -49,11 +49,22 @@ public enum ReceiptState: Sendable, Equatable {
     }
 }
 
+public struct SessionCommandResult: Codable, Sendable, Equatable {
+    public var command: String
+    public var title: String
+    public var output: String
+    public init(command: String, title: String, output: String) {
+        self.command = command; self.title = title; self.output = output
+    }
+}
+
 public struct RequestReceipt: Sendable, Equatable {
     public var requestID: RequestID
+    public var commandResult: SessionCommandResult?
     public var state: ReceiptState
 
-    public init(requestID: RequestID, state: ReceiptState) {
+    public init(requestID: RequestID, state: ReceiptState, commandResult: SessionCommandResult? = nil) {
+        self.commandResult = commandResult
         self.requestID = requestID
         self.state = state
     }
@@ -62,6 +73,8 @@ public struct RequestReceipt: Sendable, Equatable {
 /// A mutation this device issued, with what is known about its outcome.
 public struct TrackedRequest: Identifiable, Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
+        case command(String)
+        case cancelQuestion
         case submit(String)
         case steer(String)
         case queue(String)
@@ -101,8 +114,8 @@ public struct TrackedRequest: Identifiable, Sendable, Equatable {
 
     public var text: String? {
         switch kind {
-        case .submit(let text), .steer(let text), .queue(let text): text
-        case .settings, .cancel, .answer, .approval: nil
+        case .command(let text), .submit(let text), .steer(let text), .queue(let text): text
+        case .cancelQuestion, .settings, .cancel, .answer, .approval: nil
         }
     }
 }

@@ -65,6 +65,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
     case sessionSettingsUpdated(SessionSettingsUpdated)
     case promptAccepted(PromptAccepted)
     case turnCancelled(TurnCancelled)
+    case commandExecuted(SessionCommandResult)
+    case questionCancelled(QuestionAnswered)
     case questionAnswered(QuestionAnswered)
     case approvalResolved(ApprovalResolved)
     case requestStatus(RequestStatus)
@@ -72,7 +74,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
 
     public static let knownTypes: Set<String> = [
         "error", "sessions", "attached", "resumed", "detached", "history", "content",
-        "session_settings_updated", "prompt_accepted", "turn_cancelled", "question_answered", "approval_resolved", "request_status",
+        "session_settings_updated", "prompt_accepted", "turn_cancelled", "question_answered", "question_cancelled", "command_executed", "approval_resolved", "request_status",
     ]
 
     public struct Sessions: Codable, Equatable, Sendable {
@@ -175,6 +177,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .sessionSettingsUpdated: "session_settings_updated"
         case .promptAccepted: "prompt_accepted"
         case .turnCancelled: "turn_cancelled"
+        case .commandExecuted: "command_executed"
+        case .questionCancelled: "question_cancelled"
         case .questionAnswered: "question_answered"
         case .approvalResolved: "approval_resolved"
         case .requestStatus: "request_status"
@@ -195,6 +199,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case "session_settings_updated": self = .sessionSettingsUpdated(try SessionSettingsUpdated(from: decoder))
         case "prompt_accepted": self = .promptAccepted(try PromptAccepted(from: decoder))
         case "turn_cancelled": self = .turnCancelled(try TurnCancelled(from: decoder))
+        case "command_executed": self = .commandExecuted(try SessionCommandResult(from: decoder))
+        case "question_cancelled": self = .questionCancelled(try QuestionAnswered(from: decoder))
         case "question_answered": self = .questionAnswered(try QuestionAnswered(from: decoder))
         case "approval_resolved": self = .approvalResolved(try ApprovalResolved(from: decoder))
         case "request_status": self = .requestStatus(try RequestStatus(from: decoder))
@@ -214,6 +220,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .sessionSettingsUpdated(let payload): payload
         case .promptAccepted(let payload): payload
         case .turnCancelled(let payload): payload
+        case .commandExecuted(let payload): payload
+        case .questionCancelled(let payload): payload
         case .questionAnswered(let payload): payload
         case .approvalResolved(let payload): payload
         case .requestStatus(let payload): payload
@@ -576,6 +584,7 @@ public struct WireContentChunk: Codable, Equatable, Sendable {
 // MARK: - Snapshot
 
 public struct WireSnapshot: Codable, Equatable, Sendable {
+    public var capabilities: [String]? = nil
     public var settings: WireSessionSettings? = nil
     public var snapshotID: String? = nil
     public var lastTurn: WireTurnTiming? = nil
@@ -599,6 +608,7 @@ public struct WireSnapshot: Codable, Equatable, Sendable {
         case generation
         case turn
         case transcript
+        case capabilities
         case settings
         case snapshotID = "snapshot_id"
         case lastTurn = "last_turn"

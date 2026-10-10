@@ -53,6 +53,63 @@ struct SessionEndToEndTests {
     }
 
     @Test(.timeLimit(.minutes(2)))
+    func questionBatchAnswersAndCancellationSettleBeforeAnotherTurnStarts() async throws {
+        let model = try FakeModelServer(askQuestions: true)
+        let modelPort = try await model.start()
+        let config = configFile(modelPort: modelPort).replacingOccurrences(of: "tool_protocol = \"json\"", with: "tool_protocol = \"apinative\"")
+        let gateway = try await GatewayIntegrationTests.Gateway(configFile: config)
+        let workspace = gateway.configuration.appendingPathComponent("workspace")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let terminal = try TerminalSession(binary: gateway.binary, configuration: gateway.configuration, workspace: workspace)
+        defer { terminal.stop(); gateway.stop(); model.stop() }
+        let client = LiveRemoteClient(codec: WireCodec(), requestTimeout: .seconds(5))
+        let credential = try await client.pair(.scanned(try gateway.pairingChallenge().payload), deviceName: "Question test")
+        try await client.connect(using: credential)
+        var lists = try await client.subscribeSessions().makeAsyncIterator()
+        _ = try await lists.next()
+        try await Task.sleep(for: .seconds(3))
+        terminal.type("/remote\r")
+        let shared = try await list(&lists) { !$0.isEmpty }
+        let session = try #require(shared.first)
+        try await Task.sleep(for: .milliseconds(500))
+        terminal.type("\u{1b}")
+        let attachment = try await client.attach(session.ref, resumeAfter: nil)
+        guard case .snapshot(var state) = attachment.start else { Issue.record("missing snapshot"); return }
+        var updates = attachment.updates.makeAsyncIterator()
+        #expect(try await client.submit("Ask three questions", to: session.ref, requestID: RequestID()).state == .applied)
+        while state.pendingQuestion == nil, let update = try await updates.next() {
+            state.apply(update)
+            if update.changes.contains(where: { if case .turnFinished = $0 { true } else { false } }) { break }
+        }
+        let first = try #require(state.pendingQuestion)
+        let answerID = RequestID()
+        #expect(try await client.answerQuestion(first.id, with: QuestionAnswer(selectedOptionIDs: [first.options[0].id]), in: session.ref, requestID: answerID).state == .applied)
+        while state.pendingQuestion == nil || state.pendingQuestion?.id == first.id, let update = try await updates.next() {
+            state.apply(update)
+            if update.changes.contains(where: { if case .turnFinished = $0 { true } else { false } }) { break }
+        }
+        let second = try #require(state.pendingQuestion)
+        #expect(state.isRunning)
+        #expect(try await client.getRequestStatus(answerID, in: session.ref).state == .applied)
+        let cancelID = RequestID()
+        #expect(try await client.cancelQuestion(second.id, in: session.ref, requestID: cancelID).state == .applied)
+        #expect(try await client.getRequestStatus(cancelID, in: session.ref).state == .applied)
+        while state.isRunning, let update = try await updates.next() { state.apply(update) }
+        #expect(state.pendingQuestion == nil)
+        #expect(try await client.submit("Continue after cancelling", to: session.ref, requestID: RequestID()).state == .applied)
+        var sawNewTurn = false
+        while let update = try await updates.next() {
+            state.apply(update)
+            if state.isRunning { sawNewTurn = true }
+            if sawNewTurn && !state.isRunning { break }
+        }
+        #expect(state.items.contains { item in
+            if case .assistant(let text) = item.content { text.text.contains("Hello from") } else { false }
+        })
+        await client.disconnect()
+    }
+
+    @Test(.timeLimit(.minutes(2)))
     func aSharedTerminalSessionIsListedAttachedDrivenAndClosed() async throws {
         let model = try FakeModelServer()
         let modelPort = try await model.start()
@@ -123,6 +180,19 @@ struct SessionEndToEndTests {
         }
         #expect(state.settings?.selectedModel == "fake")
         #expect(state.settings?.reasoningEffort == "high")
+
+        #expect(state.capabilities.contains("cancel_question"))
+        #expect(state.capabilities.contains("execute_command"))
+        let commandID = RequestID()
+        let status = try await client.executeCommand("/status", in: session.ref, requestID: commandID)
+        #expect(status.state == .applied)
+        #expect(status.commandResult?.command == "/status")
+        #expect(status.commandResult?.output.isEmpty == false)
+        let checked = try await client.getRequestStatus(commandID, in: session.ref)
+        #expect(checked == status)
+        #expect(state.items.isEmpty)
+        let staleQuestion = try await client.cancelQuestion("missing", in: session.ref, requestID: RequestID())
+        #expect(staleQuestion.state == .rejected(.staleQuestion))
 
         // A slash command from the phone is refused, and never runs.
         let slash = try await client.submit("/exit", to: session.ref, requestID: RequestID())

@@ -26,6 +26,8 @@ public actor LiveRemoteClient: RemoteClient {
     private var replaySnapshotIDs: [SessionRef: String] = [:]
     /// Mutations in flight; a `received` receipt for these is not the final answer.
     private var mutations: Set<RequestID> = []
+    private var receiptContinuation: AsyncStream<RequestReceipt>.Continuation?
+    private var outstandingMutations: Set<RequestID> = []
     private var receivedOnly: Set<RequestID> = []
     private var sessionsContinuation: SessionsContinuation?
     private var updateContinuations: [SessionRef: UpdatesContinuation] = [:]
@@ -92,6 +94,13 @@ public actor LiveRemoteClient: RemoteClient {
             await teardown(with: .connectionClosed)
             throw error
         }
+    }
+
+    public func receiptUpdates() async -> AsyncStream<RequestReceipt> {
+        let (stream, continuation) = AsyncStream.makeStream(of: RequestReceipt.self)
+        receiptContinuation?.finish()
+        receiptContinuation = continuation
+        return stream
     }
 
     public func disconnect() async {
@@ -172,6 +181,12 @@ public actor LiveRemoteClient: RemoteClient {
 
     // MARK: Mutations
 
+    public func executeCommand(_ command: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        try await mutate(.executeCommand(session, command: command), id: requestID)
+    }
+    public func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
+        try await mutate(.cancelQuestion(session, questionID: questionID), id: requestID)
+    }
     public func setSessionSettings(model: String, reasoningEffort: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
         try await mutate(.setSessionSettings(session, model: model, reasoningEffort: reasoningEffort), id: requestID)
     }
@@ -213,6 +228,7 @@ public actor LiveRemoteClient: RemoteClient {
 
     public func getRequestStatus(_ requestID: RequestID, in session: SessionRef) async throws -> RequestReceipt {
         let reply = try await request(.getRequestStatus(session, target: requestID))
+        if case .commandExecuted(let result) = reply { return RequestReceipt(requestID: requestID, state: .applied, commandResult: result) }
         guard case .receipt(let state) = reply else { throw Self.unexpected(reply) }
         return RequestReceipt(requestID: requestID, state: state)
     }
@@ -278,9 +294,11 @@ public actor LiveRemoteClient: RemoteClient {
 
     private func mutate(_ command: RemoteCommand, id: RequestID) async throws -> RequestReceipt {
         mutations.insert(id)
+        outstandingMutations.insert(id)
         defer { mutations.remove(id) }
         do {
             let reply = try await request(command, id: id)
+            if case .commandExecuted(let result) = reply { return RequestReceipt(requestID: id, state: .applied, commandResult: result) }
             guard case .receipt(let state) = reply else { throw Self.unexpected(reply) }
             return RequestReceipt(requestID: id, state: state)
         } catch RemoteError.rejected(let rejection) {
@@ -305,6 +323,19 @@ public actor LiveRemoteClient: RemoteClient {
 
         switch message {
         case .reply(let id, let reply):
+            if outstandingMutations.contains(id) {
+                let state: ReceiptState? = switch reply {
+                case .commandExecuted: .applied
+                case .receipt(let state): state
+                case .failure(.rejected(let rejection)): .rejected(rejection)
+                default: nil
+                }
+                if let state {
+                    let result: SessionCommandResult? = if case .commandExecuted(let result) = reply { result } else { nil }
+                    receiptContinuation?.yield(RequestReceipt(requestID: id, state: state, commandResult: result))
+                    if state.isFinal { outstandingMutations.remove(id) }
+                }
+            }
             if case .attached(.snapshot(let snapshot), _) = reply {
                 replaySnapshotIDs[snapshot.session] = snapshot.snapshotID
             }

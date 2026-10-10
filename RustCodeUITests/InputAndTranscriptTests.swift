@@ -189,9 +189,66 @@ final class InputAndTranscriptTests: XCTestCase {
         app.buttons["High"].tap()
         XCTAssertEqual(app.buttons["Thinking effort"].value as? String, "high")
         model.tap()
-        app.buttons["demo-fast-model"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "demo-fast-model")).firstMatch.tap()
         XCTAssertEqual(model.value as? String, "demo-fast-model")
         XCTAssertTrue(app.staticTexts["sessionTurnCount"].exists)
+    }
+
+    func testQuestionCanCancelWithoutSendingAnAnswer() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSession", "question", "-demoSheet"]
+        app.launch()
+        let cancel = app.navigationBars["Question"].buttons["Cancel questions"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.tap()
+        XCTAssertTrue(app.navigationBars["Question"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Stop the running turn"].exists)
+    }
+
+    func testSlashSuggestionsRunHelpWithoutSendingAModelPrompt() {
+        let app = launchChat(draft: "/")
+        let help = app.buttons["/help"]
+        XCTAssertTrue(help.waitForExistence(timeout: 5))
+        help.tap()
+        app.buttons["Run command"].tap()
+        XCTAssertTrue(app.staticTexts["commandOutputTitle"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["You: /help"].exists)
+    }
+
+    func testModelChoicesCanBeInspectedWhileAQuestionIsWaiting() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSession", "question"]
+        app.launch()
+        let model = app.buttons["Model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 5))
+        XCTAssertTrue(model.isEnabled)
+        let dock = XCTAttachment(screenshot: app.screenshot())
+        dock.name = "Question and settings in composer"
+        dock.lifetime = .keepAlways
+        add(dock)
+        model.tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "demo-fast-model")).firstMatch.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "demo-fast-model")).firstMatch.isEnabled)
+    }
+
+    func testQuestionChainAdvancesInTheSameSheetAndCanBeCancelled() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSession", "questions", "-demoSheet"]
+        app.launch()
+        for number in 1...2 {
+            let progress = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Question \(number) of 3")).firstMatch
+            XCTAssertTrue(progress.waitForExistence(timeout: 5))
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Segment files")).firstMatch.tap()
+            app.buttons["Next"].tap()
+        }
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Question 3 of 3")).firstMatch.waitForExistence(timeout: 5))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Continuous question chain"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.navigationBars["Question"].buttons["Cancel questions"].tap()
+        XCTAssertTrue(app.navigationBars["Question"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Stop the running turn"].exists)
     }
 
     private func launchChat(draft: String) -> XCUIApplication {

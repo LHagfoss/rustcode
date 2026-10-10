@@ -159,6 +159,17 @@ import Testing
         #expect(receipt.state == .received)
     }
 
+    @Test func lateFinalReceiptSurvivesMutationTimeout() async throws {
+        let (client, transport) = makeClient(["authenticate": ["authenticated"], "steer": ["receipt|received"]], timeout: .milliseconds(30))
+        try await client.connect(using: makeCredential())
+        var updates = await client.receiptUpdates().makeAsyncIterator()
+        let receipt = try await client.steer("faster", in: ref, requestID: RequestID("late"))
+        #expect(receipt.state == .received)
+        #expect(await updates.next()?.state == .received)
+        await transport.push("reply|late|receipt|applied")
+        #expect(await updates.next() == RequestReceipt(requestID: RequestID("late"), state: .applied))
+    }
+
     @Test func noAnswerAtAllTimesOut() async throws {
         let transport = ScriptedTransport()
         let client = LiveRemoteClient(codec: LineCodec(), requestTimeout: .milliseconds(50)) { transport }
