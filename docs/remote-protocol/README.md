@@ -591,3 +591,11 @@ receipt is scoped to the authenticated device and request ID. After a timeout,
 reuse the same ID or query `get_request_status`; never generate a new ID merely
 because confirmation has not arrived. Session owners hold a private per-session
 lease, so concurrent launch/reconnect attempts cannot create duplicate owners.
+
+The gateway preserves pairing credentials when upgrading. Existing terminal-owned
+sessions keep running and reconnect, but retain their owner's older capabilities
+until that terminal session is reopened with the updated binary. Newly created
+mobile sessions immediately use the installed owner version. Automatic network
+selection is retained in the login service instead of persisting a temporary
+Wi-Fi/DHCP address; explicitly configured bind and advertised addresses remain
+explicit.
