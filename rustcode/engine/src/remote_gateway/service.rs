@@ -35,11 +35,20 @@ fn xml(value: &str) -> String {
 
 /// Development/test binaries never register a persistent login service.
 fn installed_program(program: &Path) -> bool {
-    let value = program.to_string_lossy();
-    value.starts_with("/opt/homebrew/")
-        || value.starts_with("/usr/local/")
-        || std::env::var_os("HOME")
-            .is_some_and(|home| program.starts_with(PathBuf::from(home).join(".local/bin")))
+    let mut directories = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        directories.extend([home.join(".local/bin"), home.join(".cargo/bin")]);
+    }
+    if let Some(home) = std::env::var_os("CARGO_HOME") {
+        directories.push(PathBuf::from(home).join("bin"));
+    }
+    directories
+        .iter()
+        .any(|directory| program.parent() == Some(directory.as_path()))
 }
 
 pub async fn start(
