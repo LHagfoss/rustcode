@@ -85,6 +85,78 @@ pub async fn apply_session_mutation(
         return Err(stale_session());
     }
     match &request.operation {
+        RemoteOperation::SetSessionSettings {
+            model,
+            reasoning_effort,
+        } => {
+            let mut state = state.lock().await;
+            if state.active_session_id != registration.session_id {
+                return Err(stale_session());
+            }
+            let mut settings = super::projection::project_settings(&state);
+            if !settings.can_change {
+                return Err(error(
+                    RemoteErrorCode::Busy,
+                    "session settings can only change while idle",
+                ));
+            }
+            let index = state
+                .config
+                .models
+                .iter()
+                .position(|profile| &profile.name == model)
+                .ok_or_else(|| error(RemoteErrorCode::InvalidRequest, "unknown model profile"))?;
+            if !super::projection::reasoning_efforts(&state.config.models[index])
+                .contains(reasoning_effort)
+            {
+                return Err(error(
+                    RemoteErrorCode::InvalidRequest,
+                    "unsupported reasoning effort",
+                ));
+            }
+            settings.selected_model = model.clone();
+            settings.reasoning_effort = reasoning_effort.clone();
+            let settings = super::projection::bound_settings(
+                settings,
+                super::projection::ProjectionLimits::default().frame_bytes / 4,
+            )
+            .ok_or_else(|| {
+                error(
+                    RemoteErrorCode::FrameTooLarge,
+                    "the model catalog is too large for remote controls",
+                )
+            })?;
+            // Retain the explicitly configured legacy choice when clearing it.
+            let known = super::projection::reasoning_efforts(&state.config.models[index]);
+            let profile = &mut state.config.models[index];
+            if profile.supports_reasoning_effort.is_none() && known.len() > 1 {
+                profile.supports_reasoning_effort = Some(true);
+            }
+            if profile.reasoning_efforts.is_none() {
+                profile.reasoning_efforts = Some(
+                    known
+                        .into_iter()
+                        .filter(|effort| effort != "default")
+                        .collect(),
+                );
+            }
+            profile.reasoning_effort =
+                (reasoning_effort != "default").then(|| reasoning_effort.clone());
+            let (model_name, url) = (profile.model.clone(), profile.url.clone());
+            state.model_name = model_name;
+            state.api_base_url = url;
+            state.config.default.set_big(model.clone());
+            state.request_redraw();
+            crate::config::record_session_settings_for_profile(
+                &state.active_session_id,
+                &state.config,
+                model,
+            );
+            Ok(SessionMutation::done(
+                RemoteResult::SessionSettingsUpdated { settings },
+            ))
+        }
+
         RemoteOperation::SubmitPrompt { prompt } => {
             accept_prompt(state, registration, prompt, PromptDisposition::Started).await
         }
@@ -340,6 +412,87 @@ mod tests {
             rememberable_prefix: None,
             forbidden_prefix: None,
         }
+    }
+
+    #[tokio::test]
+    async fn oversized_settings_result_is_rejected_before_mutation() {
+        let mut state = shared_state();
+        state.config.models = vec![crate::config::ModelProfile {
+            name: "choice".into(),
+            model: "m".repeat(super::super::MAX_REMOTE_FRAME_BYTES),
+            ..Default::default()
+        }];
+        let before = state.model_name.clone();
+        let state = Arc::new(Mutex::new(state));
+        let mut token = CancellationToken::new();
+        let result = apply(
+            &state,
+            &mut token,
+            RemoteOperation::SetSessionSettings {
+                model: "choice".into(),
+                reasoning_effort: "default".into(),
+            },
+        )
+        .await;
+        assert_eq!(
+            result.err().map(|error| error.code),
+            Some(RemoteErrorCode::FrameTooLarge)
+        );
+        assert_eq!(state.lock().await.model_name, before);
+    }
+
+    #[tokio::test]
+    async fn settings_mutation_selects_exact_profile_and_rejects_busy_or_invalid_values() {
+        let mut state = shared_state();
+        state.config.models = vec![crate::config::ModelProfile {
+            name: "chosen".into(),
+            model: "model".into(),
+            url: "https://example.test/v1".into(),
+            reasoning_effort: Some("high".into()),
+            supports_reasoning_effort: Some(true),
+            ..Default::default()
+        }];
+        let state = Arc::new(Mutex::new(state));
+        let mut token = CancellationToken::new();
+        let op = serde_json::from_value::<RemoteOperation>(serde_json::json!({
+            "type": "set_session_settings", "model": "chosen", "reasoning_effort": "high"
+        }))
+        .expect("settings operation is supported");
+        apply(&state, &mut token, op.clone()).await.unwrap();
+        assert_eq!(state.lock().await.model_name, "model");
+        let mut invalid = op.clone();
+        if let RemoteOperation::SetSessionSettings {
+            reasoning_effort, ..
+        } = &mut invalid
+        {
+            *reasoning_effort = "imaginary".into();
+        }
+        assert_eq!(
+            code(apply(&state, &mut token, invalid).await),
+            RemoteErrorCode::InvalidRequest
+        );
+        let mut stale = request(op.clone());
+        stale.registration_epoch = Some(6);
+        assert_eq!(
+            code(apply_session_mutation(&state, &mut token, &registration(), &stale).await),
+            RemoteErrorCode::StaleSession
+        );
+        let clear = RemoteOperation::SetSessionSettings {
+            model: "chosen".into(),
+            reasoning_effort: "default".into(),
+        };
+        apply(&state, &mut token, clear).await.unwrap();
+        assert!(
+            state.lock().await.config.models[0]
+                .reasoning_effort
+                .is_none()
+        );
+        apply(&state, &mut token, op.clone()).await.unwrap();
+        state.lock().await.begin_turn_identity();
+        assert_eq!(
+            code(apply(&state, &mut token, op).await),
+            RemoteErrorCode::Busy
+        );
     }
 
     #[tokio::test]

@@ -801,6 +801,15 @@ fn catalog_profiles(value: &Value, account: &AccountStatus) -> Result<Vec<ModelP
             max_output_tokens: Some(output),
             supports_vision: Some(vision),
             supports_reasoning_effort: Some(reasoning),
+            reasoning_efforts: reasoning.then(|| {
+                item.pointer("/capabilities/supports/reasoning_effort")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            }),
             supports_thinking_budget: Some(false),
             enable_thinking: None,
             ..Default::default()
@@ -906,6 +915,10 @@ mod tests {
         assert_eq!(profiles[0].hard_effective_limit, Some(120000));
         assert_eq!(profiles[0].supports_vision, Some(true));
         assert_eq!(profiles[0].supports_reasoning_effort, Some(true));
+        assert_eq!(
+            serde_json::to_value(&profiles[0]).unwrap()["reasoning_efforts"],
+            serde_json::json!(["low", "high"])
+        );
         assert_eq!(profiles[2].supports_reasoning_effort, Some(false));
         assert!(
             profiles

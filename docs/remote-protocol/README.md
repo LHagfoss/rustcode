@@ -486,3 +486,45 @@ under `golden/handshake` as the handshake types; re-encode and compare as
 JSON: that is the same round trip this repository's tests run. Decode
 optionals with `decodeIfPresent`, and give every enum an unknown case as
 described under [Compatibility](#compatibility).
+
+### Session model and reasoning controls
+
+New hosts include optional `settings` in snapshots: `models` contains safe
+configured profile IDs (`id`), provider model labels (`model`), and
+`reasoning_efforts`; `selected_model` is the exact profile ID;
+`reasoning_effort` is the current override or `default`; and `can_change`
+reports whether the owner is idle. Profiles never include URLs or credentials.
+Only provider-advertised or explicitly configured effort choices are offered.
+A catalog that exceeds the control payload budget is omitted from snapshots;
+its settings mutations return `frame_too_large` without changing state. Profile
+IDs are never truncated and a partial catalog is never presented as complete.
+`default` clears the effort override; it does not mean thinking is disabled.
+Legacy profiles without an effort catalog offer only their configured value
+and `default`. Refreshing the provider catalog obtains advertised choices.
+
+Send `{"type":"set_session_settings","model":"profile-id","reasoning_effort":"high"}`
+inside a normal session request envelope. Both fields are required and applied
+atomically. The operation uses the existing authenticated registration, receipt,
+idempotency, and request-status rules. Unknown profiles or unsupported efforts
+return `invalid_request`; active, queued, or suspended turns return `busy`.
+An applied receipt carries `{"type":"session_settings_updated","settings":{...}}`.
+The owner publishes an authoritative snapshot after local or remote settings
+changes. Settings affect this session's runtime configuration and are recorded
+in its settings log; they do not rewrite host-wide user defaults. Clients
+connected to older hosts must hide or disable these controls when `settings`
+is absent.
+
+Session rows may include `turn_count`, counted across the full host transcript
+using logical turn IDs (including the active turn), with unattributed legacy
+user prompts counted separately. Assistant/tool phases and client history
+pagination do not increase it. The field is absent when a compaction boundary
+means the archived prefix prevents an exact total; clients must not substitute
+the count of loaded transcript rows.
+
+Assistant history messages, live turns, and `text_delta` updates may include
+`thought_tokens` and `thought_tokens_estimated`. These are the engine's existing
+estimates from observed reasoning text, scoped to one assistant segment,
+not provider billing totals or a cumulative session total. The estimate flag
+is `true` for these values. Missing values mean unavailable. Empty text deltas
+can update the observation without appending content, using the normal event
+sequence and replay rules.

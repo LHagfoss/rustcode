@@ -14,7 +14,7 @@
 //! ID and only ever restate what a snapshot already holds.
 
 use std::collections::HashSet;
-use std::hash::{DefaultHasher, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::app::AppState;
 use crate::controller::AgentUiEvent;
@@ -103,12 +103,18 @@ impl ResponseCursor {
 struct Unannounced {
     history_rewrites: u64,
     history_len: usize,
+    settings_hash: u64,
     queued_prompts: usize,
 }
 
 impl Unannounced {
     fn of(state: &AppState) -> Self {
+        let mut settings_hash = DefaultHasher::new();
+        serde_json::to_string(&super::projection::project_settings(state))
+            .unwrap_or_default()
+            .hash(&mut settings_hash);
         Self {
+            settings_hash: settings_hash.finish(),
             history_rewrites: state.history.rewrite_revision(),
             history_len: state.history.len(),
             queued_prompts: state.pending_queue.len() + state.pending_steers.len(),
@@ -371,6 +377,8 @@ impl SessionPublisher {
                                 text,
                                 timing: None,
                                 thought_time_ms: None,
+                                thought_tokens: None,
+                                thought_tokens_estimated: None,
                             }));
                         }
                         messages.push(self.event(RemoteEvent::TurnFinished {
@@ -417,6 +425,9 @@ impl SessionPublisher {
                         timing: project_active_timing(state)
                             .filter(|timing| timing.elapsed_work_ms.is_some()),
                         thought_time_ms: project_live_thought_time(state),
+                        thought_tokens: super::projection::live_thought_tokens(state),
+                        thought_tokens_estimated: super::projection::live_thought_tokens(state)
+                            .map(|_| true),
                     }),
                 ),
                 None => {}
@@ -440,6 +451,9 @@ impl SessionPublisher {
                         text: String::new(),
                         timing: Some(timing),
                         thought_time_ms: thought,
+                        thought_tokens: super::projection::live_thought_tokens(state),
+                        thought_tokens_estimated:
+                            super::projection::live_thought_tokens(state).map(|_| true),
                     }));
                 }
             }
@@ -470,7 +484,8 @@ impl SessionPublisher {
         let unannounced = Unannounced::of(state);
         if unannounced.history_rewrites != self.unannounced.history_rewrites {
             self.snapshot_due = Some(Some(ResyncReason::HistoryChanged));
-        } else if unannounced.queued_prompts != self.unannounced.queued_prompts
+        } else if unannounced.settings_hash != self.unannounced.settings_hash
+            || unannounced.queued_prompts != self.unannounced.queued_prompts
             || (self.announced_turn.is_none()
                 && unannounced.history_len != self.unannounced.history_len)
         {
@@ -533,6 +548,56 @@ mod tests {
     use crate::remote::protocol::{RemoteSnapshot, SessionActivity};
 
     const SESSION: &str = "publisher-session";
+
+    #[tokio::test]
+    async fn applied_settings_are_published_without_leaking_credentials() {
+        let mut state = shared_state();
+        state.config.models = vec![crate::config::ModelProfile {
+            name: "remote-choice".into(),
+            model: "new-model".into(),
+            url: "https://private.test".into(),
+            api_key: Some("do-not-publish".into()),
+            ..Default::default()
+        }];
+        let (mut publisher, _) = register(&state);
+        let registration = publisher.registration.clone();
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+        let mut cancel = tokio_util::sync::CancellationToken::new();
+        super::super::apply_session_mutation(
+            &state,
+            &mut cancel,
+            &registration,
+            &super::super::RemoteRequest {
+                protocol_version: REMOTE_PROTOCOL_VERSION,
+                request_id: "settings-test".into(),
+                session_id: Some(registration.session_id.clone()),
+                registration_epoch: Some(registration.registration_epoch),
+                operation: super::super::RemoteOperation::SetSessionSettings {
+                    model: "remote-choice".into(),
+                    reasoning_effort: "default".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let state = state.lock().await;
+        let messages = publisher.publish(&state, true);
+        let snapshot = messages
+            .iter()
+            .find_map(|message| match message {
+                OwnerMessage::Snapshot { snapshot, .. } => Some(snapshot),
+                _ => None,
+            })
+            .expect("settings change publishes an authoritative snapshot");
+        assert_eq!(
+            snapshot.settings.as_ref().unwrap().selected_model,
+            "remote-choice"
+        );
+        assert_eq!(snapshot.session.model, "new-model");
+        let wire = serde_json::to_string(snapshot).unwrap();
+        assert!(!wire.contains("do-not-publish"));
+        assert!(!wire.contains("private.test"));
+    }
 
     #[test]
     fn terminal_timing_is_retained_for_live_events_late_attach_and_history() {
@@ -631,6 +696,8 @@ mod tests {
         let RemoteEvent::TextDelta {
             timing: Some(timing),
             thought_time_ms: Some(thought),
+            thought_tokens: None,
+            thought_tokens_estimated: None,
             ..
         } = clock
         else {
@@ -762,6 +829,8 @@ mod tests {
                         text: "Hel".to_owned(),
                         timing: None,
                         thought_time_ms: None,
+                        thought_tokens: None,
+                        thought_tokens_estimated: None,
                     }
                 ),
             ]
@@ -774,6 +843,8 @@ mod tests {
                     text: "lo".to_owned(),
                     timing: None,
                     thought_time_ms: None,
+                    thought_tokens: None,
+                    thought_tokens_estimated: None,
                 }
             )]
         );
@@ -817,6 +888,8 @@ mod tests {
                     text: "ghi".to_owned(),
                     timing: None,
                     thought_time_ms: None,
+                    thought_tokens: None,
+                    thought_tokens_estimated: None,
                 }
             )]
         );
@@ -851,6 +924,8 @@ mod tests {
                     text: " answer".to_owned(),
                     timing: None,
                     thought_time_ms: None,
+                    thought_tokens: None,
+                    thought_tokens_estimated: None,
                 },
                 RemoteEvent::TurnFinished {
                     turn_id: Some(turn_id),
@@ -898,6 +973,8 @@ mod tests {
                     text: ", and more.".to_owned(),
                     timing: None,
                     thought_time_ms: None,
+                    thought_tokens: None,
+                    thought_tokens_estimated: None,
                 },
                 RemoteEvent::TurnFinished {
                     turn_id: Some(turn_id),
@@ -1023,6 +1100,8 @@ mod tests {
                     text: " four".to_owned(),
                     timing: None,
                     thought_time_ms: None,
+                    thought_tokens: None,
+                    thought_tokens_estimated: None,
                 }
             )]
         );
@@ -1049,14 +1128,14 @@ mod tests {
         assert_eq!(snapshot.pending_prompts.len(), 1);
         assert_eq!(snapshot.session.activity, SessionActivity::Running);
 
-        // Only the session-list row changes.
+        // Becoming idle also enables the settings controls.
         state.pending_queue.clear();
         publisher.publish(&state, true);
         state.enter_idle();
         let published = publisher.publish(&state, true);
         assert!(matches!(
             &published[..],
-            [OwnerMessage::SessionInfo(info)] if info.activity == SessionActivity::Idle
+            [OwnerMessage::Snapshot { snapshot, .. }] if snapshot.session.activity == SessionActivity::Idle && snapshot.settings.as_ref().unwrap().can_change
         ));
     }
 

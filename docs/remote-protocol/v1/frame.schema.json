@@ -356,6 +356,21 @@
                 "null"
               ]
             },
+            "thought_tokens": {
+              "description": "Estimated from observed reasoning text; absent when unavailable.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "thought_tokens_estimated": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "timing": {
               "anyOf": [
                 {
@@ -715,6 +730,21 @@
             "null"
           ]
         },
+        "thought_tokens": {
+          "description": "Estimated from observed reasoning text; absent when unavailable.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "thought_tokens_estimated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "timestamp": {
           "type": [
             "string",
@@ -774,6 +804,30 @@
         "name",
         "success",
         "pending"
+      ],
+      "type": "object"
+    },
+    "RemoteModelOption": {
+      "properties": {
+        "id": {
+          "description": "Exact configured profile name, including account-qualified names.",
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_efforts": {
+          "description": "`default` plus only explicitly known supported values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "model",
+        "reasoning_efforts"
       ],
       "type": "object"
     },
@@ -1150,6 +1204,22 @@
         },
         {
           "properties": {
+            "settings": {
+              "$ref": "#/$defs/RemoteSessionSettings"
+            },
+            "type": {
+              "const": "session_settings_updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "settings"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "receipt": {
               "$ref": "#/$defs/ReceiptState"
             },
@@ -1206,6 +1276,15 @@
         "title": {
           "type": "string"
         },
+        "turn_count": {
+          "description": "Total logical turns across the full host transcript, including an active turn.\nAbsent when an archived prefix prevents an exact total.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "workspace": {
           "type": [
             "string",
@@ -1221,6 +1300,34 @@
         "activity",
         "attention",
         "health"
+      ],
+      "type": "object"
+    },
+    "RemoteSessionSettings": {
+      "description": "Safe session controls: never contains endpoint URLs or credentials.",
+      "properties": {
+        "can_change": {
+          "type": "boolean"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/RemoteModelOption"
+          },
+          "type": "array"
+        },
+        "reasoning_effort": {
+          "description": "`default` means omit the provider effort override, not disable thinking.",
+          "type": "string"
+        },
+        "selected_model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "models",
+        "selected_model",
+        "reasoning_effort",
+        "can_change"
       ],
       "type": "object"
     },
@@ -1328,6 +1435,16 @@
         },
         "session": {
           "$ref": "#/$defs/RemoteSessionInfo"
+        },
+        "settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteSessionSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "snapshot_id": {
           "description": "Opaque gateway identity for this snapshot cut, including replacements\nat the same sequence. Store alongside the reconnect cursor.",
@@ -1498,6 +1615,21 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "thought_tokens": {
+          "description": "Estimated from observed reasoning text; absent when unavailable.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "thought_tokens_estimated": {
+          "type": [
+            "boolean",
             "null"
           ]
         },

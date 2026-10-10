@@ -8,12 +8,28 @@
     "instance_id": "inst-41c07d92",
     "resync": "gateway_restarted",
     "snapshot": {
+      "settings": {
+        "models": [
+          {
+            "id": "example-profile",
+            "model": "gpt-5.5",
+            "reasoning_efforts": [
+              "default",
+              "high"
+            ]
+          }
+        ],
+        "selected_model": "example-profile",
+        "reasoning_effort": "high",
+        "can_change": false
+      },
       "session": {
         "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
         "registration_epoch": 3,
         "title": "Fix the failing parser tests",
         "workspace": "/Users/dev/code/parser",
         "model": "gpt-5.5",
+        "turn_count": 2,
         "activity": "awaiting_approval",
         "attention": {
           "approval": true,
@@ -47,7 +63,9 @@
           "started_at": "2026-10-09T18:41:00+02:00",
           "elapsed_work_ms": 12000
         },
-        "thought_time_ms": 4000
+        "thought_time_ms": 4000,
+        "thought_tokens": 800,
+        "thought_tokens_estimated": true
       },
       "last_turn": {
         "turn_id": "turn:previous",
@@ -70,6 +88,8 @@
           "timestamp": "2026-10-09T18:40:25+02:00",
           "response_time_ms": 12000,
           "thought_time_ms": 4000,
+          "thought_tokens": 800,
+          "thought_tokens_estimated": true,
           "completed_at": "2026-10-09T18:40:32+02:00",
           "turn": {
             "turn_id": "turn:previous",

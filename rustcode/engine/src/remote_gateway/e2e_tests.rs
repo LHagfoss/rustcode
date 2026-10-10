@@ -728,11 +728,9 @@ async fn a_paired_device_drives_a_shared_session_end_to_end() {
     terminal.devices(&[]).await;
     terminal.state.lock().await.status = AppStatus::Streaming;
     terminal.stream("All 12 passed.").await;
-    terminal
-        .finish_turn(&turn_id, "Running cargo test. All 12 passed.")
-        .await;
-
-    // Reconnect and resume by cursor: only what was missed is replayed.
+    // Reconnect mid-turn and resume by cursor: only what was missed is
+    // replayed. Finishing the turn changes settings availability and may
+    // publish a replacement snapshot, which intentionally resets replay.
     let (mut phone, welcome) = Phone::authenticate(&host, &paired).await;
     let resumed = phone
         .request(
@@ -746,6 +744,9 @@ async fn a_paired_device_drives_a_shared_session_end_to_end() {
         .await;
     assert_eq!(resumed["result"]["type"], "resumed", "{resumed}");
     assert_eq!(resumed["result"]["next_sequence"], cursor + 1);
+    terminal
+        .finish_turn(&turn_id, "Running cargo test. All 12 passed.")
+        .await;
     let finished = view.until(&mut phone, "turn_finished").await;
     assert_eq!(finished["event"]["turn_id"], turn_id.as_str());
     assert_eq!(view.text, "Running cargo test. All 12 passed.");

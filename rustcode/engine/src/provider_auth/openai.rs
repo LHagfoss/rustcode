@@ -84,12 +84,28 @@ struct CatalogModel {
     visibility: String,
     #[serde(default)]
     context_window: Option<u32>,
+    #[serde(default)]
+    supported_reasoning_levels: Option<Vec<CatalogReasoningLevel>>,
+}
+
+#[derive(Deserialize)]
+struct CatalogReasoningLevel {
+    effort: String,
 }
 
 impl CatalogModel {
     fn into_profile(self, account: &AccountStatus) -> ModelProfile {
         let mut profile = ModelProfile::for_chatgpt(account, self.slug);
         profile.context_window = self.context_window.filter(|window| *window > 0);
+        if let Some(levels) = self.supported_reasoning_levels {
+            let efforts: Vec<String> = levels
+                .into_iter()
+                .map(|level| level.effort)
+                .filter(|effort| !effort.is_empty())
+                .collect();
+            profile.supports_reasoning_effort = Some(!efforts.is_empty());
+            profile.reasoning_efforts = Some(efforts);
+        }
         profile
     }
 }
@@ -1199,6 +1215,32 @@ mod tests {
         assert_eq!(available.len(), 2);
         assert_eq!(available[0].slug, "available-model");
         assert_eq!(available[1].slug, "later-model");
+    }
+
+    #[test]
+    fn catalog_profile_retains_advertised_reasoning_choices() {
+        let model: CatalogModel = serde_json::from_value(serde_json::json!({
+            "slug": "reasoner", "visibility": "list",
+            "supported_reasoning_levels": [{"effort": "low"}, {"effort": "xhigh"}]
+        }))
+        .unwrap();
+        let account = AccountStatus {
+            provider: "openai".into(),
+            account: "fixture".into(),
+            method: AuthMethod::ChatGpt,
+            display: "fixture".into(),
+            endpoint: RESOURCE.into(),
+            client_id: None,
+            scopes: vec![],
+            expires_at: None,
+            active: true,
+        };
+        let profile = model.into_profile(&account);
+        assert_eq!(
+            profile.reasoning_efforts,
+            Some(vec!["low".into(), "xhigh".into()])
+        );
+        assert!(profile.supports_reasoning_effort_wire());
     }
 
     #[test]
