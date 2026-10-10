@@ -45,6 +45,7 @@ pub fn list_directories(path: Option<&str>) -> Result<RemoteResult> {
     let path = resolve_directory(path)?;
     let mut directories = Vec::new();
     let mut truncated = false;
+    let mut bytes = 0usize;
     for entry in std::fs::read_dir(&path)? {
         let Ok(entry) = entry else { continue };
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -55,10 +56,16 @@ pub fn list_directories(path: Option<&str>) -> Result<RemoteResult> {
             truncated = true;
             break;
         }
-        directories.push(RemoteDirectory {
+        let directory = RemoteDirectory {
             name,
             path: entry.path().to_string_lossy().into_owned(),
-        });
+        };
+        bytes += serde_json::to_vec(&directory)?.len() + 1;
+        if bytes > MAX_REMOTE_FRAME_BYTES / 2 {
+            truncated = true;
+            break;
+        }
+        directories.push(directory);
     }
     directories.sort_by_key(|entry| entry.name.to_lowercase());
     Ok(RemoteResult::Directories {
@@ -109,18 +116,23 @@ impl WorkspaceRouter {
         request: &RemoteRequest,
         path: Option<&str>,
     ) -> Result<RemoteResponse> {
-        let directory = resolve_directory(path)?;
         let receipt = Self::receipt_path(config, device, &request.request_id);
         ensure_private_directory(receipt.parent().unwrap(), "remote session creation")?;
-        let mut creation = if receipt.exists() {
+        let previous = if receipt.exists() {
             let stored: Creation = read_private_json(&receipt, 64 * 1024)?;
             ensure!(
                 stored.request == *request,
                 "request identifier already used with different arguments"
             );
-            if let Some(response) = stored.response {
-                return Ok(response);
+            if let Some(response) = &stored.response {
+                return Ok(response.clone());
             }
+            Some(stored)
+        } else {
+            None
+        };
+        let directory = resolve_directory(path)?;
+        let mut creation = if let Some(stored) = previous {
             stored
         } else {
             ensure!(
@@ -230,6 +242,22 @@ impl FrameRouter for WorkspaceRouter {
                 });
             }
             RemoteOperation::CreateSession { path } => {
+                if let Ok(stored) = read_private_json::<Creation>(
+                    &Self::receipt_path(&self.config, &device.device_id, &request.request_id),
+                    64 * 1024,
+                ) && stored.request != request
+                {
+                    let mut response = RemoteResponse::error(
+                        request.request_id,
+                        RemoteError::new(
+                            RemoteErrorCode::RequestConflict,
+                            "request identifier already used with different arguments",
+                        ),
+                    );
+                    response.receipt = Some(ReceiptState::Rejected);
+                    send(sink, response);
+                    return;
+                }
                 let path = path.clone();
                 let hub = self.hub.clone();
                 let config = self.config.clone();
@@ -269,7 +297,18 @@ impl FrameRouter for WorkspaceRouter {
             }
             RemoteOperation::GetRequestStatus { target_request_id } => {
                 let path = Self::receipt_path(&self.config, &device.device_id, target_request_id);
-                if let Ok(creation) = read_private_json::<Creation>(&path, 64 * 1024) {
+                if let Ok(mut creation) = read_private_json::<Creation>(&path, 64 * 1024) {
+                    if creation.response.is_none()
+                        && let Some(session) = self.hub.session_info(&creation.session_id)
+                    {
+                        let mut response = RemoteResponse::new(
+                            creation.request.request_id.clone(),
+                            RemoteResult::SessionCreated { session },
+                        );
+                        response.receipt = Some(ReceiptState::Applied);
+                        creation.response = Some(response);
+                        let _ = publish_private_json(&path, &creation);
+                    }
                     let result = creation.response.map(|response| Box::new(response.result));
                     send(
                         sink,
@@ -318,6 +357,65 @@ mod tests {
         );
         assert!(resolve_directory(Some("relative")).is_err());
         assert!(resolve_directory(root.path().join("file").to_str()).is_err());
+    }
+    #[tokio::test]
+    async fn completed_creation_replays_after_directory_removal() {
+        let config = tempfile::tempdir().unwrap();
+        let request = RemoteRequest {
+            protocol_version: REMOTE_PROTOCOL_VERSION,
+            request_id: "create-1".into(),
+            session_id: None,
+            registration_epoch: None,
+            operation: RemoteOperation::CreateSession {
+                path: Some("/directory/no/longer/present".into()),
+            },
+        };
+        let response = RemoteResponse::new(request.request_id.clone(), RemoteResult::Detached);
+        let receipt = WorkspaceRouter::receipt_path(config.path(), "phone", &request.request_id);
+        ensure_private_directory(receipt.parent().unwrap(), "test").unwrap();
+        publish_private_json(
+            &receipt,
+            &Creation {
+                request: request.clone(),
+                session_id: "0123456789abcdef0123456789abcdef".into(),
+                response: Some(response.clone()),
+            },
+        )
+        .unwrap();
+        let hub = SessionHub::start(Default::default());
+        assert_eq!(
+            WorkspaceRouter::create(
+                &hub,
+                config.path(),
+                Path::new("/never/launch"),
+                "phone",
+                &request,
+                Some("/directory/no/longer/present")
+            )
+            .await
+            .unwrap(),
+            response
+        );
+        assert_ne!(
+            receipt,
+            WorkspaceRouter::receipt_path(config.path(), "other-phone", &request.request_id)
+        );
+    }
+    #[test]
+    fn oversized_folder_listing_is_bounded_before_transport() {
+        let root = tempfile::tempdir().unwrap();
+        for n in 0..520 {
+            std::fs::create_dir(root.path().join(format!("{n:04}{}", "a".repeat(220)))).unwrap();
+        }
+        let result = list_directories(root.path().to_str()).unwrap();
+        assert!(matches!(
+            &result,
+            RemoteResult::Directories {
+                truncated: true,
+                ..
+            }
+        ));
+        assert!(serde_json::to_vec(&result).unwrap().len() < MAX_REMOTE_FRAME_BYTES);
     }
 }
 

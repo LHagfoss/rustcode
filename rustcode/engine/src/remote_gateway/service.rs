@@ -46,6 +46,24 @@ pub async fn start(
     launcher: &super::owner_client::Launcher,
     lifecycle: &super::lifecycle::RemoteLifecycle,
 ) -> Result<super::control::GatewayStatus> {
+    // Serialize adoption and upgrades across terminals and detached owners.
+    let _launch_lock = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            match crate::daemon::lifecycle::lock_private_file(
+                launcher.config_directory.join("remote").as_path(),
+                "launch.lock",
+                "remote launcher",
+            ) {
+                Ok(lock) => return Ok::<_, anyhow::Error>(lock),
+                Err(error) if crate::daemon::lifecycle::is_lock_busy(&error) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .context("another gateway launcher is still starting")??;
     #[cfg(target_os = "macos")]
     if installed_program(&launcher.program) {
         let home = PathBuf::from(std::env::var_os("HOME").context("home directory unavailable")?);
@@ -73,7 +91,7 @@ pub async fn start(
             .map(|v| format!("<string>{}</string>", xml(v)))
             .collect::<String>();
         let document = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array>{arguments}</array><key>EnvironmentVariables</key><dict><key>RUSTCODE_CONFIG_DIR</key><string>{config}</string><key>PATH</key><string>{path}</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>StandardOutPath</key><string>{log}</string><key>StandardErrorPath</key><string>{log}</string></dict></plist>"#,
+            r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array>{arguments}</array><key>EnvironmentVariables</key><dict><key>RUSTCODE_REMOTE_MANAGED</key><string>1</string><key>RUSTCODE_CONFIG_DIR</key><string>{config}</string><key>PATH</key><string>{path}</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>StandardOutPath</key><string>{log}</string><key>StandardErrorPath</key><string>{log}</string></dict></plist>"#,
             config = xml(&launcher.config_directory.to_string_lossy()),
             path = xml(&std::env::var("PATH")
                 .unwrap_or_else(|_| "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin".into())),

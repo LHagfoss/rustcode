@@ -15,6 +15,16 @@ impl AppRuntime {
             rustcode::remote_gateway::workspace::owner_state(config, session_id)?;
         state.remote_command = Some(rustcode::remote::owner::SharingCommand::Enable);
         let mut runtime = Self::detached(state);
+        if let Some(connector) =
+            rustcode::remote_gateway::owner_client::GatewayConnector::for_this_host()
+        {
+            runtime.remote = super::remote::RemoteBridge::with_connector(Box::new(
+                connector.with_timing(rustcode::remote_gateway::owner_client::ClientTiming {
+                    reconnect_window: Duration::from_secs(365 * 24 * 60 * 60),
+                    ..Default::default()
+                }),
+            ));
+        }
         let subscription = rustcode::tools::background_task_manager().subscribe_session(session_id);
         let mut interval = tokio::time::interval(Duration::from_millis(25));
         let mut terminate =
@@ -33,6 +43,7 @@ impl AppRuntime {
         runtime.current_cancel_token.cancel();
         let state = runtime.app_state.lock().await;
         rustcode::config::save_session_history(&state.active_session_id, &state.history);
+        rustcode::config::flush_history();
         Ok(())
     }
 }

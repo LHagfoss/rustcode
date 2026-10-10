@@ -566,3 +566,28 @@ owner is current. In a separate terminal run `rustcode remote stop`, then
 `rustcode remote serve` with the same bind/advertise options previously used.
 Shared session owners reconnect automatically; pairings remain saved. Reattach
 in the app. Do not restart a running session merely to reconnect the gateway.
+
+### Background gateway and mobile-created sessions
+
+Once remote sharing is enabled, an installed macOS RustCode registers a private,
+per-user LaunchAgent. The gateway survives terminal closure, starts at login, and
+restarts after a crash or binary upgrade. `rustcode remote start` enables it,
+`remote pair` starts it as needed, and `remote stop` explicitly disables the
+LaunchAgent. Development binaries run detached without installing a login job.
+The gateway advertises `_rustcode._tcp` on the local network; its Bonjour record
+contains only the host name, port, and protocol version. Discovery does not pair
+a device or grant access.
+
+Authenticated clients can use `list_directories { path? }` to browse existing
+folders (default `~/`) and `create_session { path? }` to create a session there.
+The latter returns `session_created { session }`. It starts a detached session
+owner with the same runtime, tools, questions, approvals, and turn cancellation
+as the TUI. Closing the app or restarting the gateway does not stop that owner.
+Folder listings omit dot-folders, cap their count and encoded size, and report
+`truncated`; direct absolute and `~/` paths remain accepted.
+
+Creation is a host-wide mutation: no session envelope is required. Its durable
+receipt is scoped to the authenticated device and request ID. After a timeout,
+reuse the same ID or query `get_request_status`; never generate a new ID merely
+because confirmation has not arrived. Session owners hold a private per-session
+lease, so concurrent launch/reconnect attempts cannot create duplicate owners.

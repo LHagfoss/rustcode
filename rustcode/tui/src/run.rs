@@ -246,6 +246,19 @@ async fn run_remote_command(
     let config_dir = rustcode::config::get_config_dir().ok_or("config directory unavailable")?;
     let lifecycle = RemoteLifecycle::new(&config_dir);
     match command {
+        RemoteCommands::Start => {
+            let (_, _, config) = rustcode::config::load_config();
+            let launcher = rustcode::remote_gateway::owner_client::Launcher {
+                program: rustcode::remote_gateway::service::executable_path()?,
+                config_directory: config_dir.clone(),
+                bind: config.remote.bind,
+                port: config.remote.port,
+                advertise: config.remote.advertise,
+            };
+            let _ = std::fs::remove_file(config_dir.join("remote/disabled"));
+            let status = rustcode::remote_gateway::service::start(&launcher, &lifecycle).await?;
+            println!("{}", remote::format_status(Some(&status)));
+        }
         RemoteCommands::SessionOwner { session_id } => {
             hydrate_shell_provider_keys();
             AppRuntime::run_detached_session(&config_dir, session_id).await?;
@@ -256,6 +269,16 @@ async fn run_remote_command(
             advertise,
         } => remote::serve(&config_dir, bind, *port, advertise.as_deref()).await?,
         RemoteCommands::Pair => {
+            let (_, _, config) = rustcode::config::load_config();
+            let launcher = rustcode::remote_gateway::owner_client::Launcher {
+                program: rustcode::remote_gateway::service::executable_path()?,
+                config_directory: config_dir.clone(),
+                bind: config.remote.bind,
+                port: config.remote.port,
+                advertise: config.remote.advertise,
+            };
+            let _ = std::fs::remove_file(config_dir.join("remote/disabled"));
+            rustcode::remote_gateway::service::start(&launcher, &lifecycle).await?;
             use std::io::IsTerminal;
             let style = if std::io::stdout().is_terminal() {
                 remote::QrStyle::Ansi

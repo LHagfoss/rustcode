@@ -608,3 +608,16 @@ pub(super) fn gateway_needs_upgrade(running: &str, current: &str) -> bool {
     }
     matches!((version(running), version(current)), (Some(old),Some(new)) if old < new)
 }
+
+#[cfg(test)]
+mod upgrade_tests {
+    use super::gateway_needs_upgrade;
+    #[test]
+    fn only_an_older_gateway_is_replaced() {
+        assert!(gateway_needs_upgrade("", "0.64.4"));
+        assert!(gateway_needs_upgrade("0.64.3", "0.64.4"));
+        assert!(!gateway_needs_upgrade("0.64.4", "0.64.4"));
+        assert!(!gateway_needs_upgrade("0.65.0", "0.64.4"));
+        assert!(!gateway_needs_upgrade("dev", "0.64.4"));
+    }
+}

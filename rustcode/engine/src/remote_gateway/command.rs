@@ -118,7 +118,7 @@ pub async fn serve(
     // Let the gateway close its connections and remove its registration.
     shutdown.cancel();
     run.await?;
-    if restart {
+    if restart && std::env::var_os("RUSTCODE_REMOTE_MANAGED").is_none() {
         let launcher = super::owner_client::Launcher {
             program,
             config_directory: config_directory.to_path_buf(),

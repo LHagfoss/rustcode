@@ -279,6 +279,8 @@ pub enum DaemonCommands {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum RemoteCommands {
+    /// Enable the persistent background gateway
+    Start,
     /// Own a mobile-created session without a terminal
     #[command(hide = true)]
     SessionOwner {
