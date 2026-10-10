@@ -31,6 +31,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 mod composer;
+#[cfg(unix)]
+mod detached;
 pub(crate) mod events;
 mod input;
 mod orchestration;
@@ -161,8 +163,7 @@ impl AppRuntime {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(app_state: AppState) -> Self {
+    pub(crate) fn detached(app_state: AppState) -> Self {
         let (app_event_sender, app_event_receiver) = AppEventSender::channel();
         let (agent_ui_event_sender, agent_ui_event_receiver) = AgentUiEventSender::channel();
         let (frame_requester, frame_stream) = FrameRequester::new(STREAM_FRAME_INTERVAL);
@@ -189,11 +190,17 @@ impl AppRuntime {
             agent_ui_event_receiver,
             task_subscriptions: HashMap::new(),
             demo_state: None,
-            // Tests never reach for the user's gateway.
-            remote: remote::RemoteBridge::with_connector(Box::new(
-                rustcode::remote::owner::NoGatewayConnector,
-            )),
+            remote: remote::RemoteBridge::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(app_state: AppState) -> Self {
+        let mut runtime = Self::detached(app_state);
+        runtime.remote = remote::RemoteBridge::with_connector(Box::new(
+            rustcode::remote::owner::NoGatewayConnector,
+        ));
+        runtime
     }
 
     #[cfg(test)]

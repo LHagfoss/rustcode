@@ -82,7 +82,7 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    fn command(&self) -> tokio::process::Command {
+    pub fn command(&self) -> tokio::process::Command {
         let mut command = tokio::process::Command::new(&self.program);
         command
             .env("RUSTCODE_CONFIG_DIR", &self.config_directory)
@@ -134,7 +134,7 @@ impl GatewayConnector {
     pub fn for_this_host() -> Option<Self> {
         let config_directory = crate::config::get_config_dir()?;
         let connector = Self::discover(RemoteLifecycle::new(&config_directory));
-        let Ok(program) = std::env::current_exe() else {
+        let Ok(program) = super::service::executable_path() else {
             return Some(connector);
         };
         // Read when sharing starts, not here: the user may edit the address
@@ -424,7 +424,8 @@ impl Client {
     async fn gateway(&self, first: bool) -> Result<(), String> {
         let lifecycle = &self.connector.lifecycle;
         match lifecycle.status().await {
-            Ok(Some(_)) => return Ok(()),
+            Ok(Some(_)) if !first || self.connector.launcher.is_none() => return Ok(()),
+            Ok(Some(_)) => {}
             Ok(None) => {}
             Err(error) => return Err(format!("{error:#}")),
         }
@@ -440,8 +441,8 @@ impl Client {
             launcher.port = config.remote.port;
             launcher.advertise = config.remote.advertise;
         }
-        lifecycle
-            .start(launcher.command())
+        let _ = std::fs::remove_file(launcher.config_directory.join("remote/disabled"));
+        super::service::start(&launcher, lifecycle)
             .await
             .map(|_| ())
             .map_err(|error| format!("{error:#}"))

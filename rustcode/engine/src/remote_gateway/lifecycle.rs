@@ -32,6 +32,8 @@ const MAX_SOCKET_PATH_BYTES: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayRegistration {
+    #[serde(default)]
+    pub version: String,
     pub pid: u32,
     /// Opaque OS-native birth timestamp; see the daemon registration.
     pub process_start_time: u64,
@@ -56,6 +58,7 @@ impl GatewayRegistration {
         advertised_address: String,
     ) -> Result<Self> {
         Ok(Self {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
             pid: std::process::id(),
             process_start_time: process_start_time(std::process::id())?
                 .context("current process missing")?,
@@ -253,8 +256,13 @@ impl RemoteLifecycle {
     /// gets its own session, so it outlives the terminal that started it,
     /// and writes to [`RemoteLifecycle::log_path`].
     pub async fn start(&self, mut command: tokio::process::Command) -> Result<GatewayStatus> {
+        // Upgrade a stale gateway through its authenticated control socket. Pairing
+        // credentials and owner processes survive; they reconnect to the successor.
         if let Some(status) = self.status().await? {
-            return Ok(status);
+            if !gateway_needs_upgrade(&status.version, env!("CARGO_PKG_VERSION")) {
+                return Ok(status);
+            }
+            self.stop().await?;
         }
         ensure_private_directory(&self.directory, OWNER)?;
         let log = OpenOptions::new()
@@ -583,5 +591,33 @@ mod tests {
         assert!(!lifecycle.registration_path().exists());
         assert!(lifecycle.stop().await.unwrap().is_none());
         assert!(lifecycle.pair().await.is_err());
+    }
+}
+
+/// Never let an older session owner downgrade a newer installed gateway.
+pub(super) fn gateway_needs_upgrade(running: &str, current: &str) -> bool {
+    fn version(value: &str) -> Option<Vec<u64>> {
+        value
+            .split('.')
+            .map(str::parse)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .ok()
+    }
+    if running.is_empty() {
+        return true;
+    }
+    matches!((version(running), version(current)), (Some(old),Some(new)) if old < new)
+}
+
+#[cfg(test)]
+mod upgrade_tests {
+    use super::gateway_needs_upgrade;
+    #[test]
+    fn only_an_older_gateway_is_replaced() {
+        assert!(gateway_needs_upgrade("", "0.64.4"));
+        assert!(gateway_needs_upgrade("0.64.3", "0.64.4"));
+        assert!(!gateway_needs_upgrade("0.64.4", "0.64.4"));
+        assert!(!gateway_needs_upgrade("0.65.0", "0.64.4"));
+        assert!(!gateway_needs_upgrade("dev", "0.64.4"));
     }
 }

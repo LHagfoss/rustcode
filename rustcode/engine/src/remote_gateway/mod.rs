@@ -42,3 +42,12 @@ mod e2e_tests;
 
 /// Default TCP port of the gateway's WebSocket listener.
 pub const DEFAULT_PORT: u16 = 17879;
+
+#[cfg(unix)]
+pub mod workspace;
+
+#[cfg(unix)]
+mod discovery;
+
+#[cfg(unix)]
+pub mod service;

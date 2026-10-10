@@ -74,12 +74,18 @@ pub async fn serve(
         GatewayConfig {
             plan: plan.clone(),
             port,
-            router: hub.clone(),
+            router: std::sync::Arc::new(super::workspace::WorkspaceRouter::new(
+                hub.clone(),
+                config_directory.to_path_buf(),
+                std::env::current_exe()?,
+            )),
             sessions: Some(hub),
             limits: Limits::default(),
         },
     )
     .await?;
+    let _discovery =
+        super::discovery::advertise(gateway.local_addr().port(), plan.advertise.is_loopback());
     println!("rustcode remote gateway");
     println!("listening on  {}", gateway.local_addr());
     println!("advertised as {}", gateway.advertised_address());
@@ -96,18 +102,33 @@ pub async fn serve(
         "Share a session with `/remote` in a terminal session; pair a device with `rustcode remote pair`."
     );
 
+    let program = super::service::executable_path()?;
+    let upgraded = super::service::wait_for_upgrade(program.clone());
+    tokio::pin!(upgraded);
     let shutdown = gateway.shutdown_token();
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let run = gateway.run();
     tokio::pin!(run);
-    tokio::select! {
+    let restart = tokio::select! {
         result = &mut run => return result,
-        _ = tokio::signal::ctrl_c() => {}
-        _ = terminate.recv() => {}
-    }
+        _ = tokio::signal::ctrl_c() => false,
+        _ = terminate.recv() => false,
+        _ = &mut upgraded => true,
+    };
     // Let the gateway close its connections and remove its registration.
     shutdown.cancel();
-    run.await
+    run.await?;
+    if restart && std::env::var_os("RUSTCODE_REMOTE_MANAGED").is_none() {
+        let launcher = super::owner_client::Launcher {
+            program,
+            config_directory: config_directory.to_path_buf(),
+            bind: Some(bind.into()),
+            port: Some(port),
+            advertise: advertise.map(str::to_owned),
+        };
+        lifecycle.start(launcher.command()).await?;
+    }
+    Ok(())
 }
 
 /// How a pairing QR code is drawn.

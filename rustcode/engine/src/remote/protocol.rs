@@ -43,6 +43,14 @@ pub struct RemoteRequest {
 pub enum RemoteOperation {
     /// Live shared sessions on this host, once.
     ListSessions,
+    ListDirectories {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    CreateSession {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// As `list_sessions`, then a `sessions` frame on every change.
     SubscribeSessions,
     /// Subscribe to one session. Without `resume` (or when replay is not
@@ -108,8 +116,10 @@ pub enum RemoteOperation {
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 16] = [
+    pub const NAMES: [&'static str; 18] = [
         "list_sessions",
+        "list_directories",
+        "create_session",
         "subscribe_sessions",
         "attach_session",
         "detach_session",
@@ -130,6 +140,8 @@ impl RemoteOperation {
     pub fn name(&self) -> &'static str {
         match self {
             Self::ListSessions => "list_sessions",
+            Self::ListDirectories { .. } => "list_directories",
+            Self::CreateSession { .. } => "create_session",
             Self::SubscribeSessions => "subscribe_sessions",
             Self::AttachSession { .. } => "attach_session",
             Self::DetachSession => "detach_session",
@@ -153,7 +165,11 @@ impl RemoteOperation {
     pub fn targets_session(&self) -> bool {
         !matches!(
             self,
-            Self::ListSessions | Self::SubscribeSessions | Self::GetRequestStatus { .. }
+            Self::ListSessions
+                | Self::SubscribeSessions
+                | Self::GetRequestStatus { .. }
+                | Self::ListDirectories { .. }
+                | Self::CreateSession { .. }
         )
     }
 
@@ -162,7 +178,8 @@ impl RemoteOperation {
     pub fn is_mutation(&self) -> bool {
         matches!(
             self,
-            Self::SubmitPrompt { .. }
+            Self::CreateSession { .. }
+                | Self::SubmitPrompt { .. }
                 | Self::Steer { .. }
                 | Self::Queue { .. }
                 | Self::CancelQuestion { .. }
@@ -267,6 +284,16 @@ pub enum ReceiptState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RemoteResult {
+    Directories {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+        directories: Vec<RemoteDirectory>,
+        truncated: bool,
+    },
+    SessionCreated {
+        session: RemoteSessionInfo,
+    },
     Error(RemoteError),
     Sessions {
         gateway_id: String,
@@ -627,6 +654,8 @@ pub struct RemoteModelOption {
 /// snapshot already contains every event up to and including it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<RemoteCommandInfo>,
     /// Optional operations implemented by this session owner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
@@ -798,6 +827,9 @@ pub struct RemoteMessage {
 /// Set on a tool-result message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteMessageTool {
+    /// Correlates the persisted result with its live tool events, never a message identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
     pub name: String,
     /// Short human label, e.g. the file or command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1054,6 +1086,8 @@ mod tests {
     fn operation_names_match_the_wire_tags() {
         let operations = [
             RemoteOperation::ListSessions,
+            RemoteOperation::ListDirectories { path: None },
+            RemoteOperation::CreateSession { path: None },
             RemoteOperation::SubscribeSessions,
             RemoteOperation::AttachSession { resume: None },
             RemoteOperation::DetachSession,
@@ -1108,4 +1142,18 @@ mod tests {
             assert_eq!(serde_json::to_value(operation).unwrap()["type"], name);
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteDirectory {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteCommandInfo {
+    pub name: String,
+    pub description: String,
+    pub insertion: String,
+    pub action: String,
 }
