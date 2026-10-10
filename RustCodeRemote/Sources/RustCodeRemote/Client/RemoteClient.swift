@@ -65,6 +65,8 @@ public protocol RemoteClient: Sendable {
         maxBytes: Int
     ) async throws -> ContentChunk
 
+    func uploadImage(_ chunk: ImageUploadChunk, in session: SessionRef, requestID: RequestID) async throws -> ImageUploadProgress
+
     func executeCommand(_ command: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
     func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
     func setSessionSettings(model: String, reasoningEffort: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt
@@ -93,6 +95,7 @@ public protocol RemoteClient: Sendable {
 }
 
 public extension RemoteClient {
+    func uploadImage(_ chunk: ImageUploadChunk, in session: SessionRef, requestID: RequestID) async throws -> ImageUploadProgress { throw RemoteError.rejected(.unsupportedOperation) }
     func browseDirectories(path: String?) async throws -> DirectoryListing { throw RemoteError.rejected(.unsupportedOperation) }
     func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary { throw RemoteError.rejected(.unsupportedOperation) }
     func receiptUpdates() async -> AsyncStream<RequestReceipt> { AsyncStream { $0.finish() } }

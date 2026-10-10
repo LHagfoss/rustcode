@@ -126,6 +126,14 @@ public actor LiveRemoteClient: RemoteClient {
         }
     }
 
+    public func uploadImage(_ chunk: ImageUploadChunk, in session: SessionRef, requestID: RequestID) async throws -> ImageUploadProgress {
+        mutations.insert(requestID)
+        defer { mutations.remove(requestID) }
+        let reply = try await request(.uploadImage(session, chunk), id: requestID)
+        guard case .imageUploaded(let progress) = reply else { throw Self.unexpected(reply) }
+        return progress
+    }
+
     public func browseDirectories(path: String?) async throws -> DirectoryListing {
         let reply = try await request(.listDirectories(path: path))
         guard case .directories(let listing) = reply else { throw Self.unexpected(reply) }

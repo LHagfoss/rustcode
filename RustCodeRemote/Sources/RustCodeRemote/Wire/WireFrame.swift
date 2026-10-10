@@ -57,6 +57,7 @@ public enum WireReceiptState: String, Sendable, Equatable, CaseIterable {
 public indirect enum WireResult: Codable, Equatable, Sendable {
     case error(WireError)
     case sessions(Sessions)
+    case imageUploaded(ImageUploadProgress)
     case directories(DirectoryListing)
     case sessionCreated(SessionCreated)
     case attached(Attached)
@@ -75,7 +76,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
     case unknown(type: String, JSONValue)
 
     public static let knownTypes: Set<String> = [
-        "directories", "session_created", "error", "sessions", "attached", "resumed", "detached", "history", "content",
+        "image_uploaded", "directories", "session_created", "error", "sessions", "attached", "resumed", "detached", "history", "content",
         "session_settings_updated", "prompt_accepted", "turn_cancelled", "question_answered", "question_cancelled", "command_executed", "approval_resolved", "request_status",
     ]
 
@@ -173,6 +174,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         switch self {
         case .error: "error"
         case .sessions: "sessions"
+        case .imageUploaded: "image_uploaded"
         case .directories: "directories"
         case .sessionCreated: "session_created"
         case .attached: "attached"
@@ -197,6 +199,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         switch type {
         case "error": self = .error(try WireError(from: decoder))
         case "sessions": self = .sessions(try Sessions(from: decoder))
+        case "image_uploaded": self = .imageUploaded(try ImageUploadProgress(from: decoder))
         case "directories": self = .directories(try DirectoryListing(from: decoder))
         case "session_created": self = .sessionCreated(try SessionCreated(from: decoder))
         case "attached": self = .attached(try Attached(from: decoder))
@@ -220,6 +223,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         let payload: (any Encodable)? = switch self {
         case .error(let payload): payload
         case .sessions(let payload): payload
+        case .imageUploaded(let payload): payload
         case .directories(let payload): payload
         case .sessionCreated(let payload): payload
         case .attached(let payload): payload

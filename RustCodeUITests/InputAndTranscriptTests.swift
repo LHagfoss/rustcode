@@ -71,7 +71,8 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = launchChat(draft: "Keep this draft")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Done"].exists)
-        app.buttons["Dismiss keyboard"].tap()
+        app.buttons["Chat actions"].tap()
+        app.buttons["Dismiss Keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         let field = composer(in: app)
         XCTAssertEqual(field.value as? String, "Keep this draft")
@@ -190,18 +191,27 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Question"].waitForNonExistence(timeout: 5))
     }
 
-    func testModelAndEffortMenusApplyHostSettings() {
+    func testModelAndEffortApplyInTheSameNativeSheet() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoSession", "idle"]
         app.launch()
-        let model = app.buttons["Model"]
+        let model = app.buttons["Model and effort"]
         XCTAssertTrue(model.waitForExistence(timeout: 5))
-        app.buttons["Thinking effort"].tap()
-        app.buttons["High"].tap()
-        XCTAssertEqual(app.buttons["Thinking effort"].value as? String, "high")
         model.tap()
+        XCTAssertTrue(app.navigationBars["Model & Effort"].waitForExistence(timeout: 3))
+        app.buttons["thinkingEffortPicker"].tap()
+        app.buttons["High"].tap()
+        XCTAssertTrue(app.navigationBars["Model & Effort"].exists)
+        app.navigationBars["Model & Effort"].buttons["Done"].tap()
+        XCTAssertEqual(model.value as? String, "demo-model, high")
+        model.tap()
+        let search = app.searchFields["Search models"]
+        search.tap()
+        search.typeText("fast")
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "demo-fast-model")).firstMatch.tap()
-        XCTAssertEqual(model.value as? String, "demo-fast-model")
+        XCTAssertTrue(app.navigationBars["Model & Effort"].exists)
+        app.navigationBars["Model & Effort"].buttons["Done"].tap()
+        XCTAssertEqual(model.value as? String, "demo-fast-model, default")
         XCTAssertFalse(app.staticTexts["sessionTurnCount"].exists)
     }
 
@@ -230,7 +240,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoSession", "question"]
         app.launch()
-        let model = app.buttons["Model"]
+        let model = app.buttons["Model and effort"]
         XCTAssertTrue(model.waitForExistence(timeout: 5))
         XCTAssertTrue(model.isEnabled)
         let dock = XCTAttachment(screenshot: app.screenshot())
@@ -264,7 +274,7 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testSlashAutocompleteCompletesInputAndListScrollsWithinBounds() {
         let app = launchChat(draft: "/he")
-        let complete = app.buttons["Complete command"]
+        let complete = app.buttons["/help"]
         XCTAssertTrue(complete.waitForExistence(timeout: 5))
         complete.tap()
         XCTAssertEqual(composer(in: app).value as? String, "/help")
@@ -284,22 +294,24 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.buttons["Run command"].isHittable)
     }
 
-    func testSlashModelOpensBoundedSearchablePicker() {
+    func testSlashModelOpensSearchableNativeSheet() {
         let app = launchChat(draft: "/model")
         app.buttons["Run command"].tap()
-        let search = app.textFields["Search models"]
+        let search = app.searchFields["Search models"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
-        let choices = app.scrollViews["modelChoices"]
-        XCTAssertLessThanOrEqual(choices.frame.height, 300)
+        XCTAssertTrue(app.navigationBars["Model & Effort"].exists)
+        XCTAssertTrue(app.buttons["thinkingEffortPicker"].exists)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Bounded model picker"
+        screenshot.name = "Native combined model and effort sheet"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         search.tap()
         search.typeText("fast")
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "demo-fast-model")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Model & Effort"].exists)
+        app.navigationBars["Model & Effort"].buttons["Done"].tap()
         XCTAssertTrue(search.waitForNonExistence(timeout: 5))
-        XCTAssertEqual(app.buttons["Model"].value as? String, "demo-fast-model")
+        XCTAssertEqual(app.buttons["Model and effort"].value as? String, "demo-fast-model, default")
         XCTAssertFalse(app.staticTexts["You: /model"].exists)
     }
 
@@ -320,7 +332,95 @@ final class InputAndTranscriptTests: XCTestCase {
         add(screenshot)
         start.tap()
         XCTAssertTrue(app.navigationBars["New Session"].waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Model"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Model and effort"].waitForExistence(timeout: 5))
+    }
+
+    func testSessionsDrawerDismissesWithoutLosingDraftAndSelectsAnotherSession() {
+        let app = launchChat(draft: "Keep my sidebar draft")
+        let show = app.buttons["Show sessions"]
+        XCTAssertTrue(show.waitForExistence(timeout: 5))
+        show.tap()
+        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Sessions drawer over chat"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my sidebar draft")
+        show.tap()
+        let other = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Page the session store")).firstMatch
+        XCTAssertTrue(other.waitForExistence(timeout: 3))
+        other.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Answer")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(show.exists)
+        let otherComposer = app.textFields["Message to queue"].exists ? app.textFields["Message to queue"] : app.textViews["Message to queue"]
+        XCTAssertNotEqual(otherComposer.value as? String, "Keep my sidebar draft")
+        show.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Draft release notes")).firstMatch.tap()
+        XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5))
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my sidebar draft")
+    }
+
+    func testMinimalComposerActionsPreserveDraftAndOfferSlashCommands() {
+        let app = launchChat(draft: "Keep my actions draft")
+        XCTAssertTrue(app.buttons["Model and effort"].exists)
+        XCTAssertTrue(app.buttons["Send message"].exists)
+        XCTAssertFalse(app.buttons["thinkingEffortPicker"].exists)
+        app.buttons["Chat actions"].tap()
+        app.buttons["Slash Commands"].tap()
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my actions draft")
+        app.terminate()
+        app.launchArguments = ["-demo", "-demoSession", "idle"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Chat actions"].waitForExistence(timeout: 5))
+        app.buttons["Chat actions"].tap()
+        app.buttons["Slash Commands"].tap()
+        XCTAssertEqual(composer(in: app).value as? String, "/")
+        XCTAssertTrue(app.scrollViews["commandSuggestions"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+    }
+
+    func testSidebarEdgeSwipeOpensAndClosingSwipePreservesDraft() {
+        let app = launchChat(draft: "Keep my swipe draft")
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.015, dy: 0.5))
+        let open = app.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5))
+        edge.press(forDuration: 0.05, thenDragTo: open)
+        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        XCTAssertTrue(close.waitForExistence(timeout: 4))
+        XCTAssertTrue(close.isHittable)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Interactive sidebar and charcoal chat surface"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.65))
+        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.65))
+        from.press(forDuration: 0.05, thenDragTo: to)
+        XCTAssertTrue(app.buttons["Model and effort"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["Model and effort"].isHittable)
+        XCTAssertFalse(close.isHittable)
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my swipe draft")
+    }
+
+    func testImagePickerCancellationPreservesMessageDraft() {
+        let app = launchChat(draft: "Keep my image draft")
+        app.buttons["Chat actions"].tap()
+        XCTAssertTrue(app.navigationBars["Chat Actions"].waitForExistence(timeout: 3))
+        app.buttons["Add Image"].tap()
+        let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Close"])).firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Native image picker"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my image draft")
+        XCTAssertTrue(app.buttons["Model and effort"].exists)
     }
 
     private func launchChat(draft: String) -> XCUIApplication {

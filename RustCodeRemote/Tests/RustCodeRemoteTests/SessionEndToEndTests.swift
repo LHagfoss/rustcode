@@ -52,6 +52,56 @@ struct SessionEndToEndTests {
         throw RemoteError.connectionClosed
     }
 
+    @Test(.timeLimit(.minutes(2)), arguments: ["image/png", "image/jpeg"])
+    func uploadedImageReachesProviderAsRealImageAndReplayDoesNotDuplicateBytes(mimeType: String) async throws {
+        let model = try FakeModelServer(chunkDelay: .milliseconds(5))
+        let port = try await model.start()
+        let config = configFile(modelPort: port).replacingOccurrences(of: "supports_vision = false", with: "supports_vision = true")
+        let gateway = try await GatewayIntegrationTests.Gateway(configFile: config)
+        defer { gateway.stop(); model.stop() }
+        let client = LiveRemoteClient(codec: WireCodec(), requestTimeout: .seconds(20))
+        let credential = try await client.pair(.scanned(try gateway.pairingChallenge().payload), deviceName: "Image test")
+        try await client.connect(using: credential)
+        let session = try await client.createSession(directory: gateway.configuration.path, requestID: RequestID())
+        let attachment = try await client.attach(session.ref, resumeAfter: nil)
+        guard case .snapshot(var state) = attachment.start else { Issue.record("Missing image session"); return }
+        #expect(state.capabilities.contains("upload_image"))
+        // Static 1px PNG and 2px JPEG; the JPEG matches the app photo import format.
+        let fixture = mimeType == "image/png"
+            ? "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            : "/9j/4AAQSkZJRgABAQAASABIAAD/4QBARXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAAqADAAQAAAABAAAAAgAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgAAgACAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwQDAwMEBQQEBAQFBgUFBQUFBggGBgYGBgYICAgICAgICAkJCQkJCQsLCwsLDAwMDAwMDAwMDP/bAEMBAgICAwMDBQMDBQwIBwgMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDP/dAAQAAf/aAAwDAQACEQMRAD8A5Oiiiv7cP5rP/9k="
+        let image = try #require(Data(base64Encoded: fixture))
+        let imageID = UUID().uuidString.lowercased()
+        let firstID = RequestID()
+        let first = ImageUploadChunk(attachmentID: imageID, mimeType: mimeType, offset: 0, totalBytes: UInt64(image.count), dataBase64: image.prefix(20).base64EncodedString())
+        let partial = try await client.uploadImage(first, in: session.ref, requestID: firstID)
+        #expect(partial.nextOffset == 20)
+        #expect(!partial.complete)
+        let lastID = RequestID()
+        let last = ImageUploadChunk(attachmentID: imageID, mimeType: mimeType, offset: 20, totalBytes: UInt64(image.count), dataBase64: image.dropFirst(20).base64EncodedString())
+        let complete = try await client.uploadImage(last, in: session.ref, requestID: lastID)
+        #expect(complete.complete)
+        #expect(try await client.uploadImage(first, in: session.ref, requestID: firstID) == partial)
+        #expect(try await client.uploadImage(last, in: session.ref, requestID: lastID) == complete)
+        let reference = try #require(complete.promptReference)
+        #expect(try await client.submit("Describe this image\n\n" + reference, to: session.ref, requestID: RequestID()).state == .applied)
+        for try await update in attachment.updates {
+            _ = state.apply(update)
+            if state.lastTurn?.outcome == "completed" { break }
+        }
+        let requests = model.requestBodies.compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        let urls = requests.flatMap { ($0["messages"] as? [[String: Any]] ?? []).flatMap { message in
+            (message["content"] as? [[String: Any]] ?? []).compactMap { part in
+                (part["image_url"] as? [String: Any])?["url"] as? String
+            }
+        } }
+        let prefix = "data:\(mimeType);base64,"
+        let imageURL = try #require(urls.first { $0.hasPrefix(prefix) })
+        #expect(Data(base64Encoded: String(imageURL.dropFirst(prefix.count))) == image)
+        #expect(state.lastTurn?.outcome == "completed")
+        await client.disconnect()
+    }
+
     @Test(.timeLimit(.minutes(2)))
     func attachDuringProviderlessToolKeepsOneNamedResult() async throws {
         let model = try FakeModelServer(chunkDelay: .milliseconds(5), jsonCommand: "sleep 2; printf remote-tool-identity")

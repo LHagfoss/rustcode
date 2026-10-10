@@ -50,7 +50,7 @@ enum Contract {
 @Suite struct GoldenFrameTests {
     @Test func everyGoldenRequestRoundTrips() throws {
         let files = try Contract.goldenFiles("requests")
-        #expect(files.count == 20)
+        #expect(files.count == 21)
         var operations = Set<String>()
         for file in files {
             let data = try Data(contentsOf: file)
@@ -68,7 +68,7 @@ enum Contract {
 
     @Test func everyGoldenFrameRoundTrips() throws {
         let files = try Contract.goldenFiles("frames")
-        #expect(files.count == 49)
+        #expect(files.count == 51)
         var kinds = Set<String>()
         var results = Set<String>()
         var events = Set<String>()

@@ -56,6 +56,21 @@ private actor StubClient: RemoteClient {
     private(set) var cancelledTurnIDs: [String] = []
     private(set) var cancelCalls: [RequestID] = []
     private(set) var submitCalls: [RequestID] = []
+    private(set) var submittedTexts: [String] = []
+    private(set) var uploadCalls: [(ImageUploadChunk, RequestID)] = []
+    var uploadFailure: RemoteError?
+    var uploadDelay: Duration = .zero
+    func set(uploadFailure: RemoteError?) { self.uploadFailure = uploadFailure }
+    func set(uploadDelay: Duration) { self.uploadDelay = uploadDelay }
+    func uploadImage(_ chunk: ImageUploadChunk, in session: SessionRef, requestID: RequestID) async throws -> ImageUploadProgress {
+        uploadCalls.append((chunk, requestID))
+        try await Task.sleep(for: uploadDelay)
+        if let uploadFailure { throw uploadFailure }
+        let next = chunk.offset + UInt64(Data(base64Encoded: chunk.dataBase64)!.count)
+        return ImageUploadProgress(attachmentID: chunk.attachmentID, nextOffset: next, totalBytes: chunk.totalBytes,
+            complete: next == chunk.totalBytes,
+            promptReference: next == chunk.totalBytes ? "![image](file:///private/upload/\(chunk.attachmentID).png)" : nil)
+    }
     private(set) var statusCalls: [RequestID] = []
     private(set) var attachCalls: [UInt64?] = []
     private(set) var disconnectCalls = 0
@@ -154,6 +169,7 @@ private actor StubClient: RemoteClient {
 
     func submit(_ text: String, to session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {
         submitCalls.append(requestID)
+        submittedTexts.append(text)
         if let immediateFinal {
             receiptContinuation?.yield(RequestReceipt(requestID: requestID, state: immediateFinal))
             try await Task.sleep(for: .milliseconds(15))
@@ -963,6 +979,108 @@ private final class DelayLog: Sendable {
         await store.checkStatus(of: request.id)
         #expect(!store.hasPendingCancellation)
         #expect(store.visibleRequests.isEmpty)
+    }
+
+    @Test func imagesUploadInBoundedChunksBeforeSubmittingActualReferences() async {
+        let client = StubClient()
+        var snapshot = SessionSnapshot(session: makeSession("s1").ref)
+        snapshot.capabilities = ["upload_image"]
+        await client.set(snapshot: snapshot)
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+        let image = PromptImage(data: Data(repeating: 42, count: PromptImage.chunkBytes + 7), mimeType: "image/png")
+        #expect(await store.send("Describe", images: [image]))
+        let calls = await client.uploadCalls
+        #expect(calls.map { $0.0.offset } == [0, UInt64(PromptImage.chunkBytes)])
+        #expect(calls.map { Data(base64Encoded: $0.0.dataBase64)!.count } == [PromptImage.chunkBytes, 7])
+        #expect(await client.submittedTexts == ["Describe\n\n![image](file:///private/upload/\(image.id).png)"])
+        #expect(!store.isUploadingImages)
+    }
+
+    @Test func failedUploadPreservesPromptAndExplicitRetryReusesChunkIdentity() async {
+        let client = StubClient()
+        var snapshot = SessionSnapshot(session: makeSession("s1").ref)
+        snapshot.capabilities = ["upload_image"]
+        await client.set(snapshot: snapshot)
+        await client.set(uploadFailure: .timeout)
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+        let image = PromptImage(data: Data([1, 2, 3]), mimeType: "image/png")
+        #expect(await store.send("draft", images: [image]) == false)
+        #expect(await client.submitCalls.isEmpty)
+        #expect(store.notice?.contains("has not been sent") == true)
+        await client.set(uploadFailure: nil)
+        #expect(await store.send("draft", images: [image]))
+        let calls = await client.uploadCalls
+        #expect(calls.count == 2)
+        #expect(calls[0].1 == calls[1].1)
+        #expect(await client.submitCalls.count == 1)
+    }
+
+    @Test func changingSessionDuringImageUploadCannotSubmitToAnotherChat() async {
+        let client = StubClient()
+        var snapshot = SessionSnapshot(session: makeSession("s1").ref)
+        snapshot.capabilities = ["upload_image"]
+        await client.set(snapshot: snapshot)
+        await client.set(uploadDelay: .milliseconds(100))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+        let task = Task { await store.send("draft", images: [PromptImage(data: Data([1]), mimeType: "image/png")]) }
+        #expect(await waitUntil { store.isUploadingImages })
+        store.select(nil)
+        #expect(await task.value == false)
+        #expect(await client.submitCalls.isEmpty)
+    }
+
+    @Test func rePairingSameHostDuringUploadCannotSendOldDraft() async {
+        let client = StubClient()
+        var snapshot = SessionSnapshot(session: makeSession("s1").ref)
+        snapshot.capabilities = ["upload_image"]
+        await client.set(snapshot: snapshot)
+        await client.set(uploadDelay: .milliseconds(100))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+        let pending = Task { await store.send("old draft", images: [PromptImage(data: Data([1]), mimeType: "image/png")]) }
+        #expect(await waitUntil { await client.uploadCalls.count == 1 })
+        await store.unpair()
+        await store.pair(.manual(address: HostAddress(host: "localhost", port: 7878), code: "123456"), deviceName: "Test")
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+        #expect(await pending.value == false)
+        #expect(await client.submitCalls.isEmpty)
+        #expect(!store.isUploadingImages)
+        await store.unpair()
+    }
+
+    @Test func unsupportedHostAndOversizedImagesNeverUploadOrSubmit() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attached != nil })
+        #expect(await store.send("draft", images: [PromptImage(data: Data([1]), mimeType: "image/png")]) == false)
+        #expect(await client.uploadCalls.isEmpty)
+        var snapshot = SessionSnapshot(session: makeSession("s1").ref, sequence: 11)
+        snapshot.capabilities = ["upload_image"]
+        await client.publishSnapshot(snapshot)
+        #expect(await waitUntil { store.supportsImageUpload })
+        #expect(await store.send("draft", images: [PromptImage(data: Data(repeating: 0, count: PromptImage.maximumBytes + 1), mimeType: "image/png")]) == false)
+        #expect(await client.uploadCalls.isEmpty)
+        #expect(await client.submitCalls.isEmpty)
     }
 
     @Test func demoCancelsTheObservedTurn() async {

@@ -21,6 +21,8 @@ public actor DemoRemoteClient: RemoteClient {
     private var outcomes: [RequestID: ReceiptState] = [:]
     private var isConnected = false
     private var counter = 0
+    private var imageReplies: [RequestID: (SessionRef, ImageUploadChunk, ImageUploadProgress)] = [:]
+    private var imageOffsets: [String: UInt64] = [:]
     private var createdSessions: [RequestID: SessionSummary] = [:]
 
     public static let approvalSessionID = "demo-backoff"
@@ -43,7 +45,7 @@ public actor DemoRemoteClient: RemoteClient {
         }
         for var session in seed {
             session.state.commands = Self.commandCatalog
-            session.state.capabilities = ["cancel_question", "execute_command"]
+            session.state.capabilities = ["cancel_question", "execute_command", "upload_image"]
             session.state.settings = SessionSettings(models: [
                 .init(id: "demo-balanced", model: "demo-model", reasoningEfforts: ["default", "low", "medium", "high"]),
                 .init(id: "demo-fast", model: "demo-fast-model", reasoningEfforts: ["default"])
@@ -114,7 +116,7 @@ public actor DemoRemoteClient: RemoteClient {
         var state = SessionSnapshot(session: ref)
         state.settings = sessions[Self.idleSessionID]?.state.settings
         state.commands = Self.commandCatalog
-        state.capabilities = ["cancel_question", "execute_command"]
+        state.capabilities = ["cancel_question", "execute_command", "upload_image"]
         sessions[ref.sessionID] = Session(summary: summary, state: state)
         order.insert(ref.sessionID, at: 0)
         createdSessions[requestID] = summary
@@ -203,6 +205,30 @@ public actor DemoRemoteClient: RemoteClient {
             listContinuation?.yield(summaries)
             return .applied
         }
+    }
+
+    /// In-memory upload simulation for exercising the picker and composer in Demo mode.
+    public func uploadImage(_ chunk: ImageUploadChunk, in session: SessionRef, requestID: RequestID) async throws -> ImageUploadProgress {
+        guard isConnected else { throw RemoteError.notConnected }
+        guard sessions[session.sessionID]?.summary.ref == session else { throw RemoteError.rejected(.staleSession) }
+        if let previous = imageReplies[requestID] {
+            guard previous.0 == session, previous.1 == chunk else { throw RemoteError.rejected(.unsupportedOperation) }
+            return previous.2
+        }
+        let key = "\(session.sessionID):\(chunk.attachmentID)"
+        guard let bytes = Data(base64Encoded: chunk.dataBase64), !bytes.isEmpty,
+              bytes.count <= PromptImage.chunkBytes, chunk.totalBytes <= PromptImage.maximumBytes,
+              ["image/jpeg", "image/png"].contains(chunk.mimeType),
+              chunk.offset == (imageOffsets[key] ?? 0), chunk.offset + UInt64(bytes.count) <= chunk.totalBytes
+        else { throw RemoteError.rejected(.unsupportedOperation) }
+        let next = chunk.offset + UInt64(bytes.count)
+        imageOffsets[key] = next
+        let complete = next == chunk.totalBytes
+        let progress = ImageUploadProgress(attachmentID: chunk.attachmentID, nextOffset: next,
+            totalBytes: chunk.totalBytes, complete: complete,
+            promptReference: complete ? "![image](file:///demo/\(chunk.attachmentID).png)" : nil)
+        imageReplies[requestID] = (session, chunk, progress)
+        return progress
     }
 
     public func submit(_ text: String, to session: SessionRef, requestID: RequestID) async throws -> RequestReceipt {

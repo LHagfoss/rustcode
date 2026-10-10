@@ -1,25 +1,108 @@
 import RustCodeRemote
 import SwiftUI
 
+struct OpenSessionSidebarAction: Sendable {
+    var perform: @MainActor @Sendable (Bool) -> Void = { _ in }
+    @MainActor func callAsFunction(toggle: Bool = false) { perform(toggle) }
+}
+
+extension EnvironmentValues {
+    @Entry var openSessionSidebar = OpenSessionSidebarAction()
+    @Entry var isChatObscured = false
+}
+
 struct SessionsView: View {
     @Environment(RemoteStore.self) private var store
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var drafts = ChatDrafts()
     @State private var showsSettings = LaunchOptions.current.presentsSettings
     @State private var unpairsAfterSettings = false
+    @State private var showsSidebar = false
+    @GestureState(resetTransaction: Transaction(animation: UIAccessibility.isReduceMotionEnabled ? nil : .snappy(duration: 0.25)))
+    private var drawerDrag = DrawerDrag()
+    @State private var dismissedKeyboardForDrag = false
+    @State private var columns: NavigationSplitViewVisibility = .all
+    @AccessibilityFocusState private var sidebarFocused: Bool
     var presentsAttentionOnLaunch = false
 
     var body: some View {
-        NavigationSplitView {
-            SessionSidebar(showsSettings: $showsSettings)
-        } detail: {
-            if store.selectedSessionID != nil {
-                TranscriptView(presentsAttentionOnAppear: presentsAttentionOnLaunch)
+        Group {
+            if sizeClass == .compact {
+                GeometryReader { geometry in
+                    let width = min(geometry.size.width * 0.84, 360)
+                    let offset = min(width, max(0, (showsSidebar ? width : 0) + drawerDrag.offset))
+                    let progress = offset / width
+                    let obscured = showsSidebar || offset > 0
+                    ZStack(alignment: .leading) {
+                        Color(uiColor: .systemBackground).ignoresSafeArea()
+                        NavigationStack {
+                            SessionSidebar(showsSettings: $showsSettings, didSelect: closeSidebar)
+                                .toolbar {
+                                    ToolbarItem(placement: .topBarLeading) {
+                                        Button("Close sessions", systemImage: "sidebar.left") { closeSidebar() }
+                                            .accessibilityFocused($sidebarFocused)
+                                    }
+                                }
+                        }
+                        .frame(width: width)
+                        .offset(x: -32 * (1 - progress))
+                        .opacity(progress)
+                        .allowsHitTesting(showsSidebar)
+                        .accessibilityHidden(!showsSidebar)
+                        .accessibilityIdentifier("sessionSidebar")
+                        .accessibilityAction(.escape, closeSidebar)
+
+                        NavigationStack {
+                            chat
+                                .background(colorScheme == .dark ? Color(white: 0.07) : Color(uiColor: .systemBackground))
+                                .disabled(showsSidebar)
+                                .accessibilityHidden(obscured)
+                                .environment(\.isChatObscured, obscured)
+                        }
+                        .background(Color(uiColor: .secondarySystemBackground))
+                        .overlay {
+                            if obscured {
+                                Button { closeSidebar() } label: {
+                                    Color.black.opacity(0.12 * progress).ignoresSafeArea()
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Close sessions")
+                            }
+                        }
+                        .clipShape(.rect(cornerRadius: 28 * progress))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 28 * progress)
+                                .stroke(.white.opacity(0.08 * progress), lineWidth: 0.5)
+                                .allowsHitTesting(false)
+                        }
+                        .shadow(color: .black.opacity(0.3 * progress), radius: 16, x: -4)
+                        .offset(x: offset)
+                        .accessibilityHidden(obscured)
+                    }
+                    .clipped()
+                    .simultaneousGesture(drawerGesture(width: width, opening: !showsSidebar))
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: showsSidebar)
+                    .onChange(of: showsSidebar) { _, open in sidebarFocused = open }
+
+                }
             } else {
-                ContentUnavailableView(
-                    "No Session Selected",
-                    systemImage: "bubble.left.and.text.bubble.right",
-                    description: Text("Choose a shared session to watch it and continue it from here.")
-                )
+                NavigationSplitView(columnVisibility: $columns) {
+                    SessionSidebar(showsSettings: $showsSettings)
+                        .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
+                } detail: { chat }
+                .toolbar(removing: .sidebarToggle)
             }
+        }
+        .environment(drafts)
+        .environment(\.openSessionSidebar, OpenSessionSidebarAction { toggle in
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            if sizeClass == .compact { showsSidebar = true } else { columns = toggle && columns == .all ? .detailOnly : .all }
+        })
+        .onAppear { if store.selectedSessionID == nil { showsSidebar = true } }
+        .onChange(of: store.selectedSessionID) { _, selected in
+            if selected != nil { showsSidebar = false }
         }
         .sheet(isPresented: $showsSettings, onDismiss: {
             guard unpairsAfterSettings else { return }
@@ -29,11 +112,63 @@ struct SessionsView: View {
             SettingsView { unpairsAfterSettings = true }
         }
     }
+
+    @ViewBuilder
+    private var chat: some View {
+        if store.selectedSessionID != nil {
+            TranscriptView(presentsAttentionOnAppear: presentsAttentionOnLaunch)
+        } else {
+            ContentUnavailableView {
+                Label("Choose a Session", systemImage: "bubble.left.and.text.bubble.right")
+            } description: {
+                Text("Open your sessions or start a new conversation on your Mac.")
+            } actions: {
+                Button("Show sessions", systemImage: "sidebar.left") { showsSidebar = true; columns = .all }
+            }
+        }
+    }
+
+    private struct DrawerDrag {
+        var horizontal: Bool?
+        var offset: CGFloat = 0
+    }
+
+    private func drawerGesture(width: CGFloat, opening: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 10)
+            .updating($drawerDrag) { value, state, transaction in
+                guard !opening || value.startLocation.x <= 24 else { return }
+                if state.horizontal == nil {
+                    state.horizontal = abs(value.translation.width) > abs(value.translation.height) * 1.3
+                }
+                guard state.horizontal == true else { return }
+                transaction.animation = nil
+                state.offset = opening ? max(0, value.translation.width) : min(0, value.translation.width)
+            }
+            .onChanged { value in
+                guard !opening || value.startLocation.x <= 24 else { return }
+                guard !dismissedKeyboardForDrag, drawerDrag.horizontal != false,
+                      abs(value.translation.width) > abs(value.translation.height) * 1.3 else { return }
+                dismissedKeyboardForDrag = true
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+            .onEnded { value in
+                defer { dismissedKeyboardForDrag = false }
+                guard !opening || value.startLocation.x <= 24 else { return }
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.3 else { return }
+                let predicted = (opening ? 0 : width) + value.predictedEndTranslation.width
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
+                    showsSidebar = predicted > width * 0.5
+                }
+            }
+    }
+
+    private func closeSidebar() { showsSidebar = false }
 }
 
 private struct SessionSidebar: View {
     @Environment(RemoteStore.self) private var store
     @Binding var showsSettings: Bool
+    var didSelect: () -> Void = {}
     @State private var query = ""
     @State private var showsNewSession = false
 
@@ -45,16 +180,20 @@ private struct SessionSidebar: View {
         }
     }
 
-    private var selection: Binding<String?> {
-        Binding(get: { store.selectedSessionID }, set: { store.select($0) })
-    }
 
     var body: some View {
-        List(selection: selection) {
+        List {
             Section {
                 ForEach(sessions) { session in
-                    SessionRow(session: session, badge: store.badges.badge(for: session))
-                        .tag(session.id)
+                    Button {
+                        store.select(session.id)
+                        didSelect()
+                    } label: {
+                        SessionRow(session: session, badge: store.badges.badge(for: session))
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(session.id == store.selectedSessionID ? Color.accentColor.opacity(0.12) : Color.clear)
                         .contextMenu {
                             Button("Copy Title", systemImage: "doc.on.doc") {
                                 Clipboard.copy(session.displayTitle)

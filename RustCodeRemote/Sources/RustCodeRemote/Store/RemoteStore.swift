@@ -44,6 +44,8 @@ public final class RemoteStore {
     public private(set) var attached: SessionSnapshot?
     public private(set) var isLoadingHistory = false
     public private(set) var isCreatingSession = false
+    public private(set) var isUploadingImages = false
+    public var supportsImageUpload: Bool { attached?.capabilities.contains("upload_image") == true }
     private var hostGeneration: UInt64 = 0
     private var pendingCreation: (directory: String?, requestID: RequestID)?
     /// True while the full detail of the pending approval is being fetched.
@@ -373,6 +375,70 @@ public final class RemoteStore {
 
     // MARK: Mutations
 
+    /// Uploads prepared images to this session before submitting the prompt. Upload failures
+    /// leave the caller's draft intact. A submitted but uncertain prompt uses the receipt ledger.
+    @discardableResult
+    public func send(_ text: String, images: [PromptImage], mode: SendMode = .automatic) async -> Bool {
+        guard !images.isEmpty else { return await send(text, mode: mode) }
+        guard !isUploadingImages, connection == .connected, let session = attached?.session else { return false }
+        guard supportsImageUpload else {
+            notice = "This host does not support image attachments. Update RustCode on your Mac and reconnect."
+            return false
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/") else {
+            notice = "Send images with a message rather than a slash command."
+            return false
+        }
+        guard images.count <= 4, Set(images.map(\.id)).count == images.count,
+              images.allSatisfy({ !$0.id.isEmpty && $0.id.utf8.count <= 64
+                && $0.id.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }
+                && !$0.data.isEmpty && $0.data.count <= PromptImage.maximumBytes
+                && ["image/jpeg", "image/png"].contains($0.mimeType) }) else {
+            notice = "Choose up to four JPEG or PNG images, each no larger than 8 MB."
+            return false
+        }
+        let generation = hostGeneration
+        isUploadingImages = true
+        defer { if generation == hostGeneration { isUploadingImages = false } }
+        var references: [String] = []
+        do {
+            for image in images {
+                var offset = 0
+                while offset < image.data.count {
+                    guard generation == hostGeneration, attached?.session == session else { return false }
+                    let end = min(offset + PromptImage.chunkBytes, image.data.count)
+                    let chunk = ImageUploadChunk(attachmentID: image.id, mimeType: image.mimeType,
+                        offset: UInt64(offset), totalBytes: UInt64(image.data.count),
+                        dataBase64: image.data.subdata(in: offset..<end).base64EncodedString())
+                    // Retrying the same prepared image reuses exact chunk identities. Uploads do
+                    // not start turns; a lost upload reply can be safely retried explicitly.
+                    let id = RequestID("image-\(generation)-\(session.sessionID)-\(session.registrationEpoch)-\(image.id)-\(offset)")
+                    let result = try await client.uploadImage(chunk, in: session, requestID: id)
+                    guard generation == hostGeneration, attached?.session == session else { return false }
+                    guard result.attachmentID == image.id, result.nextOffset == UInt64(end),
+                          result.totalBytes == UInt64(image.data.count), result.complete == (end == image.data.count)
+                    else { throw RemoteError.invalidFrame("Invalid image upload progress") }
+                    if result.complete {
+                        guard let reference = result.promptReference, reference.hasPrefix("![image](file://"),
+                              reference.hasSuffix(")"), !reference.contains("\n") else {
+                            throw RemoteError.invalidFrame("Missing image reference")
+                        }
+                        references.append(reference)
+                    }
+                    offset = end
+                }
+            }
+            guard generation == hostGeneration, attached?.session == session else { return false }
+            let prompt = ([text.trimmingCharacters(in: .whitespacesAndNewlines)] + references)
+                .filter { !$0.isEmpty }.joined(separator: "\n\n")
+            return await send(prompt, mode: mode)
+        } catch {
+            guard generation == hostGeneration else { return false }
+            notice = "Image upload failed: \(error.localizedDescription) Your message has not been sent."
+            return false
+        }
+    }
+
     /// Sends text to the attached session.
     /// - Returns: false when the text certainly did not reach the session, so the caller can
     ///   give it back to the user. True does not mean applied: the outcome may be uncertain.
@@ -508,6 +574,7 @@ public final class RemoteStore {
     private func resetHostState() {
         hostGeneration &+= 1
         isCreatingSession = false
+        isUploadingImages = false
         client = liveClient
         credential = nil
         host = nil

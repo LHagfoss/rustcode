@@ -1028,6 +1028,44 @@
       "oneOf": [
         {
           "properties": {
+            "attachment_id": {
+              "type": "string"
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "next_offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "prompt_reference": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "total_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "image_uploaded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "attachment_id",
+            "next_offset",
+            "total_bytes",
+            "complete"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "directories": {
               "items": {
                 "$ref": "#/$defs/RemoteDirectory"

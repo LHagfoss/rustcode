@@ -132,6 +132,8 @@ public struct WireCodec: RemoteCodec {
             return scoped(session, .cancelQuestion(.init(questionID: questionID)))
         case .setSessionSettings(let session, let model, let effort):
             return scoped(session, .setSessionSettings(.init(model: model, reasoningEffort: effort)))
+        case .uploadImage(let session, let chunk):
+            return scoped(session, .uploadImage(chunk))
         case .submitPrompt(let session, let text):
             return scoped(session, .submitPrompt(.init(prompt: text)))
         case .steer(let session, let text):
@@ -273,6 +275,8 @@ public struct WireCodec: RemoteCodec {
                 return .failure(.outcomeUnknown)
             }
             return .failure(remoteError(error))
+        case .imageUploaded(let progress):
+            return receipt == .applied ? .imageUploaded(progress) : .receipt(receipt == .received ? .received : .unknown)
         case .directories(let listing): return .directories(listing)
         case .sessionCreated(let created):
             return receipt == .applied ? .sessionCreated(summary(created.session)) : .receipt(receipt == .received ? .received : .unknown)

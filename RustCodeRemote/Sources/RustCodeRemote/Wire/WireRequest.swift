@@ -34,6 +34,7 @@ public struct WireRequest: Codable, Equatable, Sendable {
 }
 
 public enum WireOperation: Codable, Equatable, Sendable {
+    case uploadImage(ImageUploadChunk)
     case listSessions
     case subscribeSessions
     case listDirectories(DirectoryPath)
@@ -56,7 +57,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
 
     /// Every `operation.type` this build knows.
     public static let knownTypes: Set<String> = [
-        "list_directories", "create_session", "list_sessions", "subscribe_sessions", "attach_session", "detach_session", "get_history",
+        "upload_image", "list_directories", "create_session", "list_sessions", "subscribe_sessions", "attach_session", "detach_session", "get_history",
         "get_content", "submit_prompt", "steer", "queue", "cancel_turn", "answer_question",
         "resolve_approval", "get_request_status", "set_session_settings", "execute_command", "cancel_question",
     ]
@@ -137,6 +138,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
 
     public var type: String {
         switch self {
+        case .uploadImage: "upload_image"
         case .listSessions: "list_sessions"
         case .subscribeSessions: "subscribe_sessions"
         case .listDirectories: "list_directories"
@@ -162,6 +164,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let type = try WireTag.read("type", from: decoder)
         switch type {
+        case "upload_image": self = .uploadImage(try ImageUploadChunk(from: decoder))
         case "list_sessions": self = .listSessions
         case "subscribe_sessions": self = .subscribeSessions
         case "list_directories": self = .listDirectories(try DirectoryPath(from: decoder))
@@ -186,6 +189,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         let payload: (any Encodable)? = switch self {
+        case .uploadImage(let payload): payload
         case .listSessions, .subscribeSessions, .detachSession: nil
         case .listDirectories(let payload), .createSession(let payload): payload
         case .attachSession(let payload): payload

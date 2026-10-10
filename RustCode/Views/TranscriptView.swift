@@ -3,6 +3,8 @@ import SwiftUI
 
 struct TranscriptView: View {
     @Environment(RemoteStore.self) private var store
+    @Environment(\.openSessionSidebar) private var openSessions
+    @Environment(\.isChatObscured) private var isChatObscured
     @State private var sheet: AttentionSheet?
     @State private var selectable: SelectableText?
     @State private var showsRequests = false
@@ -31,10 +33,15 @@ struct TranscriptView: View {
         }
         .navigationTitle(store.selectedSession?.displayTitle ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden()
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Show sessions", systemImage: "line.3.horizontal") { isComposerFocused = false; openSessions(toggle: true) }
+                    .accessibilityHidden(isChatObscured)
+            }
             if let session = store.selectedSession {
                 ToolbarItem(placement: .topBarTrailing) {
-                    sessionMenu(session)
+                    sessionMenu(session).accessibilityHidden(isChatObscured)
                 }
             }
         }
@@ -48,6 +55,7 @@ struct TranscriptView: View {
             }
         }
         .sheet(isPresented: $showsRequests) { RequestStatusSheet() }
+        .sheet(isPresented: $showsModels) { ModelPicker() }
         .alert("Update RustCode on your Mac", isPresented: $showsHostUpdate) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -180,6 +188,7 @@ struct TranscriptView: View {
     private var composerDock: some View {
         if let snapshot = store.attached {
             ComposerBar(
+                sessionID: snapshot.session.sessionID,
                 isRunning: snapshot.isRunning,
                 canSteer: snapshot.canSteer,
                 isEnabled: store.connection == .connected,
@@ -215,66 +224,27 @@ struct TranscriptView: View {
         }
     }
 
-    @ViewBuilder
     private func sessionControls(_ snapshot: SessionSnapshot) -> some View {
-        ViewThatFits(in: .horizontal) {
-            controlsRow(snapshot)
-            ScrollView(.horizontal) { controlsRow(snapshot) }.scrollIndicators(.hidden)
-        }
-    }
-
-    private func controlsRow(_ snapshot: SessionSnapshot) -> some View {
-        HStack(spacing: 8) {
-            if let settings = snapshot.settings {
-                let current = settings.models.first { $0.id == settings.selectedModel }
-                Button { isComposerFocused = false; showsModels = true } label: {
-                    Label(current?.model ?? (store.selectedSession?.model ?? "Model"), systemImage: "chevron.down")
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: 180, minHeight: 44)
-                        .contentShape(.rect)
+        Button {
+            isComposerFocused = false
+            if snapshot.settings == nil { showsHostUpdate = true } else { showsModels = true }
+        } label: {
+            HStack(spacing: 5) {
+                let settings = snapshot.settings
+                let current = settings?.models.first { $0.id == settings?.selectedModel }
+                Text(current?.model ?? store.selectedSession?.model ?? "Model")
+                    .lineLimit(1).truncationMode(.middle)
+                if let effort = settings?.reasoningEffort, effort != "default" {
+                    Text("· \(effort.capitalized)").foregroundStyle(.secondary)
                 }
-                .popover(isPresented: $showsModels, arrowEdge: .bottom) {
-                    ModelPicker().presentationCompactAdaptation(.popover)
-                }
-                .accessibilityLabel("Model")
-                .accessibilityValue(current?.model ?? (store.selectedSession?.model ?? "Model"))
-
-                Menu {
-                    if !settings.canChange { Text("Available after the current turn stops") }
-                    ForEach(current?.reasoningEfforts ?? [], id: \.self) { effort in
-                        Button {
-                            Task { await store.setSessionSettings(model: settings.selectedModel, reasoningEffort: effort) }
-                        } label: {
-                            if effort == settings.reasoningEffort {
-                                Label(effort.capitalized, systemImage: "checkmark")
-                            } else { Text(effort.capitalized) }
-                        }
-                        .disabled(!settings.canChange || store.connection != .connected || hasPendingSettings)
-                    }
-                } label: {
-                    Label(settings.reasoningEffort.capitalized, systemImage: "brain").frame(minHeight: 44).contentShape(.rect)
-                }
-                .accessibilityLabel("Thinking effort")
-                .accessibilityValue(settings.reasoningEffort)
-
-            } else {
-                Button { showsHostUpdate = true } label: {
-                    Label(store.selectedSession?.model ?? "Model", systemImage: "chevron.down")
-                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 180, minHeight: 44)
-                        .contentShape(.rect)
-                }
-                .accessibilityLabel("Model")
-                Button { showsHostUpdate = true } label: { Label("Effort", systemImage: "brain").frame(minHeight: 44).contentShape(.rect) }
-                    .accessibilityLabel("Thinking effort")
+                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
             }
+            .font(.subheadline.weight(.medium))
+            .frame(minHeight: 44).contentShape(.rect)
         }
-        .font(.caption.weight(.medium))
-        .controlSize(.regular)
         .buttonStyle(.plain)
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(minHeight: 44)
-        .padding(.horizontal, 6)
+        .accessibilityLabel("Model and effort")
+        .accessibilityValue("\(snapshot.settings?.models.first { $0.id == snapshot.settings?.selectedModel }?.model ?? store.selectedSession?.model ?? "Model"), \(snapshot.settings?.reasoningEffort ?? "default")")
     }
 
     private func runCommand(_ command: String) async -> Bool {
@@ -301,7 +271,7 @@ struct TranscriptView: View {
             showsModels = true
             return true
         case "session_picker":
-            store.select(nil)
+            openSessions()
             return true
         case "copy_response":
             guard let response = store.attached?.items.reversed().compactMap({ item -> String? in

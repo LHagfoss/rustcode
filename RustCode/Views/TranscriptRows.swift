@@ -70,8 +70,10 @@ struct TurnFooter: View {
 private struct UserMessage: View {
     let text: String
 
+    private var displayText: String { ImageAttachmentPresentation.displayText(text) }
+
     var body: some View {
-        Text(text)
+        Text(displayText)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(.fill.tertiary, in: .rect(cornerRadius: 20))
@@ -79,7 +81,7 @@ private struct UserMessage: View {
             .contextMenu { TextActions(text: text) }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
-            .accessibilityLabel("You: \(text)")
+            .accessibilityLabel("You: \(displayText)")
     }
 }
 

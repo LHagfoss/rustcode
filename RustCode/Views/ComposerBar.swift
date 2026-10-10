@@ -1,9 +1,13 @@
 import RustCodeRemote
 import SwiftUI
+import PhotosUI
+import UIKit
 
 /// The message field and its send or stop button, as one floating glass control.
 struct ComposerBar<Accessory: View, Controls: View>: View {
     @Environment(RemoteStore.self) private var store
+    @Environment(ChatDrafts.self) private var drafts
+    let sessionID: String
     let isRunning: Bool
     /// Whether the running turn accepts steering.
     var canSteer = true
@@ -12,13 +16,31 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     @ViewBuilder var accessory: () -> Accessory
     @ViewBuilder var controls: () -> Controls
 
-    @State private var text = ""
     @State private var sendCount = 0
     @State private var stopCount = 0
+    @State private var showsActions = false
+    @State private var showsFolder = false
+    @State private var showsPhotos = false
+    @State private var hadKeyboard = false
+    @State private var nextAction: ChatAction?
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var isImporting = false
+    @State private var isSending = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState.Binding var isFocused: Bool
     @ScaledMetric(relativeTo: .body) private var buttonSize: CGFloat = 44
 
     private let inset: CGFloat = 7
+
+    private var text: String {
+        get { drafts.draft(for: sessionID).text }
+        nonmutating set { drafts.setText(newValue, for: sessionID) }
+    }
+
+    private var images: [PromptImage] {
+        get { drafts.draft(for: sessionID).images }
+        nonmutating set { drafts.setImages(newValue, for: sessionID) }
+    }
 
     private var trimmed: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -32,17 +54,48 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             accessory()
             if isFocused && trimmed.hasPrefix("/") { commandSuggestions }
+            if !images.isEmpty { imagePreviews }
             inputRow
-            controls().padding(.horizontal, 8).padding(.bottom, 4)
+            HStack(spacing: 8) {
+                Button {
+                    hadKeyboard = isFocused
+                    isFocused = false
+                    showsActions = true
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 18, weight: .regular)).frame(width: buttonSize, height: buttonSize)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Chat actions")
+                .disabled(isSending || isImporting)
+                controls().disabled(isSending || isImporting)
+                Spacer(minLength: 0)
+                if isSending || isImporting || store.isUploadingImages {
+                    ProgressView().frame(width: buttonSize, height: buttonSize).accessibilityLabel("Preparing message")
+                } else if isRunning && trimmed.isEmpty && images.isEmpty {
+                    stopButton
+                } else if isRunning && !trimmed.hasPrefix("/") {
+                    queueButton
+                } else { sendButton }
+            }
+            .padding(.horizontal, 8).padding(.bottom, 6)
         }
         .contentShape(shape)
         .glassSurface(in: shape)
+        .background(Color(uiColor: .secondarySystemBackground), in: shape)
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
         .sensoryFeedback(.stop, trigger: stopCount)
+        .sheet(isPresented: $showsActions, onDismiss: performNextAction) {
+            ChatActionsSheet(hadKeyboard: hadKeyboard, isRunning: isRunning) { action in
+                nextAction = action
+                showsActions = false
+            }
+        }
+        .sheet(isPresented: $showsFolder) { NewSessionView() }
+        .photosPicker(isPresented: $showsPhotos, selection: $photoItems, maxSelectionCount: max(1, 4 - images.count), matching: .images)
+        .onChange(of: photoItems) { _, items in importPhotos(items) }
         #if DEBUG
         .task {
             let options = LaunchOptions.current
-            if let draft = options.composerDraft { text = draft }
+            if drafts.values[sessionID] == nil, options.demoSessionID == sessionID, let draft = options.composerDraft { text = draft }
             if options.focusesComposer {
                 try? await Task.sleep(for: .milliseconds(600))
                 isFocused = true
@@ -53,7 +106,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
 
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField(isRunning ? "Queue a message" : "Message", text: $text, axis: .vertical)
+            TextField(isRunning ? "Queue a message" : "Message", text: Binding(get: { text }, set: { text = $0 }), axis: .vertical)
                 .lineLimit(1...6)
                 .font(trimmed.hasPrefix("/") ? .body.monospaced() : .body)
                 .overlay(alignment: .leading) {
@@ -64,52 +117,17 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                     }
                 }
                 .focused($isFocused)
+                .disabled(isSending || isImporting)
                 .frame(maxWidth: .infinity, minHeight: buttonSize)
                 .background {
                     Color.clear.contentShape(.rect).onTapGesture { isFocused = true }
                 }
                 .accessibilityLabel(isRunning ? "Message to queue" : "Message")
-
-            if let completion, isFocused {
-                Button { text = completion } label: {
-                    Image(systemName: "arrow.right.to.line").frame(width: buttonSize, height: buttonSize)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Complete command")
-                .accessibilityHint(completion)
-            }
-
-            if isFocused {
-                Button {
-                    isFocused = false
-                } label: {
-                    Image(systemName: "keyboard.chevron.compact.down")
-                        .foregroundStyle(.secondary)
-                        .frame(width: buttonSize, height: buttonSize)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss keyboard")
-            }
-
-            if trimmed.hasPrefix("/") {
-                sendButton
-            } else if isRunning {
-                if !trimmed.isEmpty {
-                    queueButton
-                        .transition(.scale.combined(with: .opacity))
-                }
-                stopButton
-                    .transition(.scale.combined(with: .opacity))
-            } else {
-                sendButton
-                    .transition(.scale.combined(with: .opacity))
-            }
         }
         .padding(.leading, 18)
         .padding(.trailing, inset)
         .padding(.vertical, inset)
-        .animation(.snappy(duration: 0.2), value: isRunning)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: isRunning)
     }
 
     private var matchingCommands: [SessionCommandChoice] {
@@ -180,16 +198,17 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         Button {
             send(.automatic)
         } label: {
-            circle("arrow.up", isProminent: !trimmed.isEmpty)
+            circle("arrow.up", isProminent: !trimmed.isEmpty || !images.isEmpty)
         }
         .buttonStyle(.plain)
-        .disabled(trimmed.isEmpty || !isEnabled)
+        .disabled((trimmed.isEmpty && images.isEmpty) || !isEnabled || isSending || isImporting)
         .accessibilityLabel(trimmed.hasPrefix("/") ? "Run command" : "Send message")
     }
 
     /// While a turn runs, a tap queues; the menu offers steering instead.
     private var queueButton: some View {
         Menu {
+            Button("Stop the running turn", role: .destructive) { Task { await store.cancelTurn() } }
             Button("Queue for Next Turn", systemImage: "text.line.last.and.arrowtriangle.forward") {
                 send(.queue)
             }
@@ -242,19 +261,95 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             .contentShape(.rect)
     }
 
+    private var imagePreviews: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(images) { image in
+                    PromptImageThumbnail(image: image)
+                            .overlay(alignment: .topTrailing) {
+                                Button { images.removeAll { $0.id == image.id } } label: {
+                                    Image(systemName: "xmark.circle.fill").symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, .black.opacity(0.75)).frame(width: 44, height: 44)
+                                }
+                                .buttonStyle(.plain).accessibilityLabel("Remove image")
+                                .disabled(isSending || isImporting)
+                            }
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel("Attached image")
+                }
+            }
+            .padding(.horizontal, 14).padding(.top, 10)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private func performNextAction() {
+        guard let action = nextAction else { return }
+        nextAction = nil
+        switch action {
+        case .newSession:
+            Task { await store.createSession(directory: nil) }
+        case .folder:
+            showsFolder = true
+        case .commands:
+            if text.isEmpty { text = "/" }
+            isFocused = true
+        case .dismissKeyboard:
+            isFocused = false
+        case .stop:
+            Task { await store.cancelTurn() }
+        case .image:
+            guard store.supportsImageUpload else {
+                store.notice = "Update RustCode on your Mac to attach images to this session."
+                return
+            }
+            guard images.count < 4 else { store.notice = "You can attach up to four images to a message."; return }
+            showsPhotos = true
+        }
+    }
+
+    private func importPhotos(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty, !isImporting else { return }
+        isImporting = true
+        Task {
+            defer { photoItems = []; isImporting = false }
+            var imported: [PromptImage] = []
+            do {
+                for item in items.prefix(4 - images.count) {
+                    guard let data = try await item.loadTransferable(type: Data.self) else { throw PromptImageImport.ImportError.unreadable }
+                    let image = try await Task.detached { try PromptImageImport.prepare(data) }.value
+                    imported.append(image)
+                }
+                images.append(contentsOf: imported)
+            } catch { store.notice = error.localizedDescription }
+        }
+    }
+
     private func send(_ mode: SendMode) {
         let message = trimmed
-        guard !message.isEmpty else { return }
+        guard !isSending, !message.isEmpty || !images.isEmpty else { return }
+        guard !message.hasPrefix("/") || images.isEmpty else {
+            store.notice = "Send attached images with a message instead of a slash command."
+            return
+        }
+        let outgoingImages = images
         isFocused = false
-        text = ""
+        // Commit UIKit's resignation before disabling the field; otherwise SwiftUI can
+        // reattach its editor as the turn changes from Message to Queue a message.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        isSending = true
         sendCount += 1
         Task {
-            // Give the text back if it certainly did not reach the session.
+            defer { isSending = false }
+            guard store.selectedSessionID == sessionID else { return }
             let accepted = message.hasPrefix("/")
                 ? await runCommand(message)
-                : await store.send(message, mode: mode)
-            if !accepted, text.isEmpty {
-                text = message
+                : await store.send(message, images: outgoingImages, mode: mode)
+            if accepted {
+                if store.selectedSessionID == sessionID && !isFocused {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+                drafts.clearIfMatching(text: message, images: outgoingImages, sessionID: sessionID)
             }
         }
     }

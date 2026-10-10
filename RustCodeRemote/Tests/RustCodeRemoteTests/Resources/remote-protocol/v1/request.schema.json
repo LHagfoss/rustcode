@@ -201,6 +201,43 @@
           "type": "object"
         },
         {
+          "description": "Upload one bounded image chunk without starting a turn.",
+          "properties": {
+            "attachment_id": {
+              "type": "string"
+            },
+            "data_base64": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": "string"
+            },
+            "offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "upload_image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "attachment_id",
+            "mime_type",
+            "offset",
+            "total_bytes",
+            "data_base64"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Start a turn. Rejected with `busy` while the session is running.",
           "properties": {
             "prompt": {

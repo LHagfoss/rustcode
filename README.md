@@ -60,7 +60,7 @@ access and, on a LAN, for local-network access; allow both. Without a camera, ty
 address (`192.168.1.20:17879`) and the code instead. Nearby Macs also appear automatically
 on the same Wi-Fi: choose one and enter its pairing code. Native Paste buttons accept an
 address/QR payload or the pairing code. The app remembers the last successfully paired
-address, never the one-time code. Nearby-machine discovery is not available yet.
+address, never the one-time code.
 The scanner shows a square target and offers a retry if camera startup fails.
 
 The session appears in the app's list as soon as it is shared. `/remote off` stops
@@ -74,12 +74,13 @@ wrong attempts the host locks pairing for a few minutes and the app says for how
 
 ## Session controls and input
 
-The controls inside the composer show the current model and thinking effort. Tap either
-to inspect host-provided choices; changes become available when the turn is idle and
-appear after host confirmation. Missing controls show an update/restart explanation.
-After updating RustCode, restart an older remote gateway with `rustcode remote stop`
-then `rustcode remote serve`, and reconnect the app. Running session owners reconnect
-to the gateway; new protocol operations also require current session owners.
+The composer combines the current model and thinking effort in one control. Tap it
+for a native sheet with model search and an effort picker. Changes become available
+when the turn is idle and appear after host confirmation. The session menu opens a
+sidebar for finding and switching chats without backing out of the current session.
+After updating RustCode, the background gateway follows the installed binary. Reopen
+older terminal sessions once to load new session capabilities; app-created sessions
+use the current host binary.
 Blank titles use `Session <short ID>`. Turn totals come from the complete host session;
 unknown totals (including some compacted sessions) are omitted.
 
@@ -99,14 +100,21 @@ Tap **New Session** in the sessions list to start in your Mac's Home folder, bro
 project directory, or enter an absolute path. Turn totals appear on session rows.
 
 Type `/` for the host's complete terminal command catalog in a compact, scrollable list.
-Typing a prefix shows an inline completion; tap the completion arrow or a suggestion to
-fill the draft. `/new [folder]`, `/history`, `/model`, `/models`, and `/copy` have native
+Typing a prefix shows an inline completion; tap a suggestion to fill the draft. `/new [folder]`, `/history`, `/model`, `/models`, and `/copy` have native
 app actions. Informational commands and supported session settings run on the host,
 with results displayed outside model history. `/cancel` targets the current question
 or turn. Commands that still require the Mac interface are marked **On Mac** and keep
 your draft when selected; listing a command does not imply mobile execution support.
 
-Tap the model name for a bounded, searchable picker. Effort choices come from the host:
+The `+` button opens a native Chat Actions sheet: **New Session**, **Slash Commands**,
+**Choose Folder**, and **Add Image**. Pick up to four photos, preview or remove them,
+then send with or without a written message. Photos are downsampled to 2048 pixels,
+converted to JPEG without location metadata, and uploaded to the paired Mac before the
+prompt is submitted. Upload failures preserve the draft. This requires RustCode 0.64.5
+and a vision-capable model or a configured vision fallback. Internal attachment paths
+appear as attachment labels in chat; copying retains the original message.
+
+Effort choices come from the host:
 explicit provider catalogs take precedence, while legacy profiles with reasoning-effort
 support offer the terminal's low, medium and high choices. Settings change while idle.
 

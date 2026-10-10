@@ -14,6 +14,8 @@ final class FakeModelServer: Sendable {
     private let askQuestions: Bool
     private let jsonCommand: String?
     private let hasAsked = Mutex(false)
+    private let capturedBodies = Mutex<[String]>([])
+    var requestBodies: [String] { capturedBodies.withLock { $0 } }
 
     init(chunkDelay: Duration = .milliseconds(120), askQuestions: Bool = false, jsonCommand: String? = nil) throws {
         self.askQuestions = askQuestions
@@ -44,6 +46,7 @@ final class FakeModelServer: Sendable {
                 guard let self else { connection.cancel(); return }
                 connection.start(queue: .global())
                 Self.readRequest(on: connection, received: Data()) { body in
+                    self.capturedBodies.withLock { $0.append(body) }
                     let request = (try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? [String: Any]
                     let tools = request?["tools"] as? [[String: Any]] ?? []
                     let advertisesQuestions = tools.contains { ($0["function"] as? [String: Any])?["name"] as? String == "ask_question" }

@@ -63,6 +63,7 @@ struct LineCodec: RemoteCodec {
 
     func encode(_ command: RemoteCommand, requestID: RequestID) throws -> String {
         let operation = switch command {
+        case .uploadImage: "upload_image"
         case .pair: "pair"
         case .authenticate: "authenticate"
         case .subscribeSessions: "subscribe"

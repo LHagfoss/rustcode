@@ -19,6 +19,7 @@ public enum RemoteCommand: Sendable, Equatable {
     case detachSession(SessionRef)
     case getHistory(SessionRef, before: HistoryCursor, limit: Int)
     case getContent(SessionRef, contentID: String, offset: UInt64, maxBytes: Int)
+    case uploadImage(SessionRef, ImageUploadChunk)
     case executeCommand(SessionRef, command: String)
     case cancelQuestion(SessionRef, questionID: String)
     case setSessionSettings(SessionRef, model: String, reasoningEffort: String)
@@ -112,6 +113,7 @@ public enum HandshakeReply: Sendable, Equatable {
 public enum RemoteReply: Sendable, Equatable {
     case handshake(HandshakeReply)
     case sessions([SessionSummary])
+    case imageUploaded(ImageUploadProgress)
     case directories(DirectoryListing)
     case sessionCreated(SessionSummary)
     /// `origin` is what a later resume cursor for this session has to name.
