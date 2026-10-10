@@ -255,7 +255,7 @@ fn set_settings(
     Ok(settings)
 }
 
-const REMOTE_COMMAND_HELP: &str = "/help — Show commands\n/status — Session status\n/info, /about — About RustCode\n/usage — Token usage\n/perf — Last turn performance\n/context — Context window\n/tasks — Running tasks\n/mcp — Configured server names\n/model [profile] — Show or select an exact model profile\n/effort [value] — Show or select reasoning effort\n/title <title>, /change_title <title> — Rename this session\n\nUse Stop to cancel the current turn. Session lifecycle, terminal pickers, authentication, and configuration editing remain terminal-only.";
+const REMOTE_COMMAND_HELP: &str = "- `/help` — Show commands\n- `/status` — Session status\n- `/info`, `/about` — About RustCode\n- `/usage` — Token usage\n- `/perf` — Last turn performance\n- `/context` — Context window\n- `/tasks` — Running tasks\n- `/mcp` — Configured server names\n- `/model [profile]` — Show or select an exact model profile\n- `/effort [value]` — Show or select reasoning effort\n- `/title <title>`, `/change_title <title>` — Rename this session\n\nUse the app's `/cancel` command or Stop control to cancel the current turn or questionnaire. Session lifecycle, terminal pickers, authentication, and configuration editing remain terminal-only.";
 
 /// Explicitly allowed owner commands. Their output is presentation-only and
 /// never enters provider history or the terminal's draft/panel state.
@@ -307,7 +307,7 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
                 } else {
                     tasks
                         .iter()
-                        .map(|task| format!("{}: {}", task.id, task.command))
+                        .map(|task| format!("- {}: {}", task.id, task.command))
                         .collect::<Vec<_>>()
                         .join("\n")
                 },
@@ -322,7 +322,7 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
                     .config
                     .mcp_servers
                     .iter()
-                    .map(|server| server.name.clone())
+                    .map(|server| format!("- {}", server.name))
                     .collect::<Vec<_>>()
                     .join("\n")
             },
@@ -335,7 +335,7 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
                 settings
                     .models
                     .iter()
-                    .map(|model| model.id.as_str())
+                    .map(|model| format!("- {}", model.id))
                     .collect::<Vec<_>>()
                     .join("\n")
             ),
@@ -395,6 +395,15 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
                 "this command or its arguments are not supported remotely; use /help for available commands",
             ));
         }
+    };
+    // Shared reports use plain line breaks; preserve their rows in Markdown.
+    let output = if matches!(
+        command.as_str(),
+        "/status" | "/usage" | "/perf" | "/context" | "/effort"
+    ) {
+        output.replace('\n', "  \n")
+    } else {
+        output
     };
     // A result must fit the transport and receipt cache. Informational reports
     // may grow with configured catalogs, task output, or provider metadata.
