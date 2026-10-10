@@ -1083,6 +1083,8 @@ mod tests {
     fn operation_names_match_the_wire_tags() {
         let operations = [
             RemoteOperation::ListSessions,
+            RemoteOperation::ListDirectories { path: None },
+            RemoteOperation::CreateSession { path: None },
             RemoteOperation::SubscribeSessions,
             RemoteOperation::AttachSession { resume: None },
             RemoteOperation::DetachSession,
