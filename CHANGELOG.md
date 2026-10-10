@@ -1,3 +1,11 @@
+## [v0.64.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.4) - 2026-10-10
+
+### Features
+- Keep the remote gateway running as a per-user macOS background service, restart it after executable upgrades, and preserve paired devices and independent session owners.
+- Start background sessions from the phone in Home or a chosen host folder, with authenticated directory browsing and durable creation receipts.
+- Advertise nearby gateways over Bonjour for same-Wi-Fi discovery.
+- Share the complete TUI command catalog with mobile clients, expand executable session commands, and expose low/medium/high choices for capability-enabled legacy effort profiles.
+- Prevent duplicate or unnamed tool result rows when attaching during a running command.
 ## [v0.64.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.3) - 2026-10-10
 
 ### Fixes
