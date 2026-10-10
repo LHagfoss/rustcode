@@ -3,9 +3,7 @@ use super::{
     hub::SessionHub,
     router::{DeviceContext, FrameRouter, FrameSink},
 };
-use crate::daemon::lifecycle::{
-    ensure_private_directory, publish_private_json, random_instance_id, read_private_json,
-};
+use crate::daemon::lifecycle::{ensure_private_directory, publish_private_json, read_private_json};
 use crate::remote::*;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -83,6 +81,14 @@ struct Creation {
     response: Option<RemoteResponse>,
 }
 
+fn planned_creation(request: &RemoteRequest) -> Creation {
+    Creation {
+        request: request.clone(),
+        session_id: rustcode_session::next_session_id(),
+        response: None,
+    }
+}
+
 pub struct WorkspaceRouter {
     hub: Arc<SessionHub>,
     config: PathBuf,
@@ -139,11 +145,7 @@ impl WorkspaceRouter {
                 hub.summary().len() < 32,
                 "too many shared sessions; close a session first"
             );
-            let creation = Creation {
-                request: request.clone(),
-                session_id: random_instance_id()?,
-                response: None,
-            };
+            let creation = planned_creation(request);
             publish_private_json(&receipt, &creation)?;
             creation
         };
@@ -358,6 +360,29 @@ mod tests {
         assert!(resolve_directory(Some("relative")).is_err());
         assert!(resolve_directory(root.path().join("file").to_str()).is_err());
     }
+    #[test]
+    fn mobile_creation_uses_the_normal_chronological_session_identity() {
+        let request = RemoteRequest {
+            protocol_version: REMOTE_PROTOCOL_VERSION,
+            request_id: "new".into(),
+            session_id: None,
+            registration_epoch: None,
+            operation: RemoteOperation::CreateSession { path: None },
+        };
+        let creation = planned_creation(&request);
+        assert!(rustcode_session::valid_session_id(&creation.session_id));
+        let root = tempfile::tempdir().unwrap();
+        let path = rustcode_session::SessionStore::new(root.path())
+            .canonical_session_dir(&creation.session_id);
+        let today = chrono::Local::now().format("%Y/%m/%d").to_string();
+        assert!(
+            path.to_string_lossy().contains(&today),
+            "{} was not filed under {today}",
+            path.display()
+        );
+        assert_ne!(creation.session_id, planned_creation(&request).session_id);
+    }
+
     #[tokio::test]
     async fn completed_creation_replays_after_directory_removal() {
         let config = tempfile::tempdir().unwrap();
@@ -425,7 +450,7 @@ pub fn owner_state(
     session_id: &str,
 ) -> Result<(std::fs::File, crate::app::AppState)> {
     ensure!(
-        session_id.len() == 32 && session_id.bytes().all(|c| c.is_ascii_hexdigit()),
+        rustcode_session::valid_session_id(session_id),
         "invalid mobile session identifier"
     );
     let lease = crate::daemon::lifecycle::lock_private_file(

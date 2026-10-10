@@ -73,22 +73,14 @@ pub async fn start(
     })
     .await
     .context("another gateway launcher is still starting")??;
-    let mut effective = launcher.clone();
-    if let Some(status) = lifecycle.status().await? {
-        if let Ok(address) = status.listen_address.parse::<std::net::SocketAddr>() {
-            effective
-                .bind
-                .get_or_insert_with(|| address.ip().to_string());
-            effective.port.get_or_insert(address.port());
-        }
-        if effective.advertise.is_none() {
-            if let Ok(address) = url::Url::parse(&format!("ws://{}", status.advertised_address)) {
-                effective.advertise = address.host_str().map(str::to_owned);
-            } else if let Ok(address) = status.advertised_address.parse::<std::net::SocketAddr>() {
-                effective.advertise = Some(address.ip().to_string());
-            }
-        }
-    }
+    let effective = retain_port(
+        launcher,
+        lifecycle
+            .status()
+            .await?
+            .as_ref()
+            .map(|status| status.listen_address.as_str()),
+    );
     let launcher = &effective;
     #[cfg(target_os = "macos")]
     if installed_program(&launcher.program) {
@@ -249,6 +241,58 @@ pub async fn wait_for_upgrade(program: PathBuf) {
         let next = identity(&program);
         if next.is_some() && next != original {
             return;
+        }
+    }
+}
+
+/// The current IP is auto-selection's result, never its durable policy.
+fn retain_port(
+    launcher: &super::owner_client::Launcher,
+    listen: Option<&str>,
+) -> super::owner_client::Launcher {
+    let mut effective = launcher.clone();
+    if let Some(address) = listen.and_then(|value| value.parse::<std::net::SocketAddr>().ok()) {
+        effective.port.get_or_insert(address.port());
+    }
+    effective
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn adopting_auto_gateway_does_not_pin_its_dhcp_address() {
+        let original = super::super::owner_client::Launcher {
+            program: "/usr/local/bin/rustcode".into(),
+            config_directory: "/tmp/config".into(),
+            bind: None,
+            advertise: None,
+            port: None,
+        };
+        let adopted = retain_port(&original, Some("192.168.1.15:17879"));
+        assert_eq!(adopted.bind, None);
+        assert_eq!(adopted.advertise, None);
+        assert_eq!(adopted.port, Some(17879));
+        let explicit = super::super::owner_client::Launcher {
+            bind: Some("127.0.0.1".into()),
+            advertise: Some("host.local".into()),
+            port: Some(23456),
+            ..original
+        };
+        let adopted = retain_port(&explicit, Some("192.168.1.15:17879"));
+        assert_eq!(adopted.bind, explicit.bind);
+        assert_eq!(adopted.advertise, explicit.advertise);
+        assert_eq!(adopted.port, explicit.port);
+    }
+    #[test]
+    fn cargo_installs_are_managed_but_development_builds_are_not() {
+        assert!(!installed_program(Path::new(
+            "/tmp/rustcode/target/debug/rustcode"
+        )));
+        if let Some(home) = std::env::var_os("HOME") {
+            assert!(installed_program(
+                &PathBuf::from(home).join(".cargo/bin/rustcode")
+            ));
         }
     }
 }

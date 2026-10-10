@@ -7,9 +7,6 @@ impl AppRuntime {
         config: &Path,
         session_id: &str,
     ) -> Result<(), Box<dyn Error>> {
-        if session_id.len() != 32 || !session_id.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return Err("invalid mobile session identifier".into());
-        }
         let owners = config.join("remote").join("owners");
         let (_lease, mut state) =
             rustcode::remote_gateway::workspace::owner_state(config, session_id)?;
