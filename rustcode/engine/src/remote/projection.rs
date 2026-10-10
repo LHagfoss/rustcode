@@ -529,6 +529,8 @@ pub fn project_snapshot(
         .collect();
     let mut snapshot = RemoteSnapshot {
         session: project_session_info(state, context),
+
+        capabilities: vec!["cancel_question".into(), "execute_command".into()],
         settings: bound_settings(project_settings(state), limits.frame_bytes / 4),
         snapshot_id: None,
         sequence: context.sequence,

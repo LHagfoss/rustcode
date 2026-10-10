@@ -225,9 +225,10 @@ Any request can also be rejected with:
 | `internal` | The answer did not fit in a frame, or the host failed. |
 
 A prompt whose first character is `/` is refused with `unsupported_operation`.
-Remote text is never dispatched as a slash command, and v1 does not send it to
-the model as literal text either. There is no operation that changes the
-approval mode, the model, the session on screen or any configuration.
+Prompt text is never dispatched as a slash command or sent to the model as
+literal slash text. Use `execute_command` for supported commands and
+`set_session_settings` for model/effort controls. Approval mode, the terminal
+session on screen, and host-wide configuration remain local-only.
 
 ## Sessions
 
@@ -528,3 +529,40 @@ not provider billing totals or a cumulative session total. The estimate flag
 is `true` for these values. Missing values mean unavailable. Empty text deltas
 can update the observation without appending content, using the normal event
 sequence and replay rules.
+
+### Question cancellation and remote commands
+
+Snapshots advertise optional `capabilities`: `cancel_question` and
+`execute_command`. Missing capabilities mean that the owner or gateway needs an
+upgrade; clients must not emulate these operations by sending provider prompts.
+
+`{"type":"cancel_question","question_id":"…"}` dismisses the entire active
+question chain with the same behavior as Escape in the terminal: it cancels the
+turn token, resolves the question waiter as cancelled, clears all remaining
+questions, and returns to idle. The question identity is checked under the same
+lock as cancellation. A stale identity returns `stale_question` and changes
+nothing. Success returns `{"type":"question_cancelled","question_id":"…"}`.
+
+`{"type":"execute_command","command":"/status"}` runs an explicitly supported
+host command and returns `{"type":"command_executed","command":"/status",
+"title":"Status","output":"…"}`. Output is presentation-only Markdown, bounded
+to 32 KiB plus a truncation marker, and is never added to provider history.
+Both operations use the existing mutation receipts and request-status lookup.
+
+Supported commands are `/help`, `/status`, `/info`, `/about`, `/usage`, `/perf`,
+`/context`, `/tasks`, `/mcp`, `/model [exact profile name]`, `/effort [value]`, and
+`/title <title>` (alias `/change_title`). Model and effort mutations use the same
+idle-only validation and session persistence as `set_session_settings`.
+`/context`, `/tasks`, and `/mcp` are read-only summaries. Unsupported commands or
+arguments return `unsupported_operation`. Terminal lifecycle commands such as
+`/new`, `/clear`, `/compact`, provider authentication, host configuration changes,
+and interactive terminal pickers are not exposed. Use the identity-bound Stop
+control for turn cancellation. Slash text in prompt/queue/steer stays rejected.
+
+After upgrading the executable, restart the gateway as well as the session owner
+before using newly added controls. A gateway launched before the upgrade can
+discard new snapshot fields while decoding owner IPC, even when the terminal
+owner is current. In a separate terminal run `rustcode remote stop`, then
+`rustcode remote serve` with the same bind/advertise options previously used.
+Shared session owners reconnect automatically; pairings remain saved. Reattach
+in the app. Do not restart a running session merely to reconnect the gateway.

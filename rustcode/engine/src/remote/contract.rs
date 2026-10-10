@@ -221,6 +221,26 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
     let session = Some(SESSION);
     vec![
         (
+            "cancel_question",
+            request(
+                "req-0017",
+                session,
+                RemoteOperation::CancelQuestion {
+                    question_id: "question-1".into(),
+                },
+            ),
+        ),
+        (
+            "execute_command",
+            request(
+                "req-0018",
+                session,
+                RemoteOperation::ExecuteCommand {
+                    command: "/status".into(),
+                },
+            ),
+        ),
+        (
             "set_session_settings",
             request(
                 "req-0016",
@@ -568,6 +588,7 @@ fn golden_previous_timing() -> RemoteTurnTiming {
 
 fn golden_snapshot() -> RemoteSnapshot {
     RemoteSnapshot {
+        capabilities: vec!["cancel_question".into(), "execute_command".into()],
         settings: Some(golden_settings()),
         snapshot_id: Some("snapshot-example".to_owned()),
         session: golden_session_info(),
@@ -641,6 +662,24 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
     let rejected = Some(ReceiptState::Rejected);
     let applied = Some(ReceiptState::Applied);
     vec![
+        response(
+            "question_cancelled",
+            "req-0017",
+            applied,
+            RemoteResult::QuestionCancelled {
+                question_id: "question-1".into(),
+            },
+        ),
+        response(
+            "command_executed",
+            "req-0018",
+            applied,
+            RemoteResult::CommandExecuted {
+                command: "/status".into(),
+                title: "Status".into(),
+                output: "Session: example-session".into(),
+            },
+        ),
         response(
             "session_settings_updated",
             "req-0016",

@@ -734,12 +734,9 @@ fn finish_native_provider_auth(
     }
 }
 
-fn native_status_report(state: &AppState) -> String {
+pub(crate) fn native_status_report(state: &AppState) -> String {
     let provider = crate::provider_auth::provider_summary(&state.config);
-    let turn = if matches!(
-        &state.status,
-        crate::app::AppStatus::Streaming | crate::app::AppStatus::Queued
-    ) {
+    let turn = if state.has_active_turn() {
         "active"
     } else {
         "inactive"
@@ -752,7 +749,7 @@ fn native_status_report(state: &AppState) -> String {
     )
 }
 
-fn native_usage_report(state: &AppState) -> String {
+pub(crate) fn native_usage_report(state: &AppState) -> String {
     let provider = crate::provider_auth::provider_usage_summary(&state.config);
     let local = state
         .current_turn_token_usage

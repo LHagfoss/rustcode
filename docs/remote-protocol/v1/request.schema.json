@@ -217,6 +217,38 @@
         },
         {
           "properties": {
+            "question_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel_question",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "question_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "type": {
+              "const": "execute_command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "command"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "turn_id": {
               "type": "string"
             },
