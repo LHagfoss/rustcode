@@ -827,6 +827,9 @@ pub struct RemoteMessage {
 /// Set on a tool-result message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteMessageTool {
+    /// Correlates the persisted result with its live tool events, never a message identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
     pub name: String,
     /// Short human label, e.g. the file or command.
     #[serde(default, skip_serializing_if = "Option::is_none")]

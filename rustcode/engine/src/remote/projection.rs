@@ -396,6 +396,12 @@ fn project_messages(
                 .tool_result
                 .as_ref()
                 .map(|record| RemoteMessageTool {
+                    call_id: Some(
+                        message
+                            .tool_call_id
+                            .clone()
+                            .unwrap_or_else(|| format!("local_{}", record.arguments_hash)),
+                    ),
                     name: record.tool_name.clone(),
                     detail: details[index].clone(),
                     success: record.success,

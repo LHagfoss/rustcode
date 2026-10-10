@@ -570,6 +570,7 @@ fn golden_messages() -> Vec<RemoteMessage> {
                 content_id: Some("message:h2:61".to_owned()),
             },
             tool: Some(RemoteMessageTool {
+                call_id: Some("call-parser-tests".into()),
                 name: "run_command".to_owned(),
                 detail: Some("cargo test parser".to_owned()),
                 success: false,

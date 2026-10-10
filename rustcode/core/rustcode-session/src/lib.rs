@@ -2317,11 +2317,15 @@ mod picker_bench {
             let history = (0..TRANSCRIPT_MESSAGES)
                 .map(|index| {
                     let content = format!("{index}-{}", "bench transcript body ".repeat(12));
-                    if index % 2 == 0 {
+                    let mut row = if index % 2 == 0 {
                         message("user", &content)
                     } else {
                         message("assistant", &content)
-                    }
+                    };
+                    // Keep the byte benchmark independent of variable fractional
+                    // timestamp precision when each comparison store is built.
+                    row.timestamp = "2026-01-01T00:00:00Z".to_owned();
+                    row
                 })
                 .collect::<Vec<_>>();
             for index in 0..sessions {
