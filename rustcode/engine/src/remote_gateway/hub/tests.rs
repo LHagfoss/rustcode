@@ -48,6 +48,7 @@ fn info(session_id: &str, epoch: u64) -> RemoteSessionInfo {
 
 fn snapshot(session_id: &str, epoch: u64, sequence: u64) -> Box<RemoteSnapshot> {
     Box::new(RemoteSnapshot {
+        commands: Vec::new(),
         capabilities: vec!["cancel_question".into(), "execute_command".into()],
         settings: None,
         snapshot_id: None,

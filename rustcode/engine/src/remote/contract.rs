@@ -588,6 +588,7 @@ fn golden_previous_timing() -> RemoteTurnTiming {
 
 fn golden_snapshot() -> RemoteSnapshot {
     RemoteSnapshot {
+        commands: Vec::new(),
         capabilities: vec!["cancel_question".into(), "execute_command".into()],
         settings: Some(golden_settings()),
         snapshot_id: Some("snapshot-example".to_owned()),
