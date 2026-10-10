@@ -19,8 +19,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test remote client and contract
         run: swift test --package-path RustCodeRemote
-      - name: Test local release helpers without hardware
-        run: python3 tests/test_ios_release_helpers.py
+      - name: Test release installers without hardware
+        run: |
+          python3 tests/test_ios_release_helpers.py
+          python3 tests/test_github_ios_install.py
       - name: Build iOS Simulator app
         run: >-
           xcodebuild -quiet -project RustCode.xcodeproj -scheme RustCode

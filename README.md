@@ -412,8 +412,9 @@ Pull requests run the remote package tests, device-helper fixture tests and a
 Simulator build on macOS. After merging a version/build update, a matching
 `v<VERSION>` tag on `main` runs the release workflow. It publishes a Simulator
 app, an unsigned iOS archive and `SHA256SUMS`. Personal signing profiles never
-enter those public artifacts; use the local development build below for your
-registered iPhone.
+enter those public artifacts. The installer below downloads the CI-built device
+archive and signs it on your Mac for your registered iPhone; it does not rebuild
+the app. GitHub needs no Apple signing credentials.
 
 ## Build a local iPhone release
 
@@ -445,20 +446,39 @@ Connect and unlock the iPhone, trust this Mac, and enable Developer Mode. Run:
 cd ~/code/rustcode_app && Scripts/install-on-iphone.sh
 ```
 
-The helper selects the single connected, paired physical iPhone, reuses the
-local archive only when its version, build, bundle, signature and source
-fingerprint match, otherwise builds it, then installs over the existing app and
-launches it. It does not uninstall the app, so existing app data and pairing are
-retained.
+The default downloads the latest published GitHub release, verifies the archive
+against its published SHA256 checksum, checks its version, bundle and device
+platform, then signs it using an unexpired cached provisioning profile and a
+matching private identity in your Keychain. The selected phone must be included
+in that profile. Signed copies stay in the ignored `build/github-releases`
+directory. Your working checkout's version does not select the release.
 
-The fingerprint covers app sources/assets, the Xcode project, remote package
-sources/manifest, and shared and local build configuration. Local signing values
-are hashed without printing their contents. Generated builds, user Xcode state,
-documentation and tests are excluded. Editing app source triggers a rebuild even
-if the version and build number have not changed.
+It installs over the existing app and launches it, retaining app data and
+pairing. It does not uninstall, change provisioning, or fall back to a source
+build if downloading or signing fails. Install GitHub CLI (`gh`) and Xcode first;
+configure signing in Xcode if no usable cached profile is available.
 
-If several phones are connected, choose one with
-`Scripts/install-on-iphone.sh --device 'YOUR IPHONE NAME OR ID'`. Add `--no-launch`
-to install without opening the app. The phone must be included in the cached
-development profile. If signing fails, configure it in Xcode first; these helpers
-do not register devices or request provisioning changes automatically.
+```sh
+# Download and sign, without installing or requiring a connected phone:
+Scripts/install-on-iphone.sh --prepare-only
+# Choose a published version and phone; omit launch:
+Scripts/install-on-iphone.sh --version 0.1.7 --device 'YOUR IPHONE NAME OR ID' --no-launch
+# Specify a cached development provisioning profile:
+Scripts/install-on-iphone.sh --profile /path/to/profile.mobileprovision
+# Build/install unpublished changes from your working checkout instead:
+Scripts/install-on-iphone.sh --local
+```
+
+`--local` retains the source installer: it reuses a signed archive only when its
+version, build, bundle, signature and source fingerprint match the checkout,
+otherwise builds it. The fingerprint covers app sources/assets, the Xcode
+project, remote package sources/manifest, and shared and local configuration.
+Personal signing values contribute only to the digest. Generated builds, Xcode
+user state, documentation and tests are excluded. `--device` and `--no-launch`
+work with both modes; `--version`, `--profile` and `--prepare-only` apply to the
+GitHub mode.
+
+If installation reports a CoreDevice/XPC connection interruption, unlock the
+phone, keep its screen on and reconnect it directly by USB. If Xcode's live
+device view also times out, restart the phone and Xcode before retrying. The
+installer stops on failure and does not launch or uninstall the app.

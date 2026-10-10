@@ -105,6 +105,8 @@ class ReleaseHelperTests(unittest.TestCase):
 
     def run_helper(self, name, *args):
         script = self.root / 'Scripts' / name
+        if name == 'install-on-iphone.sh':
+            args = ('--local', *args)
         self.assertTrue(script.is_file(), 'helper draft not implemented: ' + name)
         return subprocess.run(['bash', str(script), *args], cwd=self.root,
                               env=self.env, text=True, capture_output=True)

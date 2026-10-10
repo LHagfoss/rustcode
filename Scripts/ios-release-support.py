@@ -87,7 +87,7 @@ def validate_fingerprint(archive, expected):
         fail('The archive source fingerprint is missing or does not match the current app source.')
 
 
-def select_device(path, selector=''):
+def device_metadata(path, selector=''):
     payload = json.loads(Path(path).read_text())
     devices = payload.get('result', {}).get('devices')
     if not isinstance(devices, list):
@@ -111,14 +111,18 @@ def select_device(path, selector=''):
                   hardware.get('serialNumber'), hardware.get('ecid')]
         if selector and selector not in [str(value) for value in values if value is not None]:
             continue
-        candidates.append((identifier, state.get('name', 'Unnamed iPhone')))
+        candidates.append((identifier, state.get('name', 'Unnamed iPhone'), hardware.get('udid')))
     if not candidates:
         fail('No matching connected, paired physical iPhone. Connect and unlock the phone, '
              'trust this Mac, and enable Developer Mode; use --device NAME/ID if needed.')
     if len(candidates) != 1:
-        names = ', '.join(str(name).replace('\n', ' ') for _, name in candidates)
+        names = ', '.join(str(name).replace('\n', ' ') for _, name, _ in candidates)
         fail('More than one physical iPhone matches (' + names + '). Choose one with --device NAME/ID.')
-    print(candidates[0][0])
+    return candidates[0]
+
+
+def select_device(path, selector=''):
+    print(device_metadata(path, selector)[0])
 
 
 def main():
