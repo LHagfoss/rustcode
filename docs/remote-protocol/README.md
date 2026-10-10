@@ -495,6 +495,9 @@ configured profile IDs (`id`), provider model labels (`model`), and
 `reasoning_effort` is the current override or `default`; and `can_change`
 reports whether the owner is idle. Profiles never include URLs or credentials.
 Only provider-advertised or explicitly configured effort choices are offered.
+A catalog that exceeds the control payload budget is omitted from snapshots;
+its settings mutations return `frame_too_large` without changing state. Profile
+IDs are never truncated and a partial catalog is never presented as complete.
 `default` clears the effort override; it does not mean thinking is disabled.
 Legacy profiles without an effort catalog offer only their configured value
 and `default`. Refreshing the provider catalog obtains advertised choices.

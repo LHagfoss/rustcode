@@ -247,11 +247,15 @@ fn catalog_profiles(models: &Value, account: &AccountStatus) -> Vec<ModelProfile
             supports_reasoning_effort: Some(
                 item.get("supportsEffort").and_then(Value::as_bool) == Some(true),
             ),
-            reasoning_efforts: (item.get("supportsEffort").and_then(Value::as_bool) == Some(true))
-                .then(|| {
-                    EFFORT_LEVELS
+            reasoning_efforts: item
+                .get("supportedEffortLevels")
+                .and_then(Value::as_array)
+                .map(|levels| {
+                    levels
                         .iter()
-                        .map(|effort| (*effort).to_owned())
+                        .filter_map(Value::as_str)
+                        .filter(|effort| EFFORT_LEVELS.contains(effort))
+                        .map(str::to_owned)
                         .collect()
                 }),
             supports_thinking_budget: Some(false),
@@ -356,7 +360,7 @@ mod tests {
         let profiles = catalog_profiles(
             &json!([
                 {"value": "default", "resolvedModel": "claude-opus-5-5"},
-                {"value": "opus", "supportsEffort": true},
+                {"value": "opus", "supportsEffort": true, "supportedEffortLevels": ["low", "high"]},
                 {"value": "claude-fable-5-1", "supportsEffort": true},
                 {"value": "haiku"},
                 {"value": "opus"},
@@ -372,6 +376,11 @@ mod tests {
         assert_eq!(opus.url, ENDPOINT);
         assert_eq!(opus.api_protocol, Some(ApiProtocol::AnthropicMessages));
         assert_eq!(opus.supports_reasoning_effort, Some(true));
+        assert_eq!(
+            opus.reasoning_efforts,
+            Some(vec!["low".into(), "high".into()])
+        );
+        assert_eq!(profiles[1].reasoning_efforts, None);
         assert_eq!(profiles[2].supports_reasoning_effort, Some(false));
         assert!(opus.credential.as_ref().unwrap().is_claude_cli());
         assert!(opus.api_key.is_none() && opus.env_key.is_none());

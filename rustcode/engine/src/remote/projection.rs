@@ -134,6 +134,15 @@ pub(super) fn reasoning_efforts(profile: &crate::config::ModelProfile) -> Vec<St
     efforts
 }
 
+/// Controls are optional: omit an oversized catalog rather than changing
+/// opaque profile IDs or publishing a partial selection list.
+pub(super) fn bound_settings(
+    settings: RemoteSessionSettings,
+    max_bytes: usize,
+) -> Option<RemoteSessionSettings> {
+    (encoded_len(&settings) <= max_bytes).then_some(settings)
+}
+
 pub(super) fn project_settings(state: &AppState) -> RemoteSessionSettings {
     let active = state.active_model_profile();
     RemoteSessionSettings {
@@ -520,7 +529,7 @@ pub fn project_snapshot(
         .collect();
     let mut snapshot = RemoteSnapshot {
         session: project_session_info(state, context),
-        settings: Some(project_settings(state)),
+        settings: bound_settings(project_settings(state), limits.frame_bytes / 4),
         snapshot_id: None,
         sequence: context.sequence,
         generation: context.generation,
@@ -774,6 +783,26 @@ pub fn project_event(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oversized_settings_do_not_overflow_a_snapshot_or_truncate_profile_ids() {
+        let mut state = state_with_history(0, 0);
+        state.config.models = vec![crate::config::ModelProfile {
+            name: "profile".repeat(4096),
+            model: "m".into(),
+            ..Default::default()
+        }];
+        let limits = ProjectionLimits {
+            frame_bytes: 4096,
+            ..Default::default()
+        };
+        let snapshot = project_snapshot(&state, &context(), &limits);
+        assert!(serde_json::to_vec(&snapshot).unwrap().len() <= 4096);
+        assert!(
+            snapshot.settings.is_none(),
+            "oversized controls are unavailable, never partially named"
+        );
+    }
+
     #[test]
     fn advertised_efforts_override_stale_configured_effort() {
         let profile = crate::config::ModelProfile {

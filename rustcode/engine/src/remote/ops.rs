@@ -93,7 +93,8 @@ pub async fn apply_session_mutation(
             if state.active_session_id != registration.session_id {
                 return Err(stale_session());
             }
-            if !super::projection::project_settings(&state).can_change {
+            let mut settings = super::projection::project_settings(&state);
+            if !settings.can_change {
                 return Err(error(
                     RemoteErrorCode::Busy,
                     "session settings can only change while idle",
@@ -113,6 +114,18 @@ pub async fn apply_session_mutation(
                     "unsupported reasoning effort",
                 ));
             }
+            settings.selected_model = model.clone();
+            settings.reasoning_effort = reasoning_effort.clone();
+            let settings = super::projection::bound_settings(
+                settings,
+                super::projection::ProjectionLimits::default().frame_bytes / 4,
+            )
+            .ok_or_else(|| {
+                error(
+                    RemoteErrorCode::FrameTooLarge,
+                    "the model catalog is too large for remote controls",
+                )
+            })?;
             // Retain the explicitly configured legacy choice when clearing it.
             let known = super::projection::reasoning_efforts(&state.config.models[index]);
             let profile = &mut state.config.models[index];
@@ -140,9 +153,7 @@ pub async fn apply_session_mutation(
                 model,
             );
             Ok(SessionMutation::done(
-                RemoteResult::SessionSettingsUpdated {
-                    settings: super::projection::project_settings(&state),
-                },
+                RemoteResult::SessionSettingsUpdated { settings },
             ))
         }
 
@@ -401,6 +412,33 @@ mod tests {
             rememberable_prefix: None,
             forbidden_prefix: None,
         }
+    }
+
+    #[tokio::test]
+    async fn oversized_settings_result_is_rejected_before_mutation() {
+        let mut state = shared_state();
+        state.config.models = vec![crate::config::ModelProfile {
+            name: "choice".into(),
+            model: "m".repeat(super::super::MAX_REMOTE_FRAME_BYTES),
+            ..Default::default()
+        }];
+        let before = state.model_name.clone();
+        let state = Arc::new(Mutex::new(state));
+        let mut token = CancellationToken::new();
+        let result = apply(
+            &state,
+            &mut token,
+            RemoteOperation::SetSessionSettings {
+                model: "choice".into(),
+                reasoning_effort: "default".into(),
+            },
+        )
+        .await;
+        assert_eq!(
+            result.err().map(|error| error.code),
+            Some(RemoteErrorCode::FrameTooLarge)
+        );
+        assert_eq!(state.lock().await.model_name, before);
     }
 
     #[tokio::test]
