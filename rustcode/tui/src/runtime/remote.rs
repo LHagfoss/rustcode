@@ -1641,6 +1641,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_commands_and_question_cancel_pass_through_the_owner_loop() {
+        let (mut runtime, gateway) = shared_runtime(AppState::new(), 64);
+        let (registration, link, snapshot) = share(&mut runtime, &gateway).await;
+        assert!(
+            snapshot
+                .capabilities
+                .iter()
+                .any(|value| value == "execute_command")
+        );
+        let (question_id, answered) = pending_question(&mut *runtime.app_state.lock().await);
+        let old_token = runtime.current_cancel_token.clone();
+        let response = send(
+            &mut runtime,
+            &link,
+            &registration,
+            RemoteOperation::ExecuteCommand {
+                command: "/status".into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            response.result,
+            RemoteResult::CommandExecuted { output, .. } if output.contains("Turn: active")
+        ));
+        assert!(runtime.app_state().await.pending_question.is_some());
+        let response = send(
+            &mut runtime,
+            &link,
+            &registration,
+            RemoteOperation::CancelQuestion {
+                question_id: question_id.clone(),
+            },
+        )
+        .await;
+        assert_eq!(response.receipt, Some(ReceiptState::Applied));
+        assert!(matches!(
+            response.result,
+            RemoteResult::QuestionCancelled { .. }
+        ));
+        assert_eq!(answered.await.unwrap(), "User cancelled prompt.");
+        assert!(old_token.is_cancelled());
+        assert!(!runtime.current_cancel_token.is_cancelled());
+        assert!(runtime.app_state().await.pending_question.is_none());
+        let stale = send(
+            &mut runtime,
+            &link,
+            &registration,
+            RemoteOperation::CancelQuestion { question_id },
+        )
+        .await;
+        assert_eq!(rejection(&stale), RemoteErrorCode::StaleQuestion);
+    }
+
+    #[tokio::test]
     async fn the_first_answer_to_a_question_wins_whichever_side_gives_it() {
         let (mut runtime, gateway) = shared_runtime(AppState::new(), 64);
         let (registration, link, _) = share(&mut runtime, &gateway).await;

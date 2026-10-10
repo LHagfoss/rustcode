@@ -194,13 +194,15 @@ draft. The terminal must stay open and the session must be explicitly shared.
 Use the engine's rejections as authoritative when the UI state races a command:
 `busy`, `not_running`, `unsupported_operation`, and the stale identity errors.
 
-Full TUI parity still needs future protocol work. v1 does not expose remote
-model/provider/configuration changes, approval-mode changes, arbitrary slash
-commands, creating/loading unshared sessions, filesystem editing, or commands
-to interrupt/reconfigure individual subagents/background tasks. Shared session
-titles/models are display data, not editable settings. Tool command text is
-currently display content rather than a separately typed copy-command field.
-`can_steer` is supplied in snapshots, question options use labels, and approvals
-act on a batch. Build these existing surfaces from the contract; add explicit,
-tested operations for further controls instead of sending terminal slash
-commands through `submit_prompt`.
+Current hosts expose model/effort selection through optional snapshot `settings`,
+question-chain cancellation and supported slash commands through snapshot
+`capabilities`. Render command output outside the transcript. Unsupported
+commands receive explicit errors; never send them through `submit_prompt`.
+Session titles can be changed with `/title` or `/change_title`. Missing settings
+or capabilities may indicate an older owner or a gateway that needs restarting
+after an upgrade; see the protocol README.
+
+Full TUI parity still needs future protocol work: provider authentication,
+host-wide configuration and approval-mode changes, creating/loading unshared
+sessions, filesystem editing, and individual subagent/background-task controls
+remain terminal-only. Tool command text remains display content.

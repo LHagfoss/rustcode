@@ -1172,6 +1172,46 @@
               "type": "string"
             },
             "type": {
+              "const": "question_cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "question_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "command_executed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "command",
+            "title",
+            "output"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "question_id": {
+              "type": "string"
+            },
+            "type": {
               "const": "question_answered",
               "type": "string"
             }
@@ -1368,6 +1408,13 @@
         "background_tasks": {
           "items": {
             "$ref": "#/$defs/RemoteBackgroundTask"
+          },
+          "type": "array"
+        },
+        "capabilities": {
+          "description": "Optional operations implemented by this session owner.",
+          "items": {
+            "type": "string"
           },
           "type": "array"
         },

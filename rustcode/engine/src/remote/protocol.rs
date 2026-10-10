@@ -77,6 +77,12 @@ pub enum RemoteOperation {
     Queue {
         prompt: String,
     },
+    CancelQuestion {
+        question_id: String,
+    },
+    ExecuteCommand {
+        command: String,
+    },
     CancelTurn {
         turn_id: String,
     },
@@ -102,7 +108,7 @@ pub enum RemoteOperation {
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 14] = [
+    pub const NAMES: [&'static str; 16] = [
         "list_sessions",
         "subscribe_sessions",
         "attach_session",
@@ -112,6 +118,8 @@ impl RemoteOperation {
         "submit_prompt",
         "steer",
         "queue",
+        "cancel_question",
+        "execute_command",
         "cancel_turn",
         "answer_question",
         "resolve_approval",
@@ -130,6 +138,8 @@ impl RemoteOperation {
             Self::SubmitPrompt { .. } => "submit_prompt",
             Self::Steer { .. } => "steer",
             Self::Queue { .. } => "queue",
+            Self::CancelQuestion { .. } => "cancel_question",
+            Self::ExecuteCommand { .. } => "execute_command",
             Self::CancelTurn { .. } => "cancel_turn",
             Self::AnswerQuestion { .. } => "answer_question",
             Self::ResolveApproval { .. } => "resolve_approval",
@@ -155,6 +165,8 @@ impl RemoteOperation {
             Self::SubmitPrompt { .. }
                 | Self::Steer { .. }
                 | Self::Queue { .. }
+                | Self::CancelQuestion { .. }
+                | Self::ExecuteCommand { .. }
                 | Self::CancelTurn { .. }
                 | Self::AnswerQuestion { .. }
                 | Self::ResolveApproval { .. }
@@ -294,6 +306,14 @@ pub enum RemoteResult {
     },
     TurnCancelled {
         turn_id: String,
+    },
+    QuestionCancelled {
+        question_id: String,
+    },
+    CommandExecuted {
+        command: String,
+        title: String,
+        output: String,
     },
     QuestionAnswered {
         question_id: String,
@@ -607,6 +627,9 @@ pub struct RemoteModelOption {
 /// snapshot already contains every event up to and including it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteSnapshot {
+    /// Optional operations implemented by this session owner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<RemoteSessionSettings>,
     pub session: RemoteSessionInfo,
@@ -1051,6 +1074,12 @@ mod tests {
             },
             RemoteOperation::Queue {
                 prompt: String::new(),
+            },
+            RemoteOperation::CancelQuestion {
+                question_id: String::new(),
+            },
+            RemoteOperation::ExecuteCommand {
+                command: String::new(),
             },
             RemoteOperation::CancelTurn {
                 turn_id: String::new(),

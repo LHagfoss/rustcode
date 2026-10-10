@@ -93,68 +93,30 @@ pub async fn apply_session_mutation(
             if state.active_session_id != registration.session_id {
                 return Err(stale_session());
             }
-            let mut settings = super::projection::project_settings(&state);
-            if !settings.can_change {
-                return Err(error(
-                    RemoteErrorCode::Busy,
-                    "session settings can only change while idle",
-                ));
+            set_settings(&mut state, model, reasoning_effort).map(|settings| {
+                SessionMutation::done(RemoteResult::SessionSettingsUpdated { settings })
+            })
+        }
+        RemoteOperation::CancelQuestion { question_id } => {
+            ensure_session(state, registration).await?;
+            crate::controller::cancel_question_for_question(state, cancel_token, question_id)
+                .await
+                .map_err(|_| {
+                    error(
+                        RemoteErrorCode::StaleQuestion,
+                        "the named question is no longer pending",
+                    )
+                })?;
+            Ok(SessionMutation::done(RemoteResult::QuestionCancelled {
+                question_id: question_id.clone(),
+            }))
+        }
+        RemoteOperation::ExecuteCommand { command } => {
+            let mut state = state.lock().await;
+            if state.active_session_id != registration.session_id {
+                return Err(stale_session());
             }
-            let index = state
-                .config
-                .models
-                .iter()
-                .position(|profile| &profile.name == model)
-                .ok_or_else(|| error(RemoteErrorCode::InvalidRequest, "unknown model profile"))?;
-            if !super::projection::reasoning_efforts(&state.config.models[index])
-                .contains(reasoning_effort)
-            {
-                return Err(error(
-                    RemoteErrorCode::InvalidRequest,
-                    "unsupported reasoning effort",
-                ));
-            }
-            settings.selected_model = model.clone();
-            settings.reasoning_effort = reasoning_effort.clone();
-            let settings = super::projection::bound_settings(
-                settings,
-                super::projection::ProjectionLimits::default().frame_bytes / 4,
-            )
-            .ok_or_else(|| {
-                error(
-                    RemoteErrorCode::FrameTooLarge,
-                    "the model catalog is too large for remote controls",
-                )
-            })?;
-            // Retain the explicitly configured legacy choice when clearing it.
-            let known = super::projection::reasoning_efforts(&state.config.models[index]);
-            let profile = &mut state.config.models[index];
-            if profile.supports_reasoning_effort.is_none() && known.len() > 1 {
-                profile.supports_reasoning_effort = Some(true);
-            }
-            if profile.reasoning_efforts.is_none() {
-                profile.reasoning_efforts = Some(
-                    known
-                        .into_iter()
-                        .filter(|effort| effort != "default")
-                        .collect(),
-                );
-            }
-            profile.reasoning_effort =
-                (reasoning_effort != "default").then(|| reasoning_effort.clone());
-            let (model_name, url) = (profile.model.clone(), profile.url.clone());
-            state.model_name = model_name;
-            state.api_base_url = url;
-            state.config.default.set_big(model.clone());
-            state.request_redraw();
-            crate::config::record_session_settings_for_profile(
-                &state.active_session_id,
-                &state.config,
-                model,
-            );
-            Ok(SessionMutation::done(
-                RemoteResult::SessionSettingsUpdated { settings },
-            ))
+            execute_command(&mut state, command).map(SessionMutation::done)
         }
 
         RemoteOperation::SubmitPrompt { prompt } => {
@@ -224,6 +186,232 @@ pub async fn apply_session_mutation(
         }
         _ => unreachable!("non-mutations were rejected above"),
     }
+}
+
+fn set_settings(
+    state: &mut AppState,
+    model: &str,
+    reasoning_effort: &str,
+) -> Result<super::protocol::RemoteSessionSettings, RemoteError> {
+    let mut settings = super::projection::project_settings(state);
+    if !settings.can_change {
+        return Err(error(
+            RemoteErrorCode::Busy,
+            "session settings can only change while idle",
+        ));
+    }
+    let index = state
+        .config
+        .models
+        .iter()
+        .position(|profile| profile.name == model)
+        .ok_or_else(|| error(RemoteErrorCode::InvalidRequest, "unknown model profile"))?;
+    if !super::projection::reasoning_efforts(&state.config.models[index])
+        .iter()
+        .any(|effort| effort == reasoning_effort)
+    {
+        return Err(error(
+            RemoteErrorCode::InvalidRequest,
+            "unsupported reasoning effort",
+        ));
+    }
+    settings.selected_model = model.to_owned();
+    settings.reasoning_effort = reasoning_effort.to_owned();
+    let settings = super::projection::bound_settings(
+        settings,
+        super::projection::ProjectionLimits::default().frame_bytes / 4,
+    )
+    .ok_or_else(|| {
+        error(
+            RemoteErrorCode::FrameTooLarge,
+            "the model catalog is too large for remote controls",
+        )
+    })?;
+    // Retain the explicitly configured legacy choice when clearing it.
+    let known = super::projection::reasoning_efforts(&state.config.models[index]);
+    let profile = &mut state.config.models[index];
+    if profile.supports_reasoning_effort.is_none() && known.len() > 1 {
+        profile.supports_reasoning_effort = Some(true);
+    }
+    if profile.reasoning_efforts.is_none() {
+        profile.reasoning_efforts = Some(
+            known
+                .into_iter()
+                .filter(|effort| effort != "default")
+                .collect(),
+        );
+    }
+    profile.reasoning_effort = (reasoning_effort != "default").then(|| reasoning_effort.to_owned());
+    let (model_name, url) = (profile.model.to_owned(), profile.url.clone());
+    state.model_name = model_name;
+    state.api_base_url = url;
+    state.config.default.set_big(model.to_owned());
+    state.request_redraw();
+    crate::config::record_session_settings_for_profile(
+        &state.active_session_id,
+        &state.config,
+        model,
+    );
+    Ok(settings)
+}
+
+const REMOTE_COMMAND_HELP: &str = "/help — Show commands\n/status — Session status\n/info, /about — About RustCode\n/usage — Token usage\n/perf — Last turn performance\n/context — Context window\n/tasks — Running tasks\n/mcp — Configured server names\n/model [profile] — Show or select an exact model profile\n/effort [value] — Show or select reasoning effort\n/title <title>, /change_title <title> — Rename this session\n\nUse Stop to cancel the current turn. Session lifecycle, terminal pickers, authentication, and configuration editing remain terminal-only.";
+
+/// Explicitly allowed owner commands. Their output is presentation-only and
+/// never enters provider history or the terminal's draft/panel state.
+fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, RemoteError> {
+    let input = input.trim();
+    let (name, arguments) = input
+        .split_once(char::is_whitespace)
+        .map_or((input, ""), |(name, args)| (name, args.trim()));
+    let command = name.to_ascii_lowercase();
+    let settings = super::projection::project_settings(state);
+    let (title, output) = match command.as_str() {
+        "/help" if arguments.is_empty() => ("Remote commands", REMOTE_COMMAND_HELP.to_owned()),
+        "/status" if arguments.is_empty() => {
+            ("Status", crate::controller::native_status_report(state))
+        }
+        "/usage" if arguments.is_empty() => {
+            ("Usage", crate::controller::native_usage_report(state))
+        }
+        "/info" | "/about" if arguments.is_empty() => {
+            ("About RustCode", crate::app::actions::build_info_text())
+        }
+        "/perf" if arguments.is_empty() => (
+            "Performance",
+            state
+                .last_turn_performance
+                .as_ref()
+                .map(|perf| perf.report())
+                .unwrap_or_else(|| "No turn telemetry available yet.".into()),
+        ),
+        "/context" if arguments.is_empty() => (
+            "Context",
+            state
+                .active_model_profile()
+                .map(|profile| {
+                    format!(
+                        "Model: {}\nContext window: {} tokens",
+                        profile.name,
+                        profile.context_budget().context_window
+                    )
+                })
+                .unwrap_or_else(|| "No active model profile.".into()),
+        ),
+        "/tasks" if arguments.is_empty() => {
+            let tasks = crate::tools::background_task_snapshots(&state.active_session_id);
+            (
+                "Tasks",
+                if tasks.is_empty() {
+                    "No tasks are running.".into()
+                } else {
+                    tasks
+                        .iter()
+                        .map(|task| format!("{}: {}", task.id, task.command))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                },
+            )
+        }
+        "/mcp" if arguments.is_empty() => (
+            "MCP servers",
+            if state.config.mcp_servers.is_empty() {
+                "No MCP servers configured.".into()
+            } else {
+                state
+                    .config
+                    .mcp_servers
+                    .iter()
+                    .map(|server| server.name.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            },
+        ),
+        "/model" if arguments.is_empty() => (
+            "Model",
+            format!(
+                "Selected: {}\n\n{}",
+                settings.selected_model,
+                settings
+                    .models
+                    .iter()
+                    .map(|model| model.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        ),
+        "/effort" if arguments.is_empty() => (
+            "Reasoning effort",
+            format!(
+                "Selected: {}\nAvailable: {}",
+                settings.reasoning_effort,
+                state
+                    .active_model_profile()
+                    .map(|profile| super::projection::reasoning_efforts(&profile).join(", "))
+                    .unwrap_or_else(|| "default".into())
+            ),
+        ),
+        "/model" => {
+            let profile = state
+                .config
+                .models
+                .iter()
+                .find(|profile| profile.name == arguments)
+                .ok_or_else(|| {
+                    error(
+                        RemoteErrorCode::InvalidRequest,
+                        "unknown model profile; use /model to list exact profile names",
+                    )
+                })?;
+            let effort = profile
+                .reasoning_effort
+                .clone()
+                .unwrap_or_else(|| "default".into());
+            set_settings(state, arguments, &effort)?;
+            ("Model", format!("Selected: {arguments}"))
+        }
+        "/effort" => {
+            set_settings(state, &settings.selected_model, arguments)?;
+            ("Reasoning effort", format!("Selected: {arguments}"))
+        }
+        "/title" | "/change_title" => {
+            if arguments.is_empty()
+                || arguments.len() > 512
+                || arguments.chars().any(char::is_control)
+            {
+                return Err(error(
+                    RemoteErrorCode::InvalidRequest,
+                    "Usage: /title <title> (one line, up to 512 bytes)",
+                ));
+            }
+            crate::config::save_session_title(&state.active_session_id, arguments);
+            state.invalidate_session_title_cache();
+            state.request_redraw();
+            ("Session title", format!("Renamed to {arguments}"))
+        }
+        _ => {
+            return Err(error(
+                RemoteErrorCode::UnsupportedOperation,
+                "this command or its arguments are not supported remotely; use /help for available commands",
+            ));
+        }
+    };
+    // A result must fit the transport and receipt cache. Informational reports
+    // may grow with configured catalogs, task output, or provider metadata.
+    let output = if output.len() > 32 * 1024 {
+        let mut end = 32 * 1024;
+        while !output.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}\n… output truncated", &output[..end])
+    } else {
+        output
+    };
+    Ok(RemoteResult::CommandExecuted {
+        command,
+        title: title.into(),
+        output,
+    })
 }
 
 /// Answer a read that only the owner can serve (`get_history`,
@@ -305,14 +493,14 @@ async fn accept_prompt(
             "the prompt is empty",
         ));
     }
-    // Remote text is never dispatched as a command: `/exit`, `/new` or an
+    // Remote prompt text is never dispatched as a command: `/exit`, `/new` or an
     // approval toggle must not be reachable from a phone. v1 refuses the
     // prompt outright rather than sending the model a literal slash line the
     // user meant as a command.
     if prompt.starts_with('/') {
         return Err(error(
             RemoteErrorCode::UnsupportedOperation,
-            "slash commands are not available remotely",
+            "use execute_command for supported remote slash commands",
         ));
     }
     let mut state = state.lock().await;
@@ -412,6 +600,166 @@ mod tests {
             rememberable_prefix: None,
             forbidden_prefix: None,
         }
+    }
+
+    #[tokio::test]
+    async fn remote_command_validation_preserves_busy_state_and_draft() {
+        let mut state = shared_state();
+        state.input_buffer = "my terminal draft".into();
+        state.config.models = vec![crate::config::ModelProfile {
+            name: "Exact profile".into(),
+            model: "model".into(),
+            supports_reasoning_effort: Some(true),
+            reasoning_efforts: Some(vec!["low".into(), "high".into()]),
+            ..Default::default()
+        }];
+        let state = Arc::new(Mutex::new(state));
+        let mut token = CancellationToken::new();
+        let command = |text: &str| RemoteOperation::ExecuteCommand {
+            command: text.into(),
+        };
+        apply(&state, &mut token, command("  /MODEL Exact profile  "))
+            .await
+            .unwrap();
+        apply(&state, &mut token, command("/effort high"))
+            .await
+            .unwrap();
+        assert_eq!(
+            state.lock().await.config.models[0]
+                .reasoning_effort
+                .as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            code(apply(&state, &mut token, command("/effort imaginary")).await),
+            RemoteErrorCode::InvalidRequest
+        );
+        for text in [
+            "/exit",
+            "/new",
+            "/clear",
+            "/compact",
+            "/config",
+            "/status change",
+            "plain text",
+        ] {
+            assert_eq!(
+                code(apply(&state, &mut token, command(text)).await),
+                RemoteErrorCode::UnsupportedOperation
+            );
+        }
+        state.lock().await.begin_turn_identity();
+        assert_eq!(
+            code(apply(&state, &mut token, command("/effort low")).await),
+            RemoteErrorCode::Busy
+        );
+        apply(&state, &mut token, command("/status")).await.unwrap();
+        assert_eq!(
+            state.lock().await.config.models[0]
+                .reasoning_effort
+                .as_deref(),
+            Some("high")
+        );
+        assert!(state.lock().await.history.is_empty());
+        assert!(state.lock().await.pending_queue.is_empty());
+        assert_eq!(state.lock().await.input_buffer, "my terminal draft");
+    }
+
+    #[tokio::test]
+    async fn remote_cancel_releases_a_real_questionnaire_tool_waiter() {
+        let state = Arc::new(Mutex::new(shared_state()));
+        let mut token = CancellationToken::new();
+        let tool_state = state.clone();
+        let tool_token = token.clone();
+        let waiter = tokio::spawn(async move {
+            crate::network::tool_exec::ask_user_question(
+                &tool_state,
+                &tool_token,
+                &serde_json::json!({
+                    "questions": [
+                        {"question":"First?", "options":["Yes", "No"]},
+                        {"question":"Second?", "options":["Yes", "No"]}
+                    ]
+                }),
+            )
+            .await
+        });
+        let id = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(question) = state.lock().await.pending_question.as_ref() {
+                    break question.id.clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let operation = serde_json::from_value::<RemoteOperation>(serde_json::json!({
+            "type": "cancel_question", "question_id": id
+        }))
+        .expect("targeted cancellation is supported");
+        apply(&state, &mut token, operation).await.unwrap();
+        let (output, _) = tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!output.success);
+        assert!(state.lock().await.pending_question.is_none());
+        assert!(state.lock().await.pending_question_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn remote_question_cancel_clears_chain_and_rejects_stale_identity() {
+        let mut state = shared_state();
+        state.begin_question_chain(vec![
+            PendingQuestion::new("First?".into(), vec!["Yes".into()], false),
+            PendingQuestion::new("Second?".into(), vec!["Yes".into()], false),
+        ]);
+        let id = state.pending_question.as_ref().unwrap().id.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.question_response = Some(tx);
+        let state = Arc::new(Mutex::new(state));
+        let mut token = CancellationToken::new();
+        let old_token = token.clone();
+        let operation = |id: &str| {
+            serde_json::from_value::<RemoteOperation>(serde_json::json!({
+                "type": "cancel_question", "question_id": id
+            }))
+            .expect("targeted cancellation is supported")
+        };
+        assert_eq!(
+            code(apply(&state, &mut token, operation("old")).await),
+            RemoteErrorCode::StaleQuestion
+        );
+        assert!(!old_token.is_cancelled());
+        apply(&state, &mut token, operation(&id)).await.unwrap();
+        assert_eq!(rx.await.unwrap(), "User cancelled prompt.");
+        assert!(old_token.is_cancelled());
+        assert!(!token.is_cancelled());
+        assert!(state.lock().await.pending_question.is_none());
+        assert!(state.lock().await.pending_question_queue.is_empty());
+        assert_eq!(
+            code(apply(&state, &mut token, operation(&id)).await),
+            RemoteErrorCode::StaleQuestion
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_commands_produce_output_without_touching_prompt_history() {
+        let state = Arc::new(Mutex::new(shared_state()));
+        let mut token = CancellationToken::new();
+        for command in ["/help", "/status", "/info", "/usage", "/model", "/effort"] {
+            let op = serde_json::from_value::<RemoteOperation>(serde_json::json!({
+                "type": "execute_command", "command": command
+            }))
+            .expect("remote commands are supported");
+            let result = apply(&state, &mut token, op).await.unwrap();
+            let json = serde_json::to_value(result.result).unwrap();
+            assert_eq!(json["type"], "command_executed");
+            assert!(!json["output"].as_str().unwrap().is_empty());
+        }
+        assert!(state.lock().await.history.is_empty());
+        assert!(state.lock().await.pending_queue.is_empty());
     }
 
     #[tokio::test]

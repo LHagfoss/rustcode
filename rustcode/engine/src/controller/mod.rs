@@ -13,6 +13,7 @@ mod tasks;
 mod tasks_panel;
 mod transcript;
 mod worker;
+pub(crate) use worker::{native_status_report, native_usage_report};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -55,7 +56,8 @@ pub use crate::provider_auth::{
 pub use apply::{
     QuestionRejection, QuestionReply, apply_approval_decision, apply_approval_decision_for_batch,
     apply_background_task_event, apply_question_answer, apply_question_answer_for_question,
-    cancel_turn_for_turn, refresh_workspace_location_async, spawn_observed_orchestrator,
+    cancel_question_for_question, cancel_turn_for_turn, refresh_workspace_location_async,
+    spawn_observed_orchestrator,
 };
 pub use attachments::save_image_attachment;
 pub use config::{

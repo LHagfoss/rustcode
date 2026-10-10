@@ -308,15 +308,8 @@ pub async fn apply_question_answer(
     answer: QuestionAnswer,
 ) {
     if matches!(answer, QuestionAnswer::Cancelled) {
-        cancel_token.cancel();
-        *cancel_token = CancellationToken::new();
         let mut state = state.lock().await;
-        if let Some(tx) = state.question_response.take() {
-            let _ = tx.send("User cancelled prompt.".to_owned());
-        }
-        state.clear_question_chain();
-        state.enter_idle();
-        state.request_redraw();
+        cancel_question_locked(&mut state, cancel_token);
         return;
     }
     let current = match answer {
@@ -325,6 +318,37 @@ pub async fn apply_question_answer(
     };
     let mut state = state.lock().await;
     record_question_answer(&mut state, current);
+}
+
+fn cancel_question_locked(state: &mut AppState, cancel_token: &mut CancellationToken) {
+    cancel_token.cancel();
+    *cancel_token = CancellationToken::new();
+    if let Some(tx) = state.question_response.take() {
+        let _ = tx.send("User cancelled prompt.".to_owned());
+    }
+    state.clear_question_chain();
+    state.enter_idle();
+    state.request_redraw();
+}
+
+/// Cancel the entire question chain with terminal Escape semantics, only if the
+/// named question is still pending. Identity and mutation share one lock.
+pub async fn cancel_question_for_question(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    expected_question_id: &str,
+) -> Result<(), QuestionRejection> {
+    let mut state = state.lock().await;
+    if state
+        .pending_question
+        .as_ref()
+        .is_none_or(|q| q.id != expected_question_id)
+        || state.question_response.is_none()
+    {
+        return Err(QuestionRejection::Stale);
+    }
+    cancel_question_locked(&mut state, cancel_token);
+    Ok(())
 }
 
 /// Record `current` for the active question: advance the chain, or resolve

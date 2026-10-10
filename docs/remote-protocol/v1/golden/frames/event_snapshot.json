@@ -8,6 +8,10 @@
   "event": {
     "type": "snapshot",
     "snapshot": {
+      "capabilities": [
+        "cancel_question",
+        "execute_command"
+      ],
       "settings": {
         "models": [
           {
