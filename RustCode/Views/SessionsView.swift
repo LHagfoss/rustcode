@@ -37,24 +37,6 @@ struct SessionsView: View {
                     let obscured = showsSidebar || offset > 0
                     ZStack(alignment: .leading) {
                         NavigationStack {
-                            chat
-                                .background(ChatSurface.background.ignoresSafeArea())
-                                .toolbarBackground(ChatSurface.background, for: .navigationBar)
-                                .toolbarBackground(.visible, for: .navigationBar)
-                                .disabled(obscured)
-                                .environment(\.isChatObscured, obscured)
-                        }
-                        .accessibilityHidden(obscured)
-
-                        if obscured {
-                            Button { closeSidebar() } label: {
-                                Color.black.opacity(0.35 * progress).ignoresSafeArea()
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Close sessions")
-                        }
-
-                        NavigationStack {
                             SessionSidebar(showsSettings: $showsSettings, didSelect: closeSidebar)
                                 .toolbar {
                                     ToolbarItem(placement: .topBarLeading) {
@@ -65,13 +47,35 @@ struct SessionsView: View {
                         }
                         .frame(width: width)
                         .background(ChatSurface.sidebar.ignoresSafeArea())
-                        .shadow(color: .black.opacity(0.2 * progress), radius: 16, x: 6)
                         .offset(x: offset - width)
                         .opacity(obscured ? 1 : 0)
                         .allowsHitTesting(showsSidebar)
                         .accessibilityHidden(!showsSidebar)
                         .accessibilityIdentifier("sessionSidebar")
                         .accessibilityAction(.escape, closeSidebar)
+
+                        NavigationStack {
+                            chat
+                                .background(ChatSurface.background.ignoresSafeArea())
+                                .toolbarBackground(ChatSurface.background, for: .navigationBar)
+                                .toolbarBackground(.visible, for: .navigationBar)
+                                .disabled(obscured)
+                                .environment(\.isChatObscured, obscured)
+                        }
+                        .accessibilityHidden(obscured)
+                        .overlay {
+                            if obscured {
+                                Button { closeSidebar() } label: {
+                                    Color.black.opacity(0.16 * progress).ignoresSafeArea()
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Close sessions")
+                            }
+                        }
+                        .shadow(color: .black.opacity(0.2 * progress), radius: 16, x: -4)
+                        // Keep the chat at its full width and move its header, transcript,
+                        // and composer together with the menu throughout the gesture.
+                        .offset(x: offset)
                     }
                     .simultaneousGesture(drawerGesture(width: width, opening: !showsSidebar))
                     .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: showsSidebar)

@@ -52,6 +52,24 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertEqual(composer(in: app).value as? String, "Keep my backdrop draft")
     }
 
+    func testSidebarPushesTheChatScreenAndReturnsItOnDismissal() {
+        let app = launchChat(draft: "Keep my pushed chat draft")
+        let chatBar = app.navigationBars["Draft release notes"]
+        let originalX = chatBar.frame.minX
+        app.buttons["Show sessions"].tap()
+        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(chatBar.frame.minX - originalX, app.frame.width * 0.75)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Sessions reveal pushes the whole chat screen"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(chatBar.frame.minX, originalX, accuracy: 1)
+        XCTAssertEqual(composer(in: app).value as? String, "Keep my pushed chat draft")
+    }
+
     func testLeavingHostDismissesSettingsBeforeShowingPairing() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoSettings"]
@@ -392,7 +410,7 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(close.waitForExistence(timeout: 3))
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Sessions drawer over chat"
+        screenshot.name = "Sessions drawer beside the pushed chat"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         close.tap()

@@ -3,7 +3,7 @@ import SwiftUI
 import PhotosUI
 import UIKit
 
-/// The message field and its controls, in one rounded composer.
+/// The message field and its controls, in one rounded glass composer.
 struct ComposerBar<Accessory: View, Controls: View>: View {
     @Environment(RemoteStore.self) private var store
     @Environment(ChatDrafts.self) private var drafts
@@ -82,8 +82,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             .padding(.horizontal, 8).padding(.bottom, 8)
         }
         .contentShape(shape)
-        .background(ChatSurface.composer, in: shape)
-        .overlay { shape.stroke(.separator.opacity(0.45), lineWidth: 0.5).allowsHitTesting(false) }
+        .glassSurface(in: shape)
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
         .sensoryFeedback(.stop, trigger: stopCount)
         .sheet(isPresented: $showsActions, onDismiss: performNextAction) {
