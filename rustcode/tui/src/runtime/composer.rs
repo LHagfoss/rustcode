@@ -187,8 +187,7 @@ impl Composer {
             KeyAction::Complete => {
                 if state.can_accept_steer()
                     && !state.input_buffer.trim().is_empty()
-                    && rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position)
-                        == 0
+                    && state.completion_len() == 0
                 {
                     state.draft_submit_mode = match state.draft_submit_mode {
                         rustcode::app::state::DraftSubmitMode::Steer => {
@@ -236,8 +235,7 @@ impl Composer {
     }
 
     pub(crate) fn recall_previous(&self, state: &mut AppState) {
-        let completion_len =
-            rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position);
+        let completion_len = state.completion_len();
         if let Some(current) = state.active_suggestion_index
             && completion_len > 0
         {
@@ -260,8 +258,7 @@ impl Composer {
     }
 
     pub(crate) fn recall_next(&self, state: &mut AppState) {
-        let completion_len =
-            rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position);
+        let completion_len = state.completion_len();
         if let Some(current) = state.active_suggestion_index
             && completion_len > 0
         {
@@ -290,8 +287,7 @@ impl Composer {
     }
 
     fn cycle_suggestion(&self, state: &mut AppState, next: bool) -> bool {
-        let completion_len =
-            rustcode::app::get_completion_len(&state.input_buffer, state.cursor_position);
+        let completion_len = state.completion_len();
         if state.active_suggestion_index.is_some() && completion_len > 0 {
             let current = state.active_suggestion_index.unwrap_or(0);
             state.active_suggestion_index = Some(if next {
@@ -312,15 +308,7 @@ impl Composer {
     }
 
     fn complete(&self, state: &mut AppState) {
-        state.dismissed_completion = None;
-        let has_at =
-            rustcode_core::input::get_at_word_query(&state.input_buffer, state.cursor_position)
-                .is_some();
-        if state.active_suggestion_index.is_some() || has_at {
-            rustcode::app::apply_autocomplete(state);
-        } else if rustcode::app::suggestion::command_token(&state.input_buffer).is_some() {
-            state.cycle_suggestion();
-        }
+        rustcode::app::tab_complete(state);
     }
 
     fn toggle_agent_mode(&self, state: &mut AppState) {
@@ -582,13 +570,68 @@ mod tests {
         let mut state = AppState::new();
         state.status = AppStatus::Streaming;
         state.active_turn_steerable_session = Some(state.active_session_id.clone());
-        state.input_buffer = "/mo".to_owned();
+        state.input_buffer = "/hel".to_owned();
         state.cursor_position = state.input_buffer.len();
         state.active_suggestion_index = Some(0);
 
         composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
         assert_eq!(state.draft_submit_mode, DraftSubmitMode::Steer);
-        assert_eq!(state.input_buffer, "/model");
+        assert_eq!(state.input_buffer, "/help");
+    }
+
+    fn type_text(composer: &Composer, state: &mut AppState, text: &str) {
+        for character in text.chars() {
+            composer.handle_key(
+                state,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+            );
+        }
+    }
+
+    #[test]
+    fn typing_then_tab_completes_the_command_and_its_argument() {
+        let composer = Composer::default();
+        let mut state = AppState::new();
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+
+        // The first Tab commits the command; no second press is needed.
+        type_text(&composer, &mut state, "/sandb");
+        assert_eq!(state.active_suggestion_index, Some(0));
+        composer.handle_key(&mut state, tab);
+        assert_eq!(state.input_buffer, "/sandbox ");
+
+        // The argument values follow, and Down then Tab picks the second one.
+        assert_eq!(state.completion_len(), 4);
+        composer.recall_next(&mut state);
+        assert_eq!(state.active_suggestion_index, Some(1));
+        composer.handle_key(&mut state, tab);
+        assert_eq!(state.input_buffer, "/sandbox workspace_write");
+        assert_eq!(state.cursor_position, state.input_buffer.len());
+    }
+
+    #[test]
+    fn arrows_move_the_cursor_in_a_multi_line_slash_draft() {
+        let composer = Composer::default();
+        let mut state = AppState::new();
+        type_text(&composer, &mut state, "/goal first");
+        composer.handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        );
+        if !state.input_buffer.contains('\n') {
+            state.insert_char('\n');
+        }
+        type_text(&composer, &mut state, "second");
+        let end = state.cursor_position;
+
+        // No popup owns the arrows, so Up reaches the first line and Down
+        // returns: the draft is never stuck behind a completion list.
+        assert_eq!(state.completion_len(), 0);
+        composer.recall_previous(&mut state);
+        assert!(state.cursor_position < "/goal first".len() + 1);
+        assert_eq!(state.active_suggestion_index, None);
+        composer.recall_next(&mut state);
+        assert_eq!(state.cursor_position, end);
     }
 }

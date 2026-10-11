@@ -12,7 +12,9 @@ use crate::app::{AppStatus, LiveToolCall};
 pub use crate::app::activity::{ActivityKind, ActivitySnapshot};
 pub use crate::app::filtered_model_picker_profiles;
 pub use crate::app::fuzzy::{fuzzy_match_positions, fuzzy_matches};
-pub use crate::app::suggestion::CommandInfo;
+pub use crate::app::suggestion::{
+    ArgumentSources, ArgumentSuggestion, CommandInfo, CompletionPopup, completion_popup,
+};
 
 /// Classify session activity for the status line from the turn status and
 /// the currently running tools.
@@ -66,11 +68,6 @@ pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
     crate::app::suggestion::filtered_commands(input)
 }
 
-/// Length of the completion suffix available at the cursor, if any.
-pub fn get_completion_len(input_buffer: &str, cursor_position: usize) -> usize {
-    crate::app::get_completion_len(input_buffer, cursor_position)
-}
-
 /// `@`-mentionable project paths matching `query` (at most 25).
 pub fn list_project_file_paths(query: &str) -> Vec<String> {
     crate::app::list_project_file_paths(query)
@@ -119,10 +116,6 @@ mod tests {
                 .iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            get_completion_len("/he", 3),
-            crate::app::get_completion_len("/he", 3)
         );
         assert_eq!(build_help_text(), crate::app::actions::build_help_text());
         let args = serde_json::json!({"path": "src/main.rs"});

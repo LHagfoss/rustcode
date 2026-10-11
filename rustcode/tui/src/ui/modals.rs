@@ -120,10 +120,27 @@ pub(crate) fn question_cancel_event() -> AppEvent {
     AppEvent::AnswerQuestion(QuestionAnswer::Cancelled)
 }
 
+#[cfg(test)]
 pub(super) fn render_popup_menu(
     f: &mut Frame,
     state: &RenderSnapshot,
     filtered_cmds: &[&CommandInfo],
+    area: ratatui::layout::Rect,
+) {
+    let rows: Vec<(&str, &str)> = filtered_cmds
+        .iter()
+        .map(|command| (command.name, command.desc))
+        .collect();
+    render_popup_rows(f, state, &rows, &state.input_buffer(), area);
+}
+
+/// Paint the slash completion menu: one `(name, description)` row per command
+/// or argument value, with the characters matching `search` marked.
+pub(super) fn render_popup_rows(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    rows: &[(&str, &str)],
+    search: &str,
     area: ratatui::layout::Rect,
 ) {
     // Scroll the menu while keeping the selected command in the space above
@@ -141,14 +158,13 @@ pub(super) fn render_popup_menu(
 
     f.render_widget(Clear, area);
     let mut popup_lines = Vec::new();
-    let name_width = filtered_cmds
+    let name_width = rows
         .iter()
-        .map(|command| command.name.width())
+        .map(|(name, _)| name.width())
         .max()
         .unwrap_or(0)
         .min(picker_column_budget(area.width as usize, 0));
-    let search = state.input_buffer();
-    for (idx, cmd) in filtered_cmds.iter().enumerate().skip(offset).take(max_rows) {
+    for (idx, (row_name, row_desc)) in rows.iter().enumerate().skip(offset).take(max_rows) {
         let is_selected = state
             .active_suggestion_index()
             .map(|i| i == idx)
@@ -159,10 +175,10 @@ pub(super) fn render_popup_menu(
         // columns is the shared picker gap, so this menu measures its rows with
         // the same rule as the inline pickers (#1528).
         let marker = if is_selected { "› " } else { "  " };
-        let name = format!("{:<name_width$}", truncate_to_width(cmd.name, name_width));
+        let name = format!("{:<name_width$}", truncate_to_width(row_name, name_width));
         let description_width = (area.width as usize)
             .saturating_sub(PICKER_MARKER_WIDTH + name_width + PICKER_COLUMN_GAP);
-        let desc_text = truncate_to_width(cmd.desc, description_width);
+        let desc_text = truncate_to_width(row_desc, description_width);
         let padding_len = description_width.saturating_sub(desc_text.width());
         let background = if is_selected {
             COLOR_PRIMARY()

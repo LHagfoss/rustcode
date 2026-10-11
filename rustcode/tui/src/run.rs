@@ -877,6 +877,11 @@ async fn run_interactive(
     rustcode::config::archive_live_history();
 
     let mut app_state_struct = AppState::new();
+    // `/theme` completion offers the themes this frontend can load.
+    app_state_struct.theme_names = crate::ui::theme::load_available_themes()
+        .into_iter()
+        .map(|theme| theme.name)
+        .collect();
     let fullscreen_requested = cli_args.fullscreen || app_state_struct.config.fullscreen;
     let local_terminal = crate::terminal_probe::probe().supports_alternate_screen();
     let fullscreen = fullscreen_requested && local_terminal;
