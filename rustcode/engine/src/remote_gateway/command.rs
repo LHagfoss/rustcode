@@ -73,6 +73,14 @@ pub async fn serve(
         &lifecycle,
         GatewayConfig {
             plan: plan.clone(),
+            // The address is a result of the arguments, never a setting: a
+            // lease that changes moves the listener instead of stranding it.
+            replan: Some({
+                let (bind, advertise) = (bind.to_owned(), advertise.map(str::to_owned));
+                Arc::new(move || {
+                    plan_listen(&bind, advertise.as_deref(), &candidate_addresses()).ok()
+                })
+            }),
             port,
             router: std::sync::Arc::new(super::workspace::WorkspaceRouter::new(
                 hub.clone(),
@@ -84,18 +92,37 @@ pub async fn serve(
         },
     )
     .await?;
-    let _discovery =
-        super::discovery::advertise(gateway.local_addr().port(), plan.advertise.is_loopback());
+    let port = gateway.local_addr().port();
+    let mut discovery = super::discovery::advertise(port, plan.advertise.is_loopback());
+    // Bonjour is announced only while a phone could reach the address.
+    let mut advertised = gateway.advertised_changes();
+    let announce = async move {
+        let mut loopback = plan.advertise.is_loopback();
+        while advertised.changed().await.is_ok() {
+            let now = advertised.borrow_and_update().host().is_loopback();
+            if now != loopback {
+                loopback = now;
+                discovery = super::discovery::advertise(port, loopback);
+            }
+        }
+        // Keeps the announcement up when the address can no longer change.
+        let _discovery = discovery;
+        std::future::pending::<()>().await
+    };
+    let plan = ListenPlanSummary {
+        loopback_bind: gateway.local_addr().ip().is_loopback(),
+        loopback_advertise: gateway.advertised_address().host().is_loopback(),
+    };
     println!("rustcode remote gateway");
     println!("listening on  {}", gateway.local_addr());
     println!("advertised as {}", gateway.advertised_address());
     println!("gateway id    {}", gateway.gateway_id());
-    if !plan.bind.is_loopback() {
+    if !plan.loopback_bind {
         println!(
             "warning: plain WebSocket on a non-loopback address is authenticated but not encrypted; use it only on a trusted network such as NetBird."
         );
     }
-    if plan.advertise.is_loopback() {
+    if plan.loopback_advertise {
         println!("{}", loopback_guidance(false));
     }
     println!(
@@ -109,8 +136,10 @@ pub async fn serve(
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let run = gateway.run();
     tokio::pin!(run);
+    tokio::pin!(announce);
     let restart = tokio::select! {
         result = &mut run => return result,
+        _ = &mut announce => false,
         _ = tokio::signal::ctrl_c() => false,
         _ = terminate.recv() => false,
         _ = &mut upgraded => true,
@@ -129,6 +158,11 @@ pub async fn serve(
         lifecycle.start(launcher.command()).await?;
     }
     Ok(())
+}
+
+struct ListenPlanSummary {
+    loopback_bind: bool,
+    loopback_advertise: bool,
 }
 
 /// How a pairing QR code is drawn.
@@ -156,8 +190,9 @@ pub fn format_offer(offer: &OfferDetails, style: QrStyle) -> String {
         QrStyle::Text => None,
     };
     let lifetime = format!(
-        "Pair a device within {} seconds (single use).",
-        offer.expires_in_secs
+        "Pair a device within {} seconds (single use, {} wrong codes allowed).",
+        offer.expires_in_secs,
+        super::pairing::ATTEMPTS_PER_CHALLENGE
     );
     let by_hand = format!(
         "  address:  {}\n  code:     {}",
@@ -262,27 +297,60 @@ pub fn format_status(status: Option<&GatewayStatus>) -> String {
     let Some(status) = status else {
         return "Remote gateway: stopped".to_string();
     };
+    let pairing = match &status.pairing {
+        Some(pairing) => match (
+            pairing.locked_for_secs,
+            pairing.expires_in_secs,
+            pairing.attempts_left,
+        ) {
+            (Some(locked), _, _) => {
+                format!("locked for {locked} s after too many wrong codes")
+            }
+            (None, Some(expires), Some(attempts)) => {
+                format!("challenge open ({expires} s left, {attempts} wrong codes allowed)")
+            }
+            _ => "closed (run `rustcode remote pair` for a new code)".to_string(),
+        },
+        None if status.pairing_open => "challenge open".to_string(),
+        None => "closed".to_string(),
+    };
     let mut lines = vec![
         format!("Remote gateway: running (pid {})", status.pid),
         format!("  listening on   {}", status.listen_address),
         format!("  advertised as  {}", status.advertised_address),
+    ];
+    if !status.candidates.is_empty() {
+        lines.push("  addresses now".to_string());
+        lines.extend(status.candidates.iter().map(|line| format!("    {line}")));
+    }
+    if let Some(warning) = stale_address_warning(status) {
+        lines.push(format!("  warning        {warning}"));
+    }
+    lines.extend([
         format!("  gateway id     {}", status.gateway_id),
         format!("  paired devices {}", status.paired_devices),
-        format!(
-            "  pairing        {}",
-            if status.pairing_open {
-                "challenge open"
-            } else {
-                "closed"
-            }
-        ),
-        format!("  connections    {}", status.connections.len()),
-    ];
-    for connection in &status.connections {
+    ]);
+    for device in &status.devices {
+        let connected = status
+            .connections
+            .iter()
+            .any(|connection| connection.device_id == device.id);
         lines.push(format!(
-            "    {}  {}",
-            connection.device_id, connection.device_name
+            "    {}  {}{}",
+            device.id,
+            device.name,
+            if connected { "  (connected)" } else { "" }
         ));
+    }
+    lines.push(format!("  pairing        {pairing}"));
+    lines.push(format!("  connections    {}", status.connections.len()));
+    if status.devices.is_empty() {
+        for connection in &status.connections {
+            lines.push(format!(
+                "    {}  {}",
+                connection.device_id, connection.device_name
+            ));
+        }
     }
     match &status.sessions {
         None => lines.push("  sessions       not supported by this gateway".to_string()),
@@ -304,11 +372,50 @@ pub fn format_status(status: Option<&GatewayStatus>) -> String {
             }
         }
     }
+    if !status.unregistered_owners.is_empty() {
+        lines.push(format!(
+            "  idle owners    {} (running but not shared here; they register again by themselves, or end them with `kill`)",
+            status.unregistered_owners.len()
+        ));
+        for session in &status.unregistered_owners {
+            lines.push(format!("    {session}"));
+        }
+    }
+    if let Some(log) = &status.log_path {
+        lines.push(format!("  gateway log    {}", log.display()));
+    }
+    if let Some(logs) = &status.owner_log_directory {
+        lines.push(format!("  session logs   {}", logs.display()));
+    }
     if status.loopback_only {
         lines.push(String::new());
         lines.push(loopback_guidance(false));
     }
     lines.join("\n")
+}
+
+/// The listener sits on an address this machine no longer has: nothing can
+/// reach it until it moves. A wildcard or loopback bind cannot go stale.
+fn stale_address_warning(status: &GatewayStatus) -> Option<String> {
+    let listen = status
+        .listen_address
+        .parse::<std::net::SocketAddr>()
+        .ok()?
+        .ip();
+    if listen.is_loopback() || listen.is_unspecified() || status.candidates.is_empty() {
+        return None;
+    }
+    let present = status.candidates.iter().any(|line| {
+        line.split_whitespace()
+            .next()
+            .and_then(|address| address.parse::<std::net::IpAddr>().ok())
+            == Some(listen)
+    });
+    (!present).then(|| {
+        format!(
+            "{listen} is no longer an address of this machine; with automatic selection the gateway moves within seconds, an explicit --bind has to be changed by hand"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -375,6 +482,79 @@ mod tests {
         assert!(local.contains("rustcode remote serve"));
         assert!(local.contains("[remote]"));
         assert!(local.contains("QR payload: "));
+    }
+
+    #[test]
+    fn status_shows_addresses_devices_pairing_and_logs() {
+        use crate::remote_gateway::control::{ConnectionSummary, DeviceSummary, PairingStatus};
+        let mut status = GatewayStatus {
+            version: "1.0.0".into(),
+            pid: 7,
+            process_start_time: 1,
+            instance_id: "instance".into(),
+            gateway_id: "gateway".into(),
+            uptime_seconds: 3,
+            listen_address: "192.168.31.237:17879".into(),
+            advertised_address: "192.168.31.237:17879".into(),
+            paired_devices: 2,
+            connections: vec![ConnectionSummary {
+                device_id: "aa".into(),
+                device_name: "phone".into(),
+            }],
+            pairing_open: true,
+            loopback_only: false,
+            sessions: Some(Vec::new()),
+            candidates: vec!["192.168.31.185  (en0)".into()],
+            devices: vec![
+                DeviceSummary {
+                    id: "aa".into(),
+                    name: "phone".into(),
+                },
+                DeviceSummary {
+                    id: "bb".into(),
+                    name: "tablet".into(),
+                },
+            ],
+            pairing: Some(PairingStatus {
+                expires_in_secs: Some(87),
+                attempts_left: Some(4),
+                locked_for_secs: None,
+            }),
+            unregistered_owners: vec!["session-1".into()],
+            log_path: Some("/config/remote/gateway.log".into()),
+            owner_log_directory: Some("/config/remote/owners".into()),
+        };
+        let text = format_status(Some(&status));
+        for expected in [
+            "listening on   192.168.31.237:17879",
+            "192.168.31.185  (en0)",
+            "192.168.31.237 is no longer an address of this machine",
+            "aa  phone  (connected)",
+            "bb  tablet",
+            "challenge open (87 s left, 4 wrong codes allowed)",
+            "idle owners    1",
+            "gateway log    /config/remote/gateway.log",
+            "session logs   /config/remote/owners",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(!text.contains("bb  tablet  (connected)"), "{text}");
+
+        status.listen_address = "192.168.31.185:17879".into();
+        status.pairing.as_mut().unwrap().locked_for_secs = Some(240);
+        let text = format_status(Some(&status));
+        assert!(!text.contains("warning"), "{text}");
+        assert!(text.contains("locked for 240 s"), "{text}");
+
+        // A gateway from before these fields existed still reads cleanly.
+        let old = serde_json::json!({
+            "pid": 7, "process_start_time": 1, "instance_id": "i", "gateway_id": "g",
+            "uptime_seconds": 3, "listen_address": "127.0.0.1:1",
+            "advertised_address": "127.0.0.1:1", "paired_devices": 0,
+            "connections": [], "pairing_open": false,
+        });
+        let old: GatewayStatus = serde_json::from_value(old).unwrap();
+        assert!(format_status(Some(&old)).contains("pairing        closed"));
     }
 
     #[test]

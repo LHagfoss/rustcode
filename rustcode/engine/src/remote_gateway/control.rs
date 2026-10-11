@@ -13,7 +13,7 @@ use super::pairing::{self, PairingOffer};
 use crate::daemon::protocol::{read_async_frame, write_async_frame};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::{io::BufReader, net::UnixStream};
 
@@ -82,6 +82,41 @@ pub struct GatewayStatus {
     /// Shared sessions; `None` from a gateway without session routing.
     #[serde(default)]
     pub sessions: Option<Vec<SessionSummary>>,
+    /// Addresses this machine has right now, as `address  (interface)`. A
+    /// listen address that is not among them has gone stale.
+    #[serde(default)]
+    pub candidates: Vec<String>,
+    /// Paired devices, connected or not. Never a token.
+    #[serde(default)]
+    pub devices: Vec<DeviceSummary>,
+    /// `None` from a gateway that does not report it.
+    #[serde(default)]
+    pub pairing: Option<PairingStatus>,
+    /// Sessions whose owner process is alive but not registered here.
+    #[serde(default)]
+    pub unregistered_owners: Vec<String>,
+    #[serde(default)]
+    pub log_path: Option<PathBuf>,
+    /// Holds one `<session id>.log` per session started from a device.
+    #[serde(default)]
+    pub owner_log_directory: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceSummary {
+    pub id: String,
+    pub name: String,
+}
+
+/// Where pairing stands, without any secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingStatus {
+    /// Lifetime left of the open challenge.
+    pub expires_in_secs: Option<u64>,
+    /// Wrong codes the open challenge still tolerates.
+    pub attempts_left: Option<u8>,
+    /// Pairing is locked after too many failures on this host.
+    pub locked_for_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

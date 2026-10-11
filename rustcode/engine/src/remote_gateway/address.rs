@@ -345,6 +345,29 @@ mod tests {
     }
 
     #[test]
+    fn automatic_plan_follows_the_addresses_the_machine_has_now() {
+        // Resolved again with the same arguments, the plan tracks a changed
+        // lease, and leaves loopback once a network is there.
+        let plan = |candidates: &[Candidate]| plan_listen("auto", None, candidates).unwrap();
+        let before = plan(&[candidate("en0", "192.168.31.237")]);
+        let after = plan(&[candidate("en0", "192.168.31.185")]);
+        assert_ne!(before, after);
+        assert_eq!(after.bind, "192.168.31.185".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            after.advertise.clone().with_port(17879).to_string(),
+            "192.168.31.185:17879"
+        );
+        assert!(plan(&[]).bind.is_loopback());
+        assert_eq!(plan(&[candidate("en0", "192.168.31.185")]), after);
+        // A name the user chose stays, wherever the listener moves.
+        let named = plan_listen("auto", Some("mac.example"), &[candidate("en0", "10.0.0.9")]);
+        assert_eq!(
+            named.unwrap().advertise.with_port(1).to_string(),
+            "mac.example:1"
+        );
+    }
+
+    #[test]
     fn automatic_bind_without_network_keeps_local_access() {
         let plan = plan_listen("auto", None, &[]).unwrap();
         assert!(plan.bind.is_loopback());

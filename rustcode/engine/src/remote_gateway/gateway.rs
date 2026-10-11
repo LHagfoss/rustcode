@@ -6,10 +6,10 @@
 //! registering the connection, forgetting a device and closing its
 //! connections. Nothing awaits while the lock is held.
 
-use super::address::{AdvertisedAddress, ListenPlan};
+use super::address::{AdvertisedAddress, Candidate, ListenPlan, candidate_addresses};
 use super::control::{
-    CONTROL_TIMEOUT, ConnectionSummary, ControlRequest, ControlResponse, GatewayStatus,
-    OfferDetails,
+    CONTROL_TIMEOUT, ConnectionSummary, ControlRequest, ControlResponse, DeviceSummary,
+    GatewayStatus, OfferDetails, PairingStatus,
 };
 use super::devices::{DeviceError, DeviceRecord, DeviceStore, Devices};
 use super::handshake::{
@@ -57,6 +57,8 @@ pub struct Limits {
     pub ping_interval: Duration,
     /// Silence, pongs included, after which a connection is closed.
     pub idle_timeout: Duration,
+    /// How often the listen plan is resolved again; see [`GatewayConfig::replan`].
+    pub replan_interval: Duration,
 }
 
 impl Default for Limits {
@@ -70,12 +72,22 @@ impl Default for Limits {
             write_timeout: Duration::from_secs(10),
             ping_interval: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(90),
+            replan_interval: Duration::from_secs(5),
         }
     }
 }
 
+/// Resolves the listen plan again from the machine's current addresses.
+/// `None` means there is nothing better to move to right now.
+pub type Replan = Arc<dyn Fn() -> Option<ListenPlan> + Send + Sync>;
+
 pub struct GatewayConfig {
     pub plan: ListenPlan,
+    /// Asked every [`Limits::replan_interval`]. When its answer differs from
+    /// the plan in use (DHCP handed out another address, Wi-Fi came up after
+    /// the gateway did), the listener moves there and pairing details, status
+    /// and the registration follow. `None` keeps `plan` for good.
+    pub replan: Option<Replan>,
     pub port: u16,
     pub router: Arc<dyn FrameRouter>,
     /// The session registry behind `router`, when it is one: session owners
@@ -128,7 +140,10 @@ struct Unauthenticated {
 pub(super) struct Shared {
     pub(super) gateway_id: String,
     pub(super) instance_id: String,
-    pub(super) advertised: AdvertisedAddress,
+    /// The address pairing details name. Replaced when the listener moves.
+    advertised: tokio::sync::watch::Sender<AdvertisedAddress>,
+    registration: Arc<Mutex<GatewayRegistration>>,
+    lifecycle: RemoteLifecycle,
     pub(super) limits: Limits,
     pub(super) router: Arc<dyn FrameRouter>,
     sessions: Option<Arc<SessionHub>>,
@@ -383,11 +398,52 @@ impl Shared {
     fn issue_pairing(&self) -> OfferDetails {
         let offer = self.state().pairing.issue(Instant::now());
         OfferDetails::new(
-            &self.advertised,
+            &self.advertised.borrow(),
             &self.gateway_id,
             self.host_name.as_deref(),
             offer,
         )
+    }
+}
+
+impl Shared {
+    /// Follow a changed listen plan. A new bind address gets a new listener
+    /// on the same port, returned to replace the old one; connections on the
+    /// old address stay until it stops carrying them. Either way pairing
+    /// details, status, the registration and the session owners learn the
+    /// address a device should dial now.
+    async fn move_listener(
+        &self,
+        listener: &TcpListener,
+        current: &ListenPlan,
+        next: &ListenPlan,
+    ) -> Result<Option<TcpListener>> {
+        let port = listener.local_addr()?.port();
+        let moved = if next.bind == current.bind {
+            None
+        } else {
+            Some(TcpListener::bind(SocketAddr::new(next.bind, port)).await?)
+        };
+        let local = match &moved {
+            Some(moved) => moved.local_addr()?,
+            None => listener.local_addr()?,
+        };
+        let advertised = next.advertise.clone().with_port(port);
+        {
+            let mut registration = self
+                .registration
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            registration.listen_address = local.to_string();
+            registration.advertised_address = advertised.to_string();
+            registration.publish(&self.lifecycle.registration_path())?;
+        }
+        if let Some(sessions) = &self.sessions {
+            sessions.set_advertised_address(advertised.to_string(), next.bind.is_loopback());
+        }
+        println!("address changed: listening on {local}, advertised as {advertised}");
+        self.advertised.send_replace(advertised);
+        Ok(moved)
     }
 }
 
@@ -399,7 +455,7 @@ fn busy(message: impl Into<String>) -> HandshakeResponse {
 /// while still holding the ownership lock.
 struct Ownership {
     lifecycle: RemoteLifecycle,
-    registration: GatewayRegistration,
+    registration: Arc<Mutex<GatewayRegistration>>,
     _lock: File,
 }
 
@@ -412,7 +468,12 @@ impl Drop for Ownership {
         if GatewayRegistration::read(&self.lifecycle.registration_path())
             .ok()
             .as_ref()
-            == Some(&self.registration)
+            == Some(
+                &*self
+                    .registration
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            )
         {
             let _ = remove_if_exists(&self.lifecycle.registration_path());
         }
@@ -424,7 +485,8 @@ pub struct Gateway {
     control: UnixListener,
     owners: UnixListener,
     shared: Arc<Shared>,
-    registration: GatewayRegistration,
+    plan: ListenPlan,
+    replan: Option<Replan>,
     started: Instant,
     _ownership: Ownership,
 }
@@ -440,7 +502,7 @@ impl Gateway {
         let devices = store.load()?;
         let listener = TcpListener::bind(SocketAddr::new(config.plan.bind, config.port)).await?;
         let local = listener.local_addr()?;
-        let advertised = config.plan.advertise.with_port(local.port());
+        let advertised = config.plan.advertise.clone().with_port(local.port());
         let registration = GatewayRegistration::current(
             lifecycle.socket_path(),
             lifecycle.owner_socket_path(),
@@ -454,9 +516,11 @@ impl Gateway {
                 lifecycle.socket_path().display()
             )
         })?;
+        let instance_id = registration.instance_id.clone();
+        let registration = Arc::new(Mutex::new(registration));
         let ownership = Ownership {
             lifecycle: lifecycle.clone(),
-            registration: registration.clone(),
+            registration: Arc::clone(&registration),
             _lock: lock,
         };
         fs::set_permissions(lifecycle.socket_path(), fs::Permissions::from_mode(0o600))?;
@@ -473,16 +537,21 @@ impl Gateway {
         if let Some(sessions) = &config.sessions {
             sessions.bind_identity(HubIdentity {
                 gateway_id: gateway_id.clone(),
-                instance_id: registration.instance_id.clone(),
+                instance_id: instance_id.clone(),
                 advertised_address: advertised.to_string(),
                 loopback_only: config.plan.bind.is_loopback(),
             });
         }
-        registration.publish(&lifecycle.registration_path())?;
+        registration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .publish(&lifecycle.registration_path())?;
         let shared = Arc::new(Shared {
             gateway_id,
-            instance_id: registration.instance_id.clone(),
-            advertised,
+            instance_id,
+            advertised: tokio::sync::watch::Sender::new(advertised),
+            registration,
+            lifecycle: lifecycle.clone(),
             limits: config.limits,
             router: config.router,
             sessions: config.sessions,
@@ -502,7 +571,8 @@ impl Gateway {
             control,
             owners,
             shared,
-            registration,
+            plan: config.plan,
+            replan: config.replan,
             started: Instant::now(),
             _ownership: ownership,
         })
@@ -516,8 +586,13 @@ impl Gateway {
     }
 
     /// The address pairing details tell a device to dial.
-    pub fn advertised_address(&self) -> &AdvertisedAddress {
-        &self.shared.advertised
+    pub fn advertised_address(&self) -> AdvertisedAddress {
+        self.shared.advertised.borrow().clone()
+    }
+
+    /// Follows the advertised address as the listener moves.
+    pub fn advertised_changes(&self) -> tokio::sync::watch::Receiver<AdvertisedAddress> {
+        self.shared.advertised.subscribe()
     }
 
     pub fn gateway_id(&self) -> &str {
@@ -533,18 +608,38 @@ impl Gateway {
     /// connection and removes the socket and registration.
     pub async fn run(self) -> Result<()> {
         let Gateway {
-            listener,
+            mut listener,
             control,
             owners,
             shared,
-            registration,
+            mut plan,
+            replan,
             started,
             _ownership,
         } = self;
         let mut tasks = JoinSet::new();
+        let mut replan_due = tokio::time::interval(shared.limits.replan_interval);
+        replan_due.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = shared.shutdown.cancelled() => break,
+                _ = replan_due.tick(), if replan.is_some() => {
+                    let next = replan.as_ref().and_then(|replan| replan());
+                    if let Some(next) = next.filter(|next| *next != plan) {
+                        match shared.move_listener(&listener, &plan, &next).await {
+                            Ok(Some(moved)) => {
+                                listener = moved;
+                                plan = next;
+                            }
+                            Ok(None) => plan = next,
+                            // Usually the new address is not assignable yet;
+                            // the next round tries again.
+                            Err(error) => {
+                                crate::dbg_log!("remote gateway: could not move to {}: {error:#}", next.bind);
+                            }
+                        }
+                    }
+                }
                 accepted = listener.accept() => match accepted {
                     Ok((socket, peer)) => {
                         // Over the limit: drop the socket without reading a byte.
@@ -564,12 +659,7 @@ impl Gateway {
                 },
                 accepted = control.accept() => {
                     if let Ok((stream, _)) = accepted {
-                        tasks.spawn(serve_control(
-                            Arc::clone(&shared),
-                            registration.clone(),
-                            started,
-                            stream,
-                        ));
+                        tasks.spawn(serve_control(Arc::clone(&shared), started, stream));
                     }
                 }
                 accepted = owners.accept() => {
@@ -597,19 +687,14 @@ impl Gateway {
     }
 }
 
-async fn serve_control(
-    shared: Arc<Shared>,
-    registration: GatewayRegistration,
-    started: Instant,
-    stream: UnixStream,
-) {
+async fn serve_control(shared: Arc<Shared>, started: Instant, stream: UnixStream) {
     let exchange = async {
         let (reader, mut writer) = stream.into_split();
         let request: ControlRequest = read_async_frame(&mut BufReader::new(reader)).await?;
         let mut stop = false;
         let response = match request {
             ControlRequest::Status => ControlResponse::Status {
-                status: status(&shared, &registration, started),
+                status: status(&shared, started),
             },
             ControlRequest::Pair => ControlResponse::Offer {
                 offer: shared.issue_pairing(),
@@ -628,7 +713,7 @@ async fn serve_control(
                 },
             },
             ControlRequest::Shutdown { instance_id } => {
-                if instance_id == registration.instance_id {
+                if instance_id == shared.instance_id {
                     stop = true;
                     ControlResponse::Ack
                 } else {
@@ -646,8 +731,25 @@ async fn serve_control(
     }
 }
 
-fn status(shared: &Shared, registration: &GatewayRegistration, started: Instant) -> GatewayStatus {
-    let state = shared.state();
+fn status(shared: &Shared, started: Instant) -> GatewayStatus {
+    let registration = shared
+        .registration
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let sessions = shared.sessions.as_ref().map(|sessions| sessions.summary());
+    // Owners hold their lease for as long as they live; one that is not in
+    // the session list is alive without being shared.
+    let unregistered_owners = super::workspace::live_owner_sessions(&shared.lifecycle)
+        .into_iter()
+        .filter(|id| {
+            sessions
+                .as_ref()
+                .is_none_or(|sessions| sessions.iter().all(|session| session.session_id != *id))
+        })
+        .collect();
+    let now = Instant::now();
+    let mut state = shared.state();
     let mut connections: Vec<(u64, ConnectionSummary)> = state
         .live
         .iter()
@@ -662,6 +764,7 @@ fn status(shared: &Shared, registration: &GatewayRegistration, started: Instant)
         })
         .collect();
     connections.sort_by_key(|(id, _)| *id);
+    let (expires_in, attempts_left) = state.pairing.open_challenge(now).unzip();
     GatewayStatus {
         version: registration.version.clone(),
         pid: registration.pid,
@@ -673,9 +776,30 @@ fn status(shared: &Shared, registration: &GatewayRegistration, started: Instant)
         advertised_address: registration.advertised_address.clone(),
         paired_devices: state.devices.list().len(),
         connections: connections.into_iter().map(|(_, c)| c).collect(),
-        pairing_open: state.pairing.is_open(Instant::now()),
-        loopback_only: shared.advertised.host().is_loopback(),
-        sessions: shared.sessions.as_ref().map(|sessions| sessions.summary()),
+        pairing_open: state.pairing.is_open(now),
+        loopback_only: shared.advertised.borrow().host().is_loopback(),
+        sessions,
+        candidates: candidate_addresses()
+            .into_iter()
+            .map(|Candidate { interface, address }| format!("{address}  ({interface})"))
+            .collect(),
+        devices: state
+            .devices
+            .list()
+            .iter()
+            .map(|device| DeviceSummary {
+                id: device.id.clone(),
+                name: device.name.clone(),
+            })
+            .collect(),
+        pairing: Some(PairingStatus {
+            expires_in_secs: expires_in.map(|left| left.as_secs()),
+            attempts_left,
+            locked_for_secs: state.pairing.lockout(now).map(|left| left.as_secs().max(1)),
+        }),
+        unregistered_owners,
+        log_path: Some(shared.lifecycle.log_path()),
+        owner_log_directory: Some(shared.lifecycle.owners_directory()),
     }
 }
 

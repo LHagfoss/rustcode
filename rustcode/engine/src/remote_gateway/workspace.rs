@@ -3,7 +3,10 @@ use super::{
     hub::SessionHub,
     router::{DeviceContext, FrameRouter, FrameSink},
 };
-use crate::daemon::lifecycle::{ensure_private_directory, publish_private_json, read_private_json};
+use crate::daemon::lifecycle::{
+    ensure_private_directory, is_lock_busy, lock_private_file, publish_private_json,
+    read_private_json, remove_if_exists,
+};
 use crate::remote::*;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -12,8 +15,78 @@ use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// How long a new owner may take to register before it is stopped.
+const OWNER_START_TIMEOUT: Duration = Duration::from_secs(20);
+const OWNER_LEASE: &str = "remote session";
+
+/// The owner of a new session could not be started, and nothing is left of
+/// the attempt: no process and no receipt. The device may simply ask again.
+#[derive(Debug)]
+struct OwnerStartFailed(String);
+
+impl std::fmt::Display for OwnerStartFailed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for OwnerStartFailed {}
+
+/// Whether the owner process of `session_id` is running: it holds its lease
+/// for as long as it lives. The probe takes a free lease for an instant,
+/// which [`owner_state`] rides out.
+fn owner_alive(owners: &Path, session_id: &str) -> bool {
+    match lock_private_file(owners, &format!("{session_id}.lock"), OWNER_LEASE) {
+        Ok(_free) => false,
+        Err(error) => is_lock_busy(&error),
+    }
+}
+
+/// Sessions with a running owner process, registered with the gateway or not.
+pub(super) fn live_owner_sessions(lifecycle: &super::lifecycle::RemoteLifecycle) -> Vec<String> {
+    let owners = lifecycle.owners_directory();
+    let Ok(entries) = std::fs::read_dir(&owners) else {
+        return Vec::new();
+    };
+    let mut sessions: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            Some(name.to_str()?.strip_suffix(".lock")?.to_owned())
+        })
+        .filter(|id| rustcode_session::valid_session_id(id) && owner_alive(&owners, id))
+        .collect();
+    sessions.sort();
+    sessions
+}
+
+/// The gateway's own line in an owner log, so a failed start never leaves it empty.
+fn note_in_log(log: &Path, text: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(log)
+    {
+        let _ = writeln!(file, "gateway: {text}");
+    }
+}
+
+/// The last lines an owner wrote, on one line, for an error message.
+fn log_tail(log: &Path) -> Option<String> {
+    let bytes = std::fs::read(log).ok()?;
+    let text = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(2048)..]).into_owned();
+    let mut lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("gateway: "))
+        .collect();
+    let tail = lines.split_off(lines.len().saturating_sub(3)).join(" | ");
+    (!tail.is_empty()).then(|| tail.chars().take(600).collect())
+}
 
 pub fn resolve_directory(path: Option<&str>) -> Result<PathBuf> {
     ensure!(
@@ -121,6 +194,7 @@ impl WorkspaceRouter {
         device: &str,
         request: &RemoteRequest,
         path: Option<&str>,
+        timeout: Duration,
     ) -> Result<RemoteResponse> {
         let receipt = Self::receipt_path(config, device, &request.request_id);
         ensure_private_directory(receipt.parent().unwrap(), "remote session creation")?;
@@ -149,23 +223,37 @@ impl WorkspaceRouter {
             publish_private_json(&receipt, &creation)?;
             creation
         };
-        if hub.session_info(&creation.session_id).is_none() {
-            let owners = config.join("remote").join("owners");
-            ensure_private_directory(&owners, "remote session owners")?;
+        let session_id = creation.session_id.clone();
+        let owners = config.join("remote").join("owners");
+        ensure_private_directory(&owners, "remote session owners")?;
+        let log_path = owners.join(format!("{session_id}.log"));
+        // Nothing is left of a failed start, so the same request may run again.
+        let failed = |reason: String| -> anyhow::Error {
+            note_in_log(&log_path, &reason);
+            let _ = remove_if_exists(&receipt);
+            let output = match log_tail(&log_path) {
+                Some(tail) => format!("its last output: {tail}"),
+                None => "it wrote nothing".to_owned(),
+            };
+            OwnerStartFailed(format!(
+                "session {session_id} was not created: {reason}; {output} (owner log {})",
+                log_path.display()
+            ))
+            .into()
+        };
+        // A retry finds the owner of an earlier attempt by its lease and
+        // waits for that one: a session never has two owner processes.
+        let mut child = None;
+        if hub.session_info(&session_id).is_none() && !owner_alive(&owners, &session_id) {
             let log = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW)
-                .open(owners.join(format!("{}.log", creation.session_id)))?;
+                .open(&log_path)?;
             let mut command = tokio::process::Command::new(program);
             command
-                .args([
-                    "remote",
-                    "session-owner",
-                    "--session-id",
-                    &creation.session_id,
-                ])
+                .args(["remote", "session-owner", "--session-id", &session_id])
                 .current_dir(directory)
                 .env("RUSTCODE_CONFIG_DIR", config)
                 .stdin(std::process::Stdio::null())
@@ -180,22 +268,47 @@ impl WorkspaceRouter {
                     Ok(())
                 });
             }
-            let mut child = command.spawn().context("could not launch session owner")?;
+            child = Some(command.spawn().map_err(|error| {
+                failed(format!("the session owner could not be launched ({error})"))
+            })?);
+        }
+        let started = Instant::now();
+        let session = loop {
+            if let Some(info) = hub.session_info(&session_id) {
+                break info;
+            }
+            if let Some(owner) = child.as_mut()
+                && let Ok(Some(status)) = owner.try_wait()
+            {
+                return Err(failed(format!(
+                    "the session owner exited before registering ({status})"
+                )));
+            }
+            if started.elapsed() >= timeout {
+                let Some(mut owner) = child else {
+                    anyhow::bail!(
+                        "session {session_id} is still starting: its owner process is alive but has not registered with this gateway; retry with the same request identifier to check it (receipt {}, owner log {})",
+                        receipt.display(),
+                        log_path.display()
+                    );
+                };
+                // An owner that registers this late is gone with its
+                // connection: the hub closes the session it opened.
+                let _ = owner.start_kill();
+                let _ = owner.wait().await;
+                return Err(failed(format!(
+                    "the session owner did not register with the gateway within {} s and was stopped",
+                    timeout.as_secs_f32()
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        if let Some(mut owner) = child {
             // Reap eventually without coupling the owner's lifetime to the gateway.
             tokio::spawn(async move {
-                let _ = child.wait().await;
+                let _ = owner.wait().await;
             });
         }
-        let session = tokio::time::timeout(Duration::from_secs(20), async {
-            loop {
-                if let Some(info) = hub.session_info(&creation.session_id) {
-                    break info;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        })
-        .await
-        .context("session is starting; retry with the same request identifier to check it")?;
         let mut response = RemoteResponse::new(
             request.request_id.clone(),
             RemoteResult::SessionCreated { session },
@@ -269,31 +382,42 @@ impl FrameRouter for WorkspaceRouter {
                 let device = device.device_id.clone();
                 tokio::spawn(async move {
                     let _guard = gate.lock().await;
-                    let response =
-                        Self::create(&hub, &config, &program, &device, &request, path.as_deref())
-                            .await
-                            .unwrap_or_else(|error| {
-                                let uncertain =
-                                    Self::receipt_path(&config, &device, &request.request_id)
-                                        .exists();
-                                let mut response = RemoteResponse::error(
-                                    request.request_id.clone(),
-                                    RemoteError::new(
-                                        if uncertain {
-                                            RemoteErrorCode::OwnerUnavailable
-                                        } else {
-                                            RemoteErrorCode::InvalidRequest
-                                        },
-                                        format!("{error:#}"),
-                                    ),
-                                );
-                                response.receipt = Some(if uncertain {
-                                    ReceiptState::Unknown
+                    let response = Self::create(
+                        &hub,
+                        &config,
+                        &program,
+                        &device,
+                        &request,
+                        path.as_deref(),
+                        OWNER_START_TIMEOUT,
+                    )
+                    .await
+                    .unwrap_or_else(|error| {
+                        // A failed start is a decided outcome, not a
+                        // lost one: the device is free to ask again.
+                        let failed = error.downcast_ref::<OwnerStartFailed>().is_some();
+                        let uncertain = !failed
+                            && Self::receipt_path(&config, &device, &request.request_id).exists();
+                        let mut response = RemoteResponse::error(
+                            request.request_id.clone(),
+                            RemoteError::new(
+                                if failed {
+                                    RemoteErrorCode::Internal
+                                } else if uncertain {
+                                    RemoteErrorCode::OwnerUnavailable
                                 } else {
-                                    ReceiptState::Rejected
-                                });
-                                response
-                            });
+                                    RemoteErrorCode::InvalidRequest
+                                },
+                                format!("{error:#}"),
+                            ),
+                        );
+                        response.receipt = Some(if uncertain {
+                            ReceiptState::Unknown
+                        } else {
+                            ReceiptState::Rejected
+                        });
+                        response
+                    });
                     send(&sink, response);
                 });
             }
@@ -417,7 +541,8 @@ mod tests {
                 Path::new("/never/launch"),
                 "phone",
                 &request,
-                Some("/directory/no/longer/present")
+                Some("/directory/no/longer/present"),
+                OWNER_START_TIMEOUT,
             )
             .await
             .unwrap(),
@@ -428,6 +553,151 @@ mod tests {
             WorkspaceRouter::receipt_path(config.path(), "other-phone", &request.request_id)
         );
     }
+    fn creation_request(id: &str, directory: &Path) -> RemoteRequest {
+        RemoteRequest {
+            authenticated_device_id: None,
+            protocol_version: REMOTE_PROTOCOL_VERSION,
+            request_id: id.into(),
+            session_id: None,
+            registration_epoch: None,
+            operation: RemoteOperation::CreateSession {
+                path: Some(directory.to_string_lossy().into_owned()),
+            },
+        }
+    }
+
+    /// `/bin/sh remote session-owner …` runs the file `remote` of the session
+    /// directory: a stand-in owner that never registers.
+    fn stand_in_owner(script: &str) -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("remote"), script).unwrap();
+        directory
+    }
+
+    fn alive(pid: &str) -> bool {
+        // SAFETY: signal 0 only checks that the process exists.
+        unsafe { libc::kill(pid.trim().parse().unwrap(), 0) == 0 }
+    }
+
+    #[tokio::test]
+    async fn an_owner_that_exits_before_registering_fails_the_creation_with_its_output() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = stand_in_owner("echo 'provider key missing' >&2\nexit 3\n");
+        let request = creation_request("create-1", directory.path());
+        let hub = SessionHub::start(Default::default());
+        let error = WorkspaceRouter::create(
+            &hub,
+            config.path(),
+            Path::new("/bin/sh"),
+            "phone",
+            &request,
+            directory.path().to_str(),
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.downcast_ref::<OwnerStartFailed>().is_some());
+        let message = error.to_string();
+        assert!(message.contains("exited before registering"), "{message}");
+        assert!(message.contains("provider key missing"), "{message}");
+        assert!(message.contains("remote/owners/"), "{message}");
+        // Nothing is left to be uncertain about: the request may run again.
+        let receipt = WorkspaceRouter::receipt_path(config.path(), "phone", "create-1");
+        assert!(!receipt.exists());
+        let logs: Vec<_> = std::fs::read_dir(config.path().join("remote/owners"))
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|e| e == "log"))
+            .collect();
+        assert_eq!(logs.len(), 1);
+        let log = std::fs::read_to_string(logs[0].path()).unwrap();
+        assert!(log.contains("provider key missing"), "{log}");
+        assert!(log.contains("gateway: the session owner exited"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn owners_that_never_register_are_stopped_and_do_not_accumulate() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = stand_in_owner("echo $$ > owner-$$.pid\nexec sleep 600\n");
+        let request = creation_request("create-1", directory.path());
+        let hub = SessionHub::start(Default::default());
+        for _ in 0..3 {
+            let error = WorkspaceRouter::create(
+                &hub,
+                config.path(),
+                Path::new("/bin/sh"),
+                "phone",
+                &request,
+                directory.path().to_str(),
+                Duration::from_millis(400),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.downcast_ref::<OwnerStartFailed>().is_some());
+            let message = error.to_string();
+            assert!(message.contains("did not register"), "{message}");
+            assert!(message.contains("it wrote nothing"), "{message}");
+            assert!(!WorkspaceRouter::receipt_path(config.path(), "phone", "create-1").exists());
+        }
+        let owners: Vec<String> = std::fs::read_dir(directory.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|e| e == "pid"))
+            .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+            .collect();
+        assert_eq!(owners.len(), 3);
+        assert!(owners.iter().all(|pid| !alive(pid)), "{owners:?}");
+        let lifecycle = crate::remote_gateway::lifecycle::RemoteLifecycle::new(config.path());
+        assert!(live_owner_sessions(&lifecycle).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_retry_waits_for_the_owner_that_is_already_running() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let request = creation_request("create-1", directory.path());
+        let session_id = rustcode_session::next_session_id();
+        let receipt = WorkspaceRouter::receipt_path(config.path(), "phone", "create-1");
+        ensure_private_directory(receipt.parent().unwrap(), "test").unwrap();
+        publish_private_json(
+            &receipt,
+            &Creation {
+                request: request.clone(),
+                session_id: session_id.clone(),
+                response: None,
+            },
+        )
+        .unwrap();
+        // An owner from an earlier attempt holds the session's lease.
+        let owners = config.path().join("remote/owners");
+        let _lease =
+            lock_private_file(&owners, &format!("{session_id}.lock"), OWNER_LEASE).unwrap();
+        let lifecycle = crate::remote_gateway::lifecycle::RemoteLifecycle::new(config.path());
+        assert_eq!(live_owner_sessions(&lifecycle), vec![session_id.clone()]);
+        let hub = SessionHub::start(Default::default());
+        // The program does not exist: launching a second owner would say so.
+        let error = WorkspaceRouter::create(
+            &hub,
+            config.path(),
+            Path::new("/never/launch"),
+            "phone",
+            &request,
+            directory.path().to_str(),
+            Duration::from_millis(200),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.downcast_ref::<OwnerStartFailed>().is_none());
+        let message = error.to_string();
+        assert!(message.contains(&session_id), "{message}");
+        assert!(
+            message.contains("alive but has not registered"),
+            "{message}"
+        );
+        assert!(message.contains("created/"), "{message}");
+        assert!(receipt.exists());
+    }
+
     #[test]
     fn oversized_folder_listing_is_bounded_before_transport() {
         let root = tempfile::tempdir().unwrap();
@@ -455,11 +725,24 @@ pub fn owner_state(
         rustcode_session::valid_session_id(session_id),
         "invalid mobile session identifier"
     );
-    let lease = crate::daemon::lifecycle::lock_private_file(
-        &config.join("remote/owners"),
-        &format!("{session_id}.lock"),
-        "remote session",
-    )?;
+    // The gateway probes a lease to see whether its owner lives, holding a
+    // free one for an instant; only a lease that stays taken is another owner.
+    let waited = Instant::now();
+    let lease = loop {
+        match lock_private_file(
+            &config.join("remote/owners"),
+            &format!("{session_id}.lock"),
+            OWNER_LEASE,
+        ) {
+            Err(error) if is_lock_busy(&error) && waited.elapsed() < Duration::from_secs(2) => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => {
+                return Err(error.context("another process already owns this session"));
+            }
+            Ok(lease) => break lease,
+        }
+    };
     let workspace = std::env::current_dir()?;
     let mut state = crate::app::AppState::new_with_workspace_session(&workspace, Some(session_id));
     state.workspace_root = Some(workspace.clone());

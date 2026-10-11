@@ -70,6 +70,7 @@ impl Host {
     async fn start_gateway(&mut self) {
         let hub = SessionHub::start(HubLimits::default());
         let config = || GatewayConfig {
+            replan: None,
             plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
             port: 0,
             router: hub.clone(),

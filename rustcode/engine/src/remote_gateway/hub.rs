@@ -21,7 +21,7 @@
 //! be delivered on both sides of it.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -217,7 +217,8 @@ struct State {
 
 pub struct SessionHub {
     limits: HubLimits,
-    identity: OnceLock<HubIdentity>,
+    /// Replaced when the gateway moves to another address.
+    identity: RwLock<Arc<HubIdentity>>,
     state: Mutex<State>,
 }
 
@@ -477,7 +478,12 @@ impl SessionHub {
     pub fn start(limits: HubLimits) -> Arc<Self> {
         let hub = Arc::new(Self {
             limits,
-            identity: OnceLock::new(),
+            identity: RwLock::new(Arc::new(HubIdentity {
+                gateway_id: String::new(),
+                instance_id: String::new(),
+                advertised_address: String::new(),
+                loopback_only: true,
+            })),
             state: Mutex::new(State::default()),
         });
         let weak: Weak<Self> = Arc::downgrade(&hub);
@@ -497,19 +503,33 @@ impl SessionHub {
 
     /// Record who this gateway is. Called once, when its listeners are bound.
     pub fn bind_identity(&self, identity: HubIdentity) {
-        let _ = self.identity.set(identity);
+        *self
+            .identity
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(identity);
     }
 
-    fn identity(&self) -> &HubIdentity {
-        static UNBOUND: OnceLock<HubIdentity> = OnceLock::new();
-        self.identity.get().unwrap_or_else(|| {
-            UNBOUND.get_or_init(|| HubIdentity {
-                gateway_id: String::new(),
-                instance_id: String::new(),
-                advertised_address: String::new(),
-                loopback_only: true,
-            })
-        })
+    /// The gateway now listens somewhere else. Owners learn the new address
+    /// with their next status, on the following tick.
+    pub fn set_advertised_address(&self, advertised_address: String, loopback_only: bool) {
+        let mut identity = self
+            .identity
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *identity = Arc::new(HubIdentity {
+            advertised_address,
+            loopback_only,
+            ..(**identity).clone()
+        });
+    }
+
+    fn identity(&self) -> Arc<HubIdentity> {
+        Arc::clone(
+            &self
+                .identity
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -649,7 +669,7 @@ impl SessionHub {
                     session.invalidate_subscribers(Some(ResyncReason::SequenceGap));
                     session.request_snapshot(Instant::now());
                 }
-                session.serve_all(&session_id, self.identity(), &self.limits);
+                session.serve_all(&session_id, &self.identity(), &self.limits);
             }
             OwnerFrame::Snapshot {
                 mut snapshot,
@@ -674,7 +694,7 @@ impl SessionHub {
                 session.snapshot_requested = None;
                 session
                     .invalidate_subscribers(resync.or(lost.then_some(ResyncReason::SequenceGap)));
-                session.serve_all(&session_id, self.identity(), &self.limits);
+                session.serve_all(&session_id, &self.identity(), &self.limits);
             }
             OwnerFrame::SessionInfo { info } => {
                 let registration = SessionRegistration {
@@ -941,7 +961,7 @@ impl SessionHub {
         session.serve(
             session_id,
             device.connection_id,
-            identity,
+            &identity,
             &self.limits,
             Instant::now(),
         );
@@ -1150,7 +1170,7 @@ impl SessionHub {
                 .values()
                 .any(|subscriber| subscriber.next.is_none());
             if session.backlog || waiting {
-                session.serve_all(session_id, self.identity(), &self.limits);
+                session.serve_all(session_id, &self.identity(), &self.limits);
             }
         }
         for pending in timed_out {
