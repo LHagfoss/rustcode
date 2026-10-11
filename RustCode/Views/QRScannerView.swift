@@ -82,9 +82,9 @@ struct QRScannerSheet: View {
                 // A permission prompt makes the scene inactive. Do not cancel that
                 // permission request; scene changes only pause/resume capture.
                 if case .ready = access { return }
-                let resolved = await resolveAccess()
-                guard !Task.isCancelled else { return }
-                access = resolved
+                // Apply the result even if SwiftUI restarted this task while the
+                // sheet settled; dropping it would leave "Opening Camera…" up forever.
+                access = await resolveAccess()
             }
             .onChange(of: scenePhase) { _, phase in
                 // Returning from Settings can grant permission without reopening
@@ -168,11 +168,11 @@ private final class ScannerController: UIViewController {
         loading.accessibilityLabel = "Starting camera preview"
         view.addSubview(loading)
         loading.startAnimating()
-        previewObservation = preview.observe(\.isPreviewing, options: [.initial, .new]) { [weak self] _, change in
-            let ready = change.newValue ?? false
+        previewObservation = preview.observe(\.isPreviewing, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                lifecycle.previewChanged(ready)
+                // Read the layer now: queued change values can arrive out of order.
+                lifecycle.previewChanged(preview.isPreviewing)
                 updatePreviewLoading()
             }
         }
@@ -247,12 +247,18 @@ private final class ScannerController: UIViewController {
             // captureStarted replaces this with the shorter preview watchdog.
             let starting = lifecycle.isStarting
             previewTimeout = Task { @MainActor [weak self] in
-                do { try await Task.sleep(for: .seconds(starting ? 20 : 8)) } catch { return }
+                // Poll the layer as well as observing it: a missed observation must
+                // not leave the spinner over a working camera, or end in an error.
+                let deadline = ContinuousClock.now + .seconds(starting ? 20 : 8)
+                while ContinuousClock.now < deadline {
+                    do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                    guard let self, lifecycle.shouldRun, !lifecycle.hasPreview else { return }
+                    guard preview.isPreviewing else { continue }
+                    lifecycle.previewChanged(true)
+                    updatePreviewLoading()
+                    return
+                }
                 guard let self, lifecycle.shouldRun, !lifecycle.hasPreview else { return }
-                // Read the layer again: a delayed observation must not replace a
-                // working camera with an error screen.
-                lifecycle.previewChanged(preview.isPreviewing)
-                guard !lifecycle.hasPreview else { updatePreviewLoading(); return }
                 logger.error("Preview timeout: running=\(self.capture.session.isRunning) connected=\(self.preview.connection != nil) enabled=\(self.preview.connection?.isEnabled ?? false) active=\(self.preview.connection?.isActive ?? false) attached=\(self.view.window != nil) width=\(self.preview.bounds.width) height=\(self.preview.bounds.height)")
                 reportFailure("The camera did not begin showing video. Try Again, or enter the code manually.")
             }

@@ -456,6 +456,6 @@ public actor LiveRemoteClient: RemoteClient {
     }
 
     private static func remoteError(from error: any Error) -> RemoteError {
-        (error as? RemoteError) ?? .transport(error.localizedDescription)
+        (error as? RemoteError) ?? .transport(ConnectionFailure.describe(error))
     }
 }

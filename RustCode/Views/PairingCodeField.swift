@@ -7,14 +7,16 @@ import UIKit
 struct PairingCodeField: View {
     @Binding var text: String
     @Binding var isFocused: Bool
-    var body: some View { PairingTextField(text: $text, isFocused: $isFocused, isCode: true) }
+    var onPaste: (String) -> Void
+    var body: some View { PairingTextField(text: $text, isFocused: $isFocused, isCode: true, onPaste: onPaste) }
 }
 
 struct PairingAddressField: View {
     @Binding var text: String
     @Binding var isFocused: Bool
     var onNext: () -> Void
-    var body: some View { PairingTextField(text: $text, isFocused: $isFocused, isCode: false, onNext: onNext) }
+    var onPaste: (String) -> Void
+    var body: some View { PairingTextField(text: $text, isFocused: $isFocused, isCode: false, onNext: onNext, onPaste: onPaste) }
 }
 
 private struct PairingTextField: UIViewRepresentable {
@@ -23,6 +25,7 @@ private struct PairingTextField: UIViewRepresentable {
 
     var isCode: Bool
     var onNext: () -> Void = {}
+    var onPaste: (String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -53,9 +56,24 @@ private struct PairingTextField: UIViewRepresentable {
         })
         done.accessibilityIdentifier = "pairingKeyboardDone"
         done.accessibilityLabel = "Dismiss pairing keyboard"
-        toolbar.items = [.flexibleSpace(), done]
+        // The system paste control reads the clipboard without a permission prompt.
+        let configuration = UIPasteControl.Configuration()
+        configuration.displayMode = .iconAndLabel
+        configuration.cornerStyle = .capsule
+        let pasteControl = UIPasteControl(configuration: configuration)
+        pasteControl.target = context.coordinator
+        pasteControl.accessibilityIdentifier = "pairingKeyboardPaste"
+        let paste = UIBarButtonItem(customView: pasteControl)
+        if #available(iOS 26, *) { paste.hidesSharedBackground = true }
+        toolbar.items = [paste, .flexibleSpace(), done]
         toolbar.sizeToFit()
-        field.inputAccessoryView = toolbar
+        // Glass bar items float, so lift them off the keyboard's top edge.
+        var gap = 0.0
+        if #available(iOS 26, *) { gap = 10 }
+        let accessory = UIView(frame: CGRect(x: 0, y: 0, width: toolbar.frame.width, height: toolbar.frame.height + gap))
+        toolbar.autoresizingMask = .flexibleWidth
+        accessory.addSubview(toolbar)
+        field.inputAccessoryView = accessory
         return field
     }
 
@@ -88,9 +106,22 @@ private struct PairingTextField: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, UITextFieldDelegate {
+    final class Coordinator: NSObject, UITextFieldDelegate, UIPasteConfigurationSupporting {
         var parent: PairingTextField
+        var pasteConfiguration: UIPasteConfiguration? = UIPasteConfiguration(forAccepting: NSString.self)
         init(_ parent: PairingTextField) { self.parent = parent }
+
+        func canPaste(_ itemProviders: [NSItemProvider]) -> Bool {
+            itemProviders.contains { $0.canLoadObject(ofClass: NSString.self) }
+        }
+
+        func paste(itemProviders: [NSItemProvider]) {
+            guard let provider = itemProviders.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else { return }
+            _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+                guard let value = value as? String else { return }
+                Task { @MainActor [weak self] in self?.parent.onPaste(value) }
+            }
+        }
 
         func textFieldDidBeginEditing(_ textField: UITextField) { parent.isFocused = true }
         func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }

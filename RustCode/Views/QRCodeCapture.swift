@@ -2,12 +2,13 @@ import AVFoundation
 import Foundation
 
 /// All session configuration/start/stop operations and mutable fields below are
-/// confined to `queue`. Only the preview layer shares the session, as AVFoundation
+/// confined to `queue`. Every scanner shares that queue, so a dismissed scanner
+/// releases the camera before a reopened one tries to start it. Only the preview layer shares the session, as AVFoundation
 /// supports. Delegate and notification callbacks forward values to the main actor.
 final class QRCodeCapture: NSObject, @unchecked Sendable, AVCaptureMetadataOutputObjectsDelegate {
     let session = AVCaptureSession()
     private let output = AVCaptureMetadataOutput()
-    private let queue = DispatchQueue(label: "RustCode.pairing-camera", qos: .userInitiated)
+    private static let queue = DispatchQueue(label: "RustCode.pairing-camera", qos: .userInitiated)
     private var configured = false
     private var wantsRunning = false
     private var observers: [NSObjectProtocol] = []
@@ -34,7 +35,7 @@ final class QRCodeCapture: NSObject, @unchecked Sendable, AVCaptureMetadataOutpu
     }
 
     func setRunning(_ running: Bool) {
-        queue.async { [self] in
+        Self.queue.async { [self] in
             wantsRunning = running
             guard running else {
                 if session.isRunning { session.stopRunning() }
@@ -56,7 +57,7 @@ final class QRCodeCapture: NSObject, @unchecked Sendable, AVCaptureMetadataOutpu
 
     func setRegion(_ region: CGRect) {
         guard region.width > 0, region.height > 0 else { return }
-        queue.async { [self] in output.rectOfInterest = region }
+        Self.queue.async { [self] in output.rectOfInterest = region }
     }
 
     private func configure() throws {
@@ -91,7 +92,7 @@ final class QRCodeCapture: NSObject, @unchecked Sendable, AVCaptureMetadataOutpu
     }
 
     private func fail(_ message: String) {
-        queue.async { [self] in
+        Self.queue.async { [self] in
             guard wantsRunning else { return }
             Task { @MainActor [onFailure] in onFailure(message) }
         }
