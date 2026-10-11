@@ -410,15 +410,23 @@ pub(super) fn stats_modal_height(state: &RenderSnapshot) -> u16 {
     let windows = state.provider_rate_limits().map_or(0, |limits| {
         u16::from(limits.primary.is_some()) + u16::from(limits.secondary.is_some())
     });
+    // Padding, header and blank row, two provider rows, the two-row usage
+    // hint, turn and session totals, the billing note, a blank row and the
+    // monthly heading (or its placeholder), then whatever this session adds.
+    // The panel never shrinks below its long-standing height, so a short
+    // terminal keeps the transcript rows it had.
+    let months = state.stats_usage_history().len().min(4) as u16;
+    let rows = 13 + u16::from(state.response_time().is_some()) + months;
+    let base = rows.max(STATS_MODAL_HEIGHT);
     if windows == 0 {
-        STATS_MODAL_HEIGHT
+        base
     } else {
-        STATS_MODAL_HEIGHT + windows * STATS_QUOTA_WINDOW_ROWS - 1
+        base + windows * STATS_QUOTA_WINDOW_ROWS - 1
     }
 }
-/// Header, blank row, id/model/messages and the one-row padding above and
-/// below the panel.
-pub(super) const SESSION_MODAL_HEIGHT: u16 = 8;
+/// Header, blank row, id/model/messages, the context and token budget rows
+/// and the one-row padding above and below the panel.
+pub(super) const SESSION_MODAL_HEIGHT: u16 = 10;
 pub(super) const UPDATE_PROMPT_HEIGHT: u16 = 14;
 pub(super) const VERBOSITY_PICKER_HEIGHT: u16 = 10;
 pub(super) const YOLO_PICKER_HEIGHT: u16 = 10;

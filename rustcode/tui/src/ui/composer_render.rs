@@ -497,6 +497,25 @@ pub(super) fn format_token_count(tokens: u32) -> String {
     }
 }
 
+/// Absolute context budget for the footer: tokens occupying the window over
+/// the window size, e.g. `12k/200k`. A leading `~` marks a local estimate
+/// from transcript size, shown until the provider reports a prompt count.
+pub(super) fn context_budget_label(
+    used: u32,
+    window: u32,
+    source: super::context_usage::ContextUsageSource,
+) -> String {
+    let estimate = match source {
+        super::context_usage::ContextUsageSource::ProviderPrompt => "",
+        super::context_usage::ContextUsageSource::HistoryEstimate => "~",
+    };
+    format!(
+        "{estimate}{}/{}",
+        format_context_window(u64::from(used)),
+        format_context_window(u64::from(window))
+    )
+}
+
 /// Human-sized model context window shared by the welcome banner and the
 /// `/context` panel: the nearest thousand below a million (`128_000` →
 /// `128k`, `262_144` → `262k`), tenths of a million above (`1_000_000` → `1M`,
@@ -1184,7 +1203,8 @@ pub(super) fn render_composer_footer(
         return None;
     }
 
-    let used = super::context_usage::context_usage(state).used_tokens;
+    let context_usage = super::context_usage::context_usage(state);
+    let used = context_usage.used_tokens;
     let window = state.active_context_window().max(1);
     let remaining = rustcode_core::status::context_remaining_percent(used, window);
     let location = footer_location(state);
@@ -1245,11 +1265,31 @@ pub(super) fn render_composer_footer(
         .map(|speed| format!("{speed}  "))
         .unwrap_or_default();
     let context_right = format!("{remaining}% context left  ");
+    let budget = context_budget_label(used, window, context_usage.source);
+    let with_budget = format!("{speed}{budget} · {context_right}");
     let speed_and_context = format!("{speed}{context_right}");
     let right = if speed_and_context.width() <= row_width {
         speed_and_context
     } else {
         context_right
+    };
+    // The absolute budget is the first thing to go: it rides along only when
+    // the row holds it without costing a key hint or the task counter a single
+    // column. Session metadata that fits beside the percentage keeps every
+    // column too; metadata the percentage already clips shares the row with
+    // the budget as long as it keeps half of it.
+    let chip_needed = tasks_chip_label(state).map_or(0, |label| label.width() + 4);
+    let left_needed = match &hint_clauses {
+        Some(clauses) => fit_hint_clauses("  ", clauses, usize::MAX).map_or(0, |hint| hint.width()),
+        None if left_content.width() + chip_needed + right.width() <= row_width => {
+            left_content.width()
+        }
+        None => left_content.width().min(row_width / 2),
+    };
+    let right = if left_needed + chip_needed + with_budget.width() <= row_width {
+        with_budget
+    } else {
+        right
     };
     let right_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     let right_width = right.width();
