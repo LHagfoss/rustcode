@@ -40,6 +40,11 @@ connect to or modify a Discord account. The setting is stored as
 ## Discord application assets
 
 The built-in RustCode application/client ID is used for the IPC handshake.
+Each activity names itself `RustCode`, so the title reads "RustCode" even if
+the Developer Portal application was registered under another spelling.
+Discord clients that ignore the activity name fall back to the application
+name from the Developer Portal (General Information → Name), which should
+also be `RustCode`.
 The corresponding Discord Developer Portal application should contain a large
 image asset named `rustcode_logo`. Without that asset, the activity still
 works but Discord may omit the large image. Discord must be the desktop client

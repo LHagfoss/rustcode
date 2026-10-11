@@ -120,10 +120,27 @@ pub(crate) fn question_cancel_event() -> AppEvent {
     AppEvent::AnswerQuestion(QuestionAnswer::Cancelled)
 }
 
+#[cfg(test)]
 pub(super) fn render_popup_menu(
     f: &mut Frame,
     state: &RenderSnapshot,
     filtered_cmds: &[&CommandInfo],
+    area: ratatui::layout::Rect,
+) {
+    let rows: Vec<(&str, &str)> = filtered_cmds
+        .iter()
+        .map(|command| (command.name, command.desc))
+        .collect();
+    render_popup_rows(f, state, &rows, &state.input_buffer(), area);
+}
+
+/// Paint the slash completion menu: one `(name, description)` row per command
+/// or argument value, with the characters matching `search` marked.
+pub(super) fn render_popup_rows(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    rows: &[(&str, &str)],
+    search: &str,
     area: ratatui::layout::Rect,
 ) {
     // Scroll the menu while keeping the selected command in the space above
@@ -141,14 +158,13 @@ pub(super) fn render_popup_menu(
 
     f.render_widget(Clear, area);
     let mut popup_lines = Vec::new();
-    let name_width = filtered_cmds
+    let name_width = rows
         .iter()
-        .map(|command| command.name.width())
+        .map(|(name, _)| name.width())
         .max()
         .unwrap_or(0)
         .min(picker_column_budget(area.width as usize, 0));
-    let search = state.input_buffer();
-    for (idx, cmd) in filtered_cmds.iter().enumerate().skip(offset).take(max_rows) {
+    for (idx, (row_name, row_desc)) in rows.iter().enumerate().skip(offset).take(max_rows) {
         let is_selected = state
             .active_suggestion_index()
             .map(|i| i == idx)
@@ -159,10 +175,10 @@ pub(super) fn render_popup_menu(
         // columns is the shared picker gap, so this menu measures its rows with
         // the same rule as the inline pickers (#1528).
         let marker = if is_selected { "› " } else { "  " };
-        let name = format!("{:<name_width$}", truncate_to_width(cmd.name, name_width));
+        let name = format!("{:<name_width$}", truncate_to_width(row_name, name_width));
         let description_width = (area.width as usize)
             .saturating_sub(PICKER_MARKER_WIDTH + name_width + PICKER_COLUMN_GAP);
-        let desc_text = truncate_to_width(cmd.desc, description_width);
+        let desc_text = truncate_to_width(row_desc, description_width);
         let padding_len = description_width.saturating_sub(desc_text.width());
         let background = if is_selected {
             COLOR_PRIMARY()
@@ -410,15 +426,23 @@ pub(super) fn stats_modal_height(state: &RenderSnapshot) -> u16 {
     let windows = state.provider_rate_limits().map_or(0, |limits| {
         u16::from(limits.primary.is_some()) + u16::from(limits.secondary.is_some())
     });
+    // Padding, header and blank row, two provider rows, the two-row usage
+    // hint, turn and session totals, the billing note, a blank row and the
+    // monthly heading (or its placeholder), then whatever this session adds.
+    // The panel never shrinks below its long-standing height, so a short
+    // terminal keeps the transcript rows it had.
+    let months = state.stats_usage_history().len().min(4) as u16;
+    let rows = 13 + u16::from(state.response_time().is_some()) + months;
+    let base = rows.max(STATS_MODAL_HEIGHT);
     if windows == 0 {
-        STATS_MODAL_HEIGHT
+        base
     } else {
-        STATS_MODAL_HEIGHT + windows * STATS_QUOTA_WINDOW_ROWS - 1
+        base + windows * STATS_QUOTA_WINDOW_ROWS - 1
     }
 }
-/// Header, blank row, id/model/messages and the one-row padding above and
-/// below the panel.
-pub(super) const SESSION_MODAL_HEIGHT: u16 = 8;
+/// Header, blank row, id/model/messages, the context and token budget rows
+/// and the one-row padding above and below the panel.
+pub(super) const SESSION_MODAL_HEIGHT: u16 = 10;
 pub(super) const UPDATE_PROMPT_HEIGHT: u16 = 14;
 pub(super) const VERBOSITY_PICKER_HEIGHT: u16 = 10;
 pub(super) const YOLO_PICKER_HEIGHT: u16 = 10;

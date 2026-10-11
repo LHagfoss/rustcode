@@ -59,9 +59,9 @@ an open user panel and resumes its input surface after dismissal.
 | `/quit` | Alias of /exit; immediate exit. |
 | `/quota` | Scrollable Model quota panel; asynchronous data refresh preserves navigation and respects dismissal. |
 | `/resume` | Immediate latest-session restoration. |
-| `/session` | Existing session details panel. |
+| `/session` | Existing session details panel, with the context budget (tokens in the window, window size, percent left) and the session token total. |
 | `/skills` | Scrollable Skills catalog panel. |
-| `/stats` | Existing usage panel with captured monthly data. |
+| `/stats` | Existing usage panel with the current turn, the session total and captured monthly data. |
 | `/stop` | Immediate background-terminal stop action. |
 | `/status` | Existing session status panel with the active provider account. |
 | `/test` | TUI-only static visual demo; Escape returns to the unchanged live conversation without making model or tool calls. |
@@ -133,6 +133,67 @@ inline pickers, the command palette, the question and confirmation prompts) uses
 the shared marker, column gap and column budget in `ui/modals.rs`, so the
 absence here is a deliberate distinction and not a missing convention.
 
+## Slash completion
+
+Typing `/` at the start of a single-line draft opens the completion popup above
+the composer. The rules below are implemented in `engine/src/app/suggestion.rs`
+and `AppState::slash_completion`, and are the same for every key path.
+
+**What completes**
+
+- The command name: an exact name first, then prefixes alphabetically, then
+  fuzzy matches (`/modle` finds `/model`). A bare `/` keeps the curated order.
+- The first argument, for commands whose argument is one of a closed set of
+  values the command accepts. Values rank exact, prefix (declared order), fuzzy.
+
+| Command | Values offered |
+| --- | --- |
+| `/delegate` | `on`, `off` |
+| `/discord` | `on`, `off`, `status` |
+| `/effort` | `low`, `medium`, `high`, `off` |
+| `/model` | configured profile names (names containing spaces stay picker-only) |
+| `/pi` | `on`, `off` |
+| `/remote` | `status`, `off` |
+| `/sandbox` | every sandbox mode |
+| `/theme` | themes the terminal can load |
+| `/thinking` | `on`, `off`, `default` |
+| `/verbosity` | `low`, `high`, `toggle` |
+| `/yolo` | `on`, `off`, `toggle` |
+
+Every other command takes free-form arguments (`/context <tokens>`,
+`/change_title <title>`, `/goal <task>`, `/prompt <name>` and so on) and
+completes its name only. While such arguments are typed, or when an argument
+matches none of the values above, the popup keeps the command's own row as a
+usage hint. Only the first argument completes, and only once the command name
+is spelled out; a typo in the name is corrected first.
+
+**Keys**
+
+- **Tab** accepts the selected row on the first press. Completing a command
+  from the table leaves a space after it, so its values are offered next.
+  Arguments already typed after a command are kept.
+- **Enter** accepts the selected row and runs the command when the row is the
+  typed text or extends it (`/he` runs `/help`, `/yolo o` runs `/yolo on`). A
+  fuzzy row rewrites what was typed, so Enter only completes it into the draft
+  and a second Enter runs it. A typo never runs a command nobody spelled.
+  Accepting an `@` file also only edits the draft.
+- **Up/Down** (and Ctrl+P/Ctrl+N) move the selection. The selection restarts at
+  the first row whenever the token, argument or `@` query changes.
+- **Esc** dismisses the popup and keeps the draft. It returns as soon as the
+  completion changes (more typing, a deleted character, the first argument
+  after a dismissed command) or on Tab. Tab on a dismissed popup accepts only an
+  unambiguous match (a single row, or a spelled-out name) and otherwise just
+  shows the list again.
+
+**`@` and `/` precedence.** With the cursor in the command name the command
+completes. Past it, an `@` query under the cursor takes the popup, so a file
+can be attached to a command's free-form arguments (`/goal fix @src/main.rs`).
+
+**Multi-line drafts.** A draft with more than one line has no slash completion:
+the arrow keys belong to the cursor there. `@` file completion still works on
+any line. A draft whose first word matches no command (`/usr/local/bin …`)
+shows nothing and leaves Esc and the arrows alone.
+
 ## Panel search
 
 While a searchable picker is open, its query is typed into the composer row
@@ -148,3 +209,27 @@ then prefix, then fuzzy. The popup and the palette mark the matched characters i
 the primary color on unselected rows, so a fuzzy hit shows why it matched; a
 single-character query marks nothing, and the selected row is already marked in
 full by its background.
+
+## Token figures
+
+The footer, `/stats` (`/usage`) and `/session` report two different things:
+
+- **Context budget** is what occupies the model's context window right now.
+  The footer shows it as `used/window · N% context left`, for example
+  `12k/200k · 94% context left`; `/session` spells the same numbers out. It is
+  the prompt-token count of the latest provider request, so completion tokens
+  are not part of it. Until a provider reports a count the figure is estimated
+  from transcript size: the footer marks it with a leading `~` and `/session`
+  says `estimated` instead of `provider-counted`. On a narrow terminal the
+  absolute figures yield first and the percentage stays.
+- **Session total** is what the session has spent: the sum of the usage
+  recorded on each provider response in the transcript, shown as
+  `prompt + completion = total`. Each request re-sends the conversation, so the
+  prompt total grows much faster than the context window fills. Cached prompt
+  tokens are listed beside the total (`· N cached`) when a provider reports
+  them; they are part of the prompt count and are not subtracted. A request
+  that is still running is added from its live usage and the row is marked
+  `(estimated)` while that usage is a local estimate. Subagent transcripts are
+  not included, and responses stored without usage contribute nothing.
+
+Neither figure is a provider billing total.

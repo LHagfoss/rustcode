@@ -16,6 +16,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) const DISCORD_CLIENT_ID: &str = "1533154312622964970";
+/// Product name shown as the activity title. Without it Discord falls back to
+/// the Developer Portal application name, which is not ours to fix from code.
+const DISCORD_ACTIVITY_NAME: &str = "RustCode";
 const DISCORD_LARGE_IMAGE: &str = "rustcode_logo";
 const DISCORD_LARGE_IMAGE_TEXT: &str = "RustCode — GitHub repository";
 const DISCORD_REPOSITORY_BUTTON_LABEL: &str = "Visit repo";
@@ -165,8 +168,9 @@ fn sanitize(value: &str) -> String {
 
 fn activity_payload<'a>(presence: &'a DiscordPresence, start_time: u64) -> activity::Activity<'a> {
     activity::Activity::new()
-        .state(&presence.state)
-        .details(&presence.details)
+        .name(DISCORD_ACTIVITY_NAME)
+        .state(presence.state.as_str())
+        .details(presence.details.as_str())
         .assets(
             activity::Assets::new()
                 .large_image(DISCORD_LARGE_IMAGE)
@@ -239,9 +243,7 @@ impl DiscordRpcHandler {
         if !self.enabled || self.client.is_some() {
             return self.client.is_some();
         }
-        let Ok(mut client) = DiscordIpcClient::new(DISCORD_CLIENT_ID) else {
-            return false;
-        };
+        let mut client = DiscordIpcClient::new(DISCORD_CLIENT_ID);
         if client.connect().is_ok() {
             self.client = Some(client);
             true
@@ -485,6 +487,7 @@ mod tests {
         let payload = serde_json::to_value(activity_payload(&presence, 42))
             .expect("Discord activity should serialize");
 
+        assert_eq!(payload["name"], "RustCode");
         assert_eq!(payload["state"], "Thinking");
         assert_eq!(payload["details"], "rustcode · out 1.2k");
         assert_eq!(payload["assets"]["large_image"], "rustcode_logo");

@@ -49,38 +49,54 @@ pub(super) fn report_stale_compaction(
     ));
 }
 
-pub fn get_filtered_cmds_len(input_buffer: &str) -> usize {
-    crate::app::suggestion::filtered_commands(input_buffer).len()
+/// The edit accepting the selected completion row would make.
+struct SelectedCompletion {
+    /// Byte range of the draft the row replaces.
+    range: std::ops::Range<usize>,
+    replacement: String,
+    /// The row rewrites what was typed instead of extending it.
+    fuzzy: bool,
+    /// The row names a command whose argument values can be offered next.
+    offers_arguments: bool,
 }
 
-pub fn get_completion_len(input_buffer: &str, cursor_position: usize) -> usize {
-    if crate::app::suggestion::command_token(input_buffer).is_some() {
-        return get_filtered_cmds_len(input_buffer);
+fn selected_slash_completion(s: &AppState) -> Option<SelectedCompletion> {
+    use crate::app::suggestion::{SlashCompletion, command_completes_arguments, is_fuzzy_hit};
+    let index = s.active_suggestion_index.unwrap_or(0);
+    match s.slash_completion()? {
+        SlashCompletion::Commands { token, commands } => {
+            let command = commands[index.min(commands.len() - 1)];
+            Some(SelectedCompletion {
+                range: 0..token.len(),
+                replacement: command.name.to_owned(),
+                fuzzy: is_fuzzy_hit(command.name, token),
+                offers_arguments: token.len() == s.input_buffer.len()
+                    && command_completes_arguments(command.name, &s.argument_sources()),
+            })
+        }
+        SlashCompletion::Arguments { query, values } => {
+            let value = &values[index.min(values.len() - 1)];
+            Some(SelectedCompletion {
+                range: query.start..s.input_buffer.len(),
+                replacement: value.value.clone(),
+                fuzzy: is_fuzzy_hit(&value.value, query.query),
+                offers_arguments: false,
+            })
+        }
     }
+}
 
-    rustcode_core::input::get_at_word_query(input_buffer, cursor_position)
-        .map(|(_, query)| crate::app::list_project_file_paths(&query).len())
-        .unwrap_or(0)
+/// True when the selected row only fuzzily matches what was typed. Enter
+/// completes such a row into the draft instead of running it, so a typo never
+/// runs a command the user did not spell.
+pub fn selected_completion_is_fuzzy(s: &AppState) -> bool {
+    s.active_suggestion_index.is_some()
+        && selected_slash_completion(s).is_some_and(|selected| selected.fuzzy)
 }
 
 pub fn apply_autocomplete(s: &mut AppState) {
     s.dismissed_completion = None;
-    if let Some(command) = crate::app::suggestion::command_token(&s.input_buffer) {
-        let filtered_cmds = crate::app::suggestion::filtered_commands(&s.input_buffer);
-        let idx = s
-            .active_suggestion_index
-            .unwrap_or(0)
-            .min(filtered_cmds.len().saturating_sub(1));
-        if !filtered_cmds.is_empty() {
-            let replacement = filtered_cmds[idx].name;
-            let command_end = command.len();
-            s.input_buffer.replace_range(0..command_end, replacement);
-            s.cursor_position = replacement.len();
-        }
-        s.active_suggestion_index = None;
-    } else if let Some((at_idx, at_query)) =
-        rustcode_core::input::get_at_word_query(&s.input_buffer, s.cursor_position)
-    {
+    if let Some((at_idx, at_query)) = s.file_completion_query() {
         let files = crate::app::list_project_file_paths(&at_query);
         if !files.is_empty() {
             let idx = s
@@ -98,9 +114,42 @@ pub fn apply_autocomplete(s: &mut AppState) {
             s.cursor_position = at_idx + selected_file.len() + 1;
             s.input_buffer = new_buf;
         }
-        s.active_suggestion_index = None;
+    } else if let Some(selected) = selected_slash_completion(s) {
+        s.cursor_position = selected.range.start + selected.replacement.len();
+        s.input_buffer
+            .replace_range(selected.range, &selected.replacement);
     }
+    // The draft changed, so the popup follows it: the completed command keeps
+    // its row, and a finished `@` path closes the file list.
+    s.active_suggestion_index = None;
+    s.reset_suggestion_index();
     s.request_redraw();
+}
+
+/// Tab: accept the selected completion row. Completing a command whose first
+/// argument has known values leaves a space after it, so those values are
+/// offered next. With the popup dismissed, Tab brings it back and accepts
+/// only an unambiguous match (a single row, or a spelled-out name).
+pub fn tab_complete(s: &mut AppState) {
+    if s.active_suggestion_index.is_none() {
+        s.dismissed_completion = None;
+        s.reset_suggestion_index();
+        let unambiguous = s.completion_len() == 1
+            || selected_slash_completion(s)
+                .is_some_and(|selected| s.input_buffer[selected.range] == selected.replacement);
+        if !unambiguous {
+            s.request_redraw();
+            return;
+        }
+    }
+    let offers_arguments = s.file_completion_query().is_none()
+        && selected_slash_completion(s).is_some_and(|selected| selected.offers_arguments);
+    apply_autocomplete(s);
+    if offers_arguments {
+        s.input_buffer.push(' ');
+        s.cursor_position = s.input_buffer.len();
+        s.reset_suggestion_index();
+    }
 }
 
 pub fn check_memory_usage(s: &mut AppState) {

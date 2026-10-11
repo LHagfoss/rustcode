@@ -103,6 +103,8 @@ pub struct RenderState {
     pub steering_escape_will_interrupt: bool,
     pub active_suggestion_index: Option<usize>,
     pub dismissed_completion: Option<String>,
+    /// Theme names the frontend offers, for `/theme` completion.
+    pub theme_names: Vec<String>,
     /// Completion suffix for the token under the cursor, if any.
     pub command_suggestion: Option<String>,
 
@@ -314,11 +316,12 @@ pub fn render_state(state: &AppState) -> RenderState {
         steering_interruptible: state.can_accept_steer(),
         steering_escape_will_interrupt: state.can_accept_steer()
             && !state.modal_open()
-            && state.completion_identity().is_none()
+            && !state.completion_open()
             && state.sel_start.is_none()
             && state.sel_end.is_none(),
         active_suggestion_index: state.active_suggestion_index,
         dismissed_completion: state.dismissed_completion.clone(),
+        theme_names: state.theme_names.clone(),
         command_suggestion: state.get_command_suggestion(),
 
         history: state.history.snapshot(),

@@ -1703,6 +1703,94 @@ fn stats_and_session_panels_render_their_details_without_touching_the_transcript
 }
 
 #[test]
+fn footer_stats_and_session_show_the_context_budget_and_session_total() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let usage =
+        |prompt: u32, completion: u32, cached: Option<u32>| rustcode::controller::TokenUsage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: prompt + completion,
+            cached_tokens: cached,
+            ..Default::default()
+        };
+    let mut state = RenderState::new();
+    state.active_context_window = 200_000;
+    state.history.push(ChatMessage::new("user", "question"));
+    let mut first = ChatMessage::new("assistant", "first");
+    first.token_usage = Some(usage(10_000, 200, Some(4_000)));
+    state.history.push(first);
+    let mut second = ChatMessage::new("assistant", "second");
+    second.token_usage = Some(usage(12_000, 345, None));
+    state.history.push(second);
+    state.current_token_usage = Some(usage(12_000, 345, None));
+
+    let footer_of = |rendered: &str| {
+        rendered
+            .lines()
+            .find(|line| line.contains("context left"))
+            .unwrap_or_else(|| panic!("no footer: {rendered}"))
+            .to_owned()
+    };
+    let rendered = render_state_to_text(&mut state, 100, 24);
+    let footer = footer_of(&rendered);
+    assert!(
+        footer.ends_with("12k/200k · 94% context left  "),
+        "{footer:?}"
+    );
+
+    // Before the provider reports a prompt count the figure is an estimate.
+    state.current_token_usage = None;
+    let rendered = render_state_to_text(&mut state, 100, 24);
+    let footer = footer_of(&rendered);
+    assert!(
+        footer.contains("~") && footer.contains("/200k · "),
+        "{footer:?}"
+    );
+    state.current_token_usage = Some(usage(12_000, 345, None));
+
+    // A narrow row keeps the percentage and drops the absolute budget first.
+    let rendered = render_state_to_text(&mut state, 34, 24);
+    let footer = footer_of(&rendered);
+    assert!(!footer.contains("/200k"), "{footer:?}");
+
+    state.show_stats_modal = true;
+    let stats = render_state_to_text(&mut state, 100, 40);
+    let total = stats
+        .lines()
+        .find(|line| line.contains("Session total"))
+        .unwrap_or_else(|| panic!("no session total: {stats}"));
+    assert!(
+        total.contains("22,000 prompt + 545 completion = 22,545 tokens · 4,000 cached"),
+        "{total:?}"
+    );
+    assert!(!total.contains("estimated"), "{total:?}");
+
+    // The request still running is counted on top and labelled.
+    state.token_usage_in_flight = true;
+    state.current_turn_token_usage_is_estimated = true;
+    state.current_round_token_usage = Some(usage(13_000, 55, None));
+    let stats = render_state_to_text(&mut state, 100, 40);
+    assert!(
+        stats.contains("35,000 prompt + 600 completion = 35,600 tokens · 4,000 cached (estimated)"),
+        "{stats}"
+    );
+    state.token_usage_in_flight = false;
+    state.current_round_token_usage = None;
+
+    state.show_stats_modal = false;
+    state.show_session_modal = true;
+    let session = render_state_to_text(&mut state, 100, 24);
+    assert!(
+        session.contains("12,000 of 200,000 tokens · 94% left (provider-counted)"),
+        "{session}"
+    );
+    assert!(
+        session.contains("22,000 prompt + 545 completion = 22,545 tokens · 4,000 cached"),
+        "{session}"
+    );
+}
+
+#[test]
 fn session_panel_text_can_be_selected_and_copied_without_panel_padding() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -1772,8 +1860,10 @@ fn session_panel_text_can_be_selected_and_copied_without_panel_padding() {
             .contains(Modifier::REVERSED),
         "the selected panel text is visibly highlighted"
     );
+    // The usage panel is a different height from the session panel (the
+    // status panel is not, now that /session lists its token budget).
     state.show_session_modal = false;
-    state.show_status_modal = true;
+    state.show_stats_modal = true;
     let previous_area = area;
     terminal
         .draw(|frame| {
@@ -1783,15 +1873,15 @@ fn session_panel_text_can_be_selected_and_copied_without_panel_padding() {
     assert_ne!(
         transcript.panel_selection_area,
         Some(previous_area),
-        "the taller provider-aware status panel should have its own selection surface"
+        "the taller usage panel should have its own selection surface"
     );
     assert!(
         !transcript.panel_selection.has_selection(),
-        "a resized status panel must not inherit the session panel range"
+        "a resized usage panel must not inherit the session panel range"
     );
     assert!(transcript.panel_selection.selected_text().is_none());
 
-    state.show_status_modal = false;
+    state.show_stats_modal = false;
     terminal
         .draw(|frame| {
             render_with_transcript(frame, &mut state, &mut transcript);

@@ -241,12 +241,30 @@ pub(crate) fn render_with_transcript_snapshot(
         );
     }
 
-    let completion_dismissed =
-        state.dismissed_completion() == state.completion_identity().as_deref();
-    let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed || state.modal_open() {
-        Vec::new()
+    // The engine resolves which completion applies (command, argument or
+    // `@` file) and whether it was dismissed; a panel hides all of them.
+    let popup = if state.modal_open() {
+        rustcode::controller::CompletionPopup::None
     } else {
-        rustcode::controller::filtered_commands(&state.input_buffer())
+        state.completion_popup()
+    };
+    let slash_rows: Vec<(&str, &str)> = match &popup {
+        rustcode::controller::CompletionPopup::Commands(commands) => commands
+            .iter()
+            .map(|command| (command.name, command.desc))
+            .collect(),
+        rustcode::controller::CompletionPopup::Arguments { values, .. } => values
+            .iter()
+            .map(|value| (value.value.as_str(), value.desc.as_str()))
+            .collect(),
+        _ => Vec::new(),
+    };
+    // Matched characters are marked against what was typed for the rows shown:
+    // the argument while values are offered, the whole draft for commands.
+    let input_buffer = state.input_buffer();
+    let slash_search = match &popup {
+        rustcode::controller::CompletionPopup::Arguments { query, .. } => query.as_str(),
+        _ => input_buffer,
     };
 
     let inner_width = f.area().width.max(1);
@@ -270,31 +288,23 @@ pub(crate) fn render_with_transcript_snapshot(
     };
     let queue_block_height = queue_preview_height(state, inner_width as usize);
 
-    let (_, at_query) =
-        rustcode_core::input::get_at_word_query(&state.input_buffer(), state.cursor_position())
-            .unwrap_or((0, String::new()));
-    let at_files = if !completion_dismissed
-        && !state.modal_open()
-        && (!at_query.is_empty()
-            || state.input_buffer()
-                [..safe_byte_index(&state.input_buffer(), state.cursor_position())]
-                .ends_with('@'))
-    {
-        rustcode::controller::list_project_file_paths(&at_query)
-    } else {
-        Vec::new()
+    let at_files = match &popup {
+        rustcode::controller::CompletionPopup::Files { query } => {
+            rustcode::controller::list_project_file_paths(query)
+        }
+        _ => Vec::new(),
     };
     let popup_rows = if approval_active || question_active {
         0
-    } else if !filtered_cmds.is_empty() {
-        (filtered_cmds.len() as u16).min(MAX_POPUP_ROWS)
+    } else if !slash_rows.is_empty() {
+        (slash_rows.len() as u16).min(MAX_POPUP_ROWS)
     } else if !at_files.is_empty() {
         (at_files.len() as u16).min(8)
     } else {
         0
     };
-    let popup_hint = if !filtered_cmds.is_empty() || !at_files.is_empty() {
-        Some(completion_footer_hint_clauses(!filtered_cmds.is_empty()))
+    let popup_hint = if !slash_rows.is_empty() || !at_files.is_empty() {
+        Some(completion_footer_hint_clauses(!slash_rows.is_empty()))
     } else {
         None
     };
@@ -562,7 +572,7 @@ pub(crate) fn render_with_transcript_snapshot(
         transcript.tasks_chip = None;
     }
 
-    if !filtered_cmds.is_empty() {
+    if !slash_rows.is_empty() {
         let input_inner = chunks[8].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
@@ -570,7 +580,7 @@ pub(crate) fn render_with_transcript_snapshot(
             input_inner.width,
             chunks[7].height,
         );
-        render_popup_menu(f, state, &filtered_cmds, popup_area);
+        render_popup_rows(f, state, &slash_rows, slash_search, popup_area);
     } else if !at_files.is_empty() {
         let input_inner = chunks[8].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(

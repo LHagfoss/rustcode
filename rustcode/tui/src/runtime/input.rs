@@ -2002,8 +2002,7 @@ pub(super) async fn handle_app_event(
                     }
                     KeyCode::Up => {
                         let mut s = app_state.lock().await;
-                        let completion_len =
-                            rustcode::app::get_completion_len(&s.input_buffer, s.cursor_position);
+                        let completion_len = s.completion_len();
                         if s.active_suggestion_index.is_some() && completion_len > 0 {
                             let current = s.active_suggestion_index.unwrap_or(0);
                             s.active_suggestion_index = Some(if current == 0 {
@@ -2033,8 +2032,7 @@ pub(super) async fn handle_app_event(
                     }
                     KeyCode::Down => {
                         let mut s = app_state.lock().await;
-                        let completion_len =
-                            rustcode::app::get_completion_len(&s.input_buffer, s.cursor_position);
+                        let completion_len = s.completion_len();
                         if s.active_suggestion_index.is_some() && completion_len > 0 {
                             let current = s.active_suggestion_index.unwrap_or(0);
                             s.active_suggestion_index = Some(if current + 1 >= completion_len {
@@ -2205,8 +2203,7 @@ pub(super) async fn handle_app_event(
                         if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                     {
                         let mut s = app_state.lock().await;
-                        let completion_len =
-                            rustcode::app::get_completion_len(&s.input_buffer, s.cursor_position);
+                        let completion_len = s.completion_len();
                         if s.active_suggestion_index.is_some() && completion_len > 0 {
                             let current = s.active_suggestion_index.unwrap_or(0);
                             s.active_suggestion_index = Some(if key.code == KeyCode::Char('p') {
