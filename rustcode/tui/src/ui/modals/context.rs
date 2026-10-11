@@ -190,7 +190,7 @@ pub(in crate::ui) fn render_stats_modal(
                 ""
             };
             lines.push(panel_line(
-                "Session turn",
+                "Session turn  ",
                 &format!(
                     "{} prompt + {} completion = {} tokens{estimate}",
                     usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
@@ -199,11 +199,16 @@ pub(in crate::ui) fn render_stats_modal(
             ));
         }
         None => lines.push(panel_line(
-            "Session turn",
+            "Session turn  ",
             "no token data yet",
             PanelEmphasis::Normal,
         )),
     }
+    lines.push(panel_line(
+        "Session total ",
+        &session_total_summary(state),
+        PanelEmphasis::Normal,
+    ));
     if let Some(rt) = state.response_time() {
         lines.push(panel_line(
             "Latency     ",
@@ -264,6 +269,12 @@ pub(in crate::ui) fn render_session_modal(
         .iter()
         .filter(|m| m.role == "assistant")
         .count();
+    let context = crate::ui::context_usage::context_usage(state);
+    let window = state.active_context_window().max(1);
+    let context_source = match context.source {
+        crate::ui::context_usage::ContextUsageSource::ProviderPrompt => "provider-counted",
+        crate::ui::context_usage::ContextUsageSource::HistoryEstimate => "estimated",
+    };
     let lines = vec![
         modal_header("Session"),
         Line::default(),
@@ -278,9 +289,49 @@ pub(in crate::ui) fn render_session_modal(
             &format!("{user_count} user · {assistant_count} assistant"),
             PanelEmphasis::Normal,
         ),
+        panel_line(
+            "Context    ",
+            &format!(
+                "{} of {} tokens · {}% left ({context_source})",
+                thousands(u64::from(context.used_tokens)),
+                thousands(u64::from(window)),
+                rustcode_core::status::context_remaining_percent(context.used_tokens, window)
+            ),
+            PanelEmphasis::Normal,
+        ),
+        panel_line(
+            "Tokens     ",
+            &session_total_summary(state),
+            PanelEmphasis::Normal,
+        ),
     ];
 
     render_modal_body(f, lines, inner);
+}
+
+/// One-line session total shared by `/stats` and `/session`: the sum of the
+/// usage recorded per provider response, with cached prompt tokens reported
+/// beside it rather than subtracted.
+fn session_total_summary(state: &RenderSnapshot) -> String {
+    let total = crate::ui::context_usage::session_token_total(state);
+    if total.responses == 0 {
+        return "no token data yet".to_owned();
+    }
+    let cached = if total.cached_tokens > 0 {
+        format!(" · {} cached", thousands(total.cached_tokens))
+    } else {
+        String::new()
+    };
+    // Only the request still running can be a local estimate; once a response
+    // is recorded its usage is whatever the provider (or the engine, for a
+    // provider that reports none) settled on.
+    let estimate = if total.estimated { " (estimated)" } else { "" };
+    format!(
+        "{} prompt + {} completion = {} tokens{cached}{estimate}",
+        thousands(total.prompt_tokens),
+        thousands(total.completion_tokens),
+        thousands(total.total_tokens),
+    )
 }
 
 /// Title row shared by the read-only info modals: bold title plus the key that

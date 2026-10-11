@@ -59,9 +59,9 @@ an open user panel and resumes its input surface after dismissal.
 | `/quit` | Alias of /exit; immediate exit. |
 | `/quota` | Scrollable Model quota panel; asynchronous data refresh preserves navigation and respects dismissal. |
 | `/resume` | Immediate latest-session restoration. |
-| `/session` | Existing session details panel. |
+| `/session` | Existing session details panel, with the context budget (tokens in the window, window size, percent left) and the session token total. |
 | `/skills` | Scrollable Skills catalog panel. |
-| `/stats` | Existing usage panel with captured monthly data. |
+| `/stats` | Existing usage panel with the current turn, the session total and captured monthly data. |
 | `/stop` | Immediate background-terminal stop action. |
 | `/status` | Existing session status panel with the active provider account. |
 | `/test` | TUI-only static visual demo; Escape returns to the unchanged live conversation without making model or tool calls. |
@@ -148,3 +148,27 @@ then prefix, then fuzzy. The popup and the palette mark the matched characters i
 the primary color on unselected rows, so a fuzzy hit shows why it matched; a
 single-character query marks nothing, and the selected row is already marked in
 full by its background.
+
+## Token figures
+
+The footer, `/stats` (`/usage`) and `/session` report two different things:
+
+- **Context budget** is what occupies the model's context window right now.
+  The footer shows it as `used/window · N% context left`, for example
+  `12k/200k · 94% context left`; `/session` spells the same numbers out. It is
+  the prompt-token count of the latest provider request, so completion tokens
+  are not part of it. Until a provider reports a count the figure is estimated
+  from transcript size: the footer marks it with a leading `~` and `/session`
+  says `estimated` instead of `provider-counted`. On a narrow terminal the
+  absolute figures yield first and the percentage stays.
+- **Session total** is what the session has spent: the sum of the usage
+  recorded on each provider response in the transcript, shown as
+  `prompt + completion = total`. Each request re-sends the conversation, so the
+  prompt total grows much faster than the context window fills. Cached prompt
+  tokens are listed beside the total (`· N cached`) when a provider reports
+  them; they are part of the prompt count and are not subtracted. A request
+  that is still running is added from its live usage and the row is marked
+  `(estimated)` while that usage is a local estimate. Subagent transcripts are
+  not included, and responses stored without usage contribute nothing.
+
+Neither figure is a provider billing total.
