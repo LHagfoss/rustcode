@@ -37,7 +37,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["clock", "s
 chrono-tz = { version = "0.10.4", features = ["serde"] }
 clap = { version = "4.6.4", features = ["derive"] }
 cron = "0.15.0"
-discord-rich-presence = "=0.2.4"
+discord-rich-presence = "=1.1.0"
 futures-util = "0.3.32"
 fs2 = "0.4.3"
 globset = "0.4"
