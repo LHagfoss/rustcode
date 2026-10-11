@@ -312,11 +312,10 @@ private struct SessionSidebar: View {
             } label: {
                 Label("New", systemImage: "square.and.pencil")
                     .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    .foregroundStyle(.white)
-                    .background(.brandFill, in: .capsule)
+                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.plain)
+            .brandProminentButtonStyle()
+            .controlSize(.large)
             .disabled(store.connection != .connected)
             .accessibilityIdentifier("newSession")
             .padding(.horizontal, 16)
