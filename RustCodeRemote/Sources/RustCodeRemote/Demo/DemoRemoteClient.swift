@@ -32,7 +32,11 @@ public actor DemoRemoteClient: RemoteClient {
 
     /// - Parameter pace: the delay between streamed chunks. `.zero` makes scripts run as
     ///   fast as the scheduler allows, which is what tests want.
-    public init(pace: Duration = .milliseconds(45), includeQuestionChain: Bool = false) {
+    /// How many more `createSession` calls go unanswered, to show the unconfirmed state.
+    private var unconfirmedCreations: Int
+
+    public init(pace: Duration = .milliseconds(45), includeQuestionChain: Bool = false, unconfirmedCreations: Int = 0) {
+        self.unconfirmedCreations = unconfirmedCreations
         self.pace = pace
         var seed = Self.seed()
         if includeQuestionChain, var chain = seed.first(where: { $0.summary.id == Self.questionSessionID }) {
@@ -111,6 +115,11 @@ public actor DemoRemoteClient: RemoteClient {
     public func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary {
         guard isConnected else { throw RemoteError.notConnected }
         if let created = createdSessions[requestID] { return created }
+        if unconfirmedCreations > 0 {
+            unconfirmedCreations -= 1
+            // The host's wording when a new session's owner has not registered in time.
+            throw RemoteError.outcomeUnknown(detail: "session is starting; retry with the same request identifier to check it")
+        }
         let ref = SessionRef(sessionID: "demo-created-\(UUID().uuidString)", registrationEpoch: 1)
         let summary = SessionSummary(ref: ref, title: "", workspace: directory ?? "/Users/demo", model: "demo-model", turnCount: 0)
         var state = SessionSnapshot(session: ref)

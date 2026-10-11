@@ -26,6 +26,7 @@ struct LaunchOptions {
     var expandsTools = false
     var presentsSettings = false
     var selectsFirstOption = false
+    var leavesFirstCreateUnconfirmed = false
 
     init(arguments: [String]) {
         startsDemo = arguments.contains("-demo")
@@ -45,6 +46,7 @@ struct LaunchOptions {
         expandsTools = arguments.contains("-demoExpandTools")
         presentsSettings = arguments.contains("-demoSettings")
         selectsFirstOption = arguments.contains("-demoSelectOption")
+        leavesFirstCreateUnconfirmed = arguments.contains("-demoUnconfirmedCreate")
         if let index = arguments.firstIndex(of: "-demoDraft"), arguments.indices.contains(index + 1) {
             composerDraft = arguments[index + 1]
         }

@@ -7,24 +7,30 @@ public enum PairingCodeInput {
     }
 
     /// Use the actual selection and replacement to distinguish deleting the
-    /// separator from pasting the same eight digits. Return the caret's position
-    /// in the formatted ASCII text so editing never jumps to the end.
+    /// separator from pasting the same eight digits. `range` and the returned
+    /// caret are UTF-16 offsets, the units UIKit selections are measured in, so
+    /// text that is not yet formatted cannot shift the edit. A range reaching
+    /// past the text is clamped to it.
     public static func replacing(_ current: String, range: Range<Int>, with replacement: String) -> (text: String, caret: Int) {
-        let characters = Array(current)
-        guard range.lowerBound >= 0, range.upperBound <= characters.count else {
-            return (current, characters.count)
-        }
-        var start = range.lowerBound
-        if replacement.isEmpty, range.count == 1, start > 0, characters[start] == "-" {
+        let units = Array(current.utf16)
+        let lower = min(max(range.lowerBound, 0), units.count)
+        let upper = min(max(range.upperBound, lower), units.count)
+        var start = lower
+        // Backspacing the separator removes the digit before it instead.
+        if replacement.isEmpty, upper - lower == 1, start > 0, units[start] == separator {
             start -= 1
         }
-        let prefix = String(characters[..<start]) + replacement
-        let candidate = prefix + String(characters[range.upperBound...])
+        let prefix = String(decoding: units[..<start], as: UTF16.self) + replacement
+        let candidate = prefix + String(decoding: units[upper...], as: UTF16.self)
         let text = formatted(candidate)
+        // The caret follows the digits typed so far. The result is ASCII, so
+        // its character and UTF-16 offsets are the same.
         let digitsBeforeCaret = prefix.filter { $0.isASCII && $0.isNumber }.count
         let caret = digitsBeforeCaret + (digitsBeforeCaret >= 4 ? 1 : 0)
-        return (text, min(caret, text.count))
+        return (text, min(caret, text.utf16.count))
     }
+
+    private static let separator = UInt16(UInt8(ascii: "-"))
 
     public static func isComplete(_ input: String) -> Bool {
         let bare = input.filter { $0 != "-" }

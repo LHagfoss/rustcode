@@ -141,7 +141,7 @@ struct LineCodec: RemoteCodec {
         )
         case ("resumed", _): .attached(.resumed, origin: ReplayOrigin(gatewayID: "gw-1", instanceID: "inst-1"))
         case ("content", let text): .content(ContentChunk(contentID: "c", offset: 0, text: text, totalBytes: 1, nextOffset: nil))
-        case ("receipt-unknown", _): .failure(.outcomeUnknown)
+        case ("receipt-unknown", _): .failure(.outcomeUnknown())
         case ("mystery", _): .unknown("mystery")
         case ("detached", _): .detached
         case ("receipt", "received"): .receipt(.received)

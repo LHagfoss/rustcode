@@ -48,7 +48,11 @@ public final class RemoteStore {
     public private(set) var isUploadingImages = false
     public var supportsImageUpload: Bool { attached?.capabilities.contains("upload_image") == true }
     private var hostGeneration: UInt64 = 0
-    private var pendingCreation: (directory: String?, requestID: RequestID)?
+    /// The create request the host has not confirmed yet, in flight or left uncertain.
+    public private(set) var pendingCreation: PendingSessionCreation?
+    /// Advances whenever a creation is started, abandoned or cancelled, so a late answer to
+    /// an earlier attempt cannot select a session or clear newer state.
+    private var creationAttempt: UInt64 = 0
     /// True while the full detail of the pending approval is being fetched.
     public private(set) var isLoadingApprovalDetails = false
 
@@ -254,34 +258,51 @@ public final class RemoteStore {
         return listing
     }
 
-    /// An uncertain creation keeps its request ID, so an explicit retry cannot create twice.
+    /// An uncertain creation keeps its request ID, so retrying the same folder cannot create
+    /// twice. Starting in a different folder abandons the earlier request: it gets a new
+    /// identity and a late answer to the old one is ignored.
     public func createSession(directory: String? = nil) async -> Bool {
-        guard connection == .connected, !isCreatingSession else { return false }
-        if let pendingCreation, pendingCreation.directory != directory {
-            notice = "Check the session list or retry the previous folder before starting another session."
-            return false
-        }
+        guard connection == .connected else { return false }
+        let retried = pendingCreation.flatMap { $0.directory == directory ? $0 : nil }
+        // Only a second submit of the folder already being started is debounced.
+        if isCreatingSession, retried != nil { return false }
+        var pending = retried ?? PendingSessionCreation(directory: directory, requestID: RequestID(), startedAt: Date())
+        pending.hostMessage = nil
+        pendingCreation = pending
         let creationGeneration = hostGeneration
+        creationAttempt &+= 1
+        let attempt = creationAttempt
         isCreatingSession = true
-        defer { if hostGeneration == creationGeneration { isCreatingSession = false } }
-        let id = pendingCreation?.requestID ?? RequestID()
-        pendingCreation = (directory, id)
+        var isCurrent: Bool { hostGeneration == creationGeneration && creationAttempt == attempt }
+        defer { if isCurrent { isCreatingSession = false } }
         do {
-            let session = try await client.createSession(directory: directory, requestID: id)
-            guard hostGeneration == creationGeneration else { return false }
+            let session = try await client.createSession(directory: directory, requestID: pending.requestID)
+            guard isCurrent else { return false }
             pendingCreation = nil
             if !sessions.contains(where: { $0.id == session.id }) { sessions.insert(session, at: 0) }
             select(session.id)
             return true
         } catch RemoteError.rejected(let rejection) {
-            guard hostGeneration == creationGeneration else { return false }
+            guard isCurrent else { return false }
             pendingCreation = nil
             notice = RemoteError.rejected(rejection).localizedDescription
         } catch {
-            guard hostGeneration == creationGeneration else { return false }
-            notice = "Session creation wasn’t confirmed. Check the session list or retry this folder safely."
+            guard isCurrent else { return false }
+            // The host's own words say more than a generic notice can; keep them verbatim.
+            let message = (error as? RemoteError)?.errorDescription ?? error.localizedDescription
+            pendingCreation?.hostMessage = message
+            notice = "The Mac has not confirmed the session: \(message)"
         }
         return false
+    }
+
+    /// Stops waiting for the unconfirmed creation. The host has no way to withdraw it, so a
+    /// session it still finishes starting arrives through the session list.
+    public func cancelPendingCreation() {
+        guard pendingCreation != nil else { return }
+        creationAttempt &+= 1
+        pendingCreation = nil
+        isCreatingSession = false
     }
 
     /// Asks the host for the session list again. The connection stays as it is.
@@ -575,6 +596,7 @@ public final class RemoteStore {
     private func resetHostState() {
         hostGeneration &+= 1
         isCreatingSession = false
+        creationAttempt &+= 1
         isUploadingImages = false
         client = liveClient
         credential = nil

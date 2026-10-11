@@ -111,7 +111,7 @@ or turn. Commands that still require the Mac interface are marked **On Mac** and
 your draft when selected; listing a command does not imply mobile execution support.
 
 The `+` button opens an anchored glass menu with **Camera**, **Photos**, and **Files**,
-plus **New Session**, **Slash Commands**, and **Choose Folder**. Files accepts images;
+plus **New Session**, **Slash Commands**, and **New Session in Folder**. Files accepts images;
 other document uploads are not supported by the host. Attach up to four images,
 preview or remove them, then send with or without a written message. Images are downsampled to 2048 pixels,
 converted to JPEG without location metadata, and uploaded to the paired Mac before the

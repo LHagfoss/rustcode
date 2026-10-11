@@ -9,7 +9,6 @@ struct QRScannerSheet: View {
     let onScan: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
     @State private var access: Access = .checking
     @State private var retryCount = 0
 
@@ -18,7 +17,7 @@ struct QRScannerSheet: View {
         case ready
         case denied
         case unsupported
-        case failed(String)
+        case failed(PairingScannerFailure)
     }
 
     var body: some View {
@@ -28,7 +27,7 @@ struct QRScannerSheet: View {
                 case .checking:
                     ProgressView("Opening Camera…")
                 case .ready:
-                    QRScanner(isActive: scenePhase == .active, onScan: onScan, onFailure: { access = .failed($0) })
+                    QRScanner(onScan: onScan, onFailure: { access = .failed($0) })
                         .ignoresSafeArea(edges: .bottom)
                         .overlay(alignment: .bottom) {
                             Text("Point the camera at the QR code shown by /remote")
@@ -50,13 +49,21 @@ struct QRScannerSheet: View {
                             }
                         }
                     }
-                case .failed(let message):
+                case .failed(let failure):
                     ContentUnavailableView {
                         Label("Camera Couldn’t Start", systemImage: "camera")
                     } description: {
-                        Text(message)
+                        Text(failure.message)
                     } actions: {
+                        // Retrying re-checks access and builds a fresh capture session in this sheet.
                         Button("Try Again") { access = .checking; retryCount += 1 }
+                        if failure.offersSettings {
+                            Button("Open Settings") {
+                                if let url = URL(string: UIApplication.openSettingsURLString) {
+                                    UIApplication.shared.open(url)
+                                }
+                            }
+                        }
                         Button("Enter Code Manually") { dismiss() }
                     }
                 case .unsupported:
@@ -80,16 +87,21 @@ struct QRScannerSheet: View {
             }
             .task(id: retryCount) {
                 // A permission prompt makes the scene inactive. Do not cancel that
-                // permission request; scene changes only pause/resume capture.
+                // permission request; only backgrounding pauses capture.
                 if case .ready = access { return }
                 // Apply the result even if SwiftUI restarted this task while the
                 // sheet settled; dropping it would leave "Opening Camera…" up forever.
                 access = await resolveAccess()
             }
-            .onChange(of: scenePhase) { _, phase in
+            // UIKit's notification, not `scenePhase`: inside a sheet the environment
+            // value can be stale, which used to leave the camera paused on a black view.
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 // Returning from Settings can grant permission without reopening
-                // this sheet. Only refresh a denied result, not a pending prompt.
-                guard phase == .active, case .denied = access else { return }
+                // this sheet. Only refresh a result Settings can change, not a pending prompt.
+                switch access {
+                case .denied, .failed(.accessRevoked): break
+                default: return
+                }
                 access = .checking
                 retryCount += 1
             }
@@ -111,20 +123,17 @@ struct QRScannerSheet: View {
 }
 
 private struct QRScanner: UIViewControllerRepresentable {
-    let isActive: Bool
     let onScan: (String) -> Void
-    let onFailure: (String) -> Void
+    let onFailure: (PairingScannerFailure) -> Void
 
     func makeUIViewController(context: Context) -> ScannerController {
         ScannerController(onScan: onScan, onFailure: onFailure)
     }
 
-    func updateUIViewController(_ controller: ScannerController, context: Context) {
-        controller.setActive(isActive)
-    }
+    func updateUIViewController(_ controller: ScannerController, context: Context) {}
 
     static func dismantleUIViewController(_ controller: ScannerController, coordinator: ()) {
-        controller.setActive(false)
+        controller.stop()
     }
 }
 
@@ -132,7 +141,7 @@ private struct QRScanner: UIViewControllerRepresentable {
 /// serial background queue; presentation, preview readiness and delivery stay here.
 private final class ScannerController: UIViewController {
     private let onScan: (String) -> Void
-    private let onFailure: (String) -> Void
+    private let onFailure: (PairingScannerFailure) -> Void
     private var lifecycle = PairingScannerLifecycle()
     private let guide = CAShapeLayer()
     private let loading = UIActivityIndicatorView(style: .large)
@@ -140,13 +149,13 @@ private final class ScannerController: UIViewController {
     private var previewTimeout: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.lhagfoss.rustcode", category: "PairingCamera")
     private lazy var capture = QRCodeCapture(
-        onStart: { [weak self] in self?.captureStarted() },
+        onStart: { [weak self] in self?.captureStarted(run: $0) },
         onCode: { [weak self] in self?.deliver($0) },
         onFailure: { [weak self] in self?.reportFailure($0) }
     )
     private lazy var preview = AVCaptureVideoPreviewLayer(session: capture.session)
 
-    init(onScan: @escaping (String) -> Void, onFailure: @escaping (String) -> Void) {
+    init(onScan: @escaping (String) -> Void, onFailure: @escaping (PairingScannerFailure) -> Void) {
         self.onScan = onScan
         self.onFailure = onFailure
         super.init(nibName: nil, bundle: nil)
@@ -176,7 +185,16 @@ private final class ScannerController: UIViewController {
                 updatePreviewLoading()
             }
         }
+        // Capture follows the app's own foreground state. An inactive scene (the
+        // permission prompt, Control Center) keeps the camera, so a brief
+        // interruption cannot stop and restart it underneath the preview.
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(willEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
     }
+
+    @objc private func didEnterBackground() { setForeground(false) }
+    @objc private func willEnterForeground() { setForeground(true) }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -204,7 +222,7 @@ private final class ScannerController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        lifecycle.update(visible: true, active: lifecycle.isActive)
+        lifecycle.update(visible: true, active: UIApplication.shared.applicationState != .background)
         updateCapture()
     }
 
@@ -214,23 +232,32 @@ private final class ScannerController: UIViewController {
         super.viewWillDisappear(animated)
     }
 
-    func setActive(_ active: Bool) {
-        guard active != lifecycle.isActive else { return }
-        lifecycle.update(visible: lifecycle.isVisible, active: active)
+    func stop() {
+        lifecycle.update(visible: false, active: lifecycle.isActive)
+        updateCapture()
+    }
+
+    private func setForeground(_ foreground: Bool) {
+        guard foreground != lifecycle.isActive else { return }
+        lifecycle.update(visible: lifecycle.isVisible, active: foreground)
         updateCapture()
     }
 
     private func updateCapture() {
-        capture.setRunning(lifecycle.shouldRun)
+        capture.setRunning(lifecycle.shouldRun, run: lifecycle.run)
+        lifecycle.previewChanged(preview.isPreviewing)
         updatePreviewLoading()
     }
 
-    private func captureStarted() {
-        guard lifecycle.shouldRun else { return }
+    private func captureStarted(run: Int) {
+        let wasStarting = lifecycle.isStarting
+        lifecycle.sessionStarted(run: run)
+        // A start queued before a pause or restart is not this run's start.
+        guard wasStarting, lifecycle.hasStarted else { return }
         view.setNeedsLayout()
+        // Replace the startup bound with the shorter wait for the first frame.
         previewTimeout?.cancel()
         previewTimeout = nil
-        lifecycle.sessionStarted()
         lifecycle.previewChanged(preview.isPreviewing)
         updatePreviewLoading()
     }
@@ -243,34 +270,49 @@ private final class ScannerController: UIViewController {
             previewTimeout = nil
         } else {
             guard previewTimeout == nil else { return }
-            // Cold camera startup gets its own bound. Once startRunning returns,
-            // captureStarted replaces this with the shorter preview watchdog.
-            let starting = lifecycle.isStarting
+            // Startup and the first frame have separate bounds; see PairingScannerLifecycle.
+            let timeout = lifecycle.timeout
             previewTimeout = Task { @MainActor [weak self] in
                 // Poll the layer as well as observing it: a missed observation must
                 // not leave the spinner over a working camera, or end in an error.
-                let deadline = ContinuousClock.now + .seconds(starting ? 20 : 8)
+                let deadline = ContinuousClock.now + timeout
                 while ContinuousClock.now < deadline {
                     do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-                    guard let self, lifecycle.shouldRun, !lifecycle.hasPreview else { return }
-                    guard preview.isPreviewing else { continue }
-                    lifecycle.previewChanged(true)
+                    guard let self, lifecycle.shouldRun else { return }
+                    lifecycle.previewChanged(preview.isPreviewing)
+                    guard lifecycle.hasPreview else { continue }
                     updatePreviewLoading()
                     return
                 }
-                guard let self, lifecycle.shouldRun, !lifecycle.hasPreview else { return }
-                logger.error("Preview timeout: running=\(self.capture.session.isRunning) connected=\(self.preview.connection != nil) enabled=\(self.preview.connection?.isEnabled ?? false) active=\(self.preview.connection?.isActive ?? false) attached=\(self.view.window != nil) width=\(self.preview.bounds.width) height=\(self.preview.bounds.height)")
-                reportFailure("The camera did not begin showing video. Try Again, or enter the code manually.")
+                guard !Task.isCancelled else { return }
+                self?.previewTimedOut()
             }
         }
     }
 
-    private func reportFailure(_ message: String) {
+    private func previewTimedOut() {
+        previewTimeout = nil
+        lifecycle.previewChanged(preview.isPreviewing)
+        let running = capture.session.isRunning
+        logger.error("Preview timeout: running=\(running) connected=\(self.preview.connection != nil) enabled=\(self.preview.connection?.isEnabled ?? false) active=\(self.preview.connection?.isActive ?? false) attached=\(self.view.window != nil) width=\(self.preview.bounds.width) height=\(self.preview.bounds.height)")
+        switch lifecycle.previewTimedOut() {
+        case .ignore:
+            updatePreviewLoading()
+        case .restart:
+            capture.setRunning(true, run: lifecycle.run, restarting: true)
+            updatePreviewLoading()
+        case .fail:
+            let authorized = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+            reportFailure(.timedOut(authorized: authorized, sessionRunning: running))
+        }
+    }
+
+    private func reportFailure(_ failure: PairingScannerFailure) {
         guard lifecycle.shouldRun else { return }
         capture.setRunning(false)
         previewTimeout?.cancel()
         previewTimeout = nil
-        onFailure(message)
+        onFailure(failure)
     }
 
     private func deliver(_ payload: String) {

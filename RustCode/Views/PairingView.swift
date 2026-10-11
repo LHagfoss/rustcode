@@ -11,10 +11,13 @@ struct PairingView: View {
     @State private var showsScanner = false
     @State private var scannedPayload: String?
     @State private var discovery = NearbyHostDiscovery()
-    @State private var addressFocused = false
-    @State private var codeFocused = false
+    /// One value for both fields, so they can never both claim the keyboard.
+    @State private var focus: Field?
+
+    private enum Field { case address, code }
 
     private static let errorID = "pairingError"
+    private static let connectID = "pairingConnect"
 
     private var isPairing: Bool { store.pairing == .pairing }
 
@@ -50,6 +53,12 @@ struct PairingView: View {
                     guard case .failed = pairing else { return }
                     withAnimation { proxy.scrollTo(Self.errorID, anchor: .bottom) }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                    // The Form only reveals the field being edited. Bring Connect
+                    // above the keyboard bar too, so the bar never covers it.
+                    guard focus != nil else { return }
+                    withAnimation { proxy.scrollTo(Self.connectID, anchor: .bottom) }
+                }
             }
             .scrollDismissesKeyboard(.interactively)
             .background { PairingKeyboardDismissal(dismiss: dismissKeyboard) }
@@ -66,9 +75,6 @@ struct PairingView: View {
                     .accessibilityHint("Opens sample sessions without connecting to a Mac")
                     .disabled(isPairing)
                 }
-            }
-            .onChange(of: addressFocused) { _, focused in
-                if focused { codeFocused = false }
             }
             .onAppear {
                 if address.isEmpty { address = recentAddress }
@@ -90,14 +96,17 @@ struct PairingView: View {
         }
     }
 
-    private func dismissKeyboard() {
-        addressFocused = false
-        codeFocused = false
-    }
+    private func dismissKeyboard() { focus = nil }
 
-    private func focusCode() {
-        addressFocused = false
-        codeFocused = true
+    private func focusCode() { focus = .code }
+
+    /// A field reporting that it lost focus must not clear the other field's claim.
+    private func isFocused(_ field: Field) -> Binding<Bool> {
+        Binding {
+            focus == field
+        } set: { focused in
+            if focused { focus = field } else if focus == field { focus = nil }
+        }
     }
 
     private func pairScannedPayload() {
@@ -171,14 +180,14 @@ struct PairingView: View {
         } footer: {
             Text("Choose a Mac to fill its address and enter its /remote code.")
         }
-        .sensoryFeedback(.selection, trigger: address) { _, _ in codeFocused }
+        .sensoryFeedback(.selection, trigger: address) { _, _ in focus == .code }
     }
 
     private var manualSection: some View {
         Section {
             HStack(spacing: 12) {
                 Text("Address").onTapGesture(perform: dismissKeyboard)
-                PairingAddressField(text: $address, isFocused: $addressFocused, onNext: focusCode, onPaste: pasteAddress)
+                PairingAddressField(text: $address, isFocused: isFocused(.address), onNext: focusCode, onPaste: pasteAddress)
                 PasteButton(payloadType: String.self) { values in
                     if let value = values.first { pasteAddress(value) }
                 }
@@ -187,7 +196,7 @@ struct PairingView: View {
             }
             HStack(spacing: 12) {
                 Text("Code").onTapGesture(perform: dismissKeyboard)
-                PairingCodeField(text: $code, isFocused: $codeFocused, onPaste: pasteCode)
+                PairingCodeField(text: $code, isFocused: isFocused(.code), onPaste: pasteCode)
                 PasteButton(payloadType: String.self) { values in
                     if let value = values.first { pasteCode(value) }
                 }
@@ -204,6 +213,7 @@ struct PairingView: View {
             .brandProminentButtonStyle()
             .controlSize(.large)
             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            .id(Self.connectID)
             .disabled(isPairing || address.isEmpty || (!PairingCodeInput.isComplete(code) && !address.hasPrefix("{")))
         } header: {
             Text(discovery.hosts.first { $0.address == address }.map { "Connect to \($0.name)" } ?? "Address and pairing code")

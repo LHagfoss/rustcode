@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import RustCodeRemote
 
 /// All session configuration/start/stop operations and mutable fields below are
 /// confined to `queue`. Every scanner shares that queue, so a dismissed scanner
@@ -12,29 +13,41 @@ final class QRCodeCapture: NSObject, @unchecked Sendable, AVCaptureMetadataOutpu
     private var configured = false
     private var wantsRunning = false
     private var observers: [NSObjectProtocol] = []
-    private let onStart: @MainActor @Sendable () -> Void
+    private let onStart: @MainActor @Sendable (Int) -> Void
     private let onCode: @MainActor @Sendable (String) -> Void
-    private let onFailure: @MainActor @Sendable (String) -> Void
+    private let onFailure: @MainActor @Sendable (PairingScannerFailure) -> Void
 
-    init(onStart: @escaping @MainActor @Sendable () -> Void,
+    /// `onStart` returns the run number its `setRunning` call was given, so the
+    /// caller can tell a current start from one queued before a pause.
+    init(onStart: @escaping @MainActor @Sendable (Int) -> Void,
          onCode: @escaping @MainActor @Sendable (String) -> Void,
-         onFailure: @escaping @MainActor @Sendable (String) -> Void) {
+         onFailure: @escaping @MainActor @Sendable (PairingScannerFailure) -> Void) {
         self.onStart = onStart
         self.onCode = onCode
         self.onFailure = onFailure
         super.init()
-        for name in [AVCaptureSession.runtimeErrorNotification, AVCaptureSession.wasInterruptedNotification] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: session, queue: nil) { [weak self] _ in
-                self?.fail("The camera was interrupted. Tap Try Again when it is available.")
-            })
-        }
+        observers.append(NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil) { [weak self] _ in
+            self?.fail(.interrupted)
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) { [weak self] note in
+            let reason = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int).flatMap(AVCaptureSession.InterruptionReason.init)
+            switch reason {
+            // Capture resumes by itself on returning to the foreground.
+            case .videoDeviceNotAvailableInBackground: return
+            case .videoDeviceInUseByAnotherClient: self?.fail(.inUseByAnotherApp)
+            case .videoDeviceNotAvailableWithMultipleForegroundApps: self?.fail(.unavailableWhileMultitasking)
+            case .videoDeviceNotAvailableDueToSystemPressure: self?.fail(.systemPressure)
+            default: self?.fail(.interrupted)
+            }
+        })
     }
 
     deinit {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
     }
 
-    func setRunning(_ running: Bool) {
+    /// `restarting` stops a session that runs without showing video before starting it again.
+    func setRunning(_ running: Bool, run: Int = 0, restarting: Bool = false) {
         Self.queue.async { [self] in
             wantsRunning = running
             guard running else {
@@ -43,14 +56,15 @@ final class QRCodeCapture: NSObject, @unchecked Sendable, AVCaptureMetadataOutpu
             }
             do {
                 try configure()
+                if restarting, session.isRunning { session.stopRunning() }
                 if !session.isRunning { session.startRunning() }
                 guard session.isRunning else {
-                    fail("The camera could not start. Tap Try Again, or check camera access in Settings.")
+                    fail(.couldNotStart)
                     return
                 }
-                Task { @MainActor [onStart] in onStart() }
+                Task { @MainActor [onStart] in onStart(run) }
             } catch {
-                fail("The camera could not be configured. Check camera access in Settings and try again.")
+                fail(.couldNotConfigure)
             }
         }
     }
@@ -91,10 +105,10 @@ final class QRCodeCapture: NSObject, @unchecked Sendable, AVCaptureMetadataOutpu
         Task { @MainActor [onCode] in onCode(payload) }
     }
 
-    private func fail(_ message: String) {
+    private func fail(_ failure: PairingScannerFailure) {
         Self.queue.async { [self] in
             guard wantsRunning else { return }
-            Task { @MainActor [onFailure] in onFailure(message) }
+            Task { @MainActor [onFailure] in onFailure(failure) }
         }
     }
 

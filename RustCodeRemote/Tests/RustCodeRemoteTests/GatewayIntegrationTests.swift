@@ -6,6 +6,12 @@ import Testing
 /// a `rustcode` binary that has `remote serve`:
 ///
 ///     RUSTCODE_GATEWAY_BIN=/path/to/rustcode swift test --filter GatewayIntegrationTests
+///
+/// Gateway under test: rustcode 0.64.5 (last verified 2026-10-11). Since 0.64.4 `remote pair`
+/// hands the gateway to the background service, which is started from `config.toml` and not
+/// from the arguments of the `serve` process a test launched. Each gateway therefore pins its
+/// bind address in its own configuration file, and the tests dial the address the gateway
+/// advertises instead of assuming one. Update this note when the version changes.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["RUSTCODE_GATEWAY_BIN"] != nil), .serialized)
 struct GatewayIntegrationTests {
     /// One gateway process in its own configuration directory.
@@ -23,8 +29,13 @@ struct GatewayIntegrationTests {
             // Unix socket path has to stay short.
             configuration = URL(fileURLWithPath: "/tmp/rcgw-\(UUID().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: configuration, withIntermediateDirectories: true)
-            if let configFile {
-                try configFile.write(to: configuration.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+            var config = configFile
+            if let bind, config?.contains("[remote]") != true {
+                // Without this the background service would pick a LAN address on its own.
+                config = (config ?? "version = 1\n") + "\n[remote]\nbind = \"\(bind)\"\n"
+            }
+            if let config {
+                try config.write(to: configuration.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             }
             port = Int.random(in: 20000...40000)
 
@@ -71,6 +82,11 @@ struct GatewayIntegrationTests {
                 return String(line[line.range(of: label)!.upperBound...]).trimmingCharacters(in: .whitespaces)
             }
             return (try value(after: "code:"), try value(after: "QR payload:"))
+        }
+
+        /// The address a pairing offer tells a device to dial.
+        func advertisedAddress(in payload: String) throws -> HostAddress {
+            try WireCodec().pairingTarget(for: .scanned(payload)).address
         }
 
         func stop() {
@@ -134,7 +150,10 @@ struct GatewayIntegrationTests {
         // Pair with the credential from the QR payload.
         let client = makeClient()
         let credential = try await client.pair(.scanned(challenge.payload), deviceName: "Integration Phone")
-        #expect(credential.host.address == HostAddress(host: "127.0.0.1", port: gateway.port))
+        let advertised = try gateway.advertisedAddress(in: challenge.payload)
+        #expect(credential.host.address == advertised)
+        // This gateway pins loopback, so the offer must not drift to a LAN address.
+        #expect(advertised == HostAddress(host: "127.0.0.1", port: gateway.port))
         #expect(credential.deviceToken.count == 43)
         #expect(!credential.host.device.id.isEmpty)
         #expect(credential.host.device.name == "Integration Phone")
@@ -182,7 +201,7 @@ struct GatewayIntegrationTests {
         let gateway = try await Gateway()
         defer { gateway.stop() }
         let challenge = try gateway.pairingChallenge()
-        let address = HostAddress(host: "127.0.0.1", port: gateway.port)
+        let address = try gateway.advertisedAddress(in: challenge.payload)
 
         do {
             _ = try await makeClient().pair(.manual(address: address, code: "0000-0000"), deviceName: "Phone")
@@ -232,12 +251,10 @@ struct GatewayIntegrationTests {
     @Test func tooManyWrongCodesLockPairingAndSayForHowLong() async throws {
         let gateway = try await Gateway()
         defer { gateway.stop() }
-        let address = HostAddress(host: "127.0.0.1", port: gateway.port)
-
         var lockedFor: Duration?
         for _ in 0..<14 where lockedFor == nil {
             // Five wrong attempts exhaust a challenge, so keep one open.
-            _ = try gateway.pairingChallenge()
+            let address = try gateway.advertisedAddress(in: try gateway.pairingChallenge().payload)
             do {
                 _ = try await makeClient().pair(.manual(address: address, code: "0000-0000"), deviceName: "Phone")
             } catch RemoteError.rateLimited(let retryAfter) {

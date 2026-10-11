@@ -234,7 +234,7 @@ import Testing
         #expect(try reply("response_error_unsupported_operation") == .failure(.rejected(.unsupportedOperation)))
         #expect(try reply("response_error_incompatible_version") == .failure(.incompatibleProtocol))
         // The owner could not be asked: that is uncertainty, never a rejection.
-        #expect(try reply("response_error_owner_unavailable") == .failure(.outcomeUnknown))
+        #expect(try reply("response_error_owner_unavailable") == .failure(.outcomeUnknown(detail: "the terminal did not answer; check the transcript before sending again")))
 
         guard case .content(let chunk) = try reply("response_content") else {
             Issue.record("expected content")

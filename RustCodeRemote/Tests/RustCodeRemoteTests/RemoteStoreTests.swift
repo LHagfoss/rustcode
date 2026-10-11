@@ -316,19 +316,98 @@ private final class DelayLog: Sendable {
 
     @Test func uncertainCreationRetriesSameIdentityAndSelectsConfirmedSession() async {
         let client = StubClient()
-        await client.set(creationResults: [.failure(.timeout), .success(makeSession("new"))])
+        let hostMessage = "session is starting; retry with the same request identifier to check it"
+        await client.set(creationResults: [.failure(.outcomeUnknown(detail: hostMessage)), .success(makeSession("new"))])
         let store = makeStore(client)
         store.bootstrap()
         #expect(await waitUntil { store.connection == .connected })
         #expect(await store.createSession(directory: "/work") == false)
-        #expect(await store.createSession(directory: "/different") == false)
-        #expect(await client.creationCalls.count == 1)
+        // The request stays visible with the host's own words, and nothing is in flight.
+        let pending = store.pendingCreation
+        #expect(pending?.directory == "/work")
+        #expect(pending?.hostMessage == hostMessage)
+        #expect(store.notice?.contains(hostMessage) == true)
+        #expect(!store.isCreatingSession)
         #expect(await store.createSession(directory: "/work"))
         let requests = await client.creationCalls
         #expect(requests.count == 2)
         #expect(requests[0] == requests[1])
+        #expect(requests[0] == pending?.requestID)
+        #expect(store.pendingCreation == nil)
         #expect(store.selectedSessionID == "new")
         #expect(await waitUntil { store.attached?.session.sessionID == "new" })
+        await store.unpair()
+    }
+
+    @Test func unconfirmedCreationDoesNotBlockAnotherFolder() async {
+        let client = StubClient()
+        await client.set(creationResults: [.failure(.timeout), .success(makeSession("other"))])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await store.createSession(directory: "/work") == false)
+        #expect(store.pendingCreation?.hostMessage == RemoteError.timeout.errorDescription)
+        // A different folder abandons the unconfirmed request and gets its own identity.
+        #expect(await store.createSession(directory: "/different"))
+        let requests = await client.creationCalls
+        #expect(requests.count == 2)
+        #expect(requests[0] != requests[1])
+        #expect(store.pendingCreation == nil)
+        #expect(store.selectedSessionID == "other")
+        await store.unpair()
+    }
+
+    @Test func cancellingAnUnconfirmedCreationStartsOverWithANewIdentity() async {
+        let client = StubClient()
+        await client.set(creationResults: [.failure(.timeout), .success(makeSession("again"))])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await store.createSession(directory: "/work") == false)
+        store.cancelPendingCreation()
+        #expect(store.pendingCreation == nil)
+        #expect(await store.createSession(directory: "/work"))
+        let requests = await client.creationCalls
+        #expect(requests[0] != requests[1])
+        await store.unpair()
+    }
+
+    @Test func anotherFolderCanStartWhileACreationIsStillInFlight() async {
+        let client = StubClient()
+        await client.set(creationDelay: .milliseconds(150))
+        await client.set(creationResults: [.success(makeSession("slow")), .success(makeSession("chosen"))])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        let first = Task { await store.createSession(directory: "/slow") }
+        #expect(await waitUntil { await client.creationCalls.count == 1 })
+        #expect(store.isCreatingSession)
+        // The same folder again is only debounced; it sends nothing.
+        #expect(await store.createSession(directory: "/slow") == false)
+        #expect(await client.creationCalls.count == 1)
+        #expect(await store.createSession(directory: "/chosen"))
+        // The abandoned request's late answer neither selects its session nor clears state.
+        #expect(await first.value == false)
+        #expect(store.selectedSessionID == "chosen")
+        #expect(!store.isCreatingSession)
+        #expect(store.pendingCreation == nil)
+        await store.unpair()
+    }
+
+    @Test func cancellingAnInFlightCreationIgnoresItsLateAnswer() async {
+        let client = StubClient()
+        await client.set(creationDelay: .milliseconds(100))
+        await client.set(creationResults: [.success(makeSession("late"))])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        let selected = store.selectedSessionID
+        let pending = Task { await store.createSession(directory: "/work") }
+        #expect(await waitUntil { await client.creationCalls.count == 1 })
+        store.cancelPendingCreation()
+        #expect(!store.isCreatingSession)
+        #expect(await pending.value == false)
+        #expect(store.selectedSessionID == selected)
         await store.unpair()
     }
 

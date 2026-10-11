@@ -17,7 +17,8 @@ public enum RemoteError: Error, Sendable, Equatable {
     /// Too many failed attempts on the host. Nothing is accepted until the time has passed.
     case rateLimited(retryAfter: Duration?)
     /// The owner could not say whether a mutation was applied. Never resend on that basis.
-    case outcomeUnknown
+    /// `detail` carries the host's own explanation, when it gave one.
+    case outcomeUnknown(detail: String? = nil)
     /// The session's registration ended; the associated value says why.
     case sessionClosed(String)
     /// The host at the stored address is not the gateway this device paired with.
@@ -46,7 +47,7 @@ extension RemoteError: LocalizedError {
             } else {
                 "Too many failed attempts. Try again later."
             }
-        case .outcomeUnknown: "The host could not confirm the request."
+        case .outcomeUnknown(let detail): detail.flatMap { $0.isEmpty ? nil : $0 } ?? "The host could not confirm the request."
         case .sessionClosed(let reason): reason
         case .hostIdentityChanged: "The host at this address is not the one this device was paired with. Pair again."
         case .transport(let detail): detail

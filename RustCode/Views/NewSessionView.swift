@@ -10,8 +10,13 @@ struct NewSessionView: View {
     @State private var error: String?
     @State private var browseTask: Task<Void, Never>?
     @State private var query = ""
+    /// A folder chosen while another creation is unconfirmed, awaiting the user's decision.
+    @State private var replacement: String?
 
-    private var isBusy: Bool { isLoading || store.isCreatingSession }
+    /// True while the request for exactly this folder is on its way; browsing stays enabled.
+    private func isStarting(_ folder: String) -> Bool {
+        store.isCreatingSession && store.pendingCreation?.directory == folder
+    }
 
     /// Folders of the sessions this Mac already lists, most recent first.
     private var recentFolders: [String] {
@@ -39,6 +44,7 @@ struct NewSessionView: View {
                         if listing == nil { Button("Try Again") { load(nil) } }
                     }
                 }
+                if let pending = store.pendingCreation { pendingSection(pending) }
                 if query.isEmpty, !recentFolders.isEmpty {
                     Section {
                         ForEach(recentFolders, id: \.self) { folder in
@@ -53,7 +59,6 @@ struct NewSessionView: View {
                     } footer: {
                         Text("Tap a recent folder to start a session there.")
                     }
-                    .disabled(isBusy)
                 }
                 if let listing {
                     Section {
@@ -86,7 +91,6 @@ struct NewSessionView: View {
                             Text("Some folders are not shown. Type a path in the search field to open one directly.")
                         }
                     }
-                    .disabled(isBusy)
                 } else if isLoading {
                     ProgressView("Loading folders…")
                 }
@@ -102,28 +106,78 @@ struct NewSessionView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                        .disabled(store.isCreatingSession)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Home Folder", systemImage: "house") { load(nil) }
-                        .disabled(isBusy)
                 }
             }
             .safeAreaInset(edge: .bottom) { startBar }
-            .interactiveDismissDisabled(store.isCreatingSession)
+            .confirmationDialog(
+                "Start in \(replacement.map(Self.name(of:)) ?? "this folder") instead?",
+                isPresented: Binding(get: { replacement != nil }, set: { if !$0 { replacement = nil } }),
+                titleVisibility: .visible,
+                presenting: replacement
+            ) { folder in
+                Button("Start in \(Self.name(of: folder))") { create(in: folder) }
+                Button("Keep Waiting", role: .cancel) {}
+            } message: { _ in
+                Text("This abandons the request for \(pendingFolderName). If the Mac still finishes starting it, that session appears in the session list.")
+            }
             .onAppear { if listing == nil { load(nil) } }
             .onDisappear { browseTask?.cancel() }
         }
     }
 
+    private var pendingFolderName: String {
+        store.pendingCreation?.directory.map(Self.name(of:)) ?? "the default folder"
+    }
+
+    /// An unconfirmed request is shown with what identifies it on the Mac, and can always be
+    /// checked again or given up; it never blocks browsing or another folder.
+    private func pendingSection(_ pending: PendingSessionCreation) -> some View {
+        Section {
+            LabeledContent("Folder") {
+                Text(pending.directory ?? "Default folder").lineLimit(2).truncationMode(.head)
+            }
+            LabeledContent("Request") {
+                Text(pending.requestID.rawValue).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+            }
+            LabeledContent("Waiting") {
+                Text(pending.startedAt, style: .timer).monospacedDigit()
+            }
+            if let message = pending.hostMessage {
+                Label(message, systemImage: "exclamationmark.circle")
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("pendingCreationMessage")
+            }
+            if store.isCreatingSession {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Waiting for the Mac to confirm…").foregroundStyle(.secondary)
+                }
+            } else {
+                Button("Check Again") { create(in: pending.directory) }
+                    .disabled(store.connection != .connected)
+            }
+            Button("Cancel Request", role: .destructive) { store.cancelPendingCreation() }
+        } header: {
+            Text("Unconfirmed Session")
+        } footer: {
+            Text("Checking again reuses this request, so it cannot start a second session. Cancelling only stops waiting here: if the Mac still finishes starting the session, it appears in the session list.")
+        }
+    }
+
     /// The main action stays in reach and always names the folder it will use.
     private var startBar: some View {
-        Button {
+        let starting = listing.map { isStarting($0.path) } ?? false
+        return Button {
             if let listing { start(in: listing.path) }
         } label: {
             HStack(spacing: 8) {
-                if store.isCreatingSession { ProgressView() }
-                Text(store.isCreatingSession ? "Starting…" : "Start in \(listing.map { Self.name(of: $0.path) } ?? "Folder")")
+                if starting { ProgressView() }
+                Text(starting ? "Starting…" : "Start in \(listing.map { Self.name(of: $0.path) } ?? "Folder")")
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -131,7 +185,7 @@ struct NewSessionView: View {
         }
         .brandProminentButtonStyle()
         .controlSize(.large)
-        .disabled(listing == nil || isBusy || store.connection != .connected)
+        .disabled(listing == nil || isLoading || starting || store.connection != .connected)
         .accessibilityLabel("Start session in selected folder")
         .accessibilityValue(listing?.path ?? "")
         .padding(.horizontal, 16)
@@ -149,14 +203,28 @@ struct NewSessionView: View {
         load(path.trimmingCharacters(in: .whitespaces))
     }
 
+    /// Another folder while a request is unconfirmed asks first; the same folder retries it.
     private func start(in folder: String) {
+        if let pending = store.pendingCreation, pending.directory != folder {
+            replacement = folder
+        } else {
+            create(in: folder)
+        }
+    }
+
+    private func create(in folder: String?) {
         error = nil
         Task {
             if await store.createSession(directory: folder) {
                 dismiss()
-            } else {
-                error = store.notice ?? "The session could not be started. Check your connection and try again."
+            } else if store.pendingCreation?.directory == folder {
+                // The unconfirmed request's own section carries the host's message.
                 store.notice = nil
+            } else if let notice = store.notice {
+                error = notice
+                store.notice = nil
+            } else if store.connection != .connected {
+                error = "The session could not be started. Check your connection and try again."
             }
         }
     }

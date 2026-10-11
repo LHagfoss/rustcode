@@ -272,7 +272,7 @@ public struct WireCodec: RemoteCodec {
         case .error(let error):
             // `unknown` means the owner could not be asked. That is not a rejection.
             if receipt == .unknown || error.code.known == .ownerUnavailable {
-                return .failure(.outcomeUnknown)
+                return .failure(.outcomeUnknown(detail: error.message))
             }
             return .failure(remoteError(error))
         case .imageUploaded(let progress):
@@ -341,7 +341,7 @@ public struct WireCodec: RemoteCodec {
         case .incompatibleVersion: return .incompatibleProtocol
         case .unauthorized: return .unauthorized
         case .rateLimited: return .rateLimited(retryAfter: nil)
-        case .ownerUnavailable: return .outcomeUnknown
+        case .ownerUnavailable: return .outcomeUnknown(detail: error.message)
         case .busy: return .rejected(.busy)
         case .notRunning: return .rejected(.notRunning)
         case .staleTurn: return .rejected(.staleTurn)
