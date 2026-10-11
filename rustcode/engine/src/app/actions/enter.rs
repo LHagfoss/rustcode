@@ -29,16 +29,17 @@ async fn handle_enter_inner(
     s.reset_suggestion_cycle();
     s.history_index = None;
 
-    let selected_file_completion = s.active_suggestion_index.is_some()
-        && rustcode_core::input::get_at_word_query(&s.input_buffer, s.cursor_position).is_some();
+    // Codex treats accepting a file completion as an edit to the draft, not as
+    // prompt submission. A second Enter submits once the user can see the
+    // completed path in context. A fuzzy command or argument hit is the same
+    // kind of edit: it rewrites what was typed, so it is shown before it runs
+    // instead of a typo running a command nobody spelled (#1946).
+    let completes_only = s.active_suggestion_index.is_some()
+        && (s.file_completion_query().is_some() || selected_completion_is_fuzzy(&s));
     if s.active_suggestion_index.is_some() {
         apply_autocomplete(&mut s);
     }
-
-    // Codex treats accepting a file completion as an edit to the draft, not as
-    // prompt submission. A second Enter submits once the user can see the
-    // completed path in context.
-    if selected_file_completion {
+    if completes_only {
         return false;
     }
 
@@ -629,6 +630,9 @@ async fn handle_enter_inner(
             // concern; this match only needs the names to pick and persist).
             "/theme" => {
                 let themes: Vec<String> = theme_names();
+                // Theme files can change while the app runs; keep the names
+                // `/theme` completion offers in step with the ones it accepts.
+                s.theme_names = themes.clone();
                 match tokens.get(1) {
                     None => {
                         s.theme_picker_initial = s.config.theme.clone();

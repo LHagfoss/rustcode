@@ -206,6 +206,10 @@ pub struct AppState {
     /// Completion token explicitly dismissed with Esc. It remains suppressed
     /// until the token under the cursor changes, matching Codex popup behavior.
     pub dismissed_completion: Option<String>,
+    /// Completion the current `active_suggestion_index` was chosen in.
+    pub suggestion_identity: Option<String>,
+    /// Theme names the terminal frontend offers, for `/theme` completion.
+    pub theme_names: Vec<String>,
 
     pub show_model_picker: bool,
     pub model_picker_index: usize,
@@ -1438,6 +1442,8 @@ impl AppState {
             remote_command: None,
             active_suggestion_index: None,
             dismissed_completion: None,
+            suggestion_identity: None,
+            theme_names: Vec::new(),
             show_model_picker: false,
             model_picker_index: 0,
             modal_picker_index: 0,
@@ -1918,32 +1924,96 @@ impl AppState {
         self.request_redraw();
     }
 
+    /// Re-evaluate the popup selection after the draft or the cursor changed.
+    /// A selection belongs to the completion it was made in: once the token,
+    /// argument or `@` query changes, the first row is selected again instead
+    /// of leaving an index that points at a different row or past the list.
     pub fn reset_suggestion_index(&mut self) {
         let completion = self.completion_identity();
         if self.dismissed_completion.as_ref() != completion.as_ref() {
             self.dismissed_completion = None;
         }
         if completion.is_some() && self.dismissed_completion.is_none() {
-            if self.active_suggestion_index.is_none() {
+            if self.active_suggestion_index.is_none() || self.suggestion_identity != completion {
                 self.active_suggestion_index = Some(0);
             }
         } else {
             self.active_suggestion_index = None;
         }
+        self.suggestion_identity = completion;
+    }
+
+    /// Argument values that depend on the running session.
+    pub fn argument_sources(&self) -> crate::app::suggestion::ArgumentSources<'_> {
+        crate::app::suggestion::ArgumentSources {
+            models: &self.config.models,
+            themes: &self.theme_names,
+        }
+    }
+
+    /// The `@` file query under the cursor, when it is the active completion.
+    pub fn file_completion_query(&self) -> Option<(usize, String)> {
+        crate::app::suggestion::file_completion_query(&self.input_buffer, self.cursor_position)
+    }
+
+    /// The slash completion to offer, unless an `@` query takes precedence.
+    pub fn slash_completion(&self) -> Option<crate::app::suggestion::SlashCompletion<'_>> {
+        if self.file_completion_query().is_some() {
+            return None;
+        }
+        crate::app::suggestion::slash_completion(
+            &self.input_buffer,
+            self.cursor_position,
+            &self.argument_sources(),
+        )
+    }
+
+    /// Number of rows the active completion offers.
+    pub fn completion_len(&self) -> usize {
+        use crate::app::suggestion::SlashCompletion;
+        if let Some((_, query)) = self.file_completion_query() {
+            return crate::app::list_project_file_paths(&query).len();
+        }
+        match self.slash_completion() {
+            Some(SlashCompletion::Commands { commands, .. }) => commands.len(),
+            Some(SlashCompletion::Arguments { values, .. }) => values.len(),
+            None => 0,
+        }
+    }
+
+    /// What the completion popup shows right now; nothing once dismissed.
+    pub fn completion_popup(&self) -> crate::app::suggestion::CompletionPopup {
+        crate::app::suggestion::completion_popup(
+            &self.input_buffer,
+            self.cursor_position,
+            self.dismissed_completion.as_deref(),
+            &self.argument_sources(),
+        )
+    }
+
+    /// True while a completion is offered and has not been dismissed.
+    pub fn completion_open(&self) -> bool {
+        let identity = self.completion_identity();
+        identity.is_some() && identity != self.dismissed_completion
     }
 
     pub fn completion_identity(&self) -> Option<String> {
-        if let Some(command) = crate::app::suggestion::command_token(&self.input_buffer) {
-            return Some(format!("command:{command}"));
-        }
-        rustcode_core::input::get_at_word_query(&self.input_buffer, self.cursor_position)
-            .map(|(start, query)| format!("file:{start}:{query}"))
+        crate::app::suggestion::completion_identity(
+            &self.input_buffer,
+            self.cursor_position,
+            &self.argument_sources(),
+        )
     }
 
     pub fn dismiss_completion(&mut self) -> bool {
         let Some(completion) = self.completion_identity() else {
             return false;
         };
+        // An already dismissed popup is not there to dismiss again, so the
+        // next Escape reaches whatever is beneath it.
+        if self.dismissed_completion.as_ref() == Some(&completion) {
+            return false;
+        }
         self.dismissed_completion = Some(completion);
         self.active_suggestion_index = None;
         self.request_redraw();
@@ -2083,10 +2153,10 @@ impl AppState {
         // there as soon as a command is typed and follows the arrow keys.
         // It used to appear only once Tab had started the legacy cycle.
         if let Some(index) = self.active_suggestion_index
-            && let Some(token) = crate::app::suggestion::command_token(&self.input_buffer)
+            && let Some(crate::app::suggestion::SlashCompletion::Commands { token, commands }) =
+                self.slash_completion()
             && token.len() == self.input_buffer.len()
         {
-            let commands = crate::app::suggestion::filtered_commands(&self.input_buffer);
             let selected = commands.get(index.min(commands.len().saturating_sub(1)))?;
             // A fuzzy hit does not extend what was typed, so it has no suffix
             // to preview; the popup row is its only hint.

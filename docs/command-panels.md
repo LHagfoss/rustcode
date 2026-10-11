@@ -133,6 +133,67 @@ inline pickers, the command palette, the question and confirmation prompts) uses
 the shared marker, column gap and column budget in `ui/modals.rs`, so the
 absence here is a deliberate distinction and not a missing convention.
 
+## Slash completion
+
+Typing `/` at the start of a single-line draft opens the completion popup above
+the composer. The rules below are implemented in `engine/src/app/suggestion.rs`
+and `AppState::slash_completion`, and are the same for every key path.
+
+**What completes**
+
+- The command name: an exact name first, then prefixes alphabetically, then
+  fuzzy matches (`/modle` finds `/model`). A bare `/` keeps the curated order.
+- The first argument, for commands whose argument is one of a closed set of
+  values the command accepts. Values rank exact, prefix (declared order), fuzzy.
+
+| Command | Values offered |
+| --- | --- |
+| `/delegate` | `on`, `off` |
+| `/discord` | `on`, `off`, `status` |
+| `/effort` | `low`, `medium`, `high`, `off` |
+| `/model` | configured profile names (names containing spaces stay picker-only) |
+| `/pi` | `on`, `off` |
+| `/remote` | `status`, `off` |
+| `/sandbox` | every sandbox mode |
+| `/theme` | themes the terminal can load |
+| `/thinking` | `on`, `off`, `default` |
+| `/verbosity` | `low`, `high`, `toggle` |
+| `/yolo` | `on`, `off`, `toggle` |
+
+Every other command takes free-form arguments (`/context <tokens>`,
+`/change_title <title>`, `/goal <task>`, `/prompt <name>` and so on) and
+completes its name only. While such arguments are typed, or when an argument
+matches none of the values above, the popup keeps the command's own row as a
+usage hint. Only the first argument completes, and only once the command name
+is spelled out; a typo in the name is corrected first.
+
+**Keys**
+
+- **Tab** accepts the selected row on the first press. Completing a command
+  from the table leaves a space after it, so its values are offered next.
+  Arguments already typed after a command are kept.
+- **Enter** accepts the selected row and runs the command when the row is the
+  typed text or extends it (`/he` runs `/help`, `/yolo o` runs `/yolo on`). A
+  fuzzy row rewrites what was typed, so Enter only completes it into the draft
+  and a second Enter runs it. A typo never runs a command nobody spelled.
+  Accepting an `@` file also only edits the draft.
+- **Up/Down** (and Ctrl+P/Ctrl+N) move the selection. The selection restarts at
+  the first row whenever the token, argument or `@` query changes.
+- **Esc** dismisses the popup and keeps the draft. It returns as soon as the
+  completion changes (more typing, a deleted character, the first argument
+  after a dismissed command) or on Tab. Tab on a dismissed popup accepts only an
+  unambiguous match (a single row, or a spelled-out name) and otherwise just
+  shows the list again.
+
+**`@` and `/` precedence.** With the cursor in the command name the command
+completes. Past it, an `@` query under the cursor takes the popup, so a file
+can be attached to a command's free-form arguments (`/goal fix @src/main.rs`).
+
+**Multi-line drafts.** A draft with more than one line has no slash completion:
+the arrow keys belong to the cursor there. `@` file completion still works on
+any line. A draft whose first word matches no command (`/usr/local/bin …`)
+shows nothing and leaves Esc and the arrows alone.
+
 ## Panel search
 
 While a searchable picker is open, its query is typed into the composer row

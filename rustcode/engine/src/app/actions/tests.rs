@@ -429,7 +429,8 @@ fn command_autocomplete_replaces_only_the_command_token() {
     super::apply_autocomplete(&mut state);
 
     assert_eq!(state.input_buffer, "/model --fast");
-    assert_eq!(state.active_suggestion_index, None);
+    // The completed command keeps its popup row, so it stays selected.
+    assert_eq!(state.active_suggestion_index, Some(0));
 }
 
 #[test]
@@ -2232,5 +2233,237 @@ fn ghost_completion_previews_the_selected_popup_row_without_a_tab() {
         state.cursor_position = input.len();
         state.reset_suggestion_index();
         assert_eq!(state.get_command_suggestion(), None, "{input}");
+    }
+}
+
+fn completion_state(input: &str) -> crate::app::AppState {
+    let mut state = crate::app::AppState::new();
+    // The user's own profiles must not decide what `/model` offers here.
+    state.config.models = vec![crate::config::ModelProfile {
+        name: "fast".to_owned(),
+        model: "fast-id".to_owned(),
+        ..Default::default()
+    }];
+    state.theme_names = vec!["nord".to_owned(), "dracula".to_owned()];
+    state.input_buffer = input.to_owned();
+    state.cursor_position = input.len();
+    state.reset_suggestion_index();
+    state
+}
+
+#[test]
+fn tab_completes_a_command_and_then_offers_its_argument_values() {
+    let mut state = completion_state("/thin");
+
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/thinking ");
+    assert_eq!(state.cursor_position, 10);
+    assert_eq!(state.active_suggestion_index, Some(0));
+    assert_eq!(state.completion_len(), 3, "on, off and default are offered");
+
+    state.insert_char('o');
+    state.insert_char('f');
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/thinking off");
+    assert_eq!(state.cursor_position, state.input_buffer.len());
+
+    // A command with free-form arguments gets no trailing space, and Tab on a
+    // finished command or argument changes nothing.
+    let mut state = completion_state("/hel");
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/help");
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/help");
+}
+
+#[test]
+fn tab_completes_session_values_for_model_and_theme() {
+    let mut state = completion_state("/model f");
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/model fast");
+
+    let mut state = completion_state("/theme dr");
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/theme dracula");
+}
+
+#[test]
+fn completing_a_command_keeps_the_arguments_already_typed() {
+    let mut state = completion_state("/chan New title");
+    state.cursor_position = 5;
+    state.reset_suggestion_index();
+
+    super::tab_complete(&mut state);
+
+    assert_eq!(state.input_buffer, "/change_title New title");
+    assert_eq!(state.cursor_position, "/change_title".len());
+}
+
+#[test]
+fn tab_reopens_a_dismissed_popup_and_accepts_only_an_unambiguous_match() {
+    // Several commands start with `/p`: Tab only brings the list back.
+    let mut state = completion_state("/p");
+    assert!(state.dismiss_completion());
+    assert_eq!(state.active_suggestion_index, None);
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/p");
+    assert_eq!(state.active_suggestion_index, Some(0));
+    assert_eq!(state.dismissed_completion, None);
+
+    // A single candidate is accepted at once.
+    let mut state = completion_state("/verbos");
+    assert!(state.dismiss_completion());
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/verbosity ");
+
+    // So is a spelled-out name, even with longer siblings in the list.
+    let mut state = completion_state("/prompt");
+    assert!(state.dismiss_completion());
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/prompt");
+    assert_eq!(state.active_suggestion_index, Some(0));
+}
+
+#[test]
+fn the_selection_restarts_when_the_completion_changes() {
+    let mut state = completion_state("/");
+    state.active_suggestion_index = Some(12);
+
+    state.insert_char('h');
+    state.insert_char('e');
+    assert_eq!(
+        state.active_suggestion_index,
+        Some(0),
+        "an index chosen in the full menu must not carry into a shorter list"
+    );
+
+    // Moving the cursor inside the same token keeps the chosen row.
+    state.active_suggestion_index = Some(1);
+    state.move_cursor_left();
+    assert_eq!(state.active_suggestion_index, Some(1));
+}
+
+#[test]
+fn a_draft_without_matches_or_with_more_lines_has_no_popup_to_dismiss() {
+    for input in ["/usr/local/bin is missing", "/model\nsecond line"] {
+        let mut state = completion_state(input);
+        assert_eq!(state.completion_identity(), None, "{input}");
+        assert_eq!(state.active_suggestion_index, None, "{input}");
+        assert_eq!(state.completion_len(), 0, "{input}");
+        assert!(!state.dismiss_completion(), "{input}");
+    }
+}
+
+#[test]
+fn a_dismissed_popup_returns_when_the_completion_changes() {
+    let mut state = completion_state("/thinking");
+    assert!(state.dismiss_completion());
+    assert_eq!(
+        state.completion_popup(),
+        crate::app::suggestion::CompletionPopup::None
+    );
+
+    // Nothing is left to dismiss, so Escape falls through to its next role.
+    assert!(!state.dismiss_completion());
+    assert!(!state.completion_open());
+
+    // Starting the argument is a different completion, so it is offered.
+    state.insert_char(' ');
+    assert_eq!(state.active_suggestion_index, Some(0));
+    assert!(matches!(
+        state.completion_popup(),
+        crate::app::suggestion::CompletionPopup::Arguments { .. }
+    ));
+
+    // Dismissing the values and deleting back brings the command row back.
+    assert!(state.dismiss_completion());
+    state.delete_char_backspace();
+    assert!(matches!(
+        state.completion_popup(),
+        crate::app::suggestion::CompletionPopup::Commands(_)
+    ));
+}
+
+#[test]
+fn a_file_query_after_the_command_wins_over_the_command_popup() {
+    let state = completion_state("/goal explain @Cargo");
+    assert_eq!(
+        state.completion_popup(),
+        crate::app::suggestion::CompletionPopup::Files {
+            query: "Cargo".to_owned()
+        }
+    );
+    assert_eq!(
+        state.completion_identity().as_deref(),
+        Some("file:14:Cargo")
+    );
+
+    // With the cursor back in the command name, the command completes.
+    let mut state = completion_state("/goa explain @Cargo");
+    state.cursor_position = 4;
+    state.reset_suggestion_index();
+    super::tab_complete(&mut state);
+    assert_eq!(state.input_buffer, "/goal explain @Cargo");
+}
+
+#[tokio::test]
+async fn enter_completes_a_fuzzy_command_instead_of_running_it() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let state = Arc::new(Mutex::new(completion_state("/yloo on")));
+    {
+        let mut s = state.lock().await;
+        s.auto_confirm = false;
+        s.cursor_position = 5;
+        s.reset_suggestion_index();
+    }
+    let client = reqwest::Client::new();
+    let mut cancel_token = CancellationToken::new();
+    let theme_names = Vec::new;
+
+    // The typo is corrected in the draft, where the user can read it first.
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await);
+    {
+        let s = state.lock().await;
+        assert_eq!(s.input_buffer, "/yolo on");
+        assert!(
+            !s.auto_confirm,
+            "a fuzzy hit must not run on the first Enter"
+        );
+    }
+
+    // The second Enter runs the command that is now spelled out.
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await);
+    assert!(state.lock().await.auto_confirm);
+}
+
+#[tokio::test]
+async fn enter_runs_a_prefix_match_and_completes_a_fuzzy_argument() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let client = reqwest::Client::new();
+    let mut cancel_token = CancellationToken::new();
+    let theme_names = Vec::new;
+
+    // `/yol on` and `/yolo o` only extend what was typed, so they run.
+    for input in ["/yol on", "/yolo o"] {
+        let state = Arc::new(Mutex::new(completion_state(input)));
+        state.lock().await.auto_confirm = false;
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await);
+        assert!(state.lock().await.auto_confirm, "{input}");
+    }
+
+    // `/yolo tgogle` is rewritten, so it is shown before it runs.
+    let state = Arc::new(Mutex::new(completion_state("/yolo tgogle")));
+    state.lock().await.auto_confirm = false;
+    assert!(!super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await);
+    {
+        let s = state.lock().await;
+        assert_eq!(s.input_buffer, "/yolo toggle");
+        assert!(!s.auto_confirm);
     }
 }

@@ -41,6 +41,7 @@ pub(crate) struct RenderSnapshot {
     status: AppStatus,
     active_suggestion_index: Option<usize>,
     dismissed_completion: Option<String>,
+    theme_names: Vec<String>,
     config: rustcode::controller::AppConfig,
     model_name: String,
     api_base_url: String,
@@ -232,6 +233,7 @@ impl RenderSnapshot {
             status: view.status.clone(),
             active_suggestion_index: view.active_suggestion_index,
             dismissed_completion: view.dismissed_completion.clone(),
+            theme_names: view.theme_names.clone(),
             config: view.config.clone(),
             model_name: view.model_name.clone(),
             api_base_url: view.api_base_url.clone(),
@@ -407,6 +409,7 @@ impl RenderSnapshot {
     pub(crate) fn active_suggestion_index(&self) -> Option<usize> {
         self.active_suggestion_index
     }
+    #[cfg(test)]
     pub(crate) fn dismissed_completion(&self) -> Option<&str> {
         self.dismissed_completion.as_deref()
     }
@@ -619,12 +622,17 @@ impl RenderSnapshot {
     pub(crate) fn active_tool_protocol(&self) -> rustcode::controller::ToolProtocol {
         self.active_tool_protocol
     }
-    pub(crate) fn completion_identity(&self) -> Option<String> {
-        if let Some(command) = rustcode::controller::command_token(&self.input_buffer) {
-            return Some(format!("command:{command}"));
-        }
-        rustcode_core::input::get_at_word_query(&self.input_buffer, self.cursor_position)
-            .map(|(start, query)| format!("file:{start}:{query}"))
+    /// The completion popup for this frame, resolved by the engine's rules.
+    pub(crate) fn completion_popup(&self) -> rustcode::controller::CompletionPopup {
+        rustcode::controller::completion_popup(
+            &self.input_buffer,
+            self.cursor_position,
+            self.dismissed_completion.as_deref(),
+            &rustcode::controller::ArgumentSources {
+                models: &self.config.models,
+                themes: &self.theme_names,
+            },
+        )
     }
     pub(crate) fn get_command_suggestion(&self) -> Option<&str> {
         self.command_suggestion.as_deref()

@@ -62,7 +62,7 @@ use modals::{
     open_modal_max_height, panel_selection_surface, question_height, render_at_popup_menu,
     render_command_panel, render_command_picker_modal, render_context_modal,
     render_effort_picker_modal, render_history_picker_modal, render_mcp_config_modal,
-    render_model_picker_modal, render_popup_menu, render_protocol_picker_modal,
+    render_model_picker_modal, render_popup_rows, render_protocol_picker_modal,
     render_question_modal, render_session_modal, render_stats_modal, render_status_modal,
     render_subagent_picker_modal, render_tasks_panel_modal, render_theme_picker_modal,
     render_thinking_picker_modal, render_tool_confirmation_modal, render_update_prompt_modal,
@@ -193,6 +193,7 @@ pub fn COLOR_DIFF_ABSENT_BG() -> Color {
     theme::color_diff_absent_bg()
 }
 
+#[cfg(test)]
 pub use rustcode::controller::CommandInfo;
 
 fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, _show_picker: bool) -> Style {
