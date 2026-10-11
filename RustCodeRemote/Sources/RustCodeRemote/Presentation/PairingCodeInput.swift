@@ -2,7 +2,7 @@
 public enum PairingCodeInput {
     public static func formatted(_ input: String) -> String {
         let digits = input.filter { $0.isASCII && $0.isNumber }.prefix(8)
-        guard digits.count >= 4 else { return String(digits) }
+        guard digits.count >= 5 else { return String(digits) }
         return String(digits.prefix(4)) + "-" + String(digits.dropFirst(4))
     }
 

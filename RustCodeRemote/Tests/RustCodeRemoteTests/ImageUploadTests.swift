@@ -57,6 +57,13 @@ import Testing
         #expect(ImageAttachmentPresentation.displayText("![image](file:///demo/photo.png)") == "Image attachment")
     }
 
+    @Test func extractsOnlyValidatedAttachmentIDsOutsideCodeFences() {
+        let second = "![image](file:///private/session/remote-images/" + String(repeating: "b", count: 64) + "/photo-2.jpg)"
+        #expect(ImageAttachmentPresentation.attachmentIDs(in: "Describe\n" + reference + "\n" + second) == ["photo-1", "photo-2"])
+        #expect(ImageAttachmentPresentation.attachmentIDs(in: "```\n" + reference + "\n```\n" + reference) == ["photo-1"])
+        #expect(ImageAttachmentPresentation.attachmentIDs(in: "![image](file:///Users/me/photo.png)").isEmpty)
+    }
+
     @Test func literalExamplesAndUnrelatedFilesRemainUnchanged() {
         for raw in ["Example: " + reference, "```markdown\n" + reference + "\n```", "    " + reference,
                     "![image](file:///Users/me/photo.png)", "![image](https://example.com/photo.png)"] {

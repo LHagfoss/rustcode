@@ -41,13 +41,17 @@ private struct PairingTextField: UIViewRepresentable {
         field.adjustsFontForContentSizeCategory = true
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
         let toolbar = UIToolbar()
         toolbar.accessibilityIdentifier = "Pairing keyboard toolbar"
         let appearance = UIToolbarAppearance()
         appearance.configureWithDefaultBackground()
         toolbar.standardAppearance = appearance
         toolbar.scrollEdgeAppearance = appearance
-        let done = UIBarButtonItem(title: "Done", style: .plain, target: context.coordinator, action: #selector(Coordinator.done))
+        let done = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { _ in
+            context.coordinator.dismiss()
+        })
+        done.accessibilityIdentifier = "pairingKeyboardDone"
         done.accessibilityLabel = "Dismiss pairing keyboard"
         toolbar.items = [.flexibleSpace(), done]
         toolbar.sizeToFit()
@@ -90,7 +94,7 @@ private struct PairingTextField: UIViewRepresentable {
 
         func textFieldDidBeginEditing(_ textField: UITextField) { parent.isFocused = true }
         func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
-        @objc func done() { parent.isFocused = false }
+        func dismiss() { parent.isFocused = false }
         @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
         func textFieldShouldReturn(_ textField: UITextField) -> Bool { parent.onNext(); return false }
 

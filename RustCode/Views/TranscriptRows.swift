@@ -69,11 +69,31 @@ struct TurnFooter: View {
 
 private struct UserMessage: View {
     let text: String
+    @State private var selectedImage: ImageViewerSelection?
 
-    private var displayText: String { ImageAttachmentPresentation.displayText(text) }
+    private var imageIDs: [String] { ImageAttachmentPresentation.attachmentIDs(in: text) }
+
+    private var displayText: String {
+        ImageAttachmentPresentation.displayText(text)
+    }
 
     var body: some View {
-        Text(displayText)
+        VStack(alignment: .leading, spacing: 8) {
+            let message = ImageAttachmentPresentation.textWithoutAttachments(text)
+            if !message.isEmpty {
+                Text(message)
+            }
+            if !imageIDs.isEmpty {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                    ForEach(imageIDs, id: \.self) { id in
+                        SentImageThumbnail(attachmentID: id) {
+                            selectedImage = ImageViewerSelection(id: id)
+                        }
+                    }
+                }
+                .accessibilityLabel("Attached images")
+            }
+        }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(.fill.tertiary, in: .rect(cornerRadius: 20))
@@ -82,7 +102,14 @@ private struct UserMessage: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
             .accessibilityLabel("You: \(displayText)")
+            .fullScreenCover(item: $selectedImage) { selection in
+                SentImageViewer(attachmentID: selection.id)
+            }
     }
+}
+
+private struct ImageViewerSelection: Identifiable {
+    let id: String
 }
 
 private struct AssistantMessage: View {

@@ -287,7 +287,9 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                             .overlay(alignment: .topTrailing) {
                                 Button { images.removeAll { $0.id == image.id } } label: {
                                     Image(systemName: "xmark.circle.fill").symbolRenderingMode(.palette)
-                                        .foregroundStyle(.white, .black.opacity(0.75)).frame(width: 44, height: 44)
+                                        .font(.system(size: 23, weight: .medium))
+                                        .foregroundStyle(.white, .black.opacity(0.75))
+                                        .frame(width: 44, height: 44)
                                 }
                                 .buttonStyle(.plain).accessibilityLabel("Remove image")
                                 .disabled(isSending || isImporting)
@@ -441,6 +443,11 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             if accepted {
                 if store.selectedSessionID == sessionID && !isFocused {
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+                if !outgoingImages.isEmpty {
+                    try? await Task.detached(priority: .utility) {
+                        try SentImageCache.shared.save(outgoingImages)
+                    }.value
                 }
                 drafts.clearIfMatching(text: message, images: outgoingImages, sessionID: sessionID)
             }

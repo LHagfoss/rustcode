@@ -141,8 +141,10 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.keyboards.keys["1"].exists)
         XCTAssertFalse(app.keyboards.keys["a"].exists, "The eight-digit code uses a number pad")
         code.typeText("1234")
-        XCTAssertEqual(code.value as? String, "1234-")
-        code.typeText("5678")
+        XCTAssertEqual(code.value as? String, "1234")
+        code.typeText("5")
+        XCTAssertEqual(code.value as? String, "1234-5")
+        code.typeText("678")
         app.buttons["Dismiss pairing keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertEqual(address.value as? String, "192.168.1.20:17879")
@@ -167,17 +169,17 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertEqual(code.value as? String, "1234-5678")
     }
 
-    func testPairingAddressDoneUsesNativeToolbar() {
+    func testPairingAddressDoneUsesCompactNativeKeyboardToolbar() {
         let app = XCUIApplication()
         app.launch()
         let address = app.textFields["Host address and port"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
         address.typeText("192.168.1.20:17879")
-        let toolbar = app.toolbars["Pairing keyboard toolbar"]
-        XCTAssertTrue(toolbar.waitForExistence(timeout: 3))
-        XCTAssertGreaterThan(toolbar.frame.width, app.frame.width * 0.9)
-        toolbar.buttons["Dismiss pairing keyboard"].tap()
+        let done = app.buttons["pairingKeyboardDone"]
+        XCTAssertTrue(done.waitForExistence(timeout: 3))
+        XCTAssertLessThan(done.frame.width, app.frame.width * 0.25)
+        done.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertEqual(address.value as? String, "192.168.1.20:17879")
     }
@@ -564,7 +566,7 @@ final class InputAndTranscriptTests: XCTestCase {
     func testHistoryCommandShowsSessionsAndNewSessionBrowsesFolders() {
         let app = launchChat(draft: "/history")
         app.buttons["Run command"].tap()
-        let create = app.buttons["New Session"]
+        let create = app.buttons["New"]
         XCTAssertTrue(create.waitForExistence(timeout: 5))
         create.tap()
         let path = app.textFields["Session folder path"]
@@ -588,6 +590,7 @@ final class InputAndTranscriptTests: XCTestCase {
         show.tap()
         let close = app.navigationBars["Sessions"].buttons["Close sessions"]
         XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["New"].isHittable)
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Sessions drawer beside the pushed chat"
@@ -609,6 +612,25 @@ final class InputAndTranscriptTests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Draft release notes")).firstMatch.tap()
         XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5))
         XCTAssertEqual(composer(in: app).value as? String, "Keep my sidebar draft")
+    }
+
+    func testDetachUsesRightSwipeAndKeepsSidebarOpen() {
+        let app = launchChat(draft: "Detach test")
+        let show = app.buttons["Show sessions"]
+        XCTAssertTrue(show.waitForExistence(timeout: 5))
+        show.tap()
+        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["New"].isHittable)
+
+        let session = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Page the session store")).firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 3))
+        session.tap()
+        show.tap()
+        let selected = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Page the session store")).firstMatch
+        selected.swipeRight()
+        XCTAssertTrue(app.buttons["Detach"].waitForExistence(timeout: 3))
+        XCTAssertTrue(close.isHittable)
     }
 
     func testMinimalComposerActionsPreserveDraftAndOfferSlashCommands() {

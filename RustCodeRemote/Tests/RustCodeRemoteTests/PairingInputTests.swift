@@ -4,7 +4,8 @@ import Testing
 @Suite struct PairingInputTests {
     @Test func formatsTypingAndPastingWithoutLosingLeadingZeros() {
         #expect(PairingCodeInput.formatted("123") == "123")
-        #expect(PairingCodeInput.formatted("1234") == "1234-")
+        #expect(PairingCodeInput.formatted("1234") == "1234")
+        #expect(PairingCodeInput.formatted("12345") == "1234-5")
         #expect(PairingCodeInput.formatted("01234567") == "0123-4567")
         #expect(PairingCodeInput.formatted(" 0123-4567\n") == "0123-4567")
         #expect(PairingCodeInput.formatted("123456789") == "1234-5678")

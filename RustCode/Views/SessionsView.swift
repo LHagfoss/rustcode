@@ -281,7 +281,7 @@ private struct SessionSidebar: View {
                             }
                         }
                     }
-                    .swipeActions(edge: .trailing) {
+                    .swipeActions(edge: .leading) {
                         // Detaching only stops following the session from this device.
                         if session.id == store.selectedSessionID {
                             Button("Detach", systemImage: "eye.slash") {
@@ -306,18 +306,28 @@ private struct SessionSidebar: View {
                     ContentUnavailableView.search(text: query)
                 }
             }
+
+            Button {
+                showsNewSession = true
+            } label: {
+                Label("New", systemImage: "square.and.pencil")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .foregroundStyle(.white)
+                    .background(.brandFill, in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .disabled(store.connection != .connected)
+            .accessibilityIdentifier("newSession")
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
         }
         .background(ChatSurface.sidebar.ignoresSafeArea())
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
         .softNavigationChrome()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("New Session", systemImage: "square.and.pencil") {
-                    showsNewSession = true
-                }
-                .disabled(store.connection != .connected)
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Settings", systemImage: "gearshape") {
                     showsSettings = true
@@ -339,7 +349,7 @@ private struct SessionSidebar: View {
             ContentUnavailableView(
                 "No Sessions Yet",
                 systemImage: "terminal",
-                description: Text("Tap New Session to choose a folder on \(store.host?.name ?? "your Mac"), or share an existing session with /\u{2060}remote.")
+                description: Text("Tap New to choose a folder on \(store.host?.name ?? "your Mac"), or share an existing session with /\u{2060}remote.")
             )
         case .connecting:
             ProgressView("Connecting…")
