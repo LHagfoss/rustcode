@@ -33,6 +33,7 @@ struct TranscriptView: View {
             }
         }
         .navigationTitle(store.selectedSession?.displayTitle ?? "Session")
+        .workspaceSubtitle(store.selectedSession?.workspace)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden()
         .toolbar {

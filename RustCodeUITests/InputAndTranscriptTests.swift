@@ -11,7 +11,7 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.buttons["Photos"].isHittable)
         XCTAssertTrue(app.buttons["Files"].isHittable)
         XCTAssertTrue(app.buttons["Slash Commands"].isHittable)
-        XCTAssertTrue(app.buttons["Choose Folder"].isHittable)
+        XCTAssertTrue(app.buttons["New Session in Folder"].isHittable)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Glass attachment menu above the composer"
         screenshot.lifetime = .keepAlways
@@ -616,11 +616,18 @@ final class InputAndTranscriptTests: XCTestCase {
         let create = app.buttons["New"]
         XCTAssertTrue(create.waitForExistence(timeout: 5))
         create.tap()
-        let path = app.textFields["Session folder path"]
-        XCTAssertTrue(path.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["New Session"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Home Folder"].exists)
+        XCTAssertTrue(app.searchFields.firstMatch.exists, "Folders can be filtered or opened by path")
         let start = app.buttons["Start session in selected folder"]
         XCTAssertTrue(start.waitForExistence(timeout: 5))
+        XCTAssertTrue(start.isHittable, "Start stays in reach at the bottom")
+        XCTAssertEqual(start.value as? String, "/Users/demo")
+        // Browsing keeps the action on the folder being shown.
+        app.buttons["Projects"].tap()
+        XCTAssertTrue(app.buttons["Back to demo"].waitForExistence(timeout: 5))
+        XCTAssertEqual(start.value as? String, "/Users/demo/Projects")
+        XCTAssertEqual(start.label, "Start session in selected folder")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "New session folder picker"
         screenshot.lifetime = .keepAlways

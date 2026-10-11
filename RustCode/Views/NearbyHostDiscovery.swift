@@ -78,7 +78,10 @@ extension NearbyHostDiscovery: @preconcurrency NetServiceDelegate {
               services[key(sender)] === sender else { return }
         // NetService returns an absolute DNS name; omit the terminal dot for address classification.
         let addressName = hostName.hasSuffix(".") ? String(hostName.dropLast()) : hostName
-        let host = Host(id: key(sender), name: sender.name, address: "\(addressName):\(sender.port)")
+        // The host listens on one IPv4 address, while its .local name also resolves to
+        // IPv6 and other interfaces that refuse the connection.
+        let target = Self.ipv4Address(in: sender.addresses ?? []) ?? addressName
+        let host = Host(id: key(sender), name: sender.name, address: "\(target):\(sender.port)")
         hosts.removeAll { $0.id == host.id }
         hosts.append(host)
         hosts.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -87,5 +90,23 @@ extension NearbyHostDiscovery: @preconcurrency NetServiceDelegate {
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
         // A stale advertisement must not become a selectable but unusable address.
         hosts.removeAll { $0.id == key(sender) }
+    }
+}
+
+extension NearbyHostDiscovery {
+    /// The first routable IPv4 address among a resolved service's socket addresses.
+    nonisolated static func ipv4Address(in addresses: [Data]) -> String? {
+        for data in addresses {
+            let address: String? = data.withUnsafeBytes { raw in
+                guard raw.count >= MemoryLayout<sockaddr_in>.size,
+                      raw.loadUnaligned(as: sockaddr.self).sa_family == sa_family_t(AF_INET) else { return nil }
+                var ip = raw.loadUnaligned(as: sockaddr_in.self).sin_addr
+                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                guard inet_ntop(AF_INET, &ip, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else { return nil }
+                return String(cString: buffer)
+            }
+            if let address, !address.hasPrefix("127."), !address.hasPrefix("169.254.") { return address }
+        }
+        return nil
     }
 }

@@ -18,7 +18,7 @@ struct ChatActionsMenu: View {
                 Divider().padding(.vertical, 6).padding(.horizontal, 8)
                 action("New Session", symbol: "square.and.pencil", .newSession)
                 action("Slash Commands", symbol: "command", .commands)
-                action("Choose Folder", symbol: "folder", .folder)
+                action("New Session in Folder", symbol: "folder.badge.plus", .folder)
                 if isRunning { action("Stop the running turn", symbol: "stop.circle", .stop) }
                 if hadKeyboard { action("Dismiss Keyboard", symbol: "keyboard.chevron.compact.down", .dismissKeyboard) }
             }

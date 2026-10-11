@@ -59,6 +59,16 @@ extension View {
         }
     }
 
+    /// The folder a session runs in, under its title where the system supports it.
+    @ViewBuilder
+    func workspaceSubtitle(_ workspace: String?) -> some View {
+        if #available(iOS 26, *), let workspace, !workspace.isEmpty {
+            navigationSubtitle((workspace as NSString).lastPathComponent)
+        } else {
+            self
+        }
+    }
+
     /// The main action of a screen, filled with the brand colour.
     @ViewBuilder
     func brandProminentButtonStyle() -> some View {
