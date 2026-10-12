@@ -64,6 +64,7 @@ struct TranscriptView: View {
     @Environment(\.openSessionSidebar) private var openSessions
     @Environment(\.isChatObscured) private var isChatObscured
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sheet: AttentionSheet?
     @State private var selectable: SelectableText?
     @State private var showsRequests = false
@@ -337,21 +338,30 @@ struct TranscriptView: View {
                 composerDock
             }
             .overlayPreferenceValue(ChatActionsAnchor.self) { anchor in
-                if showsChatActions, let anchor {
+                if let anchor {
                     GeometryReader { geometry in
                         let button = geometry[anchor]
-                        Color.clear
-                            .contentShape(.rect)
-                            .onTapGesture { showsChatActions = false }
-                            .accessibilityLabel("Dismiss chat actions")
-                            .accessibilityAddTraits(.isButton)
-                        ChatActionsMenu(hadKeyboard: isComposerFocused, isRunning: snapshot.isRunning) { action in
-                            nextChatAction = action
-                            showsChatActions = false
+                        // Keep the transition's container mounted while closing;
+                        // removing the GeometryReader would skip the exit animation.
+                        ZStack(alignment: .bottomLeading) {
+                            if showsChatActions {
+                                Color.clear
+                                    .contentShape(.rect)
+                                    .onTapGesture { showsChatActions = false }
+                                    .accessibilityLabel("Dismiss chat actions")
+                                    .accessibilityAddTraits(.isButton)
+                                ChatActionsMenu(hadKeyboard: isComposerFocused, isRunning: snapshot.isRunning) { action in
+                                    nextChatAction = action
+                                    showsChatActions = false
+                                }
+                                .transition(reduceMotion ? .opacity : .scale(scale: 0.94, anchor: .bottomLeading).combined(with: .opacity))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                                .padding(.leading, max(12, button.minX - 8))
+                                .padding(.bottom, max(8, geometry.size.height - button.minY + 8))
+                            }
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                        .padding(.leading, max(12, button.minX - 8))
-                        .padding(.bottom, max(8, geometry.size.height - button.minY + 8))
+                        .animation(reduceMotion ? .easeOut(duration: 0.12) : .snappy(duration: 0.22), value: showsChatActions)
+                        .allowsHitTesting(showsChatActions)
                     }
                 }
             }
