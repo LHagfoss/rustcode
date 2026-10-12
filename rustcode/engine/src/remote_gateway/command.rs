@@ -1,6 +1,6 @@
 //! `rustcode remote …` commands: argument handling and terminal output.
 
-use super::address::{candidate_addresses, plan_listen};
+use super::address::{candidate_addresses, plan_listen, plan_listen_with_preference};
 use super::control::{GatewayStatus, OfferDetails};
 use super::devices::DeviceRecord;
 use super::gateway::{Gateway, GatewayConfig, Limits};
@@ -65,8 +65,11 @@ pub async fn serve(
     bind: &str,
     port: u16,
     advertise: Option<&str>,
+    prefer_interface: Option<&str>,
 ) -> Result<()> {
-    let plan = plan_listen(bind, advertise, &candidate_addresses())?;
+    let plan =
+        plan_listen_with_preference(bind, advertise, &candidate_addresses(), prefer_interface)?;
+    let lifecycle = RemoteLifecycle::new(config_directory);
     let lifecycle = RemoteLifecycle::new(config_directory);
     let hub = SessionHub::start(HubLimits::default());
     let gateway = Gateway::bind(
@@ -76,9 +79,19 @@ pub async fn serve(
             // The address is a result of the arguments, never a setting: a
             // lease that changes moves the listener instead of stranding it.
             replan: Some({
-                let (bind, advertise) = (bind.to_owned(), advertise.map(str::to_owned));
+                let (bind, advertise, prefer_interface) = (
+                    bind.to_owned(),
+                    advertise.map(str::to_owned),
+                    prefer_interface.map(str::to_owned),
+                );
                 Arc::new(move || {
-                    plan_listen(&bind, advertise.as_deref(), &candidate_addresses()).ok()
+                    plan_listen_with_preference(
+                        &bind,
+                        advertise.as_deref(),
+                        &candidate_addresses(),
+                        prefer_interface.as_deref(),
+                    )
+                    .ok()
                 })
             }),
             port,
@@ -154,6 +167,7 @@ pub async fn serve(
             bind: Some(bind.into()),
             port: Some(port),
             advertise: advertise.map(str::to_owned),
+            prefer_interface: prefer_interface.map(str::to_owned),
         };
         lifecycle.start(launcher.command()).await?;
     }

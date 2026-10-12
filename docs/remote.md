@@ -67,6 +67,14 @@ address, preferring private IPv4 LAN addresses over VPN addresses. The OS route
 breaks ties between LAN interfaces. Virtual bridges and link-local addresses
 are excluded. The listener binds only the selected address and advertises it.
 
+To prefer the mesh instead (stable across Wi-Fi changes, reachable off-LAN),
+set `[remote] prefer_interface = "netbird"` — or
+`rustcode remote serve --prefer-interface netbird`. An `auto` bind then picks
+the NetBird interface address first (`wt`-prefixed devices, or any interface
+with netbird in its name) and falls back to the LAN default when NetBird is
+down. On macOS NetBird uses a generic `utun` device shared with other VPNs,
+so there prefer `--advertise <host>.netbird.cloud` instead.
+
 With no usable network interface, it falls back to `127.0.0.1` and explains
 that a phone cannot reach it. Explicit `--bind 127.0.0.1` keeps local-only
 access for a Simulator or test client.

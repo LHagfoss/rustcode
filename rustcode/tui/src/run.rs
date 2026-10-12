@@ -254,6 +254,7 @@ async fn run_remote_command(
                 bind: config.remote.bind,
                 port: config.remote.port,
                 advertise: config.remote.advertise,
+                prefer_interface: config.remote.prefer_interface,
             };
             let _ = std::fs::remove_file(config_dir.join("remote/disabled"));
             let status = rustcode::remote_gateway::service::start(&launcher, &lifecycle).await?;
@@ -267,7 +268,17 @@ async fn run_remote_command(
             bind,
             port,
             advertise,
-        } => remote::serve(&config_dir, bind, *port, advertise.as_deref()).await?,
+            prefer_interface,
+        } => {
+            remote::serve(
+                &config_dir,
+                bind,
+                *port,
+                advertise.as_deref(),
+                prefer_interface.as_deref(),
+            )
+            .await?
+        }
         RemoteCommands::Pair => {
             let (_, _, config) = rustcode::config::load_config();
             let launcher = rustcode::remote_gateway::owner_client::Launcher {
@@ -276,6 +287,7 @@ async fn run_remote_command(
                 bind: config.remote.bind,
                 port: config.remote.port,
                 advertise: config.remote.advertise,
+                prefer_interface: config.remote.prefer_interface,
             };
             let _ = std::fs::remove_file(config_dir.join("remote/disabled"));
             rustcode::remote_gateway::service::start(&launcher, &lifecycle).await?;
