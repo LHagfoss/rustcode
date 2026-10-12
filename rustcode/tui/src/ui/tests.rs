@@ -3414,6 +3414,38 @@ fn incremental_tool_round_continuation_has_no_second_group_heading() {
 }
 
 #[test]
+fn a_hovered_message_is_one_block_across_its_blank_paragraph_rows() {
+    use rustcode::controller::ChatMessage;
+
+    let mut state = RenderState::new();
+    state.history.extend([
+        ChatMessage::new("user", "question"),
+        ChatMessage::new("assistant", "first paragraph\n\nsecond paragraph"),
+    ]);
+    let snapshot = render_snapshot(&state);
+    let mut transcript = TranscriptState::default();
+    let lines =
+        super::render_visible_conversation_with_transcript(&snapshot, 80, 40, &mut transcript);
+    let flags = transcript.message_line_flags.take().expect("message rows");
+    let row = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.to_string().contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle}"))
+    };
+    let (first, second) = (row("first paragraph"), row("second paragraph"));
+    assert!(second > first + 1, "a blank row separates the paragraphs");
+    assert!(
+        flags[first..=second].iter().all(|flag| *flag == Some(1)),
+        "{:?}",
+        &flags[first..=second]
+    );
+    // The spacing after the message is not part of it.
+    assert_eq!(flags.get(second + 1).copied().flatten(), None);
+    assert_eq!(flags[row("question")], Some(0));
+}
+
+#[test]
 fn tool_rounds_in_one_block_render_without_a_spacer_row() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
