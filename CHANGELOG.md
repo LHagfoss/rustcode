@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.15 — 2026-10-12
+
+- Show chat notices as transient toasts, add a jump-to-latest control and prevent session row swipes from closing the sidebar ([PR #28](https://github.com/LHagfoss/rustcode_app/pull/28)).
+
 ## 0.1.1 — 2026-10-10
 
 - Scan the `/remote` QR on the same Wi-Fi with RustCode 0.64.1; the host chooses
