@@ -1,3 +1,7 @@
+## [v0.64.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.8) - 2026-10-12
+
+### Fixes
+- Show the tool action label when a TUI tool row has no target ([PR #1961](https://github.com/LHagfoss/rustcode/pull/1961))
 ## [v0.64.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.7) - 2026-10-12
 
 ### Features
