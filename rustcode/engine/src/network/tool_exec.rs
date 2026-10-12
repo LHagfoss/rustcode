@@ -1072,12 +1072,22 @@ pub(crate) async fn execute_tool_batch_with_assessments(
 ) -> Vec<ToolResult> {
     let root = state.lock().await.effective_workspace_root();
     if let Some(root) = root {
-        let snapshot = crate::workspace_intelligence::snapshot(&root);
+        // Share the turn's refresh when fresh; a full scan here stalled
+        // oversized workspaces once per tool batch (#1954). The window is
+        // deliberately short: a missed external edit only delays read-cache
+        // invalidation, and our own writes bypass it via `invalidate()`.
+        const READ_CACHE_GENERATION_MAX_AGE: std::time::Duration =
+            std::time::Duration::from_secs(10);
+        let generation = match crate::workspace_intelligence::fresh_generation(
+            &root,
+            READ_CACHE_GENERATION_MAX_AGE,
+        ) {
+            Some((canonical, generation)) => Some((canonical, generation)),
+            None => crate::workspace_intelligence::snapshot(&root)
+                .ok()
+                .map(|s| (s.root.clone(), s.generation)),
+        };
         let mut app = state.lock().await;
-        let generation = snapshot
-            .as_ref()
-            .ok()
-            .map(|s| (s.root.clone(), s.generation));
         if generation.is_none() || app.read_workspace_generation != generation {
             app.recent_read_calls.clear();
             app.recent_read_outputs.clear();
