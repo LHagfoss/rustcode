@@ -52,7 +52,7 @@ pub(crate) fn render_live_tail_with_transcript(
 /// running and the ones that have ended but are not in history yet. Without
 /// the last group a row vanished the moment its call finished and the whole
 /// batch reappeared at once when it was recorded.
-fn visible_live_tool_calls(state: &RenderSnapshot) -> Vec<rustcode::controller::LiveToolCall> {
+fn visible_live_tool_calls(state: &RenderSnapshot) -> Vec<&rustcode::controller::LiveToolCall> {
     let block_shown = state
         .live_tool_calls()
         .iter()
@@ -67,7 +67,6 @@ fn visible_live_tool_calls(state: &RenderSnapshot) -> Vec<rustcode::controller::
                     || call.finished.is_some()
                     || super::history_cell::live_tool_call_is_settled(call))
         })
-        .cloned()
         .collect()
 }
 
@@ -170,17 +169,10 @@ fn render_live_tail_mode(
 
     // Running calls are named in the transcript at every verbosity; the status
     // row by the composer only says what state the turn is in.
-    if visible_live_tool_calls.is_empty() {
-        transcript.clear_tools();
-    } else {
-        transcript.set_tools_with_verbosity(
-            &visible_live_tool_calls,
-            state.verbosity(),
-            state.home_path(),
-            live_tools_join_committed_block(state),
-        );
-        has_visible_active_cell = true;
-    }
+    // These calls belong to the immutable frame snapshot. Borrow them for
+    // painting instead of copying their potentially large output into a cell.
+    transcript.clear_tools();
+    has_visible_active_cell |= !visible_live_tool_calls.is_empty();
     if model_live_text.is_empty() {
         transcript.clear_assistant();
     } else {
@@ -224,7 +216,23 @@ fn render_live_tail_mode(
     }
 
     if has_visible_active_cell {
-        lines.extend(transcript.display_lines(width));
+        let mut tool_lines = super::history_cell::render_live_tool_cell_at_refs(
+            &visible_live_tool_calls,
+            width,
+            state.verbosity(),
+            false,
+            std::time::Instant::now(),
+            state.home_path(),
+        );
+        if live_tools_join_committed_block(state) && !tool_lines.is_empty() {
+            tool_lines.remove(0);
+        }
+        let assistant_lines = transcript.display_lines(width);
+        if !tool_lines.is_empty() && !assistant_lines.is_empty() {
+            tool_lines.push(Line::from(""));
+        }
+        lines.extend(tool_lines);
+        lines.extend(assistant_lines);
     }
 
     if state.recap_loading() {
@@ -381,7 +389,9 @@ pub(crate) fn render_visible_conversation_with_transcript(
         call.omitted_output_bytes.hash(&mut live_content);
         for chunk in &call.output {
             chunk.stderr.hash(&mut live_content);
-            chunk.text.hash(&mut live_content);
+            // Live output is append-only. Its extent marks new activity;
+            // hashing every byte made scrolling cost grow with output size.
+            chunk.text.len().hash(&mut live_content);
         }
     }
     let content_mark = (history_revision, live_content.finish() as usize);
@@ -1696,4 +1706,27 @@ mod completion_tests {
             );
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn visible_live_calls_borrow_output_instead_of_copying_it() {
+    let mut state = RenderState::new();
+    let mut call =
+        rustcode::controller::LiveToolCall::new("test", None, "run_command", "Bash", "cargo test");
+    call.execution_started = true;
+    call.output
+        .push_back(rustcode::controller::LiveToolOutputChunk {
+            stderr: false,
+            text: "large output".repeat(1024),
+        });
+    state.live_tool_calls = Arc::new(vec![call]);
+    let snapshot = render_snapshot(&state);
+    let visible = visible_live_tool_calls(&snapshot);
+    assert_eq!(visible.len(), 1);
+    assert_eq!(
+        visible[0].output[0].text.as_ptr(),
+        state.live_tool_calls[0].output[0].text.as_ptr(),
+        "frame projection must borrow live output storage"
+    );
 }

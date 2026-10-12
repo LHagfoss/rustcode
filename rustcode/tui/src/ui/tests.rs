@@ -1714,6 +1714,8 @@ fn footer_stats_and_session_show_the_context_budget_and_session_total() {
             ..Default::default()
         };
     let mut state = RenderState::new();
+    // Keep footer width independent of the checkout path and task branch.
+    state.cwd_and_branch = "/repo:main".to_owned();
     state.active_context_window = 200_000;
     state.history.push(ChatMessage::new("user", "question"));
     let mut first = ChatMessage::new("assistant", "first");
@@ -12483,4 +12485,93 @@ fn choice_shortcodes_become_glyphs_and_other_text_is_left_alone() {
         replace("08:00-08:30 :rocket: ship"),
         "08:00-08:30 :rocket: ship"
     );
+}
+
+#[test]
+#[ignore = "manual scroll/selection frame benchmark with large live output"]
+fn benchmark_scroll_and_selection_with_large_live_output() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::TestBackend;
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    for output_bytes in [0, 4 * 1024 * 1024] {
+        for selected in [false, true] {
+            let mut state = RenderState::new();
+            state.verbosity = rustcode::controller::Verbosity::High;
+            state.config.reduced_motion = true;
+            for index in 0..300 {
+                state
+                    .history
+                    .push(ChatMessage::new("user", format!("History row {index}")));
+                state.history.push(ChatMessage::new(
+                    "assistant",
+                    "A response with **formatting** and `code`.",
+                ));
+            }
+            let mut call = rustcode::controller::LiveToolCall::new(
+                "bench",
+                None,
+                "run_command",
+                "Bash",
+                "cargo test",
+            );
+            call.execution_started = true;
+            call.started_at = std::time::Instant::now() - std::time::Duration::from_secs(5);
+            call.output
+                .push_back(rustcode::controller::LiveToolOutputChunk {
+                    stderr: false,
+                    text: "x".repeat(output_bytes),
+                });
+            state.live_tool_calls = std::sync::Arc::new(vec![call]);
+            let mut transcript = TranscriptState::default();
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            transcript.scroll_up(120);
+            terminal
+                .draw(|frame| {
+                    render_with_transcript(frame, &state, &mut transcript);
+                })
+                .unwrap();
+            let area = transcript.selection.area();
+            if selected {
+                transcript.selection.begin_with_snapshot(
+                    MouseEvent {
+                        kind: MouseEventKind::Down(MouseButton::Left),
+                        column: area.x + 2,
+                        row: area.y + 2,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    render_snapshot(&state),
+                    transcript.scroll_rows(),
+                );
+            }
+            let mut costs = Vec::new();
+            for index in 0..100 {
+                if selected {
+                    transcript.selection.mouse(MouseEvent {
+                        kind: MouseEventKind::Drag(MouseButton::Left),
+                        column: area.x + 2 + (index % 20),
+                        row: area.y + 3,
+                        modifiers: KeyModifiers::NONE,
+                    });
+                } else if index % 2 == 0 {
+                    transcript.scroll_up(1);
+                } else {
+                    transcript.scroll_down(1);
+                }
+                let started = std::time::Instant::now();
+                terminal
+                    .draw(|frame| {
+                        render_with_transcript(frame, &state, &mut transcript);
+                    })
+                    .unwrap();
+                costs.push(started.elapsed().as_micros());
+            }
+            costs.sort_unstable();
+            println!(
+                "output_bytes={output_bytes} selected={selected} frame_p50_us={} frame_p95_us={}",
+                costs[50], costs[95]
+            );
+        }
+    }
 }

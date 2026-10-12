@@ -58,19 +58,11 @@ use transcript::render_finalized_assistant_scrollback;
 use updates::{apply_update_decision, run_update_command};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
-/// Bounds on how long a frame is postponed while input keeps arriving, so a
-/// sustained burst still repaints at a steady rate instead of once at its end.
-const INPUT_COALESCE_MIN: Duration = EVENT_POLL_INTERVAL;
-const INPUT_COALESCE_MAX: Duration = Duration::from_millis(48);
-
-/// How long queued input is applied before the next paint. A cheap frame waits
-/// one poll interval, so a wheel gesture repaints at display rate. A costly
-/// one waits twice its own duration, which keeps input from queueing faster
-/// than frames drain it.
-fn input_coalesce_window(last_frame_cost: Duration) -> Duration {
-    last_frame_cost
-        .saturating_mul(2)
-        .clamp(INPUT_COALESCE_MIN, INPUT_COALESCE_MAX)
+/// Apply queued input for at most one display interval before painting.
+/// Frame cost already consumes this interval; doubling it deferred expensive
+/// scroll/selection frames for another 16–48 ms under continuous input.
+fn input_coalesce_window(_last_frame_cost: Duration) -> Duration {
+    EVENT_POLL_INTERVAL
 }
 // Keep streaming frames at the same cadence as the event loop so a provider
 // chunk cannot sit in the live response buffer for a perceptible interval.
@@ -212,8 +204,8 @@ impl AppRuntime {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppRunControl, AppRuntime, Duration, EVENT_POLL_INTERVAL, INPUT_COALESCE_MAX,
-        STREAM_FRAME_INTERVAL, apply_update_decision, input_coalesce_window,
+        AppRunControl, AppRuntime, Duration, EVENT_POLL_INTERVAL, STREAM_FRAME_INTERVAL,
+        apply_update_decision, input_coalesce_window,
     };
     use crate::runtime::events::AppEvent;
     use crate::ui::render_snapshot::render_snapshot;
@@ -228,15 +220,15 @@ mod tests {
     }
 
     #[test]
-    fn input_coalescing_tracks_frame_cost_within_its_bounds() {
+    fn input_coalescing_never_adds_delay_after_a_slow_frame() {
         let ms = Duration::from_millis;
         // Cheap frames repaint at the poll cadence during a wheel burst.
         assert_eq!(input_coalesce_window(Duration::ZERO), EVENT_POLL_INTERVAL);
         assert_eq!(input_coalesce_window(ms(2)), EVENT_POLL_INTERVAL);
-        // A slow frame leaves at least its own duration to drain input.
-        assert_eq!(input_coalesce_window(ms(15)), ms(30));
-        assert_eq!(input_coalesce_window(ms(500)), INPUT_COALESCE_MAX);
-        assert_eq!(input_coalesce_window(Duration::MAX), INPUT_COALESCE_MAX);
+        // A slow frame must not add another frame-dependent delay.
+        assert_eq!(input_coalesce_window(ms(15)), EVENT_POLL_INTERVAL);
+        assert_eq!(input_coalesce_window(ms(500)), EVENT_POLL_INTERVAL);
+        assert_eq!(input_coalesce_window(Duration::MAX), EVENT_POLL_INTERVAL);
     }
 
     #[tokio::test]
