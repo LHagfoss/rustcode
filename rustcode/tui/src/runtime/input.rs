@@ -558,12 +558,24 @@ async fn report_selection_copy(
     text: &str,
     copy: impl FnOnce(&str) -> rustcode::clipboard::ClipboardCopyStatus,
 ) {
+    report_copy(app_state, text, "selection", copy).await;
+}
+
+/// Copy `text` and tell the user what happened to the `subject` they copied.
+async fn report_copy(
+    app_state: &Arc<Mutex<AppState>>,
+    text: &str,
+    subject: &str,
+    copy: impl FnOnce(&str) -> rustcode::clipboard::ClipboardCopyStatus,
+) {
     let notice = match copy(text) {
-        rustcode::clipboard::ClipboardCopyStatus::Confirmed => "Copied selection to clipboard",
-        rustcode::clipboard::ClipboardCopyStatus::Requested => {
-            "Copy sent to terminal; paste to verify"
+        rustcode::clipboard::ClipboardCopyStatus::Confirmed => {
+            format!("Copied {subject} to clipboard")
         }
-        rustcode::clipboard::ClipboardCopyStatus::Failed => "Copy failed; try again",
+        rustcode::clipboard::ClipboardCopyStatus::Requested => {
+            "Copy sent to terminal; paste to verify".to_owned()
+        }
+        rustcode::clipboard::ClipboardCopyStatus::Failed => "Copy failed; try again".to_owned(),
     };
     app_state.lock().await.set_transient_notice(notice);
 }
@@ -2453,6 +2465,36 @@ pub(super) async fn handle_app_event(
                     }
                     event::MouseEventKind::ScrollDown => {
                         transcript_state.scroll_down(ui::WHEEL_SCROLL_LINES);
+                    }
+                    // A right-click on a message copies the whole message; a
+                    // live selection keeps the right-click for itself.
+                    event::MouseEventKind::Down(event::MouseButton::Right)
+                        if !transcript_state.selection.has_selection()
+                            && transcript_state.panel_selection_area.is_none()
+                            && transcript_state
+                                .message_at(mouse.column, mouse.row)
+                                .is_some() =>
+                    {
+                        let index = transcript_state
+                            .message_at(mouse.column, mouse.row)
+                            .expect("checked");
+                        let text = app_state
+                            .lock()
+                            .await
+                            .history
+                            .get(index)
+                            .map(|message| message.content.trim().to_owned());
+                        if let Some(text) = text {
+                            report_copy(
+                                app_state,
+                                &text,
+                                "message",
+                                rustcode::clipboard::copy_to_clipboard,
+                            )
+                            .await;
+                        }
+                        frame_requester.schedule_frame();
+                        return Ok(InputFlow::ContinueIteration);
                     }
                     _ => {
                         // Composer drag selection (#1493). Down starts a

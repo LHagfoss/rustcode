@@ -232,6 +232,7 @@ pub(crate) fn render_with_transcript_snapshot(
         transcript.tasks_chip = None;
         transcript.tasks_chip_hovered = false;
         transcript.set_tool_rows(ratatui::layout::Rect::default(), Vec::new());
+        transcript.set_message_rows(ratatui::layout::Rect::default(), Vec::new());
         transcript.set_panel_targets(f.buffer(), area, false);
         transcript.refresh_hover();
         refresh_panel_selection(f, state, transcript, area);
@@ -441,6 +442,14 @@ pub(crate) fn render_with_transcript_snapshot(
             .iter()
             .zip(wrapped_counts.iter())
             .flat_map(|(&block, &count)| std::iter::repeat_n(block, count.max(1)))
+            .take(chat_height as usize)
+            .collect::<Vec<_>>()
+    });
+    let message_rows = transcript.message_line_flags.take().map(|flags| {
+        flags
+            .iter()
+            .zip(wrapped_counts.iter())
+            .flat_map(|(&message, &count)| std::iter::repeat_n(message, count.max(1)))
             .take(chat_height as usize)
             .collect::<Vec<_>>()
     });
@@ -674,7 +683,13 @@ pub(crate) fn render_with_transcript_snapshot(
         || state.show_subagent_picker()
         || state.tasks_panel().is_some()
         || state.settings_picker().is_some();
-    transcript.set_panel_targets(f.buffer(), chunks[6], list_panel);
+    // The completion menu is a list like any picker, painted in its own
+    // rows; a panel hides it, so only one of the two is ever on screen.
+    if slash_rows.is_empty() && at_files.is_empty() {
+        transcript.set_panel_targets(f.buffer(), chunks[6], list_panel);
+    } else {
+        transcript.set_panel_targets(f.buffer(), chunks[7], true);
+    }
 
     render_transcript_status_row(
         f,
@@ -696,7 +711,11 @@ pub(crate) fn render_with_transcript_snapshot(
     if let Some(rows) = tool_rows {
         transcript.set_tool_rows(selection_area, rows);
     }
+    if let Some(rows) = message_rows {
+        transcript.set_message_rows(selection_area, rows);
+    }
     transcript.refresh_hover();
+    transcript.highlight_hovered_message(f.buffer_mut());
     transcript.highlight_hovered_target(f.buffer_mut());
     transcript.highlight_hovered_tool_block(f.buffer_mut());
     transcript.selection.refresh_view(
