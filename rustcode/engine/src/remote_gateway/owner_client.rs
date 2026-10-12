@@ -773,6 +773,8 @@ impl Client {
                         }
                         GatewayFrame::Closed { reason } => return Ended::Closed(reason),
                         GatewayFrame::Registered { .. } | GatewayFrame::Pong => {}
+                        // Standby frames never reach a shared owner link.
+                        GatewayFrame::Announced { .. } | GatewayFrame::ShareRequested { .. } => {}
                     }
                 }
                 Some(done) = self.in_flight.next(), if !self.in_flight.is_empty() => {

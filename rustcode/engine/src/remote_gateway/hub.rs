@@ -207,13 +207,51 @@ struct Connection {
     in_flight: usize,
 }
 
+/// A terminal that announced an unshared session so a device can ask it to
+/// share. Presence only: no transcript, no events, no epoch.
+struct Standby {
+    session_id: String,
+    title: String,
+    workspace: Option<String>,
+    to_owner: mpsc::Sender<GatewayFrame>,
+    last_heard: Instant,
+}
+
+/// A `request_share` waiting on the session's terminal.
+struct PendingShare {
+    connection_id: u64,
+    sink: FrameSink,
+    request_id: String,
+    session_id: String,
+    deadline: Instant,
+}
+
+/// Decided share outcomes, held for `get_request_status` polls.
+struct ShareOutcome {
+    response: RemoteResponse,
+    decided: Instant,
+}
+
 #[derive(Default)]
 struct State {
     sessions: HashMap<String, Session>,
     connections: HashMap<u64, Connection>,
     lookups: HashMap<u64, Lookup>,
+    standby: HashMap<u64, Standby>,
+    standby_by_session: HashMap<String, u64>,
+    pending_shares: HashMap<u64, PendingShare>,
+    share_outcomes: HashMap<String, ShareOutcome>,
     next_id: u64,
 }
+
+/// How long a terminal may take to answer a share request before the device
+/// is told it expired.
+const SHARE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long a decided share outcome is kept for `get_request_status`.
+const SHARE_OUTCOME_TTL: Duration = Duration::from_secs(600);
+/// Cap on share requests waiting across the gateway; beyond it new requests
+/// are refused instead of queuing behind terminals that never answer.
+const MAX_PENDING_SHARES: usize = 32;
 
 pub struct SessionHub {
     limits: HubLimits,
@@ -559,6 +597,272 @@ impl SessionHub {
         sessions
     }
 
+    // ---- standby owners -------------------------------------------------
+    // Terminals that announced an unshared session so a device can ask them
+    // to share it. Presence only: no transcript ever leaves the terminal.
+
+    /// Announce an unshared session's terminal as reachable for share
+    /// requests. Nothing is shared yet; the terminal still approves.
+    pub fn announce_owner(
+        &self,
+        session_id: String,
+        title: String,
+        workspace: Option<String>,
+    ) -> Result<OwnerRegistration, String> {
+        let mut state = self.state();
+        if session_id.is_empty() || session_id.len() > 256 {
+            return Err("the session identifier is not acceptable".to_owned());
+        }
+        if state.sessions.contains_key(&session_id) {
+            return Err("this session is already shared".to_owned());
+        }
+        if state.standby_by_session.contains_key(&session_id) {
+            return Err("this session is already announced".to_owned());
+        }
+        state.next_id += 1;
+        let owner_id = state.next_id;
+        let (to_owner, frames) = mpsc::channel(self.limits.owner_queue.max(1));
+        state.standby.insert(
+            owner_id,
+            Standby {
+                session_id: session_id.clone(),
+                title,
+                workspace,
+                to_owner,
+                last_heard: Instant::now(),
+            },
+        );
+        state.standby_by_session.insert(session_id, owner_id);
+        let identity = self.identity();
+        Ok(OwnerRegistration {
+            owner_id,
+            registered: GatewayFrame::Announced {
+                gateway_id: identity.gateway_id.clone(),
+                instance_id: identity.instance_id.clone(),
+            },
+            frames,
+        })
+    }
+
+    /// One frame from a standby (announced, unshared) owner. Returns false
+    /// when the announcement is over and the connection should close.
+    pub fn standby_frame(&self, owner_id: u64, frame: OwnerFrame) -> bool {
+        let mut guard = self.state();
+        let state = &mut *guard;
+        match frame {
+            OwnerFrame::Ping => {
+                let Some(standby) = state.standby.get_mut(&owner_id) else {
+                    return false;
+                };
+                standby.last_heard = Instant::now();
+                let _ = standby.to_owner.try_send(GatewayFrame::Pong);
+                true
+            }
+            OwnerFrame::Announce {
+                session_id,
+                title,
+                workspace,
+                ..
+            } => {
+                if session_id.is_empty() || session_id.len() > 256 {
+                    return false;
+                }
+                let Some(standby) = state.standby.get_mut(&owner_id) else {
+                    return false;
+                };
+                if session_id == standby.session_id {
+                    standby.title = title;
+                    standby.workspace = workspace;
+                    standby.last_heard = Instant::now();
+                    return true;
+                }
+                if state.sessions.contains_key(&session_id)
+                    || state.standby_by_session.contains_key(&session_id)
+                {
+                    return false;
+                }
+                let old = std::mem::replace(&mut standby.session_id, session_id.clone());
+                standby.title = title;
+                standby.workspace = workspace;
+                state.standby_by_session.remove(&old);
+                state.standby_by_session.insert(session_id, owner_id);
+                Self::abandon_shares(state, &old, "the terminal switched to another session");
+                true
+            }
+            OwnerFrame::ShareDecision {
+                pending_id,
+                accepted,
+            } => {
+                let Some(session_id) = state.standby.get(&owner_id).map(|s| s.session_id.clone())
+                else {
+                    return false;
+                };
+                let Some(pending) = state.pending_shares.get(&pending_id) else {
+                    return true;
+                };
+                if pending.session_id != session_id {
+                    return true;
+                }
+                if accepted {
+                    // The registration that follows resolves the request;
+                    // register_owner answers it as accepted.
+                    return true;
+                }
+                if let Some(pending) = state.pending_shares.remove(&pending_id) {
+                    Self::answer_share(
+                        state,
+                        pending,
+                        RemoteResult::ShareDenied {
+                            reason: "the terminal declined to share this session".to_owned(),
+                        },
+                        ReceiptState::Rejected,
+                    );
+                }
+                true
+            }
+            // Session frames have no meaning on a standby link.
+            _ => state.standby.contains_key(&owner_id),
+        }
+    }
+
+    /// Answer every share request waiting on `session_id` and forget it.
+    fn abandon_shares(state: &mut State, session_id: &str, reason: &str) {
+        let abandoned: Vec<u64> = state
+            .pending_shares
+            .iter()
+            .filter(|(_, pending)| pending.session_id == session_id)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in abandoned {
+            if let Some(pending) = state.pending_shares.remove(&id) {
+                Self::answer_share(
+                    state,
+                    pending,
+                    RemoteResult::ShareDenied {
+                        reason: reason.to_owned(),
+                    },
+                    ReceiptState::Unknown,
+                );
+            }
+        }
+    }
+
+    /// Deliver a share outcome to the waiting device and keep it for
+    /// `get_request_status` polls.
+    fn answer_share(
+        state: &mut State,
+        pending: PendingShare,
+        result: RemoteResult,
+        receipt: ReceiptState,
+    ) {
+        let mut response = RemoteResponse::new(pending.request_id.clone(), result);
+        response.receipt = Some(receipt);
+        respond(&pending.sink, response.clone());
+        if state.share_outcomes.len() >= 128 {
+            state.share_outcomes.clear();
+        }
+        state.share_outcomes.insert(
+            pending.request_id,
+            ShareOutcome {
+                response,
+                decided: Instant::now(),
+            },
+        );
+        if let Some(connection) = state.connections.get_mut(&pending.connection_id) {
+            connection.in_flight = connection.in_flight.saturating_sub(1);
+        }
+    }
+
+    /// Route a `request_share` from a device to the session's terminal.
+    fn request_share(
+        &self,
+        state: &mut State,
+        device: &DeviceContext,
+        sink: &FrameSink,
+        request: RemoteRequest,
+        session_id: String,
+    ) {
+        let request_id = request.request_id.clone();
+        if let Some(outcome) = state.share_outcomes.get(&request_id) {
+            return respond(sink, outcome.response.clone());
+        }
+        if state.pending_shares.len() >= MAX_PENDING_SHARES {
+            return refuse(
+                sink,
+                &request_id,
+                true,
+                RemoteErrorCode::RateLimited,
+                "too many share requests are waiting on terminals",
+            );
+        }
+        if let Some(session) = state.sessions.get(&session_id) {
+            return reply(
+                sink,
+                &request_id,
+                RemoteResult::ShareAccepted {
+                    session: session.info.clone(),
+                },
+            );
+        }
+        let Some(&owner_id) = state.standby_by_session.get(&session_id) else {
+            return refuse(
+                sink,
+                &request_id,
+                true,
+                RemoteErrorCode::NotFound,
+                "no live terminal has this session; open it in a terminal and run /remote, or start it from the device",
+            );
+        };
+        let Some(standby) = state.standby.get(&owner_id) else {
+            state.standby_by_session.remove(&session_id);
+            return refuse(
+                sink,
+                &request_id,
+                true,
+                RemoteErrorCode::NotFound,
+                "no live terminal has this session; open it in a terminal and run /remote, or start it from the device",
+            );
+        };
+        state.next_id += 1;
+        let pending_id = state.next_id;
+        if standby
+            .to_owner
+            .try_send(GatewayFrame::ShareRequested {
+                pending_id,
+                device_name: device.device_name.clone(),
+            })
+            .is_err()
+        {
+            return refuse(
+                sink,
+                &request_id,
+                true,
+                RemoteErrorCode::OwnerUnavailable,
+                "the terminal is not keeping up; nothing was asked",
+            );
+        }
+        state.pending_shares.insert(
+            pending_id,
+            PendingShare {
+                connection_id: device.connection_id,
+                sink: sink.clone(),
+                request_id: request_id.clone(),
+                session_id,
+                deadline: Instant::now() + SHARE_REQUEST_TIMEOUT,
+            },
+        );
+        if let Some(connection) = state.connections.get_mut(&device.connection_id) {
+            connection.in_flight += 1;
+        }
+        reply(
+            sink,
+            &request_id,
+            RemoteResult::ShareRequestSent {
+                pending_id: pending_id.to_string(),
+            },
+        );
+    }
+
     // ---- owners ---------------------------------------------------------
 
     /// Take a registration from an owner connection. `Err` is the reason to
@@ -587,7 +891,7 @@ impl SessionHub {
         let mut session = Session {
             owner_id,
             epoch: registration.registration_epoch,
-            info,
+            info: info.clone(),
             to_owner,
             ring: ReplayRing::starting_after(snapshot.sequence),
             last: snapshot.sequence,
@@ -601,7 +905,30 @@ impl SessionHub {
         };
         let status = self.link_status(&state, &session);
         session.status_sent = Some(status.clone());
-        state.sessions.insert(registration.session_id, session);
+        state
+            .sessions
+            .insert(registration.session_id.clone(), session);
+        // A terminal that just shared resolves the share requests that were
+        // waiting on its announcement: the device can attach now.
+        let accepted: Vec<u64> = state
+            .pending_shares
+            .iter()
+            .filter(|(_, pending)| pending.session_id == registration.session_id)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in accepted {
+            if let Some(pending) = state.pending_shares.remove(&id) {
+                Self::answer_share(
+                    &mut state,
+                    pending,
+                    RemoteResult::ShareAccepted {
+                        session: info.clone(),
+                    },
+                    ReceiptState::Applied,
+                );
+            }
+        }
+        state.standby_by_session.remove(&registration.session_id);
         self.push_sessions(&mut state);
         let identity = self.identity();
         Ok(OwnerRegistration {
@@ -639,8 +966,11 @@ impl SessionHub {
         }
         let mut list_changed = was_unresponsive;
         match frame {
-            // A second registration on one connection is not a thing.
-            OwnerFrame::Register { .. } => {}
+            // A second registration on one connection is not a thing, and
+            // standby frames never arrive on a shared connection.
+            OwnerFrame::Register { .. }
+            | OwnerFrame::Announce { .. }
+            | OwnerFrame::ShareDecision { .. } => {}
             OwnerFrame::Ping => {
                 let _ = session.to_owner.try_send(GatewayFrame::Pong);
             }
@@ -728,7 +1058,8 @@ impl SessionHub {
     }
 
     /// The owner's connection ended. A registration that was not closed with
-    /// a reason ends as `owner_exited`.
+    /// a reason ends as `owner_exited`. A standby announcement simply stops
+    /// being reachable; its waiting share requests are answered as gone.
     pub fn owner_gone(&self, owner_id: u64) {
         let mut state = self.state();
         let session_id = state
@@ -738,6 +1069,11 @@ impl SessionHub {
             .map(|(session_id, _)| session_id.clone());
         if let Some(session_id) = session_id {
             self.close_session(&mut state, &session_id, SessionCloseReason::OwnerExited);
+            return;
+        }
+        if let Some(standby) = state.standby.remove(&owner_id) {
+            state.standby_by_session.remove(&standby.session_id);
+            Self::abandon_shares(&mut state, &standby.session_id, "the terminal went away");
         }
     }
 
@@ -1176,6 +1512,49 @@ impl SessionHub {
         for pending in timed_out {
             self.finish(state, pending, None);
         }
+        // Share requests the terminal never answered expire; decided outcomes
+        // are forgotten after their TTL. Silent standby terminals are asked
+        // to go away; the announcement ends with their connection.
+        let expired_shares: Vec<u64> = state
+            .pending_shares
+            .iter()
+            .filter(|(_, pending)| pending.deadline <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired_shares {
+            if let Some(pending) = state.pending_shares.remove(&id) {
+                Self::answer_share(
+                    state,
+                    pending,
+                    RemoteResult::ShareDenied {
+                        reason: "the terminal did not answer in time".to_owned(),
+                    },
+                    ReceiptState::Unknown,
+                );
+            }
+        }
+        state
+            .share_outcomes
+            .retain(|_, outcome| now.duration_since(outcome.decided) < SHARE_OUTCOME_TTL);
+        let silent_standby: Vec<u64> = state
+            .standby
+            .iter()
+            .filter(|(_, standby)| {
+                now.duration_since(standby.last_heard) >= self.limits.owner_timeout
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for owner_id in silent_standby {
+            if let Some(standby) = state.standby.get(&owner_id) {
+                let _ = standby.to_owner.try_send(GatewayFrame::Closed {
+                    reason: "the gateway heard nothing from this terminal for too long".to_owned(),
+                });
+            }
+            if let Some(standby) = state.standby.remove(&owner_id) {
+                state.standby_by_session.remove(&standby.session_id);
+                Self::abandon_shares(state, &standby.session_id, "the terminal went away");
+            }
+        }
         for session_id in silent {
             if let Some(session) = state.sessions.get(&session_id) {
                 let _ = session.to_owner.try_send(GatewayFrame::Closed {
@@ -1288,7 +1667,29 @@ impl FrameRouter for SessionHub {
                 reply(sink, &request.request_id, RemoteResult::Detached);
             }
             RemoteOperation::GetRequestStatus { target_request_id } => {
-                self.lookup(state, device, sink, request, target_request_id);
+                // Share outcomes are held by the hub itself, not by an owner.
+                if request.session_id.is_none()
+                    && let Some(outcome) = state.share_outcomes.get(&target_request_id)
+                {
+                    reply(
+                        sink,
+                        &request.request_id,
+                        RemoteResult::RequestStatus {
+                            target_request_id: target_request_id.clone(),
+                            receipt: outcome
+                                .response
+                                .receipt
+                                .clone()
+                                .unwrap_or(ReceiptState::Unknown),
+                            result: Some(Box::new(outcome.response.result.clone())),
+                        },
+                    );
+                } else {
+                    self.lookup(state, device, sink, request, target_request_id);
+                }
+            }
+            RemoteOperation::RequestShare { session_id } => {
+                self.request_share(state, device, sink, request, session_id);
             }
             _ => self.forward(state, device, sink, request),
         }

@@ -117,6 +117,16 @@ commands (a prompt starting with `/` is refused), change the approval mode,
 switch sessions, or read anything that is not part of a shared session. The
 terminal's own draft, cursor and attachments are never touched.
 
+A device can also ask a terminal to share a session it has open but never
+shared (`request_share` with the session id). The terminal announces its open
+session to a running gateway on its own; announcing shares nothing. The
+terminal shows `Device '<name>' asks to share this session. Press y to share
+it, n to decline.` Answering y runs `/remote` there and resolves the request
+as accepted — the device attaches with a fresh epoch. No answer within two
+minutes, a decline, or the terminal going away resolves it as denied, which
+`get_request_status` on the request id also reports. Any paired device can
+ask; nothing is shared without the terminal's explicit yes.
+
 ## Gateway commands
 
 | Command | Behavior |

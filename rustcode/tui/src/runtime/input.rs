@@ -968,6 +968,31 @@ pub(super) async fn handle_app_event(
                 }
 
                 {
+                    // A device asks to share this session. Plain keys answer
+                    // it so a stray keystroke cannot leak into the composer
+                    // while the terminal decides; chords keep working.
+                    let share_open = app_state.lock().await.pending_share_prompt.is_some();
+                    if share_open {
+                        if key.modifiers.intersects(
+                            KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::ALT,
+                        ) {
+                            // Fall through to normal handling below.
+                        } else {
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                    app_state.lock().await.share_decision = Some(true);
+                                }
+                                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                    app_state.lock().await.share_decision = Some(false);
+                                }
+                                _ => {}
+                            }
+                            return Ok(InputFlow::ContinueIteration);
+                        }
+                    }
+                }
+
+                {
                     let s = app_state.lock().await;
                     if s.status == AppStatus::AwaitingQuestion && !s.user_overlay_open() {
                         let typing = s
