@@ -1,8 +1,10 @@
 mod projection;
 mod search;
+mod session_list;
 mod settings;
 
 mod backend;
+mod context_panel;
 mod highlight;
 mod image_attachment;
 mod position_rail;

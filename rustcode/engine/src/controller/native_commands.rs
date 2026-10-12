@@ -13,6 +13,7 @@ pub(super) enum NativeSlashCommand {
     Usage,
     ChangeTitle(Option<String>),
     Info,
+    Context,
     Unknown(String),
 }
 
@@ -44,11 +45,12 @@ pub(super) fn parse(input: &str) -> Option<NativeSlashCommand> {
             NativeSlashCommand::ChangeTitle((!arguments.is_empty()).then(|| arguments.into()))
         }
         "/info" => NativeSlashCommand::Info,
+        "/context" => NativeSlashCommand::Context,
         _ => NativeSlashCommand::Unknown(name.to_owned()),
     })
 }
 
-pub(super) const HELP: &str = "Native commands:\n\n- `/help` — Show commands\n- `/new` — Start a new chat\n- `/clear` — Start a new chat\n- `/cancel` — Stop the current turn\n- `/model [profile]` — Show or select a model profile\n- `/login` — Show provider login methods\n- `/login <provider>` — Sign in to a provider\n- `/login github-copilot [new|account-id]` — Connect GitHub Copilot (GitHub CLI or configured OAuth app)\n- `/login claude` — Connect a Claude subscription through the local Claude Code CLI\n- `/login <provider> api-key <ENV_VAR>` — Save an API key environment variable\n- `/auth status` — Show saved provider accounts\n- `/accounts` — List configured provider accounts\n- `/account refresh [provider] [account-id]` — Refresh a provider model catalog\n- `/logout <provider> [account-id]` — Sign out of a provider account\n- `/status` — Show provider and session status\n- `/usage` — Show provider usage and local session token totals\n- `/change_title <title>` — Rename this chat\n- `/info` — Show session and turn status";
+pub(super) const HELP: &str = "Native commands:\n\n- `/help` — Show commands\n- `/new` — Start a new chat\n- `/clear` — Start a new chat\n- `/cancel` — Stop the current turn\n- `/model [profile]` — Show or select a model profile\n- `/login` — Show provider login methods\n- `/login <provider>` — Sign in to a provider\n- `/login github-copilot [new|account-id]` — Connect GitHub Copilot (GitHub CLI or configured OAuth app)\n- `/login claude` — Connect a Claude subscription through the local Claude Code CLI\n- `/login <provider> api-key <ENV_VAR>` — Save an API key environment variable\n- `/auth status` — Show saved provider accounts\n- `/accounts` — List configured provider accounts\n- `/account refresh [provider] [account-id]` — Refresh a provider model catalog\n- `/logout <provider> [account-id]` — Sign out of a provider account\n- `/status` — Show provider and session status\n- `/usage` — Show provider usage and local session token totals\n- `/change_title <title>` — Rename this chat\n- `/info` — Show session and turn status\n- `/context` — Show context window usage";
 
 #[cfg(test)]
 mod tests {
@@ -68,6 +70,7 @@ mod tests {
         );
         assert_eq!(parse("/model"), Some(NativeSlashCommand::Model(None)));
         assert_eq!(parse("/info"), Some(NativeSlashCommand::Info));
+        assert_eq!(parse("/context"), Some(NativeSlashCommand::Context));
         assert_eq!(parse("/status"), Some(NativeSlashCommand::Status));
         assert_eq!(parse("/usage"), Some(NativeSlashCommand::Usage));
         assert_eq!(

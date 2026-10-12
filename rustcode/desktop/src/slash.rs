@@ -35,6 +35,10 @@ pub const COMMANDS: &[SlashSuggestion] = &[
         name: "/info",
         description: "Show session and turn status",
     },
+    SlashSuggestion {
+        name: "/context",
+        description: "Show context window usage",
+    },
 ];
 
 /// Suggestions appear while the first token is being typed. Once the user
@@ -162,6 +166,7 @@ mod tests {
             vec!["/info"]
         );
         assert_eq!(complete_selection("/i", 0), Some("/info".to_owned()));
+        assert_eq!(complete_selection("/co", 0), Some("/context".to_owned()));
     }
 
     #[test]
@@ -179,7 +184,7 @@ mod tests {
     fn arrow_key_names_move_selection_and_wrap() {
         assert_eq!(
             slash_interaction("/", 0, false, "ArrowUp"),
-            SlashInteraction::Move(6)
+            SlashInteraction::Move(7)
         );
         assert_eq!(
             slash_interaction("/", 5, false, "up"),
@@ -243,7 +248,7 @@ mod tests {
     fn key_names_match_case_insensitively() {
         assert_eq!(
             slash_interaction("/", 0, false, "Up"),
-            SlashInteraction::Move(6)
+            SlashInteraction::Move(7)
         );
         assert_eq!(
             slash_interaction("/", 0, false, "DOWN"),

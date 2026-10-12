@@ -7265,6 +7265,7 @@ dependencies = [
 name = "rustcode-app"
 version = "0.64.9"
 dependencies = [
+ "chrono",
  "gpui-kit",
  "rustcode",
  "syntect",

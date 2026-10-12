@@ -807,6 +807,50 @@ async fn explicit_controller_workspace_is_the_default_tool_working_directory() {
 }
 
 #[test]
+fn snapshot_context_prefers_the_provider_count_and_attributes_the_rest_to_overhead() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut state = AppState::new_with_workspace_session(workspace.path(), Some("session-ctx"));
+    state
+        .history
+        .push(ChatMessage::new("user", "u".repeat(400)));
+    state
+        .history
+        .push(ChatMessage::new("assistant", "a".repeat(800)));
+    state
+        .history
+        .push(ChatMessage::new("tool", "t".repeat(1200)));
+
+    let estimated = ControllerSnapshot::from_state(1, &state).context;
+    assert!(!estimated.provider_counted);
+    assert_eq!(
+        (
+            estimated.user_tokens,
+            estimated.assistant_tokens,
+            estimated.tool_tokens
+        ),
+        (100, 200, 300)
+    );
+    assert_eq!(estimated.used_tokens, 600);
+    assert_eq!(estimated.overhead_tokens(), 0);
+    assert_eq!(estimated.context_window, state.active_context_window());
+
+    state.current_token_usage = Some(crate::app::TokenUsage {
+        prompt_tokens: 5_600,
+        completion_tokens: 40,
+        total_tokens: 5_640,
+        ..Default::default()
+    });
+    let counted = ControllerSnapshot::from_state(1, &state).context;
+    assert!(counted.provider_counted);
+    assert_eq!(counted.used_tokens, 5_600);
+    assert_eq!(counted.overhead_tokens(), 5_000);
+    assert_eq!(
+        counted.remaining_tokens(),
+        counted.context_window.saturating_sub(5_600)
+    );
+}
+
+#[test]
 fn snapshot_projects_session_transcript_runtime_state_without_terminal_fields() {
     let workspace = tempfile::tempdir().expect("temporary workspace");
     let mut state = AppState::new_with_workspace_session(workspace.path(), Some("session-7"));

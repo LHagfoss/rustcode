@@ -329,6 +329,79 @@ pub(crate) fn transcript_tool_details(state: &AppState) -> Vec<Option<String>> {
         .collect()
 }
 
+/// How full the active model's context window is.
+///
+/// The per-role figures are estimates from the transcript text. When the
+/// provider counted the latest request, `used_tokens` is that count, and
+/// whatever it holds beyond the transcript is the system prompt, the tool
+/// definitions and the loaded skills.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ContextSummary {
+    pub context_window: u32,
+    pub used_tokens: u32,
+    /// `used_tokens` is the provider's count of the latest request rather
+    /// than an estimate.
+    pub provider_counted: bool,
+    pub user_tokens: u32,
+    pub assistant_tokens: u32,
+    pub tool_tokens: u32,
+}
+
+impl ContextSummary {
+    pub(crate) fn from_state(state: &AppState) -> Self {
+        // A quarter of the byte length is the estimate the footer already
+        // uses; it costs nothing per snapshot, unlike a tokenizer pass.
+        let estimate = |text: &str| (text.len() / 4) as u32;
+        let (mut user_tokens, mut assistant_tokens, mut tool_tokens) = (0u32, 0u32, 0u32);
+        for message in state.history.iter() {
+            let tokens = estimate(&message.content);
+            match message.role.as_str() {
+                "user" => user_tokens += tokens,
+                "assistant" => {
+                    assistant_tokens += tokens;
+                    tool_tokens += message
+                        .tool_calls
+                        .iter()
+                        .map(|call| estimate(&call.name) + estimate(&call.arguments))
+                        .sum::<u32>();
+                }
+                "tool" => tool_tokens += tokens,
+                _ => {}
+            }
+        }
+        let counted = state
+            .current_token_usage
+            .as_ref()
+            .map(|usage| usage.prompt_tokens);
+        Self {
+            context_window: state.active_context_window(),
+            used_tokens: counted.unwrap_or(user_tokens + assistant_tokens + tool_tokens),
+            provider_counted: counted.is_some(),
+            user_tokens,
+            assistant_tokens,
+            tool_tokens,
+        }
+    }
+
+    /// Tokens in use beyond the transcript: system prompt, tool definitions
+    /// and skills. Only known when the provider counted the request.
+    pub fn overhead_tokens(&self) -> u32 {
+        if !self.provider_counted {
+            return 0;
+        }
+        self.used_tokens
+            .saturating_sub(self.user_tokens + self.assistant_tokens + self.tool_tokens)
+    }
+
+    pub fn remaining_tokens(&self) -> u32 {
+        self.context_window.saturating_sub(self.used_tokens)
+    }
+
+    pub fn remaining_percent(&self) -> u32 {
+        rustcode_core::status::context_remaining_percent(self.used_tokens, self.context_window)
+    }
+}
+
 /// An owned, presentation-independent view of the current interactive session.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ControllerSnapshot {
@@ -352,6 +425,10 @@ pub struct ControllerSnapshot {
     pub pending_approval: Option<ApprovalPrompt>,
     /// Exact batch-aware approval data for native frontends.
     pub pending_approval_batch: Option<ApprovalBatchPrompt>,
+    /// Context window usage of the active session, for `/context` displays.
+    /// In-process only: the serve protocol pins the snapshot's wire keys.
+    #[serde(skip_serializing)]
+    pub context: ContextSummary,
 }
 
 impl ControllerSnapshot {
@@ -463,6 +540,7 @@ impl ControllerSnapshot {
             );
         }
         Self {
+            context: ContextSummary::from_state(state),
             generation,
             workspace: state
                 .task_working_directory
