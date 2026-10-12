@@ -67,6 +67,14 @@ address, preferring private IPv4 LAN addresses over VPN addresses. The OS route
 breaks ties between LAN interfaces. Virtual bridges and link-local addresses
 are excluded. The listener binds only the selected address and advertises it.
 
+To prefer the mesh instead (stable across Wi-Fi changes, reachable off-LAN),
+set `[remote] prefer_interface = "netbird"` — or
+`rustcode remote serve --prefer-interface netbird`. An `auto` bind then picks
+the NetBird interface address first (`wt`-prefixed devices, or any interface
+with netbird in its name) and falls back to the LAN default when NetBird is
+down. On macOS NetBird uses a generic `utun` device shared with other VPNs,
+so there prefer `--advertise <host>.netbird.cloud` instead.
+
 With no usable network interface, it falls back to `127.0.0.1` and explains
 that a phone cannot reach it. Explicit `--bind 127.0.0.1` keeps local-only
 access for a Simulator or test client.
@@ -121,7 +129,7 @@ terminal's own draft, cursor and attachments are never touched.
 
 | Command | Behavior |
 | --- | --- |
-| `rustcode remote serve [--bind <ip>] [--port <port>] [--advertise <host>]` | Run the gateway in the foreground until Ctrl-C, SIGTERM or `remote stop`. |
+| `rustcode remote serve [--bind <ip>] [--port <port>] [--advertise <host>] [--prefer-interface <name>]` | Run the gateway in the foreground until Ctrl-C, SIGTERM or `remote stop`. |
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address and code. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
