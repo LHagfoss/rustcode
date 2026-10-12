@@ -320,17 +320,7 @@ impl RemoteBridge {
         if self.headless {
             return;
         }
-        let (session_id, title, workspace) = {
-            let state = app_state.lock().await;
-            (
-                state.active_session_id.clone(),
-                standby_title(&state),
-                state
-                    .task_working_directory
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-            )
-        };
+        let session_id = app_state.lock().await.active_session_id.clone();
         if self
             .standby
             .as_ref()
@@ -345,6 +335,19 @@ impl RemoteBridge {
         {
             self.standby_retry_at = None;
             if let Some(directory) = self.connector.gateway_directory() {
+                // Resolved only when an announcement starts: this runs on
+                // every pass of the event loop, so anything read here is paid
+                // per key press and per pointer move.
+                let (title, workspace) = {
+                    let state = app_state.lock().await;
+                    (
+                        standby_title(&state),
+                        state
+                            .task_working_directory
+                            .as_ref()
+                            .map(|path| path.to_string_lossy().into_owned()),
+                    )
+                };
                 self.standby = Some(spawn_standby(directory, session_id, title, workspace));
             }
         }
@@ -626,14 +629,16 @@ impl RemoteBridge {
 /// apart. Falls back to the session id when nothing was saved yet.
 /// Unix only: part of the standby announcement.
 #[cfg(unix)]
+/// The name a device sees for the session on screen: its saved title, else
+/// one derived from the first prompt, else its id. Reads one small file at
+/// most; listing the session store here parsed every recent transcript.
 fn standby_title(state: &AppState) -> String {
-    rustcode::app::actions::session::build_session_list(state)
-        .into_iter()
-        .find(|meta| {
-            rustcode::config::session_id_from_path(&meta.path).as_deref()
-                == Some(state.active_session_id.as_str())
+    rustcode::config::load_session_title(&state.active_session_id)
+        .or_else(|| {
+            rustcode::config::session_has_content(&state.history)
+                .then(|| rustcode::config::session_title(&state.history))
         })
-        .map(|meta| meta.title.clone())
+        .filter(|title| !title.trim().is_empty())
         .unwrap_or_else(|| state.active_session_id.clone())
 }
 
@@ -2159,5 +2164,27 @@ mod tests {
         )
         .await;
         assert_eq!(rejection(&second), RemoteErrorCode::StaleApproval);
+    }
+}
+
+#[cfg(test)]
+mod standby_title_tests {
+    use super::standby_title;
+    use rustcode::app::{AppState, ChatMessage};
+
+    #[test]
+    fn title_comes_from_the_open_session_without_listing_the_store() {
+        let mut state = AppState::new();
+        // Nothing said yet: the id is the only name there is.
+        assert_eq!(standby_title(&state), state.active_session_id);
+
+        state
+            .history
+            .push(ChatMessage::new("user", "Fix the flaky scheduler test"));
+        state.history.push(ChatMessage::new("assistant", "On it."));
+        assert_eq!(
+            standby_title(&state),
+            rustcode::config::session_title(&state.history)
+        );
     }
 }

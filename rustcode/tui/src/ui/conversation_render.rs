@@ -546,11 +546,17 @@ pub(crate) fn render_visible_conversation_with_transcript(
                     .iter()
                     .map(|line| tool_block.filter(|_| line.width() > 0)),
             );
-            message_lines.extend(
-                block[from..through]
-                    .iter()
-                    .map(|line| message.filter(|_| line.width() > 0)),
-            );
+            // A message is one target from its first row to its last: the
+            // blank rows between its paragraphs belong to it, the spacing
+            // around it does not.
+            let body = message.and_then(|_| {
+                let first = block.iter().position(|line| line.width() > 0)?;
+                let last = block.iter().rposition(|line| line.width() > 0)?;
+                Some(first..=last)
+            });
+            message_lines.extend((from..through).map(|row| {
+                message.filter(|_| body.as_ref().is_some_and(|body| body.contains(&row)))
+            }));
         }
         offset = block_end;
         if offset >= end {
