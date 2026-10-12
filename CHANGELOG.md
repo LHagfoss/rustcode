@@ -1,3 +1,8 @@
+## [v0.64.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.9) - 2026-10-12
+
+### Fixes
+- Keep scrolling and text selection responsive during large live tool output by borrowing output buffers and retaining a 16 ms input polling window ([#1966](https://github.com/LHagfoss/rustcode/pull/1966)).
+- Stop MCP discovery loops by returning callable names and input schemas consistently and counting rediscovery of known tools as no progress ([#1965](https://github.com/LHagfoss/rustcode/pull/1965)).
 ## [v0.64.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.8) - 2026-10-12
 
 ### Fixes
