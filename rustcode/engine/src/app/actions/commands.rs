@@ -503,6 +503,10 @@ pub fn build_help_text() -> String {
                 ("/agents", "Browse subagent conversation contexts"),
                 ("/delete_chat", "Delete current session and start fresh"),
                 ("/history", "Pick a previous session to resume"),
+                (
+                    "/adopt",
+                    "Take over a phone-created session from this terminal",
+                ),
                 ("/change_title", "Rename current session title"),
                 ("/cancel", "Cancel active stream or queued prompt"),
                 ("/exit", "Exit the app"),

@@ -225,7 +225,14 @@ restarts, and ends when it is killed or the machine restarts.
   after five refusals in a row it exits.
 - `rustcode remote stop` stops the gateway only. Owners keep running and
   register with the next gateway. `rustcode remote status` lists owners that
-  are running without being shared under `idle owners`; end one with `kill`.
+  are running without being shared under `idle owners`.
+
+To continue a device-started session in a terminal, run
+`/adopt <session-id>` there: it asks the detached owner to exit (gracefully,
+saving history first), waits for its lease to release, then opens the session
+exactly like a resume. Run `/remote` afterwards to share it again; devices
+re-attach with a fresh epoch. `/adopt` needs the full session id, never runs
+from a device, and refuses when the owner cannot be identified safely.
 
 On macOS an installed `rustcode` runs the gateway as a login agent. The agent
 keeps the search path it was installed with, so asking for the gateway from a

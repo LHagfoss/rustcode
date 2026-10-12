@@ -38,7 +38,7 @@ impl std::error::Error for OwnerStartFailed {}
 /// Whether the owner process of `session_id` is running: it holds its lease
 /// for as long as it lives. The probe takes a free lease for an instant,
 /// which [`owner_state`] rides out.
-fn owner_alive(owners: &Path, session_id: &str) -> bool {
+pub(crate) fn owner_alive(owners: &Path, session_id: &str) -> bool {
     match lock_private_file(owners, &format!("{session_id}.lock"), OWNER_LEASE) {
         Ok(_free) => false,
         Err(error) => is_lock_busy(&error),
@@ -46,7 +46,7 @@ fn owner_alive(owners: &Path, session_id: &str) -> bool {
 }
 
 /// Sessions with a running owner process, registered with the gateway or not.
-pub(super) fn live_owner_sessions(lifecycle: &super::lifecycle::RemoteLifecycle) -> Vec<String> {
+pub(crate) fn live_owner_sessions(lifecycle: &super::lifecycle::RemoteLifecycle) -> Vec<String> {
     let owners = lifecycle.owners_directory();
     let Ok(entries) = std::fs::read_dir(&owners) else {
         return Vec::new();
@@ -743,6 +743,7 @@ pub fn owner_state(
             Ok(lease) => break lease,
         }
     };
+    note_owner_pid(&lease);
     let workspace = std::env::current_dir()?;
     let mut state = crate::app::AppState::new_with_workspace_session(&workspace, Some(session_id));
     state.workspace_root = Some(workspace.clone());
@@ -759,4 +760,22 @@ pub fn owner_state(
         },
     );
     Ok((lease, state))
+}
+
+/// Record this process in its lease so `/adopt` can find and stop it. The
+/// lock itself is the liveness signal; the pid is only a hint and must be
+/// validated (executable check) before signalling.
+fn note_owner_pid(lease: &std::fs::File) {
+    use std::io::{Seek, Write};
+    let mut lease = lease;
+    let _ = lease.rewind();
+    let _ = lease.set_len(0);
+    let _ = writeln!(lease, "pid={}", std::process::id());
+    let _ = lease.flush();
+}
+
+/// The pid recorded in a session lease, if any. Stale when the owner is gone.
+pub(crate) fn owner_pid(owners: &Path, session_id: &str) -> Option<u32> {
+    let content = std::fs::read_to_string(owners.join(format!("{session_id}.lock"))).ok()?;
+    content.strip_prefix("pid=")?.trim().parse().ok()
 }

@@ -594,6 +594,89 @@ pub fn resume_latest_session(s: &mut AppState) {
     }
 }
 
+/// Take over a phone-created headless session (`/adopt <session-id>`).
+/// Stops the detached owner, then loads the session exactly like a resume.
+/// Returns a human-readable outcome for the transcript.
+pub fn adopt_detached_session(s: &mut AppState, session_id: &str) -> String {
+    let session_id = session_id.trim();
+    if !rustcode_session::valid_session_id(session_id) {
+        return "Usage: /adopt <session-id>  Take over a phone-created session".to_owned();
+    }
+    if session_id == s.active_session_id {
+        return "That session is already open here.".to_owned();
+    }
+    let Some(meta) = build_session_list(s).into_iter().find(|meta| {
+        crate::config::session_id_from_path(&meta.path).as_deref() == Some(session_id)
+    }) else {
+        return format!("No saved session '{session_id}' found.");
+    };
+    let Some(config_dir) = crate::config::get_config_dir() else {
+        return "No configuration directory is available.".to_owned();
+    };
+    let owners = config_dir.join("remote").join("owners");
+    if !crate::remote_gateway::workspace::owner_alive(&owners, session_id) {
+        return format!(
+            "Session '{session_id}' has no running owner; resume it from /history instead."
+        );
+    }
+    let Some(pid) = crate::remote_gateway::workspace::owner_pid(&owners, session_id) else {
+        return format!(
+            "Session '{session_id}' is owned but recorded no process; stop it on the device or with kill, then resume from /history."
+        );
+    };
+    if !owner_pid_is_rustcode(pid) {
+        return format!(
+            "Session '{session_id}' names pid {pid}, which is not this rustcode binary; refusing to signal it."
+        );
+    }
+    // SAFETY: pid was just validated as a live rustcode process holding this
+    // session's lease. SIGTERM asks the detached owner for a graceful exit
+    // (it saves history on the way out); the lease check below proves it left
+    // before this terminal touches the session.
+    let signaled = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } == 0;
+    if !signaled {
+        return format!(
+            "Could not signal the owner of '{session_id}' ({}); it may have exited already.",
+            std::io::Error::last_os_error()
+        );
+    }
+    let waited = std::time::Instant::now();
+    while crate::remote_gateway::workspace::owner_alive(&owners, session_id) {
+        if waited.elapsed() >= std::time::Duration::from_secs(5) {
+            return format!(
+                "The owner of '{session_id}' did not exit within 5s; check {} then retry.",
+                owners.join(format!("{session_id}.log")).display()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if load_session_into(s, &meta) {
+        format!(
+            "Adopted \"{}\" from its phone session. Run /remote to share it again.",
+            meta.title
+        )
+    } else {
+        format!("The owner exited but the session '{session_id}' could not be loaded.")
+    }
+}
+
+/// True when `pid` is a live process running this same binary. Guards `/adopt`
+/// against signalling a recycled pid.
+fn owner_pid_is_rustcode(pid: u32) -> bool {
+    use sysinfo::{Pid, System};
+    let mut system = System::new();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let Some(process) = system.process(Pid::from(pid as usize)) else {
+        return false;
+    };
+    let (Some(target), Some(own)) = (process.exe(), std::env::current_exe().ok()) else {
+        return false;
+    };
+    target
+        .file_name()
+        .is_some_and(|name| name == own.file_name().unwrap_or_default())
+}
+
 pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) -> bool {
     let mut loaded = crate::config::load_session_file(&meta.path);
     if loaded.is_empty() {
@@ -754,6 +837,35 @@ fn copy_last_reply_with(
         }
     } else {
         s.set_transient_notice("No assistant reply found to copy");
+    }
+}
+
+#[cfg(test)]
+mod adopt_tests {
+    use super::{AppState, adopt_detached_session};
+
+    #[test]
+    fn adopt_rejects_usage_and_current_and_missing_sessions() {
+        let mut state = AppState::new();
+        assert!(
+            adopt_detached_session(&mut state, "").starts_with("Usage: /adopt"),
+            "empty id shows usage"
+        );
+        assert!(
+            adopt_detached_session(&mut state, "not an id!").starts_with("Usage: /adopt"),
+            "invalid id shows usage"
+        );
+        state.active_session_id = "abc123".to_owned();
+        assert_eq!(
+            adopt_detached_session(&mut state, "abc123"),
+            "That session is already open here."
+        );
+        // Valid format, never saved: must stop before touching processes.
+        assert!(
+            adopt_detached_session(&mut state, "adopt-missing-session-xyz")
+                .starts_with("No saved session"),
+            "unknown id stops before signalling anything"
+        );
     }
 }
 

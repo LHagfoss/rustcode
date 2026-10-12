@@ -742,6 +742,13 @@ async fn handle_enter_inner(
                     s.show_history_picker = true;
                 }
             }
+            "/adopt" => {
+                let outcome = crate::app::actions::session::adopt_detached_session(
+                    &mut s,
+                    tokens.get(1).copied().unwrap_or(""),
+                );
+                s.history.push(ChatMessage::new("system", outcome));
+            }
             "/mcp" => {
                 s.show_mcp_config = true;
                 s.mcp_picker_index = 0;
