@@ -212,6 +212,18 @@ impl WorkspaceRouter {
             None
         };
         let directory = resolve_directory(path)?;
+        // A home directory works but tracks hundreds of thousands of files:
+        // flag it in the session log so the next slow-turn report starts with
+        // the workspace root, not the network (#1954).
+        if std::env::var_os("HOME").is_some_and(|home| directory == Path::new(&home)) {
+            crate::logger::operational_event(
+                "remote.create_home_workspace",
+                serde_json::json!({
+                    "session_hint": path,
+                    "directory": directory.display().to_string(),
+                }),
+            );
+        }
         let mut creation = if let Some(stored) = previous {
             stored
         } else {

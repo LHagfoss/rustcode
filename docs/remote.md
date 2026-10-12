@@ -108,7 +108,7 @@ paired.
 
 | Command | Behavior |
 | --- | --- |
-| `/remote` | Share the session on screen. Finds the running gateway or starts one, then shows the gateway address, a QR code and a manual pairing code. Repeating it keeps the registration and shows a fresh pairing challenge. |
+| `/remote` (`/remote on`) | Share the session on screen. Finds the running gateway or starts one, then shows the gateway address, a QR code and a manual pairing code. Repeating it keeps the registration and shows a fresh pairing challenge. |
 | `/remote status` | Whether this session is shared, the gateway address, the devices attached to this session and the devices connected to the gateway. Names only, never a credential. |
 | `/remote off` | Stop sharing. The session disappears from every device at once; a running turn is not affected. |
 
@@ -120,16 +120,28 @@ shares is refused; the first one keeps it.
 
 What a device can do with a shared session: read it, submit a prompt when it
 is idle, steer or queue while it runs, cancel the running turn, answer a
-question, approve or deny an approval batch. What it cannot do: run slash
-commands (a prompt starting with `/` is refused), change the approval mode,
-switch sessions, or read anything that is not part of a shared session. The
-terminal's own draft, cursor and attachments are never touched.
+question, approve or deny an approval batch, and run session slash commands
+such as `/yolo`. What it cannot do: switch sessions, or read anything that is
+not part of a shared session. The terminal's own draft, cursor and
+attachments are never touched.
+
+## Approvals and trusted mode
+
+Every tool batch that needs confirmation waits for a tap on the device, which
+is slow over intermittent links. `/yolo on` (also from the device) enables
+full auto-approve for the session: batches run without asking. `/yolo off`
+restores per-batch approval. The mode is per session and never persists to
+config; a fresh session always starts asking. Prefer `/yolo on` only on
+sessions whose workspace you trust, and turn it back off when leaving the
+device unattended.
 
 ## Gateway commands
 
 | Command | Behavior |
 | --- | --- |
 | `rustcode remote serve [--bind <ip>] [--port <port>] [--advertise <host>] [--prefer-interface <name>]` | Run the gateway in the foreground until Ctrl-C, SIGTERM or `remote stop`. |
+| `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
+| `rustcode remote off` | Stop the running gateway (alias of `stop`). |
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address and code. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
