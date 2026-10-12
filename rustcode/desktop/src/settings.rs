@@ -65,6 +65,62 @@ impl SettingsState {
     }
 }
 
+/// One row of the keyboard shortcuts page.
+pub(crate) struct Shortcut {
+    pub action: &'static str,
+    pub detail: &'static str,
+    pub keys: &'static str,
+}
+
+/// The app's key bindings, as registered in `main.rs` and by the composer.
+pub(crate) const SHORTCUTS: &[Shortcut] = &[
+    Shortcut {
+        action: "New chat",
+        detail: "Start a fresh chat in the current project.",
+        keys: "⌘N",
+    },
+    Shortcut {
+        action: "Search chats",
+        detail: "Jump to the sidebar's chat search, or back to the composer.",
+        keys: "⌘K",
+    },
+    Shortcut {
+        action: "Find in conversation",
+        detail: "Search the open chat's transcript.",
+        keys: "⌘F",
+    },
+    Shortcut {
+        action: "Toggle sidebar",
+        detail: "Show or hide the chat list.",
+        keys: "⌘B",
+    },
+    Shortcut {
+        action: "Settings",
+        detail: "Open this screen.",
+        keys: "⌘,",
+    },
+    Shortcut {
+        action: "Send",
+        detail: "Send the message, or steer or queue it while a turn runs.",
+        keys: "Enter",
+    },
+    Shortcut {
+        action: "New line",
+        detail: "Add a line to the message without sending it.",
+        keys: "Shift Enter",
+    },
+    Shortcut {
+        action: "Commands",
+        detail: "Type a slash in an empty composer to list commands.",
+        keys: "/",
+    },
+    Shortcut {
+        action: "Dismiss",
+        detail: "Close search, the command menu or the context panel.",
+        keys: "Esc",
+    },
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +128,7 @@ mod tests {
 
     fn snapshot() -> ControllerSnapshot {
         ControllerSnapshot {
+            context: Default::default(),
             generation: 1,
             workspace: None,
             session_id: Some("session-1".into()),
@@ -115,6 +172,7 @@ mod tests {
     fn settings_approval_label_tracks_the_persisted_controller_value() {
         let ask_first = SettingsState::from_snapshot(Some(&snapshot()));
         let auto_approve = SettingsState::from_snapshot(Some(&ControllerSnapshot {
+            context: Default::default(),
             auto_approve: true,
             ..snapshot()
         }));
@@ -138,6 +196,7 @@ mod tests {
     #[test]
     fn settings_snapshot_without_an_active_session_marks_permissions_unavailable() {
         let state = SettingsState::from_snapshot(Some(&ControllerSnapshot {
+            context: Default::default(),
             session_id: None,
             ..snapshot()
         }));
@@ -172,6 +231,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let snapshot = ControllerSnapshot {
+            context: Default::default(),
             models,
             ..snapshot()
         };

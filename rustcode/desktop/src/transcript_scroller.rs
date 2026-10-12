@@ -2,9 +2,9 @@ use std::{ops::Range, time::Duration};
 
 use gpui_kit::{
     AnyElement, App, Axis, Context, ElementId, Entity, FollowMode, InteractiveElement, IntoElement,
-    ListAlignment, ListOffset, ListState, ParentElement as _, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, TestSupportExt as _, Window,
-    container_query, div, hsla, list, prelude::FluentBuilder as _, px, rems,
+    ListAlignment, ListOffset, ListState, MouseButton, ParentElement as _, RenderOnce, Role,
+    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, TestSupportExt as _,
+    Window, container_query, div, hsla, list, prelude::FluentBuilder as _, px, rems,
 };
 use gpui_kit::{
     base::motion::{Transition, transition},
@@ -23,6 +23,7 @@ use crate::position_rail::{
 const LIST_OVERDRAW: gpui_kit::Pixels = px(400.);
 const JUMP_BUTTON_TRANSITION: Duration = Duration::from_millis(200);
 const MARKER_TRANSITION: Duration = Duration::from_millis(120);
+const JUMP_BUTTON_TEXT: &str = "Latest";
 
 /// App-owned equivalent of gpui-component's message scroller state.
 ///
@@ -366,6 +367,7 @@ impl RenderOnce for TranscriptScroller {
 
         if self.jump_button && jump_visibility > 0. {
             let state = self.state.clone();
+            let press_state = self.state.clone();
             content = content.child(
                 div()
                     .absolute()
@@ -376,19 +378,39 @@ impl RenderOnce for TranscriptScroller {
                     .justify_center()
                     .opacity(jump_visibility)
                     .child(
-                        Button::new((root_id, "jump-to-latest"))
-                            .secondary()
-                            .icon(IconName::ArrowDown)
-                            .tooltip(self.jump_button_label)
+                        // The pill owns its whole rectangle: nothing behind
+                        // it (a tool or thinking row) sees the press, and the
+                        // jump happens on press rather than on a completed
+                        // click, which a scroll in progress can swallow.
+                        div()
+                            .id((root_id.clone(), "jump-to-latest-target"))
+                            .test_support()
+                            .occlude()
                             .rounded(cx.theme().radius_full())
-                            .border_1()
-                            .border_color(tokens.colors.border)
-                            .bg(tokens.colors.background)
-                            .text_color(tokens.colors.foreground)
-                            .on_click(move |_, _, cx| {
-                                state.update(cx, |state, cx| state.scroll_to_end(cx));
+                            .when(scrolled_up, |this| {
+                                this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    press_state.update(cx, |state, cx| state.scroll_to_end(cx));
+                                })
                             })
-                            .when(!scrolled_up, |button| button.disabled(true)),
+                            .child(
+                                Button::new((root_id, "jump-to-latest"))
+                                    .secondary()
+                                    .icon(IconName::ArrowDown)
+                                    .label(JUMP_BUTTON_TEXT)
+                                    .tooltip(self.jump_button_label)
+                                    .rounded(cx.theme().radius_full())
+                                    .border_1()
+                                    .border_color(tokens.colors.border)
+                                    .bg(tokens.colors.background)
+                                    .text_color(tokens.colors.foreground)
+                                    // Keyboard activation still goes through
+                                    // the button itself.
+                                    .on_click(move |_, _, cx| {
+                                        state.update(cx, |state, cx| state.scroll_to_end(cx));
+                                    })
+                                    .when(!scrolled_up, |button| button.disabled(true)),
+                            ),
                     ),
             );
         }
@@ -497,5 +519,80 @@ mod tests {
                 assert!(pair[0].origin.y + pair[0].size.height <= pair[1].origin.y);
             }
         }
+    }
+    struct ClickHarness {
+        state: Entity<TranscriptScrollerState>,
+        row_presses: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl Render for ClickHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let row_presses = self.row_presses.clone();
+            TranscriptScroller::new("conversation", self.state.clone(), move |index, _, _| {
+                let row_presses = row_presses.clone();
+                div()
+                    .id(("row", index))
+                    .w_full()
+                    // Tall enough that a row, not the gap between two, lies
+                    // behind the pill.
+                    .h(px(200.))
+                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                        row_presses.set(row_presses.get() + 1)
+                    })
+                    .child(format!("Row {index}"))
+            })
+            .size_full()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn jump_pill_scrolls_on_press_and_hides_the_press_from_rows_behind_it(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt as _;
+
+        cx.update(gpui_kit::init);
+        let row_presses = std::rc::Rc::new(std::cell::Cell::new(0));
+        let harness_clicks = row_presses.clone();
+        let (view, window) = cx.add_window_view(|_, cx| ClickHarness {
+            state: cx.new(|cx| TranscriptScrollerState::new(100, cx)),
+            row_presses: harness_clicks,
+        });
+        window.simulate_resize(gpui_kit::size(px(600.), px(400.)));
+        let state = view.read_with(window, |view, _| view.state.clone());
+
+        window.update(|window, cx| window.render_frame(cx));
+        state.update(window, |state, cx| {
+            assert!(state.scroll_to_item(0, cx));
+        });
+        // Let the pill's entrance transition finish so it sits at rest.
+        for _ in 0..4 {
+            window.executor().advance_clock(JUMP_BUTTON_TRANSITION);
+            window.update(|window, cx| window.render_frame(cx));
+        }
+        assert!(state.read_with(window, |state, _| state.is_scrolled_up()));
+
+        let pill = window.update(|window, _| {
+            window
+                .find((ElementId::from("conversation"), "jump-to-latest-target"))
+                .bounds()
+        });
+        // The pill carries its label, so its edge is as live as its center.
+        assert!(pill.size.width > px(48.), "{pill:?}");
+        let edge = gpui_kit::point(
+            pill.origin.x + px(4.),
+            pill.origin.y + pill.size.height / 2.,
+        );
+        window.simulate_mouse_down(edge, MouseButton::Left, gpui_kit::Modifiers::default());
+        assert!(
+            !state.read_with(window, |state, _| state.is_scrolled_up()),
+            "the press itself returns to the latest row"
+        );
+        window.simulate_mouse_up(edge, MouseButton::Left, gpui_kit::Modifiers::default());
+        assert_eq!(
+            row_presses.get(),
+            0,
+            "the row behind the pill saw the press"
+        );
     }
 }

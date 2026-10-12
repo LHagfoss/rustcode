@@ -19,6 +19,8 @@ use gpui_kit::{
         menu::{DropdownMenu, PopupMenuItem},
         scroll::ScrollableElement,
         sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
+        spinner::Spinner,
+        switch::Switch,
         text::{TextView, TextViewStyle},
         tooltip::Tooltip,
     },
@@ -353,6 +355,7 @@ pub struct AppView {
     expanded_approval_actions: HashSet<(String, usize)>,
     copied_target: Option<String>,
     preview_image: Option<PathBuf>,
+    context_panel_open: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -365,6 +368,115 @@ enum AppDestination {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsSection {
     General,
+    Session,
+    Shortcuts,
+    About,
+}
+
+impl SettingsSection {
+    const ALL: [Self; 4] = [Self::General, Self::Session, Self::Shortcuts, Self::About];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Session => "Session",
+            Self::Shortcuts => "Shortcuts",
+            Self::About => "About",
+        }
+    }
+
+    /// The line under the page's title.
+    fn summary(self) -> &'static str {
+        match self {
+            Self::General => "The model and permissions the open chat runs with.",
+            Self::Session => "What the open chat is working on and how full its context is.",
+            Self::Shortcuts => "Keys that work anywhere in the app.",
+            Self::About => "Version and where RustCode keeps its files.",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Self::General => IconName::Settings,
+            Self::Session => IconName::FileText,
+            Self::Shortcuts => IconName::ALargeSmall,
+            Self::About => IconName::Info,
+        }
+    }
+}
+
+/// One labelled setting: what it is, a line of support text, and its control
+/// or value on the trailing edge.
+fn settings_row(
+    title: &'static str,
+    support: impl Into<gpui_kit::SharedString>,
+    control: impl IntoElement,
+) -> gpui_kit::AnyElement {
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_5()
+        .py_3()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_sm().font_medium().child(title))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(Palette::TEXT_SECONDARY))
+                        .child(support.into()),
+                ),
+        )
+        .child(div().flex_none().child(control))
+        .into_any_element()
+}
+
+/// A titled group of settings rows, separated by hairlines.
+fn settings_card(heading: &'static str, rows: Vec<gpui_kit::AnyElement>) -> gpui_kit::AnyElement {
+    let last = rows.len().saturating_sub(1);
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(div().text_sm().font_semibold().child(heading))
+        .child(
+            div()
+                .w_full()
+                .px_5()
+                .py_1()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(Palette::BORDER_SUBTLE))
+                .bg(rgb(Palette::SURFACE_ELEVATED))
+                .children(rows.into_iter().enumerate().map(|(index, row)| {
+                    div()
+                        .w_full()
+                        .when(index < last, |this| {
+                            this.border_b_1().border_color(rgb(Palette::BORDER_SUBTLE))
+                        })
+                        .child(row)
+                })),
+        )
+        .into_any_element()
+}
+
+/// A read-only value on the trailing edge of a settings row.
+fn settings_value(text: impl Into<gpui_kit::SharedString>) -> gpui_kit::AnyElement {
+    div()
+        .max_w(px(320.))
+        .text_sm()
+        .text_color(rgb(Palette::TEXT_SECONDARY))
+        .text_ellipsis()
+        .child(text.into())
+        .into_any_element()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -522,6 +634,7 @@ impl AppView {
             expanded_approval_actions: HashSet::new(),
             copied_target: None,
             preview_image: None,
+            context_panel_open: false,
         }
     }
 
@@ -802,6 +915,12 @@ impl AppView {
 
     pub(crate) fn close_chat_search(&mut self, cx: &mut Context<Self>) {
         if !self.chat_search_open {
+            // Escape closes whichever overlay is open; the context panel is
+            // the only other one this action owns.
+            if self.context_panel_open {
+                self.context_panel_open = false;
+                cx.notify();
+            }
             return;
         }
         self.chat_search_open = false;
@@ -1059,6 +1178,15 @@ impl AppView {
             if !send_immediately {
                 return true;
             }
+        }
+        // `/context` opens the app's own panel instead of asking the
+        // controller for a text report.
+        if !answering_now && draft.trim().eq_ignore_ascii_case("/context") {
+            self.context_panel_open = true;
+            self.composer
+                .update(cx, |state, cx| state.set_value("", window, cx));
+            cx.notify();
+            return true;
         }
         let answering_question = self.chat_state.pending_question().or_else(|| {
             self.navigation
@@ -1491,6 +1619,83 @@ impl AppView {
         .size_full()
     }
 
+    /// Context usage of the active chat, or `None` before a chat reports one.
+    fn active_context(&self) -> Option<rustcode::controller::ContextSummary> {
+        self.navigation
+            .chat_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.session_id.is_some())
+            .map(|snapshot| snapshot.context)
+            .filter(|context| context.context_window > 0)
+    }
+
+    fn selected_model_label(&self) -> Option<String> {
+        let snapshot = self.navigation.chat_snapshot.as_ref()?;
+        let selected = snapshot.selected_model.as_deref()?;
+        snapshot
+            .models
+            .iter()
+            .find(|model| model.id == selected)
+            .map(|model| model.label.clone())
+    }
+
+    /// The `/context` panel, sitting above the composer like the TUI's.
+    fn render_context_panel(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+        if !self.context_panel_open {
+            return None;
+        }
+        let body = match self.active_context() {
+            Some(context) => crate::context_panel::usage_breakdown(
+                &context,
+                self.selected_model_label().as_deref(),
+            )
+            .into_any_element(),
+            None => div()
+                .text_sm()
+                .text_color(rgb(Palette::TEXT_SECONDARY))
+                .child("Start a chat to see how much of the context window it uses.")
+                .into_any_element(),
+        };
+        Some(
+            div()
+                .id("context-panel")
+                .test_support()
+                .w_full()
+                .max_w(px(760.))
+                .flex()
+                .flex_col()
+                .gap_3()
+                .px_5()
+                .py_4()
+                .rounded(px(20.))
+                .border_1()
+                .border_color(rgb(Palette::BORDER_STRONG))
+                .bg(rgb(Palette::SURFACE_ELEVATED))
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(div().text_sm().font_semibold().child("Context"))
+                        .child(
+                            Button::new("context-panel-close")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .accessibility_label("Close context usage")
+                                .tooltip("Close")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.context_panel_open = false;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(body)
+                .into_any_element(),
+        )
+    }
+
     fn render_model_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let models = self
             .navigation
@@ -1551,9 +1756,90 @@ impl AppView {
 
     fn render_settings_page(
         &self,
+        section: SettingsSection,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
+        let cards = match section {
+            SettingsSection::General => self.settings_general_cards(cx),
+            SettingsSection::Session => self.settings_session_cards(cx),
+            SettingsSection::Shortcuts => vec![settings_card(
+                "Keyboard",
+                crate::settings::SHORTCUTS
+                    .iter()
+                    .map(|shortcut| {
+                        settings_row(
+                            shortcut.action,
+                            shortcut.detail,
+                            div()
+                                .px_2()
+                                .py(px(2.))
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(Palette::BORDER_STRONG))
+                                .bg(rgb(Palette::APP_BACKGROUND))
+                                .text_xs()
+                                .font_medium()
+                                .child(shortcut.keys),
+                        )
+                    })
+                    .collect(),
+            )],
+            SettingsSection::About => self.settings_about_cards(cx),
+        };
+        let content = div()
+            .flex_1()
+            .min_w_0()
+            .max_w(px(SETTINGS_CONTENT_WIDTH))
+            .flex()
+            .flex_col()
+            .gap_6()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_xl().font_semibold().child(section.title()))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(Palette::TEXT_SECONDARY))
+                            .child(section.summary()),
+                    ),
+            )
+            .children(cards);
+
+        div()
+            .w_full()
+            .h_full()
+            .min_h_0()
+            .flex()
+            .justify_center()
+            .px_8()
+            .pt(TITLE_BAR_HEIGHT + px(64.))
+            .pb_8()
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(SETTINGS_CONTENT_WIDTH))
+                    .h_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .w_full()
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .overflow_scrollbar()
+                            .child(content),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn settings_general_cards(&self, cx: &mut Context<Self>) -> Vec<gpui_kit::AnyElement> {
         let state =
             crate::settings::SettingsState::from_snapshot(self.navigation.chat_snapshot.as_ref());
         let models = state.models.clone();
@@ -1618,32 +1904,15 @@ impl AppView {
             });
 
         let approval_view = cx.entity().downgrade();
-        let current_approval = state.auto_approve;
-        let approval_picker = Button::new("settings-approval-picker")
-            .ghost()
-            .compact()
-            .label(state.approval_mode_label())
-            .dropdown_caret(true)
+        let approval_switch = Switch::new("settings-auto-approve")
+            .checked(state.has_session && state.auto_approve)
             .disabled(!state.has_session)
-            .accessibility_label("Select permission mode")
-            .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-                [(false, "Ask first"), (true, "Auto approve")]
-                    .into_iter()
-                    .fold(menu.min_w(px(180.)), |menu, (auto_approve, label)| {
-                        let view = approval_view.clone();
-                        menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(current_approval == auto_approve)
-                                .on_click(move |_, _, cx| {
-                                    let _ = view.update(cx, |this, cx| {
-                                        this.send_command(
-                                            Command::SetAutoApprove(auto_approve),
-                                            cx,
-                                        );
-                                    });
-                                }),
-                        )
-                    })
+            .accessibility_label("Approve tool calls automatically")
+            .on_click(move |checked, _, cx| {
+                let auto_approve = *checked;
+                let _ = approval_view.update(cx, |this, cx| {
+                    this.send_command(Command::SetAutoApprove(auto_approve), cx);
+                });
             });
 
         let model_support = if let Some(id) = selected_model_id {
@@ -1661,137 +1930,150 @@ impl AppView {
             "RustCode asks before running tool calls for this session."
         };
 
-        let model_row = div()
-            .w_full()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_5()
-            .py_3()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_medium()
-                            .child("Choose the model for this session"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(Palette::TEXT_SECONDARY))
-                            .child(model_support),
+        vec![
+            settings_card(
+                "Model",
+                vec![settings_row(
+                    "Model for this session",
+                    model_support,
+                    model_picker,
+                )],
+            ),
+            settings_card(
+                "Permissions",
+                vec![settings_row(
+                    "Approve tool calls automatically",
+                    approval_support,
+                    approval_switch,
+                )],
+            ),
+        ]
+    }
+
+    fn settings_session_cards(&self, cx: &mut Context<Self>) -> Vec<gpui_kit::AnyElement> {
+        let Some(snapshot) = self
+            .navigation
+            .chat_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.session_id.is_some())
+        else {
+            return vec![settings_card(
+                "Chat",
+                vec![settings_row(
+                    "No chat open",
+                    "Start or open a chat to see its details here.",
+                    div(),
+                )],
+            )];
+        };
+        let session_id = snapshot.session_id.clone().unwrap_or_default();
+        let title = self
+            .recent_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| session.title.clone())
+            .unwrap_or_else(|| "Untitled chat".to_owned());
+        let workspace = snapshot
+            .workspace
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "No project folder".to_owned());
+        let messages = snapshot
+            .transcript
+            .iter()
+            .filter(|item| matches!(item.role.as_str(), "user" | "assistant"))
+            .count();
+        let turn = if snapshot.turn_active {
+            "A turn is running"
+        } else {
+            "Idle"
+        };
+        let copy_session_id = copy_button(
+            "settings-copy-session-id".to_owned(),
+            "Copy session ID",
+            session_id.clone(),
+            &self.copied_target,
+            cx.entity().downgrade(),
+        );
+
+        let mut cards = vec![settings_card(
+            "Chat",
+            vec![
+                settings_row("Title", title, div()),
+                settings_row("Project", workspace, div()),
+                settings_row(
+                    "Branch",
+                    self.git_branch
+                        .clone()
+                        .unwrap_or_else(|| "Not a git repository".to_owned()),
+                    div(),
+                ),
+                settings_row("Session ID", session_id, copy_session_id),
+                settings_row(
+                    "Activity",
+                    format!("{messages} messages · {turn}"),
+                    settings_value(
+                        self.selected_model_label()
+                            .unwrap_or_else(|| "No model".to_owned()),
                     ),
-            )
-            .child(model_picker);
-        let approval_row = div()
-            .w_full()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_5()
-            .py_3()
-            .child(
+                ),
+            ],
+        )];
+        if let Some(context) = self.active_context() {
+            cards.push(
                 div()
-                    .flex_1()
-                    .min_w_0()
+                    .w_full()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_medium()
-                            .child("Choose when tools need approval"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(Palette::TEXT_SECONDARY))
-                            .child(approval_support),
-                    ),
-            )
-            .child(approval_picker);
-
-        let model_section = div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(div().text_sm().font_semibold().child("Model"))
-            .child(
-                div()
-                    .w_full()
-                    .px_5()
-                    .py_2()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(Palette::BORDER_SUBTLE))
-                    .bg(rgb(Palette::SURFACE_ELEVATED))
-                    .child(model_row),
-            );
-        let permissions_section = div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(div().text_sm().font_semibold().child("Permissions"))
-            .child(
-                div()
-                    .w_full()
-                    .px_5()
-                    .py_2()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(Palette::BORDER_SUBTLE))
-                    .bg(rgb(Palette::SURFACE_ELEVATED))
-                    .child(approval_row),
-            );
-
-        let content = div()
-            .flex_1()
-            .min_w_0()
-            .max_w(px(SETTINGS_CONTENT_WIDTH))
-            .flex()
-            .flex_col()
-            .gap_6()
-            .child(div().text_xl().font_semibold().child("General"))
-            .child(model_section)
-            .child(permissions_section);
-
-        div()
-            .w_full()
-            .h_full()
-            .min_h_0()
-            .flex()
-            .justify_center()
-            .px_8()
-            .pt(TITLE_BAR_HEIGHT + px(64.))
-            .pb_8()
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(SETTINGS_CONTENT_WIDTH))
-                    .h_full()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
+                    .gap_2()
+                    .child(div().text_sm().font_semibold().child("Context window"))
                     .child(
                         div()
                             .w_full()
-                            .flex_1()
-                            .min_h_0()
-                            .min_w_0()
-                            .overflow_scrollbar()
-                            .child(content),
-                    ),
-            )
-            .into_any_element()
+                            .px_5()
+                            .py_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(Palette::BORDER_SUBTLE))
+                            .bg(rgb(Palette::SURFACE_ELEVATED))
+                            .child(crate::context_panel::usage_breakdown(
+                                &context,
+                                self.selected_model_label().as_deref(),
+                            )),
+                    )
+                    .into_any_element(),
+            );
+        }
+        cards
+    }
+
+    fn settings_about_cards(&self, cx: &mut Context<Self>) -> Vec<gpui_kit::AnyElement> {
+        let config_dir = rustcode::controller::config_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "Unavailable".to_owned());
+        let copy_config_dir = copy_button(
+            "settings-copy-config-dir".to_owned(),
+            "Copy config folder path",
+            config_dir.clone(),
+            &self.copied_target,
+            cx.entity().downgrade(),
+        );
+        vec![settings_card(
+            "RustCode",
+            vec![
+                settings_row(
+                    "Version",
+                    "The desktop app and its engine ship together.",
+                    settings_value(concat!("v", env!("CARGO_PKG_VERSION"))),
+                ),
+                settings_row("Config folder", config_dir, copy_config_dir),
+                settings_row(
+                    "Launch folder",
+                    self.launch_dir.display().to_string(),
+                    div(),
+                ),
+            ],
+        )]
     }
 
     fn render_settings_sidebar(
@@ -1819,13 +2101,26 @@ impl AppView {
                 this.navigation.open_chat();
                 cx.notify();
             }));
-        let general = SidebarMenu::new().child(
-            SidebarMenuItem::new("General")
-                .icon(Icon::new(IconName::Settings))
-                .gap_x_0p5()
-                .rounded_lg()
-                .active(true),
-        );
+        let current = match self.navigation.destination {
+            AppDestination::Settings(section) => section,
+            AppDestination::Chat => SettingsSection::General,
+        };
+        let sections =
+            SettingsSection::ALL
+                .into_iter()
+                .fold(SidebarMenu::new(), |menu, section| {
+                    menu.child(
+                        SidebarMenuItem::new(section.title())
+                            .icon(Icon::new(section.icon()))
+                            .gap_x_0p5()
+                            .rounded_lg()
+                            .active(section == current)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.navigation.destination = AppDestination::Settings(section);
+                                cx.notify();
+                            })),
+                    )
+                });
 
         Sidebar::new("settings-sidebar")
             .w(px(SIDEBAR_WIDTH))
@@ -1835,7 +2130,7 @@ impl AppView {
             .collapsible(SidebarCollapsible::Offcanvas)
             .collapsed(false)
             .header(div().w_full().pt(px(30.)).child(back))
-            .child(general)
+            .child(sections)
             .into_any_element()
     }
 
@@ -1923,11 +2218,16 @@ impl AppView {
             .to_string()
             .to_lowercase();
         let sidebar_id = format!("session-sidebar-{query}");
-        let filtered = self
+        let mut filtered = self
             .recent_sessions
             .iter()
             .filter(|session| session_matches_query(session, &query))
             .collect::<Vec<_>>();
+        // Projects follow their newest chat, so the list reads top-down as
+        // "most recently touched".
+        let running_session = selected_session.filter(|_| self.chat_state.turn_active());
+        crate::session_list::sort_newest_first(&mut filtered, running_session);
+        let now = chrono::Local::now().fixed_offset();
         let mut grouped = Vec::<(Option<PathBuf>, String, Vec<&SessionChoice>)>::new();
         for session in filtered {
             let project = session_project_name(session);
@@ -1956,7 +2256,9 @@ impl AppView {
                 for session in sessions {
                     let session_choice = session.clone();
                     let title = session.title.clone();
-                    let metadata = format!("{} · {} msg", session.when, session.message_count);
+                    let running = running_session == Some(session.id.as_str());
+                    let activity = crate::session_list::activity_label(session, now);
+                    let tooltip = crate::session_list::activity_tooltip(session);
                     recent_menu = recent_menu.child(
                         SidebarMenuItem::new(session.title.clone())
                             .icon(Icon::new(IconName::FileText))
@@ -1967,7 +2269,7 @@ impl AppView {
                             // remaining width and render a constrained text block.
                             .label_style(gpui_kit::StyleRefinement::default().flex_none().w_0())
                             .suffix(move |_, _| {
-                                let tooltip_title = title.clone();
+                                let tooltip = tooltip.clone();
                                 div()
                                     .id("session-title")
                                     .flex_1()
@@ -1976,7 +2278,7 @@ impl AppView {
                                     .items_center()
                                     .gap_1()
                                     .tooltip(move |window, cx| {
-                                        Tooltip::new(tooltip_title.clone()).build(window, cx)
+                                        Tooltip::new(tooltip.clone()).build(window, cx)
                                     })
                                     .child(
                                         div()
@@ -1985,13 +2287,26 @@ impl AppView {
                                             .text_ellipsis()
                                             .child(title.clone()),
                                     )
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(rgb(Palette::TEXT_SECONDARY))
-                                            .child(metadata.clone()),
-                                    )
+                                    // A turn in flight replaces the time: the
+                                    // chat is active now.
+                                    .when(running, |this| {
+                                        this.child(
+                                            div().flex_none().child(
+                                                Spinner::new()
+                                                    .xsmall()
+                                                    .color(rgb(Palette::TEXT_SECONDARY).into()),
+                                            ),
+                                        )
+                                    })
+                                    .when(!running && !activity.is_empty(), |this| {
+                                        this.child(
+                                            div()
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(rgb(Palette::TEXT_MUTED))
+                                                .child(activity.clone()),
+                                        )
+                                    })
                             })
                             .active(selected_session == Some(session.id.as_str()))
                             .disable(navigation_disabled)
@@ -3444,6 +3759,22 @@ impl Render for AppView {
             .when_some(self.git_branch.clone(), |this, branch| {
                 this.child(Icon::new(IconName::Network).size_4())
                     .child(branch)
+            })
+            .when_some(self.active_context(), |this, context| {
+                this.child(div().flex_1()).child(
+                    Button::new("composer-context")
+                        .ghost()
+                        .compact()
+                        .xsmall()
+                        .selected(self.context_panel_open)
+                        .label(crate::context_panel::chip_label(&context))
+                        .accessibility_label("Show context usage")
+                        .tooltip("Show what fills the context window")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.context_panel_open = !this.context_panel_open;
+                            cx.notify();
+                        })),
+                )
             });
         let paste_view = cx.entity().downgrade();
         let composer = div()
@@ -3934,6 +4265,9 @@ impl Render for AppView {
             .when_some(self.chat_state.approval_status(), |this, message| {
                 this.child(div().w_full().max_w(px(760.)).text_sm().child(message))
             })
+            .when_some(self.render_context_panel(cx), |this, panel| {
+                this.child(panel)
+            })
             .child(
                 div()
                     .w_full()
@@ -4025,9 +4359,7 @@ impl Render for AppView {
             );
         let main = match self.navigation.destination {
             AppDestination::Chat => chat_main.into_any_element(),
-            AppDestination::Settings(SettingsSection::General) => {
-                self.render_settings_page(window, cx)
-            }
+            AppDestination::Settings(section) => self.render_settings_page(section, window, cx),
         };
 
         let toggle_icon = IconName::PanelLeft;
@@ -4139,6 +4471,7 @@ mod tests {
 
     fn interactive_snapshot(turn_active: bool, can_steer: bool) -> ControllerSnapshot {
         ControllerSnapshot {
+            context: Default::default(),
             generation: 1,
             workspace: std::env::current_dir().ok(),
             session_id: Some("interactive-session".to_owned()),
@@ -4545,6 +4878,105 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn context_command_opens_the_usage_panel_and_escape_closes_it(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, window, cx| {
+                let mut snapshot = interactive_snapshot(false, false);
+                snapshot.context = rustcode::controller::ContextSummary {
+                    context_window: 200_000,
+                    used_tokens: 50_000,
+                    provider_counted: true,
+                    user_tokens: 2_000,
+                    assistant_tokens: 6_000,
+                    tool_tokens: 12_000,
+                };
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot),
+                    },
+                    cx,
+                );
+                view.slash_picker_dismissed = true;
+                view.composer
+                    .update(cx, |state, cx| state.set_value("/context", window, cx));
+                assert!(view.submit_composer(window, cx));
+                assert!(view.context_panel_open);
+                assert_eq!(view.composer.read(cx).value().as_ref(), "");
+            })
+            .expect("view remains available");
+
+        cx.simulate_window_resize(handle.into(), gpui_kit::size(px(1440.), px(900.)));
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let panel = window.find("context-panel").bounds();
+            let composer = window.find("composer").bounds();
+            assert_eq!(panel.size.width, composer.size.width);
+            assert!(
+                panel.origin.y + panel.size.height <= composer.origin.y,
+                "the panel sits above the composer: {panel:?} {composer:?}"
+            );
+        })
+        .expect("window remains open");
+
+        handle
+            .update(cx, |view, _, cx| {
+                view.close_chat_search(cx);
+                assert!(!view.context_panel_open);
+            })
+            .expect("view remains available");
+    }
+
+    #[gpui_kit::test]
+    fn every_settings_section_and_a_running_chat_row_render(cx: &mut TestAppContext) {
+        let handle = app_view(cx);
+        handle
+            .update(cx, |view, _, cx| {
+                let mut snapshot = interactive_snapshot(true, false);
+                snapshot.sessions = vec![
+                    SessionChoice {
+                        id: "interactive-session".to_owned(),
+                        title: "Running chat".to_owned(),
+                        when: "2026-10-12T18:35:01+02:00".to_owned(),
+                        message_count: 4,
+                        workspace: None,
+                    },
+                    SessionChoice {
+                        id: "older".to_owned(),
+                        title: "Older chat".to_owned(),
+                        when: "2026-10-10T09:00:00+02:00".to_owned(),
+                        message_count: 9,
+                        workspace: None,
+                    },
+                ];
+                snapshot.context.context_window = 200_000;
+                view.apply_event(
+                    ControllerEvent {
+                        generation: 1,
+                        update: ControllerUpdate::Snapshot(snapshot),
+                    },
+                    cx,
+                );
+            })
+            .expect("view remains available");
+        cx.simulate_window_resize(handle.into(), gpui_kit::size(px(1440.), px(900.)));
+        cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+            .expect("chat with a running row renders");
+
+        for section in SettingsSection::ALL {
+            handle
+                .update(cx, |view, _, cx| {
+                    view.navigation.destination = AppDestination::Settings(section);
+                    cx.notify();
+                })
+                .expect("view remains available");
+            cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+                .expect("settings section renders");
+        }
+    }
+
+    #[gpui_kit::test]
     fn slash_enter_sends_argless_commands_but_only_completes_those_with_arguments(
         cx: &mut TestAppContext,
     ) {
@@ -4873,6 +5305,7 @@ mod tests {
         handle
             .update(cx, |view, _, cx| {
                 let snapshot = |sessions| ControllerSnapshot {
+                    context: Default::default(),
                     generation: 1,
                     workspace: Some(PathBuf::from("/workspace")),
                     session_id: None,
@@ -4924,6 +5357,7 @@ mod tests {
         handle
             .update(cx, |view, _, cx| {
                 let snapshot = |generation, sessions| ControllerSnapshot {
+                    context: Default::default(),
                     generation,
                     workspace: Some(PathBuf::from("/workspace")),
                     session_id: None,
@@ -5166,6 +5600,7 @@ mod tests {
     #[test]
     fn settings_destination_returns_to_chat_without_replacing_the_active_session() {
         let mut navigation = AppNavigation::new(Some(ControllerSnapshot {
+            context: Default::default(),
             generation: 7,
             workspace: Some(PathBuf::from("/workspace")),
             session_id: Some("session-42".to_owned()),
@@ -5264,6 +5699,7 @@ mod tests {
     #[test]
     fn list_sessions_snapshot_with_launch_workspace_keeps_start_screen_visible() {
         let initial = ControllerSnapshot {
+            context: Default::default(),
             generation: 0,
             workspace: Some(PathBuf::from("/launch")),
             session_id: None,
@@ -5283,6 +5719,7 @@ mod tests {
             background_tasks: Vec::new(),
         };
         let listed = ControllerSnapshot {
+            context: Default::default(),
             sessions: vec![SessionChoice {
                 id: "saved-session".to_owned(),
                 title: "Saved session".to_owned(),
@@ -5293,6 +5730,7 @@ mod tests {
             ..initial.clone()
         };
         let active = ControllerSnapshot {
+            context: Default::default(),
             session_id: Some("active-session".to_owned()),
             ..listed.clone()
         };

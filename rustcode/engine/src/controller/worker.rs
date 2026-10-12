@@ -567,6 +567,26 @@ async fn run_native_slash(
             ));
             send_snapshot_locked(updates, session.generation, &state);
         }
+        NativeSlashCommand::Context => {
+            let mut state = session.state.lock().await;
+            let context = super::ContextSummary::from_state(&state);
+            let source = if context.provider_counted {
+                "provider-counted"
+            } else {
+                "estimated"
+            };
+            state.set_notice(format!(
+                "Context: {} of {} tokens · {}% left ({source})\nUser: {}\nAssistant: {}\nTools: {}\nSystem, tool definitions and skills: {}",
+                context.used_tokens,
+                context.context_window,
+                context.remaining_percent(),
+                context.user_tokens,
+                context.assistant_tokens,
+                context.tool_tokens,
+                context.overhead_tokens(),
+            ));
+            send_snapshot_locked(updates, session.generation, &state);
+        }
         NativeSlashCommand::Perf => {
             let mut state = session.state.lock().await;
             let report = state
@@ -1036,6 +1056,7 @@ fn persist_session_workspace(session_id: &str, workspace: &std::path::Path) {
 
 fn empty_snapshot(generation: u64, auto_approve: bool) -> ControllerSnapshot {
     ControllerSnapshot {
+        context: Default::default(),
         generation,
         workspace: None,
         session_id: None,

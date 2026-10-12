@@ -83,7 +83,7 @@ pub use render_state::{RenderState, SubAgentView, render_state};
 pub use rustcode_command::shell_label;
 pub(crate) use snapshot::transcript_tool_details;
 pub use snapshot::{
-    ApprovalAction, ApprovalBatchPrompt, ApprovalDecision, ApprovalPrompt, Command,
+    ApprovalAction, ApprovalBatchPrompt, ApprovalDecision, ApprovalPrompt, Command, ContextSummary,
     ControllerHandle, ControllerSnapshot, DraftSubmitMode, McpEditState, ModelChoice,
     PendingPrompt, PendingPromptKind, PendingQuestion, PromptSubmitMode, QuestionAnswer,
     QuestionPrompt, SessionChoice, ToolConfirmation, TranscriptItem, UiRect,

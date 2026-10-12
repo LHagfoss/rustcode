@@ -721,6 +721,7 @@ mod tests {
 
     fn snapshot(turn_active: bool) -> ControllerSnapshot {
         ControllerSnapshot {
+            context: Default::default(),
             generation: 1,
             workspace: None,
             session_id: Some("session".to_owned()),

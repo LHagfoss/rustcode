@@ -33,6 +33,13 @@ impl NativePalette {
     pub const APPROVAL: u32 = 0xe2c07a;
     pub const APPROVAL_SURFACE: u32 = 0x403923;
     pub const FOCUS_RING: u32 = 0xb0b0b0;
+
+    // Context usage categories. These are data colors, not interaction
+    // accents, so they are the one place the palette leaves neutral.
+    pub const CONTEXT_SYSTEM: u32 = 0xb79ae8;
+    pub const CONTEXT_USER: u32 = 0x7fb2f0;
+    pub const CONTEXT_ASSISTANT: u32 = 0x8fd19e;
+    pub const CONTEXT_TOOLS: u32 = 0xe2c07a;
 }
 
 #[cfg(test)]
