@@ -1,3 +1,11 @@
+## [v0.64.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.6) - 2026-10-12
+
+### Features
+- Show session-total tokens and the context budget in the footer, `/stats` and `/session` (#1949)
+- Complete slash-command arguments and tighten Tab and Enter in the composer (#1951)
+- Follow address changes in the remote gateway without a restart, report why a remote session could not be created, and stop session owners that never register (#1952)
+- Stop re-sending a finished response to devices that attach mid-stream (#1952)
+- Show RustCode as the Discord presence name (#1950)
 ## [v0.64.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.5) - 2026-10-10
 
 ### Features
