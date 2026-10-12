@@ -498,11 +498,48 @@ final class InputAndTranscriptTests: XCTestCase {
         let field = composer(in: app)
         field.typeText("First line\nSecond line")
         XCTAssertEqual(field.value as? String, "First line\nSecond line")
+        let actions = app.buttons["Chat actions"]
+        let send = app.buttons["Send message"]
+        XCTAssertGreaterThanOrEqual(actions.frame.minY, field.frame.maxY - 1)
+        XCTAssertGreaterThanOrEqual(send.frame.minY, field.frame.maxY - 1)
+        XCTAssertEqual(actions.frame.midY, send.frame.midY, accuracy: 2)
         let transcript = app.scrollViews.matching(identifier: "transcript").firstMatch
         transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.4))
             .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.95)))
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertEqual(composer(in: app).value as? String, "First line\nSecond line")
+    }
+
+    func testSlashCompletionStaysAttachedToTypedPrefix() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSession", "idle", "-demoDraft", "/sess", "-demoFocusComposer"]
+        app.launch()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["/session"].waitForExistence(timeout: 5))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Inline slash completion beside typed prefix"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testScrollingUpShowsLatestButtonInsteadOfFollowingOutput() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSession", "idle"]
+        app.launch()
+        let transcript = app.scrollViews.matching(identifier: "transcript").firstMatch
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        // At the tail there is nothing to catch up to.
+        XCTAssertFalse(app.buttons["Latest"].exists)
+        transcript.swipeDown()
+        transcript.swipeDown()
+        let latest = app.buttons["Latest"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 3))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Latest button after scrolling up"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        latest.tap()
+        XCTAssertTrue(latest.waitForNonExistence(timeout: 3))
     }
 
     func testThinkingExpandsAndMarkdownTableIsRendered() {

@@ -132,7 +132,14 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                 .font(trimmed.hasPrefix("/") ? .body.monospaced() : .body)
                 .overlay(alignment: .leading) {
                     if let completion {
-                        (Text(text).foregroundColor(.clear) + Text(completion.dropFirst(text.count)).foregroundColor(.secondary.opacity(0.55)))
+                        // Render the suggested command as one shaped string, then hide
+                        // the part already typed. Concatenating two Text values can
+                        // introduce a visible gap where the two runs meet.
+                        Text(completion)
+                            .foregroundColor(.secondary.opacity(0.55))
+                            .overlay(alignment: .leading) {
+                                Text(text).foregroundColor(.clear)
+                            }
                             .font(.body.monospaced()).lineLimit(1)
                             .allowsHitTesting(false).accessibilityHidden(true)
                     }

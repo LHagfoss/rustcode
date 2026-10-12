@@ -1,7 +1,7 @@
 import RustCodeRemote
 import SwiftUI
 
-struct TranscriptRow: View {
+struct TranscriptRow: View, Equatable {
     let item: TranscriptItem
     var footer: TurnTiming? = nil
 

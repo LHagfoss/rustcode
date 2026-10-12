@@ -15,6 +15,7 @@ struct RootView: View {
             }
         }
         .animation(.default, value: store.host == nil)
+        .keepScreenAwake(whileRunning: store.host != nil && store.isWorking)
         .alert(
             "RustCode",
             isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } }),

@@ -148,6 +148,12 @@ public final class RemoteStore {
         sessions.first { $0.id == selectedSessionID }
     }
 
+    /// True while the assistant is actively working on the selected session. The app
+    /// keeps the screen awake for this, and lets it sleep again once the turn ends.
+    public var isWorking: Bool {
+        attached?.isRunning == true || selectedSession?.activity == .running
+    }
+
     /// Requests for the attached session that the user still has to know about.
     public var visibleRequests: [TrackedRequest] {
         guard let session = attached?.session else { return [] }
