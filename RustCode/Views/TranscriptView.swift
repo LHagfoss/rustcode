@@ -370,6 +370,7 @@ struct TranscriptView: View {
                     }
                 },
                 controls: { sessionControls(snapshot) },
+                keepsExpanded: snapshot.pendingApproval != nil || snapshot.pendingQuestion != nil || !store.visibleRequests.isEmpty,
                 isFocused: $isComposerFocused
             )
             .padding(.horizontal, 12)

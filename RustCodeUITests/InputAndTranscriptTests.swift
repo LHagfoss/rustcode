@@ -456,6 +456,26 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertEqual(field.value as? String, "Keep this draft")
     }
 
+    func testEmptyComposerCompactsWhenKeyboardDismissesAndExpandsOnFocus() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSession", "idle"]
+        app.launch()
+        let field = composer(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let expandedHeight = app.buttons["Send message"].frame.maxY - field.frame.minY
+        app.buttons["Chat actions"].tap()
+        app.buttons["Dismiss Keyboard"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        let compactHeight = app.buttons["Send message"].frame.maxY - field.frame.minY
+        XCTAssertLessThan(compactHeight, expandedHeight)
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(app.buttons["Send message"].frame.maxY - field.frame.minY, compactHeight)
+    }
+
     func testOpeningKeyboardPreservesReadingPosition() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoSession", "idle"]
@@ -878,11 +898,13 @@ final class InputAndTranscriptTests: XCTestCase {
         screenshot.name = "Interactive sidebar and charcoal chat surface"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.65))
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.65))
         let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.65))
         from.press(forDuration: 0.05, thenDragTo: to)
-        XCTAssertTrue(app.buttons["Model and effort"].waitForExistence(timeout: 4))
-        XCTAssertTrue(app.buttons["Model and effort"].isHittable)
+        let modelAndEffort = app.buttons["Model and effort"]
+        XCTAssertTrue(modelAndEffort.waitForExistence(timeout: 4))
+        expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: modelAndEffort)
+        waitForExpectations(timeout: 4)
         XCTAssertFalse(close.isHittable)
         XCTAssertEqual(composer(in: app).value as? String, "Keep my swipe draft")
     }

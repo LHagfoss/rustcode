@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.17 — 2026-10-12
+
+- Compact the empty composer when the keyboard is dismissed, expand it while editing, and add responsive touch feedback ([PR #32](https://github.com/LHagfoss/rustcode_app/pull/32)).
+
 ## 0.1.16 — 2026-10-12
 
 - Keep the screen awake during active turns, improve long transcript scrolling, and keep slash completion attached to the typed command ([PR #30](https://github.com/LHagfoss/rustcode_app/pull/30)).

@@ -7,7 +7,7 @@ struct ChatActionsMenu: View {
     let hadKeyboard: Bool
     let isRunning: Bool
     let select: (ChatAction) -> Void
-    @ScaledMetric(relativeTo: .body) private var rowHeight = 54.0
+    @ScaledMetric(relativeTo: .body) private var rowHeight = 48.0
 
     var body: some View {
         ScrollView {
@@ -22,9 +22,10 @@ struct ChatActionsMenu: View {
                 if isRunning { action("Stop the running turn", symbol: "stop.circle", .stop) }
                 if hadKeyboard { action("Dismiss Keyboard", symbol: "keyboard.chevron.compact.down", .dismissKeyboard) }
             }
-            .padding(12)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
-        .frame(width: 280, height: min(rowHeight * Double(6 + (hadKeyboard ? 1 : 0) + (isRunning ? 1 : 0)) + 52, 480))
+        .frame(width: 220, height: min(rowHeight * Double(6 + (hadKeyboard ? 1 : 0) + (isRunning ? 1 : 0)) + 34, 440))
         .scrollIndicators(.hidden)
         .foregroundStyle(.primary)
         // The native popover supplies Liquid Glass on iOS 26 and material earlier.
@@ -36,17 +37,17 @@ struct ChatActionsMenu: View {
             HStack(spacing: 14) {
                 Image(systemName: symbol)
                     .font(.title3)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 36, height: 36)
                     .background(.fill.tertiary, in: .circle)
                     .accessibilityHidden(true)
                 Text(title).font(.body)
                 Spacer(minLength: 0)
             }
             .frame(minHeight: rowHeight)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 6)
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
         .accessibilityLabel(title)
     }
 }

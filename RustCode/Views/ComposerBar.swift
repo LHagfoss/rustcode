@@ -17,6 +17,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     var runCommand: (String) async -> Bool
     @ViewBuilder var accessory: () -> Accessory
     @ViewBuilder var controls: () -> Controls
+    var keepsExpanded = false
 
     @State private var sendCount = 0
     @State private var stopCount = 0
@@ -51,7 +52,16 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     }
 
     private var shape: RoundedRectangle {
-        .rect(cornerRadius: 26)
+        .rect(cornerRadius: isCompact ? 36 : 26)
+    }
+
+    private var isCompact: Bool {
+        !isFocused && trimmed.isEmpty && images.isEmpty && accessoryIsEmpty
+    }
+
+    /// Accessory content can include pending approvals or requests; keep those visible.
+    private var accessoryIsEmpty: Bool {
+        !keepsExpanded
     }
 
     var body: some View {
@@ -59,42 +69,31 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             accessory()
             if isFocused && trimmed.hasPrefix("/") { commandSuggestions }
             if !images.isEmpty { imagePreviews }
-            inputRow
-            HStack(spacing: 8) {
-                Button {
-                    hadKeyboard = isFocused
-                    isFocused = false
-                    showsActions = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.title3)
-                        .frame(width: buttonSize, height: buttonSize)
-                        .background(.fill.tertiary, in: .circle)
+            ZStack(alignment: .bottom) {
+                messageField
+                    .padding(.leading, isCompact ? buttonSize + 16 : 18)
+                    .padding(.trailing, isCompact ? buttonSize + 16 : 18)
+                    .padding(.top, isCompact ? 0 : 10)
+                    .padding(.bottom, isCompact ? 0 : buttonSize + 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minHeight: isCompact ? buttonSize : buttonSize * 2 + 20)
+
+                HStack(spacing: 8) {
+                    chatActionsButton
+                    Spacer(minLength: 0)
+                    if !isCompact { controls().disabled(isSending || isImporting) }
+                    trailingAction
                 }
-                .buttonStyle(.plain).accessibilityLabel("Chat actions")
-                .disabled(isSending || isImporting)
-                .popover(isPresented: $showsActions, arrowEdge: .bottom) {
-                    ChatActionsMenu(hadKeyboard: hadKeyboard, isRunning: isRunning) { action in
-                        nextAction = action
-                        showsActions = false
-                    }
-                    .presentationCompactAdaptation(.popover)
-                    .onDisappear(perform: performNextAction)
-                }
-                Spacer(minLength: 0)
-                controls().disabled(isSending || isImporting)
-                if isSending || isImporting || store.isUploadingImages {
-                    ProgressView().frame(width: buttonSize, height: buttonSize).accessibilityLabel("Preparing message")
-                } else if isRunning && trimmed.isEmpty && images.isEmpty {
-                    stopButton
-                } else if isRunning && !trimmed.hasPrefix("/") {
-                    queueButton
-                } else { sendButton }
+                .padding(.horizontal, 8)
+                .padding(.bottom, isCompact ? 6 : 8)
             }
-            .padding(.horizontal, 8).padding(.bottom, 8)
+            .padding(.horizontal, 8)
         }
+        .frame(minHeight: isCompact ? 64 : nil)
         .contentShape(shape)
         .glassSurface(in: shape)
+        .sensoryFeedback(.selection, trigger: isFocused)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: isCompact)
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
         .sensoryFeedback(.impact(weight: .medium, intensity: 0.8), trigger: stopCount)
         .sensoryFeedback(.selection, trigger: showsActions)
@@ -125,34 +124,65 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         #endif
     }
 
-    private var inputRow: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField(isRunning ? "Queue a message" : "Message", text: Binding(get: { text }, set: { text = $0 }), axis: .vertical)
-                .lineLimit(1...6)
-                .font(trimmed.hasPrefix("/") ? .body.monospaced() : .body)
-                .overlay(alignment: .leading) {
-                    if let completion {
-                        // Render the suggested command as one shaped string, then hide
-                        // the part already typed. Concatenating two Text values can
-                        // introduce a visible gap where the two runs meet.
-                        Text(completion)
-                            .foregroundColor(.secondary.opacity(0.55))
-                            .overlay(alignment: .leading) {
-                                Text(text).foregroundColor(.clear)
-                            }
-                            .font(.body.monospaced()).lineLimit(1)
-                            .allowsHitTesting(false).accessibilityHidden(true)
-                    }
-                }
-                .focused($isFocused)
-                .disabled(isSending || isImporting)
-                .frame(maxWidth: .infinity, minHeight: buttonSize)
-                .accessibilityLabel(isRunning ? "Message to queue" : "Message")
+    private var chatActionsButton: some View {
+        Button {
+            hadKeyboard = isFocused
+            isFocused = false
+            showsActions = true
+        } label: {
+            Image(systemName: "plus")
+                .font(.title3)
+                .frame(width: buttonSize, height: buttonSize)
+                .background(.fill.tertiary, in: .circle)
         }
-        .padding(.leading, 18)
-        .padding(.trailing, inset)
-        .padding(.vertical, inset)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: isRunning)
+        .buttonStyle(ComposerPressStyle()).accessibilityLabel("Chat actions")
+        .disabled(isSending || isImporting)
+        .popover(isPresented: $showsActions, arrowEdge: .bottom) {
+            ChatActionsMenu(hadKeyboard: hadKeyboard, isRunning: isRunning) { action in
+                nextAction = action
+                showsActions = false
+            }
+            .presentationCompactAdaptation(.popover)
+            .onDisappear(perform: performNextAction)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingAction: some View {
+        if isSending || isImporting || store.isUploadingImages {
+            ProgressView().frame(width: buttonSize, height: buttonSize).accessibilityLabel("Preparing message")
+        } else if isRunning && trimmed.isEmpty && images.isEmpty {
+            stopButton
+        } else if isRunning && !trimmed.hasPrefix("/") {
+            queueButton
+        } else {
+            sendButton
+        }
+    }
+
+    private var messageField: some View {
+        TextField(isRunning ? "Queue a message" : "Work with ChatGPT", text: Binding(get: { text }, set: { text = $0 }), axis: .vertical)
+            .lineLimit(1...6)
+            .font(trimmed.hasPrefix("/") ? .body.monospaced() : .body)
+            .overlay(alignment: .leading) {
+                if let completion {
+                    // Render the suggested command as one shaped string, then hide
+                    // the part already typed. Concatenating two Text values can
+                    // introduce a visible gap where the two runs meet.
+                    Text(completion)
+                        .foregroundColor(.secondary.opacity(0.55))
+                        .overlay(alignment: .leading) {
+                            Text(text).foregroundColor(.clear)
+                        }
+                        .font(.body.monospaced()).lineLimit(1)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            .focused($isFocused)
+            .disabled(isSending || isImporting)
+            .frame(maxWidth: .infinity, minHeight: buttonSize)
+            .accessibilityLabel(isRunning ? "Message to queue" : "Message")
+            .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: isRunning)
     }
 
     private var matchingCommands: [SessionCommandChoice] {
@@ -225,7 +255,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         } label: {
             circle("arrow.up", isProminent: !trimmed.isEmpty || !images.isEmpty)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerPressStyle())
         .disabled((trimmed.isEmpty && images.isEmpty) || !isEnabled || isSending || isImporting)
         .accessibilityLabel(trimmed.hasPrefix("/") ? "Run command" : "Send message")
     }
@@ -247,7 +277,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         } primaryAction: {
             send(.queue)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerPressStyle())
         .disabled(!isEnabled)
         .accessibilityLabel("Queue message")
         .accessibilityHint("Touch and hold for steering")
@@ -264,7 +294,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                 circle("stop.fill", fill: AnyShapeStyle(.red), foreground: .white)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerPressStyle())
         .disabled(!isEnabled || store.hasPendingCancellation)
         .accessibilityLabel(store.hasPendingCancellation ? "Stopping the running turn" : "Stop the running turn")
     }
@@ -459,5 +489,16 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                 drafts.clearIfMatching(text: message, images: outgoingImages, sessionID: sessionID)
             }
         }
+    }
+}
+
+private struct ComposerPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .brightness(configuration.isPressed ? 0.08 : 0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: configuration.isPressed)
     }
 }
