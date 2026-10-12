@@ -93,8 +93,14 @@ impl AgentUiEventSender {
 }
 
 pub(crate) fn tool_display_detail(name: &str, arguments: &serde_json::Value) -> Option<String> {
-    let (_, target) = crate::app::activity::summarize_tool_call(name, arguments);
-    (!target.is_empty() && target != "?" && target != name).then_some(target)
+    let (action, target) = crate::app::activity::summarize_tool_call(name, arguments);
+    if !target.is_empty() && target != "?" && target != name {
+        return Some(target);
+    }
+    // No target to show (MCP tools, argument-less calls): fall back to the
+    // semantic action label so a tool row is never a bare name (#1961).
+    let action = action.trim();
+    (!action.is_empty() && action != name).then(|| action.to_owned())
 }
 
 #[cfg(test)]
@@ -937,7 +943,37 @@ mod tests {
             super::tool_display_detail("run_command", &json!({"command":"cargo test\n--lib"})),
             Some("cargo test --lib".into())
         );
-        assert_eq!(super::tool_display_detail("view_file", &json!({})), None);
+        assert_eq!(
+            super::tool_display_detail("view_file", &json!({})),
+            Some("Read".into()),
+            "a read with no path still shows the action label"
+        );
+    }
+
+    #[test]
+    fn display_detail_falls_back_to_the_action_label_without_a_target() {
+        // MCP tools with no recognizable target: the action label stands in so
+        // app tool rows are never a bare name (#1961).
+        assert_eq!(
+            super::tool_display_detail("mcp__demo__echo", &json!({"text":"hi"})),
+            Some("demo.echo".into()),
+            "an MCP tool shows its display name when nothing else is available"
+        );
+        assert_eq!(
+            super::tool_display_detail("run_command", &json!({})),
+            Some(rustcode_command::shell_label().to_owned()),
+            "a command without arguments still shows what kind of call it is"
+        );
+        assert_eq!(
+            super::tool_display_detail("custom_tool", &json!({"opaque":"x"})),
+            Some("CustomTool".into()),
+            "unknown tools fall back to the pascal-cased name"
+        );
+        assert_eq!(
+            super::tool_display_detail("view_file", &json!({"path":"src/main.rs"})),
+            Some("src/main.rs".into()),
+            "a real target still wins over the action label"
+        );
     }
 
     #[test]
