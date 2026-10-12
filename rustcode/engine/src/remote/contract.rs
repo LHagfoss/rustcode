@@ -320,6 +320,16 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
             request("req-0005", session, RemoteOperation::DetachSession),
         ),
         (
+            "request_share",
+            request(
+                "req-0020",
+                None,
+                RemoteOperation::RequestShare {
+                    session_id: SESSION.0.to_owned(),
+                },
+            ),
+        ),
+        (
             "get_history",
             request(
                 "req-0006",
@@ -772,6 +782,30 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             Some(ReceiptState::Applied),
             RemoteResult::SessionCreated {
                 session: golden_session_info(),
+            },
+        ),
+        response(
+            "share_request_sent",
+            "req-0020",
+            Some(ReceiptState::Applied),
+            RemoteResult::ShareRequestSent {
+                pending_id: "7".into(),
+            },
+        ),
+        response(
+            "share_accepted",
+            "req-0020",
+            Some(ReceiptState::Applied),
+            RemoteResult::ShareAccepted {
+                session: golden_session_info(),
+            },
+        ),
+        response(
+            "share_denied",
+            "req-0020",
+            Some(ReceiptState::Rejected),
+            RemoteResult::ShareDenied {
+                reason: "the terminal declined to share this session".into(),
             },
         ),
         response(

@@ -20,11 +20,42 @@ use rustcode::remote::{
 };
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 
+#[cfg(unix)]
+use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
+#[cfg(unix)]
+use rustcode::remote_gateway::owner_ipc::{GatewayFrame, OWNER_IPC_VERSION, OwnerFrame};
+
+/// A standby owner link: this terminal announced its unshared session as
+/// reachable, so a device can ask it to share. Presence only: no transcript
+/// ever leaves the terminal until the user accepts with y and `/remote` runs.
+/// Unix only: the owner socket does not exist on other platforms.
+#[cfg(unix)]
+struct Standby {
+    to_task: tokio::sync::mpsc::Sender<OwnerFrame>,
+    from_task: tokio::sync::mpsc::UnboundedReceiver<StandbyEvent>,
+    session_id: String,
+}
+
+#[cfg(unix)]
+enum StandbyEvent {
+    ShareRequested {
+        pending_id: u64,
+        device_name: String,
+    },
+    Gone,
+}
+
+const PANEL_TITLE: &str = "Remote";
+
 /// Remote commands applied in one loop iteration, so a burst from a device
 /// cannot hold back the terminal's own input and rendering.
 const COMMANDS_PER_TICK: usize = 8;
 
-const PANEL_TITLE: &str = "Remote";
+/// How long the bridge waits before announcing again after the gateway went
+/// away. The link is never started when no gateway runs: announcing must not
+/// bring one up behind the user's back. Unix only.
+#[cfg(unix)]
+const STANDBY_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 struct Share {
     publisher: SessionPublisher,
@@ -53,6 +84,14 @@ pub(super) struct RemotePump<'a> {
 pub(crate) struct RemoteBridge {
     connector: Box<dyn OwnerConnector>,
     share: Option<Share>,
+    /// Announced-but-unshared presence for device-initiated share requests.
+    /// Dropped the moment the session is shared, and re-announced on session
+    /// switch. Never started when no gateway runs. Unix only: the owner
+    /// socket does not exist on other platforms.
+    #[cfg(unix)]
+    standby: Option<Standby>,
+    #[cfg(unix)]
+    standby_retry_at: Option<std::time::Instant>,
     /// A turn's start was applied and its end not yet. Tracked while nothing
     /// is shared too, so a registration made mid-turn publishes that end.
     turn_stream_open: bool,
@@ -72,6 +111,10 @@ impl RemoteBridge {
         Self {
             connector,
             share: None,
+            #[cfg(unix)]
+            standby: None,
+            #[cfg(unix)]
+            standby_retry_at: None,
             turn_stream_open: false,
             stopped: None,
             headless: false,
@@ -133,6 +176,13 @@ impl RemoteBridge {
         }
         if self.share.is_some() {
             self.pump(pump).await;
+        } else {
+            let RemotePump {
+                app_state,
+                needs_redraw,
+                ..
+            } = pump;
+            self.maintain_standby(app_state, needs_redraw).await;
         }
     }
 
@@ -243,7 +293,148 @@ impl RemoteBridge {
             gateway: None,
             pairing_due: true,
         });
+        // The shared registration replaces the standby announcement; its
+        // connection ends when the task notices the dropped sender.
+        #[cfg(unix)]
+        {
+            self.standby = None;
+        }
+        {
+            let mut state = app_state.lock().await;
+            state.pending_share_prompt = None;
+            state.share_decision = None;
+        }
         self.status()
+    }
+
+    /// Announce the unshared session as reachable when a gateway already runs,
+    /// pump share requests and user decisions. Never starts a gateway: the
+    /// announcement must not bring one up behind the user's back.
+    /// Unix only: the owner socket does not exist on other platforms.
+    #[cfg(unix)]
+    async fn maintain_standby(
+        &mut self,
+        app_state: &Arc<Mutex<AppState>>,
+        needs_redraw: &mut bool,
+    ) {
+        if self.headless {
+            return;
+        }
+        let (session_id, title, workspace) = {
+            let state = app_state.lock().await;
+            (
+                state.active_session_id.clone(),
+                standby_title(&state),
+                state
+                    .task_working_directory
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            )
+        };
+        if self
+            .standby
+            .as_ref()
+            .is_some_and(|standby| standby.session_id != session_id)
+        {
+            self.drop_standby(app_state).await;
+        }
+        if self.standby.is_none()
+            && self
+                .standby_retry_at
+                .is_none_or(|at| std::time::Instant::now() >= at)
+        {
+            self.standby_retry_at = None;
+            if let Some(directory) = self.connector.gateway_directory() {
+                self.standby = Some(spawn_standby(directory, session_id, title, workspace));
+            }
+        }
+        let mut gone = false;
+        let mut requested = Vec::new();
+        if let Some(standby) = self.standby.as_mut() {
+            while let Ok(event) = standby.from_task.try_recv() {
+                match event {
+                    StandbyEvent::Gone => {
+                        gone = true;
+                        break;
+                    }
+                    StandbyEvent::ShareRequested {
+                        pending_id,
+                        device_name,
+                    } => requested.push((pending_id, device_name)),
+                }
+            }
+        }
+        if gone {
+            self.drop_standby(app_state).await;
+            self.standby_retry_at = Some(std::time::Instant::now() + STANDBY_RETRY);
+            return;
+        }
+        for (pending_id, device_name) in requested {
+            let mut state = app_state.lock().await;
+            if state.pending_share_prompt.is_some() {
+                // One prompt at a time; decline the extra at once.
+                if let Some(standby) = self.standby.as_ref() {
+                    let _ = standby.to_task.try_send(OwnerFrame::ShareDecision {
+                        pending_id,
+                        accepted: false,
+                    });
+                }
+            } else {
+                state.pending_share_prompt = Some(rustcode::app::PendingSharePrompt {
+                    pending_id,
+                    device_name: device_name.clone(),
+                });
+                state.show_command_panel(
+                    PANEL_TITLE,
+                    format!(
+                        "Device '{device_name}' asks to share this session.\nPress y to share it, n to decline."
+                    ),
+                );
+                *needs_redraw = true;
+            }
+        }
+        let decision = { app_state.lock().await.share_decision.take() };
+        if let Some(accepted) = decision {
+            let prompt = { app_state.lock().await.pending_share_prompt.take() };
+            if let (Some(standby), Some(prompt)) = (self.standby.as_ref(), prompt) {
+                let _ = standby.to_task.try_send(OwnerFrame::ShareDecision {
+                    pending_id: prompt.pending_id,
+                    accepted,
+                });
+            }
+            if accepted {
+                // Drop the announcement first; the shared registration
+                // that follows resolves the device's request.
+                self.drop_standby(app_state).await;
+                self.run_command(SharingCommand::Enable, app_state).await;
+            } else {
+                app_state.lock().await.show_command_panel(
+                    PANEL_TITLE,
+                    "Share request declined. This session stays private.",
+                );
+            }
+            *needs_redraw = true;
+        }
+    }
+
+    /// End the announcement. The gateway clears it when the task's
+    /// connection ends; prompts for the old session die with it.
+    /// Unix only: there is no standby link on other platforms.
+    #[cfg(unix)]
+    async fn drop_standby(&mut self, app_state: &Arc<Mutex<AppState>>) {
+        self.standby = None;
+        let mut state = app_state.lock().await;
+        state.pending_share_prompt = None;
+        state.share_decision = None;
+    }
+
+    /// No standby announcements off unix: the owner socket does not exist.
+    #[cfg(not(unix))]
+    async fn maintain_standby(
+        &mut self,
+        _app_state: &Arc<Mutex<AppState>>,
+        _needs_redraw: &mut bool,
+    ) {
     }
 
     fn status(&self) -> String {
@@ -427,6 +618,121 @@ impl RemoteBridge {
             *needs_redraw = true;
         } else if self.show_pairing_details(app_state) {
             *needs_redraw = true;
+        }
+    }
+}
+
+/// Title shown to the asking device, so the terminal can tell its sessions
+/// apart. Falls back to the session id when nothing was saved yet.
+/// Unix only: part of the standby announcement.
+#[cfg(unix)]
+fn standby_title(state: &AppState) -> String {
+    rustcode::app::actions::session::build_session_list(state)
+        .into_iter()
+        .find(|meta| {
+            rustcode::config::session_id_from_path(&meta.path).as_deref()
+                == Some(state.active_session_id.as_str())
+        })
+        .map(|meta| meta.title.clone())
+        .unwrap_or_else(|| state.active_session_id.clone())
+}
+
+#[cfg(unix)]
+fn spawn_standby(
+    config_directory: std::path::PathBuf,
+    session_id: String,
+    title: String,
+    workspace: Option<String>,
+) -> Standby {
+    let (to_task, from_ui) = tokio::sync::mpsc::channel(8);
+    let (to_ui, from_task) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(standby_task(
+        config_directory,
+        session_id.clone(),
+        title,
+        workspace,
+        to_ui,
+        from_ui,
+    ));
+    Standby {
+        to_task,
+        from_task,
+        session_id,
+    }
+}
+
+/// Announce one session and relay share requests until the bridge drops the
+/// link, the gateway closes it, or a write fails. Connects only: a gateway
+/// the user stopped is never brought back behind their back.
+/// Unix only: the owner socket does not exist on other platforms.
+#[cfg(unix)]
+async fn standby_task(
+    config_directory: std::path::PathBuf,
+    session_id: String,
+    title: String,
+    workspace: Option<String>,
+    to_ui: tokio::sync::mpsc::UnboundedSender<StandbyEvent>,
+    mut from_ui: tokio::sync::mpsc::Receiver<OwnerFrame>,
+) {
+    let gone = |to_ui: &tokio::sync::mpsc::UnboundedSender<StandbyEvent>| {
+        let _ = to_ui.send(StandbyEvent::Gone);
+    };
+    let socket = RemoteLifecycle::new(&config_directory).owner_socket_path();
+    let stream = match tokio::net::UnixStream::connect(&socket).await {
+        Ok(stream) => stream,
+        Err(_) => return gone(&to_ui),
+    };
+    let (reader, writer) = stream.into_split();
+    let mut reader = tokio::io::BufReader::new(reader);
+    let mut writer = writer;
+    let mut buffer = Vec::new();
+    let announce = OwnerFrame::Announce {
+        ipc_version: OWNER_IPC_VERSION,
+        session_id,
+        title,
+        workspace,
+    };
+    if rustcode::daemon::protocol::write_async_frame(&mut writer, &announce)
+        .await
+        .is_err()
+    {
+        return gone(&to_ui);
+    }
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        rustcode::daemon::protocol::read_async_frame_with_buffer::<_, GatewayFrame>(
+            &mut reader,
+            &mut buffer,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(GatewayFrame::Announced { .. })) => {}
+        _ => return gone(&to_ui),
+    }
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        tokio::select! {
+            outbound = from_ui.recv() => {
+                let Some(frame) = outbound else { return };
+                if rustcode::daemon::protocol::write_async_frame(&mut writer, &frame).await.is_err() {
+                    return gone(&to_ui);
+                }
+            }
+            inbound = rustcode::daemon::protocol::read_async_frame_with_buffer::<_, GatewayFrame>(&mut reader, &mut buffer) => {
+                match inbound {
+                    Ok(GatewayFrame::ShareRequested { pending_id, device_name }) => {
+                        let _ = to_ui.send(StandbyEvent::ShareRequested { pending_id, device_name });
+                    }
+                    Ok(GatewayFrame::Pong) | Ok(GatewayFrame::Announced { .. }) => {}
+                    _ => return gone(&to_ui),
+                }
+            }
+            _ = heartbeat.tick() => {
+                if rustcode::daemon::protocol::write_async_frame(&mut writer, &OwnerFrame::Ping).await.is_err() {
+                    return gone(&to_ui);
+                }
+            }
         }
     }
 }

@@ -57,6 +57,23 @@ pub enum OwnerFrame {
     Unregister {
         reason: SessionCloseReason,
     },
+    /// First frame alternative to `Register`: announce an unshared session's
+    /// terminal as reachable for share requests. Nothing is shared; the
+    /// terminal still approves every request.
+    Announce {
+        ipc_version: u32,
+        session_id: String,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace: Option<String>,
+    },
+    /// The terminal's answer to a [`GatewayFrame::ShareRequested`].
+    /// Accepting only notes the decision; the `Register` that follows (from
+    /// `/remote`) is what resolves the device's request as accepted.
+    ShareDecision {
+        pending_id: u64,
+        accepted: bool,
+    },
     Ping,
 }
 
@@ -69,6 +86,19 @@ pub enum GatewayFrame {
         gateway_id: String,
         instance_id: String,
         status: GatewayLinkStatus,
+    },
+    /// The standby announcement was accepted. The session is reachable for
+    /// share requests but nothing is shared.
+    Announced {
+        gateway_id: String,
+        instance_id: String,
+    },
+    /// A device asks this terminal to share its announced session. Answer
+    /// with [`OwnerFrame::ShareDecision`]; accepting is followed by a
+    /// `Register` from `/remote`, which resolves the device's request.
+    ShareRequested {
+        pending_id: u64,
+        device_name: String,
     },
     /// A session operation from the authenticated device `device_id`. The
     /// identifier scopes the owner's receipts; it is never a credential.
@@ -137,34 +167,76 @@ mod server {
             read_async_frame_with_buffer::<_, OwnerFrame>(&mut reader, &mut buffer),
         )
         .await;
-        let Ok(Ok(OwnerFrame::Register {
-            ipc_version,
-            registration,
-            snapshot,
-        })) = first
-        else {
-            return;
-        };
-        if ipc_version != OWNER_IPC_VERSION {
-            let reason = format!(
-                "this gateway speaks owner protocol {OWNER_IPC_VERSION}; restart it with `rustcode remote stop` after updating"
-            );
-            write(&mut writer, &GatewayFrame::Closed { reason }).await;
-            return;
+        let Ok(first) = first else { return };
+        let Ok(frame) = first else { return };
+        // A standby announcement and a share registration share the
+        // connection loop below; only the first frame and the per-frame
+        // handler differ.
+        enum Mode {
+            Shared,
+            Standby,
         }
-        let mut registration = match hub.register_owner(registration, snapshot) {
-            Ok(registration) => registration,
-            Err(reason) => {
-                write(&mut writer, &GatewayFrame::Closed { reason }).await;
-                return;
+        let (mode, owner_id, registered, mut frames) = match frame {
+            OwnerFrame::Register {
+                ipc_version,
+                registration,
+                snapshot,
+            } => {
+                if ipc_version != OWNER_IPC_VERSION {
+                    let reason = format!(
+                        "this gateway speaks owner protocol {OWNER_IPC_VERSION}; restart it with `rustcode remote stop` after updating"
+                    );
+                    write(&mut writer, &GatewayFrame::Closed { reason }).await;
+                    return;
+                }
+                let registration = match hub.register_owner(registration, snapshot) {
+                    Ok(registration) => registration,
+                    Err(reason) => {
+                        write(&mut writer, &GatewayFrame::Closed { reason }).await;
+                        return;
+                    }
+                };
+                (
+                    Mode::Shared,
+                    registration.owner_id,
+                    registration.registered,
+                    registration.frames,
+                )
             }
+            OwnerFrame::Announce {
+                ipc_version,
+                session_id,
+                title,
+                workspace,
+            } => {
+                if ipc_version != OWNER_IPC_VERSION {
+                    let reason = format!(
+                        "this gateway speaks owner protocol {OWNER_IPC_VERSION}; restart it with `rustcode remote stop` after updating"
+                    );
+                    write(&mut writer, &GatewayFrame::Closed { reason }).await;
+                    return;
+                }
+                let registration = match hub.announce_owner(session_id, title, workspace) {
+                    Ok(registration) => registration,
+                    Err(reason) => {
+                        write(&mut writer, &GatewayFrame::Closed { reason }).await;
+                        return;
+                    }
+                };
+                (
+                    Mode::Standby,
+                    registration.owner_id,
+                    registration.registered,
+                    registration.frames,
+                )
+            }
+            _ => return,
         };
-        let owner_id = registration.owner_id;
-        if write(&mut writer, &registration.registered).await {
+        if write(&mut writer, &registered).await {
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
-                    outbound = registration.frames.recv() => {
+                    outbound = frames.recv() => {
                         let Some(frame) = outbound else { break };
                         let last = matches!(frame, GatewayFrame::Closed { .. });
                         if !write(&mut writer, &frame).await || last {
@@ -174,7 +246,11 @@ mod server {
                     inbound = read_async_frame_with_buffer::<_, OwnerFrame>(&mut reader, &mut buffer) => {
                         match inbound {
                             Ok(frame) => {
-                                if !hub.owner_frame(owner_id, frame) {
+                                let alive = match mode {
+                                    Mode::Shared => hub.owner_frame(owner_id, frame),
+                                    Mode::Standby => hub.standby_frame(owner_id, frame),
+                                };
+                                if !alive {
                                     break;
                                 }
                             }

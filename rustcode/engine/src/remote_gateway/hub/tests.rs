@@ -1167,3 +1167,135 @@ async fn limits_on_sessions_and_waiting_requests_are_enforced() {
     let fourth = phone.send(Some(("session-a", 1)), prompt("four"));
     assert!(phone.next().is_none(), "{fourth} was forwarded");
 }
+
+#[tokio::test]
+async fn share_request_reaches_terminal_and_registering_accepts_it() {
+    let hub = hub(limits());
+    let announced = hub
+        .announce_owner("session-s".to_owned(), "title".to_owned(), None)
+        .expect("the announcement is accepted");
+    assert!(matches!(
+        announced.registered,
+        GatewayFrame::Announced { .. }
+    ));
+    let mut standby_frames = announced.frames;
+    let mut phone = Device::connect(&hub, 1, "phone");
+    // No terminal has this session: the device learns what to do instead.
+    let missing = phone.send(None, json!({"type": "request_share", "session_id": "nope"}));
+    let refused = phone.response(&missing);
+    assert_eq!(refused["result"]["type"], "error");
+    assert_eq!(refused["result"]["code"], "not_found");
+
+    let id = phone.send(
+        None,
+        json!({"type": "request_share", "session_id": "session-s"}),
+    );
+    let sent = phone.response(&id);
+    assert_eq!(sent["result"]["type"], "share_request_sent");
+    let pending = sent["result"]["pending_id"].as_str().unwrap().to_owned();
+
+    let (pending_id, device_name) = match standby_frames.try_recv().expect("share requested") {
+        GatewayFrame::ShareRequested {
+            pending_id,
+            device_name,
+        } => (pending_id, device_name),
+        other => panic!("expected a share request, got {other:?}"),
+    };
+    assert_eq!(pending_id.to_string(), pending);
+    assert_eq!(device_name, "phone");
+
+    // While the terminal thinks it over, the outcome is still unknown.
+    let poll = phone.send(
+        None,
+        json!({"type": "get_request_status", "target_request_id": id}),
+    );
+    let status = phone.response(&poll);
+    assert_eq!(status["result"]["type"], "request_status");
+    assert_eq!(status["result"]["receipt"], "unknown");
+    assert!(status["result"].get("result").is_none());
+
+    // The terminal accepts; the `/remote` registration that follows resolves
+    // the device's request as accepted.
+    assert!(hub.standby_frame(
+        announced.owner_id,
+        OwnerFrame::ShareDecision {
+            pending_id,
+            accepted: true
+        }
+    ));
+    let _owner = Owner::register(&hub, "session-s", 44);
+    let accepted = phone.response(&id);
+    assert_eq!(accepted["result"]["type"], "share_accepted");
+    assert_eq!(accepted["receipt"], "applied");
+
+    // The outcome survives for later polls.
+    let again = phone.send(
+        None,
+        json!({"type": "get_request_status", "target_request_id": id}),
+    );
+    let replayed = phone.response(&again);
+    assert_eq!(replayed["result"]["result"]["type"], "share_accepted");
+}
+
+#[tokio::test]
+async fn announce_refuses_shared_and_duplicate_sessions() {
+    let hub = hub(limits());
+    let _shared = Owner::register(&hub, "session-a", 11);
+    assert!(
+        hub.announce_owner("session-a".to_owned(), String::new(), None)
+            .is_err()
+    );
+    hub.announce_owner("session-s".to_owned(), "title".to_owned(), None)
+        .expect("the announcement is accepted");
+    assert!(
+        hub.announce_owner("session-s".to_owned(), String::new(), None)
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn share_deny_and_terminal_gone_answer_the_device() {
+    let hub = hub(limits());
+    let announced = hub
+        .announce_owner("session-d".to_owned(), "title".to_owned(), None)
+        .expect("the announcement is accepted");
+    let mut standby_frames = announced.frames;
+    let mut phone = Device::connect(&hub, 1, "phone");
+
+    let id = phone.send(
+        None,
+        json!({"type": "request_share", "session_id": "session-d"}),
+    );
+    assert_eq!(phone.response(&id)["result"]["type"], "share_request_sent");
+    let pending_id = match standby_frames.try_recv().expect("share requested") {
+        GatewayFrame::ShareRequested { pending_id, .. } => pending_id,
+        other => panic!("expected a share request, got {other:?}"),
+    };
+    assert!(hub.standby_frame(
+        announced.owner_id,
+        OwnerFrame::ShareDecision {
+            pending_id,
+            accepted: false
+        }
+    ));
+    let denied = phone.response(&id);
+    assert_eq!(denied["result"]["type"], "share_denied");
+    assert_eq!(denied["receipt"], "rejected");
+
+    // A terminal that disconnects abandons the requests waiting on it.
+    let announced = hub
+        .announce_owner("session-e".to_owned(), "title".to_owned(), None)
+        .expect("the announcement is accepted");
+    let waiting = phone.send(
+        None,
+        json!({"type": "request_share", "session_id": "session-e"}),
+    );
+    assert_eq!(
+        phone.response(&waiting)["result"]["type"],
+        "share_request_sent"
+    );
+    hub.owner_gone(announced.owner_id);
+    let gone = phone.response(&waiting);
+    assert_eq!(gone["result"]["type"], "share_denied");
+    assert_eq!(gone["receipt"], "unknown");
+}

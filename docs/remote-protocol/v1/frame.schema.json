@@ -1391,6 +1391,57 @@
           "type": "object"
         },
         {
+          "description": "A `request_share` reached the session's terminal; poll\n`get_request_status` on the request id for the outcome.",
+          "properties": {
+            "pending_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "share_request_sent",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "pending_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The terminal shared the session; attach to it.",
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/RemoteSessionInfo"
+            },
+            "type": {
+              "const": "share_accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The terminal declined, the request expired, or the terminal went away.",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "const": "share_denied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "receipt": {
               "$ref": "#/$defs/ReceiptState"

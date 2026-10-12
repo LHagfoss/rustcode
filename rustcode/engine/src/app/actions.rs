@@ -126,7 +126,7 @@ mod commands;
 #[path = "actions/enter.rs"]
 mod enter;
 #[path = "actions/session.rs"]
-mod session;
+pub mod session;
 #[path = "actions/submit.rs"]
 mod submit;
 #[path = "actions/workspace_inspection.rs"]

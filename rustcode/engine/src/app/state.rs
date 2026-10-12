@@ -274,6 +274,13 @@ pub struct AppState {
     pub tool_confirmation_selected: usize,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<ToolConfirmationResponse>>,
+    /// A paired device asks this terminal to share the session it announced
+    /// as reachable. Answer with y/n while it is set; the bridge clears it
+    /// once the decision is sent.
+    pub pending_share_prompt: Option<PendingSharePrompt>,
+    /// Decision taken by the terminal's user for the pending share prompt,
+    /// picked up by the remote bridge on its next tick.
+    pub share_decision: Option<bool>,
     /// How long batch approval prompts were open since the turn last
     /// collected it into its user-wait total (`turn.performance`).
     pub(crate) approval_wait: std::time::Duration,
@@ -1489,6 +1496,8 @@ impl AppState {
             modal_scroll_row: 0,
             tool_confirmation_selected: 0,
             tool_confirmation_response: None,
+            pending_share_prompt: None,
+            share_decision: None,
             approval_wait: std::time::Duration::ZERO,
             pending_question: None,
             question_response: None,

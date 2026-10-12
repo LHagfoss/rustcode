@@ -47,6 +47,17 @@ pub struct ToolConfirmation {
     pub forbidden_prefix: Option<String>,
 }
 
+/// A paired device asks this terminal to share its session (see
+/// `request_share`). Answered with y/n in the terminal; the bridge delivers
+/// the decision and clears the prompt.
+#[derive(Debug, Clone)]
+pub struct PendingSharePrompt {
+    /// Gateway-side share request number to answer.
+    pub pending_id: u64,
+    /// Human name of the asking device, for the prompt text.
+    pub device_name: String,
+}
+
 /// An interactive `ask_question` prompt awaiting the user's choice. Rendered as
 /// a modal; the selected option(s) are sent back to the agent as the tool result.
 /// A single tool call may carry several questions (a chain); each one keeps its

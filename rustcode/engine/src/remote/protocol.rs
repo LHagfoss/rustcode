@@ -124,11 +124,17 @@ pub enum RemoteOperation {
         model: String,
         reasoning_effort: String,
     },
+    /// Ask the live terminal of an unshared session to share it. Answered at
+    /// once with `share_request_sent`; the outcome (accepted, denied,
+    /// expired) is reported by `get_request_status` on the request id.
+    RequestShare {
+        session_id: String,
+    },
 }
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 19] = [
+    pub const NAMES: [&'static str; 20] = [
         "list_sessions",
         "list_directories",
         "create_session",
@@ -148,6 +154,7 @@ impl RemoteOperation {
         "resolve_approval",
         "get_request_status",
         "set_session_settings",
+        "request_share",
     ];
 
     pub fn name(&self) -> &'static str {
@@ -171,6 +178,7 @@ impl RemoteOperation {
             Self::ResolveApproval { .. } => "resolve_approval",
             Self::GetRequestStatus { .. } => "get_request_status",
             Self::SetSessionSettings { .. } => "set_session_settings",
+            Self::RequestShare { .. } => "request_share",
         }
     }
 
@@ -184,6 +192,7 @@ impl RemoteOperation {
                 | Self::GetRequestStatus { .. }
                 | Self::ListDirectories { .. }
                 | Self::CreateSession { .. }
+                | Self::RequestShare { .. }
         )
     }
 
@@ -203,6 +212,7 @@ impl RemoteOperation {
                 | Self::AnswerQuestion { .. }
                 | Self::ResolveApproval { .. }
                 | Self::SetSessionSettings { .. }
+                | Self::RequestShare { .. }
         )
     }
 }
@@ -374,6 +384,19 @@ pub enum RemoteResult {
     },
     SessionSettingsUpdated {
         settings: RemoteSessionSettings,
+    },
+    /// A `request_share` reached the session's terminal; poll
+    /// `get_request_status` on the request id for the outcome.
+    ShareRequestSent {
+        pending_id: String,
+    },
+    /// The terminal shared the session; attach to it.
+    ShareAccepted {
+        session: RemoteSessionInfo,
+    },
+    /// The terminal declined, the request expired, or the terminal went away.
+    ShareDenied {
+        reason: String,
     },
     RequestStatus {
         target_request_id: String,
@@ -1180,6 +1203,9 @@ mod tests {
             RemoteOperation::SetSessionSettings {
                 model: String::new(),
                 reasoning_effort: "default".into(),
+            },
+            RemoteOperation::RequestShare {
+                session_id: String::new(),
             },
         ];
         assert_eq!(operations.len(), RemoteOperation::NAMES.len());
