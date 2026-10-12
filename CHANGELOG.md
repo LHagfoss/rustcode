@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.19 — 2026-10-12
+
+- Compact the plus menu, group secondary actions under More, and use equal composer insets ([PR #34](https://github.com/LHagfoss/rustcode_app/pull/34)).
+
 ## 0.1.18 — 2026-10-12
 
 - Render assistant summaries as readable cards, format standalone JSON, and improve the composer's spacing and touch response ([PR #33](https://github.com/LHagfoss/rustcode_app/pull/33)).

@@ -10,12 +10,17 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.buttons["Camera"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Photos"].isHittable)
         XCTAssertTrue(app.buttons["Files"].isHittable)
-        XCTAssertTrue(app.buttons["Slash Commands"].isHittable)
-        XCTAssertTrue(app.buttons["New Session in Folder"].isHittable)
+        XCTAssertTrue(app.buttons["More"].isHittable)
+        let menu = app.scrollViews["chatActionsMenu"]
+        XCTAssertLessThanOrEqual(menu.frame.width, 200)
+        XCTAssertLessThanOrEqual(menu.frame.height, 220)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Glass attachment menu above the composer"
+        screenshot.name = "Compact attachment menu above the composer"
         screenshot.lifetime = .keepAlways
         add(screenshot)
+        app.buttons["More"].tap()
+        XCTAssertTrue(app.buttons["Slash Commands"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["New Session in Folder"].isHittable)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.2)).tap()
         XCTAssertTrue(app.buttons["Photos"].waitForNonExistence(timeout: 3))
         XCTAssertEqual(composer(in: app).value as? String, "Keep my attachment menu draft")
@@ -890,6 +895,7 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.buttons["Send message"].exists)
         XCTAssertFalse(app.buttons["thinkingEffortPicker"].exists)
         app.buttons["Chat actions"].tap()
+        app.buttons["More"].tap()
         app.buttons["Slash Commands"].tap()
         XCTAssertEqual(composer(in: app).value as? String, "Keep my actions draft")
         app.terminate()
@@ -897,6 +903,7 @@ final class InputAndTranscriptTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["Chat actions"].waitForExistence(timeout: 5))
         app.buttons["Chat actions"].tap()
+        app.buttons["More"].tap()
         app.buttons["Slash Commands"].tap()
         XCTAssertEqual(composer(in: app).value as? String, "/")
         XCTAssertTrue(app.scrollViews["commandSuggestions"].waitForExistence(timeout: 3))

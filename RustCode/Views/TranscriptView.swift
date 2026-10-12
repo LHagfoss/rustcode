@@ -373,8 +373,7 @@ struct TranscriptView: View {
                 keepsExpanded: snapshot.pendingApproval != nil || snapshot.pendingQuestion != nil || !store.visibleRequests.isEmpty,
                 isFocused: $isComposerFocused
             )
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(12)
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }

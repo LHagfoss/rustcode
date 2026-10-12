@@ -35,8 +35,6 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     @FocusState.Binding var isFocused: Bool
     @ScaledMetric(relativeTo: .body) private var buttonSize: CGFloat = 44
 
-    private let inset: CGFloat = 7
-
     private var text: String {
         get { drafts.draft(for: sessionID).text }
         nonmutating set { drafts.setText(newValue, for: sessionID) }
