@@ -1714,6 +1714,8 @@ fn footer_stats_and_session_show_the_context_budget_and_session_total() {
             ..Default::default()
         };
     let mut state = RenderState::new();
+    // Keep footer width independent of the checkout path and task branch.
+    state.cwd_and_branch = "/repo:main".to_owned();
     state.active_context_window = 200_000;
     state.history.push(ChatMessage::new("user", "question"));
     let mut first = ChatMessage::new("assistant", "first");

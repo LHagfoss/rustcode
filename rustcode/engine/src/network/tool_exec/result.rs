@@ -251,6 +251,9 @@ pub(crate) fn compact_replayed_read_result(
     args: &serde_json::Value,
     previous_content: Option<&str>,
 ) -> String {
+    if tool_name == "list_mcp_tools" {
+        return "[Unchanged MCP discovery: the inventory is already in history. Invoke its callable_name with the listed input_schema; matching tools are bound in the native tool menu. Do not list the same tools again or claim they ran without invocation results.]".to_string();
+    }
     let range = previous_content
         .and_then(parse_view_header)
         .map(|(path, start, end, total)| {
@@ -901,6 +904,19 @@ pub(crate) fn subagent_tool_history_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_replay_points_to_invocation_instead_of_file_inspection() {
+        let notice = compact_replayed_read_result(
+            "list_mcp_tools",
+            &serde_json::json!({"server":"worklog"}),
+            None,
+        );
+        assert!(notice.contains("callable_name"));
+        assert!(notice.contains("input_schema"));
+        assert!(!notice.contains("start_line"));
+        assert!(!notice.contains("grep"));
+    }
 
     fn verification_result(command: &str, content: String, success: bool) -> ToolResult {
         ToolResult {
