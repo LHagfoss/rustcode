@@ -1,3 +1,7 @@
+## [v0.64.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.11) - 2026-10-12
+
+### Fixes
+- Fix lag in hover, text selection and scrolling: the event loop no longer lists the session store on every pass, which parsed up to 50 transcripts per input event; a hovered message is now lit as one block across its blank paragraph rows ([#1975](https://github.com/LHagfoss/rustcode/pull/1975)).
 ## [v0.64.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.10) - 2026-10-12
 
 ### Features
