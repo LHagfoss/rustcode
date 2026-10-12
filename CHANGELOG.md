@@ -1,3 +1,8 @@
+## [v0.64.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.10) - 2026-10-12
+
+### Features
+- Light the chat message under the pointer in the TUI and copy it with a right-click; make slash and file completion rows hover and click targets; remove the stray spine row between tool rounds in a Ran block ([#1971](https://github.com/LHagfoss/rustcode/pull/1971)).
+- Add a `/context` usage panel and composer chip to the desktop app, Session, Shortcuts and About settings pages, a chat list sorted by last activity with relative times and a spinner on the running chat, and a Latest pill that jumps on press without clicking the row behind it ([#1972](https://github.com/LHagfoss/rustcode/pull/1972)).
 ## [v0.64.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.9) - 2026-10-12
 
 ### Fixes
