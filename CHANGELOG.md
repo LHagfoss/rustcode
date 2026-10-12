@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.16 — 2026-10-12
+
+- Keep the screen awake during active turns, improve long transcript scrolling, and keep slash completion attached to the typed command ([PR #30](https://github.com/LHagfoss/rustcode_app/pull/30)).
+
 ## 0.1.15 — 2026-10-12
 
 - Show chat notices as transient toasts, add a jump-to-latest control and prevent session row swipes from closing the sidebar ([PR #28](https://github.com/LHagfoss/rustcode_app/pull/28)).
