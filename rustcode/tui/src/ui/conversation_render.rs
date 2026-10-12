@@ -396,6 +396,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
     }
     let content_mark = (history_revision, live_content.finish() as usize);
     transcript.tool_line_flags = Some(Vec::new());
+    transcript.message_line_flags = Some(Vec::new());
     if let Some(agent) = state.selected_subagent() {
         // An agent context has no reading anchor of its own, so it scrolls as
         // a plain offset from the newest row of the agent's whole history.
@@ -449,6 +450,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
 
     if transcript.selection.is_active() {
         transcript.tool_line_flags = None;
+        transcript.message_line_flags = None;
         return render_selected_history_projection(
             state,
             width,
@@ -483,7 +485,8 @@ pub(crate) fn render_visible_conversation_with_transcript(
             (transcript.committed_block(state, last, width), last)
         };
         rows += block.len();
-        blocks.push((block, is_tool.then_some((next_index, index))));
+        let message = (!is_tool && is_copyable_message(state, last)).then_some(last);
+        blocks.push((block, is_tool.then_some((next_index, index)), message));
         index = next_index;
     }
     // The welcome cell is the first item in the projected transcript, and the
@@ -492,7 +495,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
     if index == state.history_display_start() && rows < target_rows && !welcome_is_live(state) {
         let banner = build_claude_startup_banner_snapshot(state, width as usize, height as usize);
         rows += banner.len();
-        blocks.push((Arc::new(banner), None));
+        blocks.push((Arc::new(banner), None, None));
     }
     let max_scroll = rows.saturating_sub(capacity);
     let scroll = transcript.clamp_scroll_rows(max_scroll);
@@ -528,8 +531,11 @@ pub(crate) fn render_visible_conversation_with_transcript(
     // Tool rows are hover and click targets for their block; the spacer rows
     // of a block are not.
     let mut tool_lines = Vec::with_capacity(capacity);
+    // A message's rows light together under the pointer, and a right-click
+    // on any of them copies it.
+    let mut message_lines = Vec::with_capacity(capacity);
     let mut offset = 0;
-    for (block, tool_block) in blocks.into_iter().rev() {
+    for (block, tool_block, message) in blocks.into_iter().rev() {
         let block_end = offset + block.len();
         let from = start.saturating_sub(offset).min(block.len());
         let through = end.saturating_sub(offset).min(block.len());
@@ -540,20 +546,37 @@ pub(crate) fn render_visible_conversation_with_transcript(
                     .iter()
                     .map(|line| tool_block.filter(|_| line.width() > 0)),
             );
+            message_lines.extend(
+                block[from..through]
+                    .iter()
+                    .map(|line| message.filter(|_| line.width() > 0)),
+            );
         }
         offset = block_end;
         if offset >= end {
             transcript.tool_line_flags = Some(tool_lines);
+            transcript.message_line_flags = Some(message_lines);
             return lines;
         }
     }
     transcript.tool_line_flags = Some(tool_lines);
+    transcript.message_line_flags = Some(message_lines);
     let from = start.saturating_sub(offset).min(live.len());
     let through = end.saturating_sub(offset).min(live.len());
     if from < through {
         lines.extend_from_slice(&live[from..through]);
     }
     lines
+}
+
+/// Whether the block at `index` is a user or assistant message whose text a
+/// right-click can copy.
+fn is_copyable_message(state: &RenderSnapshot, index: usize) -> bool {
+    state.history().get(index).is_some_and(|message| {
+        matches!(message.role.as_str(), "user" | "assistant")
+            && !message.conversation_recap
+            && !message.content.trim().is_empty()
+    })
 }
 
 /// Reuse the immutable history projection pinned at selection start. As an

@@ -3414,7 +3414,7 @@ fn incremental_tool_round_continuation_has_no_second_group_heading() {
 }
 
 #[test]
-fn multi_call_tool_rounds_are_separated_by_a_spine_row() {
+fn tool_rounds_in_one_block_render_without_a_spacer_row() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let call = |id: &str, file: &str| ToolCallRef {
@@ -3457,11 +3457,11 @@ fn multi_call_tool_rounds_are_separated_by_a_spine_row() {
         80,
         false,
     ));
-    let spacers = joined.iter().filter(|line| line.as_str() == "│").count();
-    assert_eq!(spacers, 1, "{joined:?}");
-    let spacer_at = joined.iter().position(|line| line == "│").unwrap();
-    assert!(joined[spacer_at - 1].contains("b.rs"), "{joined:?}");
-    assert!(joined[spacer_at + 1].contains("c.rs"), "{joined:?}");
+    // A lone spine between rounds read as a stray line, so the rounds of one
+    // block stay one unbroken column.
+    assert!(!joined.iter().any(|line| line.trim() == "│"), "{joined:?}");
+    let row_of = |file: &str| joined.iter().position(|line| line.contains(file)).unwrap();
+    assert_eq!(row_of("c.rs"), row_of("b.rs") + 1, "{joined:?}");
 
     let continuation = text(super::render_committed_tool_result_continuation_snapshot(
         &snapshot,
@@ -3469,14 +3469,7 @@ fn multi_call_tool_rounds_are_separated_by_a_spine_row() {
         80,
         false,
     ));
-    assert_eq!(continuation[0], "│", "{continuation:?}");
-    let compact = text(super::render_committed_tool_result_continuation_snapshot(
-        &snapshot,
-        &[3],
-        80,
-        false,
-    ));
-    assert!(!compact.iter().any(|line| line == "│"), "{compact:?}");
+    assert!(continuation[0].contains("c.rs"), "{continuation:?}");
 }
 
 #[test]

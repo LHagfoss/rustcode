@@ -93,6 +93,14 @@ pub(crate) struct TranscriptState {
     pub(crate) tool_click: Option<((u16, u16), ToolBlock)>,
     /// The tool block under the pointer, lit so it reads as clickable.
     hovered_tool_block: Option<ToolBlock>,
+    /// For each transcript line of the projection just built, the history
+    /// index of the user or assistant message it belongs to. `None` while a
+    /// selection pins the view, like [`Self::tool_line_flags`].
+    pub(super) message_line_flags: Option<Vec<Option<usize>>>,
+    /// Painted transcript area and, per row, the message shown there.
+    message_rows: (ratatui::layout::Rect, Vec<Option<usize>>),
+    /// The message under the pointer, lit so a right-click's target is clear.
+    hovered_message: Option<usize>,
     /// Where the footer's task counter was painted, if it was.
     pub(crate) tasks_chip: Option<ratatui::layout::Rect>,
     pub(crate) tasks_chip_hovered: bool,
@@ -166,6 +174,9 @@ impl Default for TranscriptState {
             tool_rows: (ratatui::layout::Rect::default(), Vec::new()),
             tool_click: None,
             hovered_tool_block: None,
+            message_line_flags: None,
+            message_rows: (ratatui::layout::Rect::default(), Vec::new()),
+            hovered_message: None,
             tasks_chip: None,
             tasks_chip_hovered: false,
             panel_targets: Vec::new(),
@@ -308,6 +319,32 @@ impl TranscriptState {
         rows.get(usize::from(row - area.y)).copied().flatten()
     }
 
+    pub(super) fn set_message_rows(
+        &mut self,
+        area: ratatui::layout::Rect,
+        rows: Vec<Option<usize>>,
+    ) {
+        if self
+            .hovered_message
+            .is_some_and(|hovered| !rows.contains(&Some(hovered)))
+        {
+            self.hovered_message = None;
+        }
+        let mut rows = rows;
+        rows.truncate(usize::from(area.height));
+        self.message_rows = (area, rows);
+    }
+
+    /// History index of the user or assistant message the last painted frame
+    /// showed at this cell.
+    pub(crate) fn message_at(&self, column: u16, row: u16) -> Option<usize> {
+        let (area, rows) = &self.message_rows;
+        if !area.contains(ratatui::layout::Position::new(column, row)) {
+            return None;
+        }
+        rows.get(usize::from(row - area.y)).copied().flatten()
+    }
+
     /// Whether this cell is on the footer's task counter.
     pub(crate) fn tasks_chip_at(&self, column: u16, row: u16) -> bool {
         self.tasks_chip
@@ -432,9 +469,15 @@ impl TranscriptState {
                     .area()
                     .filter(|area| area.contains(ratatui::layout::Position::new(column, row)))
             });
+        // A panel painted over the chat owns the pointer.
+        let message = self
+            .message_at(column, row)
+            .filter(|_| target.is_none() && self.panel_selection_area.is_none());
         let changed = block != self.hovered_tool_block
             || chip != self.tasks_chip_hovered
-            || target != self.hovered_target;
+            || target != self.hovered_target
+            || message != self.hovered_message;
+        self.hovered_message = message;
         self.hovered_tool_block = block;
         self.tasks_chip_hovered = chip;
         self.hovered_target = target;
@@ -467,6 +510,23 @@ impl TranscriptState {
         let (area, rows) = &self.tool_rows;
         for (offset, block) in rows.iter().enumerate() {
             if *block != Some(hovered) {
+                continue;
+            }
+            let y = area.y + offset as u16;
+            for x in area.x..area.right() {
+                buffer[(x, y)].set_bg(super::COLOR_HOVER_BG());
+            }
+        }
+    }
+
+    /// Light the hovered message's rows in the painted frame.
+    pub(super) fn highlight_hovered_message(&self, buffer: &mut ratatui::buffer::Buffer) {
+        let Some(hovered) = self.hovered_message else {
+            return;
+        };
+        let (area, rows) = &self.message_rows;
+        for (offset, message) in rows.iter().enumerate() {
+            if *message != Some(hovered) {
                 continue;
             }
             let y = area.y + offset as u16;
@@ -1370,6 +1430,45 @@ mod tests {
         assert_eq!(buffer[(0, 1)].bg, hover);
         assert_ne!(buffer[(0, 2)].bg, hover);
         assert_ne!(buffer[(0, 3)].bg, hover);
+    }
+
+    #[test]
+    fn hovering_a_message_lights_its_rows_and_names_it_for_copy() {
+        let (mut buffer, area) = painted(&["› first", "  second", "", "• answer"]);
+        let hover = crate::ui::COLOR_HOVER_BG();
+        let mut transcript = TranscriptState::default();
+        transcript.set_message_rows(area, vec![Some(0), Some(0), None, Some(1)]);
+
+        assert!(transcript.hover_at(3, 1));
+        // Moving within the same message costs no frame.
+        assert!(!transcript.hover_at(5, 0));
+        assert_eq!(transcript.message_at(5, 0), Some(0));
+        assert_eq!(transcript.message_at(5, 2), None);
+        transcript.highlight_hovered_message(&mut buffer);
+        assert_eq!(buffer[(0, 0)].bg, hover);
+        assert_eq!(buffer[(area.right() - 1, 1)].bg, hover);
+        assert_ne!(buffer[(0, 3)].bg, hover);
+
+        // A message that scrolled out of the frame is no longer lit.
+        transcript.set_message_rows(area, vec![None, None, None, Some(1)]);
+        let (mut repainted, _) = painted(&["", "", "", "• answer"]);
+        transcript.highlight_hovered_message(&mut repainted);
+        assert_ne!(repainted[(0, 0)].bg, hover);
+    }
+
+    #[test]
+    fn completion_menu_rows_are_click_targets() {
+        let (buffer, area) = painted(&[
+            "› /model   Open model picker",
+            "  /models  Open the model picker",
+        ]);
+        let mut transcript = TranscriptState::default();
+        transcript.set_panel_targets(&buffer, area, true);
+        assert_eq!(
+            transcript.panel_target_at(4, 1),
+            Some(PanelTarget::ListRow(1))
+        );
+        assert_eq!(transcript.panel_target_at(4, 0), None);
     }
     use rustcode::controller::{ChatMessage, History, RenderState};
 
