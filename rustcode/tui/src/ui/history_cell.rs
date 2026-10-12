@@ -774,31 +774,6 @@ impl TranscriptState {
         }
     }
 
-    pub(crate) fn set_tools_with_verbosity(
-        &mut self,
-        calls: &[LiveToolCall],
-        verbosity: &Verbosity,
-        home_path: Option<&str>,
-        continues: bool,
-    ) {
-        // Compare before allocating so an unchanged frame allocates nothing.
-        let changed = self.tools.as_ref().is_none_or(|cell| {
-            cell.calls != calls
-                || cell.verbosity != *verbosity
-                || cell.home_path.as_deref() != home_path
-                || cell.continues != continues
-        });
-        if changed {
-            self.revision = self.revision.saturating_add(1);
-            self.tools = Some(LiveToolCell {
-                calls: calls.to_vec(),
-                verbosity: verbosity.clone(),
-                home_path: home_path.map(str::to_owned),
-                continues,
-            });
-        }
-    }
-
     pub(crate) fn clear_assistant(&mut self) {
         if self.assistant.take().is_some() {
             self.revision = self.revision.saturating_add(1);
@@ -1065,6 +1040,18 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 
 pub(super) fn render_live_tool_cell_at(
     calls: &[LiveToolCall],
+    width: u16,
+    verbosity: &Verbosity,
+    show_picker: bool,
+    now: std::time::Instant,
+    home_path: Option<&str>,
+) -> Vec<Line<'static>> {
+    let calls = calls.iter().collect::<Vec<_>>();
+    render_live_tool_cell_at_refs(&calls, width, verbosity, show_picker, now, home_path)
+}
+
+pub(super) fn render_live_tool_cell_at_refs(
+    calls: &[&LiveToolCall],
     width: u16,
     verbosity: &Verbosity,
     show_picker: bool,
