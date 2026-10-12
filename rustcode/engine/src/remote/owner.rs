@@ -53,10 +53,10 @@ impl SharingCommand {
     /// Parse the words after `/remote`. `Err` is the usage text.
     pub fn parse(arguments: &[&str]) -> Result<Self, String> {
         match arguments {
-            [] => Ok(Self::Enable),
+            [] | ["on"] => Ok(Self::Enable),
             ["status"] => Ok(Self::Status),
             ["off"] => Ok(Self::Off),
-            _ => Err("Usage:\n  /remote  Share this session with a paired device\n  /remote status  Show whether this session is shared\n  /remote off  Stop sharing this session".to_owned()),
+            _ => Err("Usage:\n  /remote  Share this session with a paired device\n  /remote on  Share this session with a paired device\n  /remote status  Show whether this session is shared\n  /remote off  Stop sharing this session".to_owned()),
         }
     }
 }
@@ -357,12 +357,13 @@ mod tests {
     #[test]
     fn sharing_commands_parse_their_arguments() {
         assert_eq!(SharingCommand::parse(&[]), Ok(SharingCommand::Enable));
+        assert_eq!(SharingCommand::parse(&["on"]), Ok(SharingCommand::Enable));
         assert_eq!(
             SharingCommand::parse(&["status"]),
             Ok(SharingCommand::Status)
         );
         assert_eq!(SharingCommand::parse(&["off"]), Ok(SharingCommand::Off));
-        for unknown in [&["on"][..], &["off", "now"][..], &["serve"][..]] {
+        for unknown in [&["off", "now"][..], &["serve"][..]] {
             let usage = SharingCommand::parse(unknown).expect_err("unknown arguments");
             assert!(usage.contains("/remote off"), "unexpected usage: {usage}");
         }
