@@ -1392,15 +1392,26 @@ mod tests {
         assert_eq!(provider.requests(), 1, "queueing starts nothing");
 
         provider.release();
+        // An accepted steer runs as a turn of its own between the terminal's
+        // prompt and the queued one. Once released, the provider answers at
+        // once, so two of the turns may end within one iteration of the loop:
+        // wait for all of them, not for a count the loop might step over.
+        let turns = if steerable { 3 } else { 2 };
         let mut received = Vec::new();
         publish_until(&mut runtime, &mut link, &mut received, |messages| {
             events(messages)
                 .iter()
                 .filter(|(_, event)| matches!(event, RemoteEvent::TurnFinished { .. }))
                 .count()
-                == 2
+                >= turns
         })
         .await;
+        let finished = events(&received)
+            .iter()
+            .filter(|(_, event)| matches!(event, RemoteEvent::TurnFinished { .. }))
+            .count();
+        assert_eq!(finished, turns, "every accepted prompt ran exactly once");
+        assert_eq!(provider.requests(), turns);
         let state = runtime.app_state().await;
         let prompts: Vec<&str> = state
             .history
