@@ -28,15 +28,8 @@ struct TranscriptRow: View {
             ToolRow(tool: tool)
         case .subagent(let subagent):
             SubagentRow(subagent: subagent)
-        case .notice(let text):
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .contextMenu {
-                    Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }
-                }
+        case .notice:
+            EmptyView()
         }
     }
 }

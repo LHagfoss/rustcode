@@ -159,7 +159,7 @@ struct SessionsView: View {
     private func drawerGesture(width: CGFloat, opening: Bool) -> some Gesture {
         DragGesture(minimumDistance: 10)
             .updating($drawerDrag) { value, state, transaction in
-                guard !opening || value.startLocation.x <= 24 else { return }
+                guard opening ? value.startLocation.x <= 24 : value.startLocation.x >= width else { return }
                 if state.horizontal == nil {
                     state.horizontal = abs(value.translation.width) > abs(value.translation.height) * 1.3
                 }
@@ -168,7 +168,7 @@ struct SessionsView: View {
                 state.offset = opening ? max(0, value.translation.width) : min(0, value.translation.width)
             }
             .onChanged { value in
-                guard !opening || value.startLocation.x <= 24 else { return }
+                guard opening ? value.startLocation.x <= 24 : value.startLocation.x >= width else { return }
                 guard !dismissedKeyboardForDrag, drawerDrag.horizontal != false,
                       abs(value.translation.width) > abs(value.translation.height) * 1.3 else { return }
                 dismissedKeyboardForDrag = true
@@ -176,7 +176,7 @@ struct SessionsView: View {
             }
             .onEnded { value in
                 defer { dismissedKeyboardForDrag = false }
-                guard !opening || value.startLocation.x <= 24 else { return }
+                guard opening ? value.startLocation.x <= 24 : value.startLocation.x >= width else { return }
                 guard abs(value.translation.width) > abs(value.translation.height) * 1.3 else { return }
                 let predicted = (opening ? 0 : width) + value.predictedEndTranslation.width
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {

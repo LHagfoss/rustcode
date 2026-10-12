@@ -1,6 +1,64 @@
 import RustCodeRemote
 import SwiftUI
 
+private struct NoticeToast: Identifiable, Equatable {
+    let id: String
+    let text: String
+
+    init(id: String, text: String) {
+        self.id = id
+        self.text = text
+    }
+}
+
+private struct LatestTranscriptButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Latest", systemImage: "arrow.down")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .glassSurface(in: .capsule, interactive: true)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Scroll to the newest message")
+    }
+}
+
+private struct NoticeToastStack: View {
+    let toasts: [NoticeToast]
+    let dismiss: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(toasts) { toast in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "info.circle.fill").foregroundStyle(.secondary)
+                    Text(toast.text).font(.footnote).lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Dismiss", systemImage: "xmark") { dismiss(toast.id) }
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("Dismiss notice")
+                }
+                .padding(12)
+                .glassSurface(in: .rect(cornerRadius: 16), interactive: false)
+                .contextMenu {
+                    Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(toast.text) }
+                }
+                .task(id: toast.id) {
+                    try? await Task.sleep(for: .seconds(5))
+                    dismiss(toast.id)
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+}
+
 struct TranscriptView: View {
     @Environment(RemoteStore.self) private var store
     @Environment(\.openSessionSidebar) private var openSessions
@@ -14,10 +72,18 @@ struct TranscriptView: View {
     @State private var hasAutoPresented = false
     @State private var followsLatest = true
     @State private var isDraggingTranscript = false
+    /// Session notices announced as a transient toast instead of inline rows.
+    @State private var noticeToasts: [NoticeToast] = []
+    /// Notice ids already seen for the attached session, so history does not
+    /// announce itself when a session is opened.
+    @State private var seenNoticeIDs: Set<String> = []
+    @State private var hasSeededNotices = false
     @FocusState private var isComposerFocused: Bool
     var presentsAttentionOnAppear = false
 
-    var body: some View {
+    var body: some View { stateManagedContent }
+
+    private var navigationContent: some View {
         Group {
             if let snapshot = store.attached {
                 transcript(snapshot)
@@ -48,6 +114,10 @@ struct TranscriptView: View {
             }
         }
         .environment(\.selectText, SelectTextAction { selectable = SelectableText(text: $0) })
+    }
+
+    private var presentationContent: some View {
+        navigationContent
         .sheet(item: $sheet) { sheet in
             switch sheet {
             case .question(let question):
@@ -66,25 +136,41 @@ struct TranscriptView: View {
         .sheet(item: $selectable) { selectable in
             SelectTextSheet(text: selectable.text)
         }
+    }
+
+    private var stateManagedContent: some View {
+        presentationContent
         .onChange(of: store.attached?.pendingQuestion?.id) { reconcileSheet() }
         .onChange(of: store.attached?.pendingApproval?.batchID) { reconcileSheet() }
         .onAppear { reconcileSheet() }
         .sensoryFeedback(.selection, trigger: showsModels)
         .sensoryFeedback(trigger: store.chatFeedback) { _, feedback in
-            guard scenePhase == .active, !isChatObscured, store.connection == .connected,
-                  let feedback, feedback.session == store.attached?.session else { return nil }
-            switch feedback.kind {
-            case .started: return .impact(weight: .light, intensity: 0.6)
-            case .completed: return .success
-            case .cancelled: return .impact(weight: .medium, intensity: 0.8)
-            case .failed: return .error
-            case .attention: return .warning
-            }
+            chatSensoryFeedback(for: feedback)
         }
         .onChange(of: store.selectedSession?.ref) { _, _ in
             followsLatest = true
             isDraggingTranscript = false
             hasAutoPresented = false
+            seenNoticeIDs = []
+            hasSeededNotices = false
+            noticeToasts = []
+        }
+        .onChange(of: noticeFingerprint) { _, notices in
+            let fresh = notices.filter { !seenNoticeIDs.contains($0.id) }
+            seenNoticeIDs.formUnion(notices.map(\.id))
+            guard hasSeededNotices else {
+                // The first fingerprint after attaching is history: seed the
+                // seen set silently instead of announcing old notices.
+                hasSeededNotices = true
+                return
+            }
+            guard !fresh.isEmpty else { return }
+            withAnimation(.snappy(duration: 0.25)) {
+                noticeToasts.append(contentsOf: fresh)
+                if noticeToasts.count > 3 {
+                    noticeToasts.removeFirst(noticeToasts.count - 3)
+                }
+            }
         }
         #if DEBUG
         .task(id: store.attached?.items.isEmpty) {
@@ -95,6 +181,31 @@ struct TranscriptView: View {
             if let text { selectable = SelectableText(text: MarkdownText.plainText(text)) }
         }
         #endif
+    }
+
+    /// Notices in the attached transcript as `(id, text)`, watched for arrivals.
+    private var noticeFingerprint: [NoticeToast] {
+        (store.attached?.items ?? []).compactMap { item in
+            if case .notice(let text) = item.content { NoticeToast(id: item.id, text: text) } else { nil }
+        }
+    }
+
+    private func dismissToast(_ id: String) {
+        withAnimation(.snappy(duration: 0.25)) {
+            noticeToasts.removeAll { $0.id == id }
+        }
+    }
+
+    private func chatSensoryFeedback(for feedback: ChatFeedback?) -> SensoryFeedback? {
+        guard scenePhase == .active, !isChatObscured, store.connection == .connected,
+              let feedback, feedback.session == store.attached?.session else { return nil }
+        return switch feedback.kind {
+        case .started: SensoryFeedback.impact(weight: .light, intensity: 0.6)
+        case .completed: SensoryFeedback.success
+        case .cancelled: SensoryFeedback.impact(weight: .medium, intensity: 0.8)
+        case .failed: SensoryFeedback.error
+        case .attention: SensoryFeedback.warning
+        }
     }
 
     private func sessionMenu(_ session: SessionSummary) -> some View {
@@ -188,6 +299,22 @@ struct TranscriptView: View {
                 }
             }
             .accessibilityIdentifier("transcript")
+            .overlay(alignment: .bottomTrailing) {
+                if !followsLatest {
+                    LatestTranscriptButton {
+                        withAnimation(.snappy(duration: 0.25)) {
+                            followsLatest = true
+                            proxy.scrollTo("transcript-end", anchor: .bottom)
+                        }
+                    }
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .overlay(alignment: .top) {
+                NoticeToastStack(toasts: noticeToasts, dismiss: dismissToast)
+            }
             // Keep the editable field in a stable safe-area inset. safeAreaBar relocates
             // its content as the keyboard changes, which breaks the field's focus binding.
             .safeAreaInset(edge: .bottom, spacing: 0) {
