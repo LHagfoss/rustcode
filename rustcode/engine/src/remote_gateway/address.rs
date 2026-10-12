@@ -170,8 +170,22 @@ pub fn plan_listen(
     advertise: Option<&str>,
     candidates: &[Candidate],
 ) -> Result<ListenPlan, AddressError> {
+    plan_listen_with_preference(bind, advertise, candidates, None)
+}
+
+/// Like [`plan_listen`], but an `auto` bind first tries interfaces matching
+/// `prefer_interface` (e.g. `"netbird"` from `[remote] prefer_interface` or
+/// `serve --prefer-interface`). A mesh address is stable across Wi-Fi changes
+/// and reachable off-LAN, which is what a phone usually wants; when no
+/// interface matches, selection falls back to the LAN-first default.
+pub fn plan_listen_with_preference(
+    bind: &str,
+    advertise: Option<&str>,
+    candidates: &[Candidate],
+    prefer_interface: Option<&str>,
+) -> Result<ListenPlan, AddressError> {
     let bind: IpAddr = if bind.trim() == "auto" {
-        automatic_address(candidates)
+        automatic_address_with_preference(candidates, prefer_interface)
     } else {
         bind.trim()
             .parse()
@@ -206,6 +220,27 @@ pub fn plan_listen(
     }
 }
 
+/// True for interface names belonging to a NetBird mesh: `wt0`-style
+/// WireGuard devices on Linux/Windows, or anything with netbird in the name.
+/// (On macOS NetBird uses a generic `utun` device shared with other VPNs, so
+/// there `--advertise <host>.netbird.cloud` is the reliable route.)
+pub fn is_netbird_interface(interface: &str) -> bool {
+    let name = interface.to_ascii_lowercase();
+    name.starts_with("wt") || name.contains("netbird")
+}
+
+/// True when `interface` is selected by a `prefer_interface` value: a
+/// case-insensitive substring match, plus the `"netbird"` alias for NetBird's
+/// `wt`-prefixed devices, whose names never mention netbird.
+pub fn interface_matches_preference(interface: &str, prefer: &str) -> bool {
+    if prefer.is_empty() {
+        return false;
+    }
+    let name = interface.to_ascii_lowercase();
+    let want = prefer.to_ascii_lowercase();
+    name.contains(&want) || (want == "netbird" && is_netbird_interface(interface))
+}
+
 /// Prefer Wi-Fi/Ethernet over VPN and virtual networks, so the QR works on
 /// the phone's ordinary Wi-Fi. Bind only the selected interface, not all of
 /// them. Interface names cover macOS and the usual Linux naming schemes.
@@ -221,7 +256,36 @@ fn automatic_address(candidates: &[Candidate]) -> IpAddr {
     automatic_address_with_route(candidates, route)
 }
 
-fn automatic_address_with_route(candidates: &[Candidate], route: Option<IpAddr>) -> IpAddr {
+fn automatic_address_with_preference(
+    candidates: &[Candidate],
+    prefer_interface: Option<&str>,
+) -> IpAddr {
+    if let Some(prefer) = prefer_interface
+        && !prefer.trim().is_empty()
+    {
+        let preferred: Vec<&Candidate> = eligible_candidates(candidates)
+            .into_iter()
+            .filter(|candidate| interface_matches_preference(&candidate.interface, prefer.trim()))
+            .collect();
+        if let Some(address) = preferred
+            .iter()
+            .min_by_key(|candidate| {
+                (
+                    !matches!(candidate.address, IpAddr::V4(ip) if ip.is_private()),
+                    candidate.address,
+                )
+            })
+            .map(|candidate| candidate.address)
+        {
+            return address;
+        }
+    }
+    automatic_address(candidates)
+}
+
+/// Candidates a device could plausibly dial: up, non-loopback, routable, and
+/// not a container/VM bridge.
+fn eligible_candidates(candidates: &[Candidate]) -> Vec<&Candidate> {
     candidates
         .iter()
         .filter(|candidate| {
@@ -239,6 +303,12 @@ fn automatic_address_with_route(candidates: &[Candidate], route: Option<IpAddr>)
                 .iter()
                 .any(|prefix| interface.starts_with(prefix))
         })
+        .collect()
+}
+
+fn automatic_address_with_route(candidates: &[Candidate], route: Option<IpAddr>) -> IpAddr {
+    eligible_candidates(candidates)
+        .into_iter()
         .min_by_key(|candidate| {
             let physical = ["en", "eth", "wl"]
                 .iter()
@@ -342,6 +412,53 @@ mod tests {
         let plan = plan_listen("auto", Some("mac.example"), &candidates).unwrap();
         assert_eq!(plan.bind, "192.168.31.185".parse::<IpAddr>().unwrap());
         assert_eq!(plan.advertise.with_port(7).to_string(), "mac.example:7");
+    }
+
+    #[test]
+    fn prefer_interface_selects_netbird_before_lan() {
+        let candidates = [
+            candidate("en0", "192.168.31.185"),
+            candidate("wt0", "100.90.16.237"),
+        ];
+        // Default stays LAN-first: a full-tunnel VPN must not hide the LAN
+        // address from a nearby phone.
+        let plan = plan_listen("auto", None, &candidates).unwrap();
+        assert_eq!(plan.bind, "192.168.31.185".parse::<IpAddr>().unwrap());
+        // Opt-in: the mesh address is stable across Wi-Fi changes and
+        // reachable off-LAN.
+        for prefer in ["netbird", "wt0", "WT"] {
+            let plan =
+                plan_listen_with_preference("auto", None, &candidates, Some(prefer)).unwrap();
+            assert_eq!(plan.bind, "100.90.16.237".parse::<IpAddr>().unwrap());
+        }
+        // No match falls back to the LAN default.
+        let plan =
+            plan_listen_with_preference("auto", None, &candidates, Some("tailscale0")).unwrap();
+        assert_eq!(plan.bind, "192.168.31.185".parse::<IpAddr>().unwrap());
+        // An explicit bind or advertise always wins over the preference.
+        let plan =
+            plan_listen_with_preference("192.168.31.185", None, &candidates, Some("netbird"))
+                .unwrap();
+        assert_eq!(plan.bind, "192.168.31.185".parse::<IpAddr>().unwrap());
+        let plan =
+            plan_listen_with_preference("auto", Some("mac.example"), &candidates, Some("netbird"))
+                .unwrap();
+        assert_eq!(plan.bind, "100.90.16.237".parse::<IpAddr>().unwrap());
+        assert_eq!(plan.advertise.with_port(7).to_string(), "mac.example:7");
+    }
+
+    #[test]
+    fn netbird_interface_alias_covers_wireguard_device_names() {
+        assert!(is_netbird_interface("wt0"));
+        assert!(is_netbird_interface("WT1"));
+        assert!(is_netbird_interface("netbird0"));
+        assert!(!is_netbird_interface("en0"));
+        assert!(!is_netbird_interface("utun4"));
+        assert!(!is_netbird_interface("tailscale0"));
+        assert!(interface_matches_preference("wt0", "netbird"));
+        assert!(interface_matches_preference("en0", "en"));
+        assert!(!interface_matches_preference("en0", ""));
+        assert!(!interface_matches_preference("en0", "netbird"));
     }
 
     #[test]
