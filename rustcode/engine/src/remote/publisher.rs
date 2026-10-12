@@ -40,6 +40,10 @@ struct ResponseCursor {
     /// restarted, to tell at the end of a turn what is still missing.
     emitted_len: usize,
     emitted_hash: DefaultHasher,
+    /// The live buffer was emptied after text was published and nothing has
+    /// followed it. A finished response leaves the buffer before its turn's
+    /// end event arrives, so what was published may still be that response.
+    emptied: bool,
 }
 
 impl ResponseCursor {
@@ -52,6 +56,7 @@ impl ResponseCursor {
             len: state.current_response.len(),
             emitted_len: state.current_response.len(),
             emitted_hash,
+            emptied: false,
         }
     }
 
@@ -63,9 +68,19 @@ impl ResponseCursor {
         if revision == self.revision && response.len() == self.len {
             return None;
         }
-        let extends = state.current_response_last_rewrite_revision <= self.revision
+        let extends = !self.emptied
+            && state.current_response_last_rewrite_revision <= self.revision
             && response.len() >= self.len
             && response.is_char_boundary(self.len);
+        if !extends && response.is_empty() {
+            // Nothing replaced the published text yet: keep it, so the end
+            // of the turn can tell whether it was the final response.
+            self.emptied = true;
+            self.revision = revision;
+            self.len = 0;
+            return None;
+        }
+        self.emptied = false;
         let text = if extends {
             self.emitted_len += response.len() - self.len;
             &response[self.len..]
@@ -91,6 +106,10 @@ impl ResponseCursor {
         });
         if prefix_matches {
             &final_content[self.emitted_len..]
+        } else if self.emptied {
+            // The buffer held other text (reasoning aloud before a tool
+            // call, say) and the final response never appeared in it.
+            final_content
         } else {
             ""
         }
@@ -663,6 +682,60 @@ mod tests {
             });
             reconnected.observe(&event);
             assert!(events(&reconnected.publish(&state, true)).is_empty());
+        }
+    }
+
+    #[test]
+    fn text_shown_before_the_live_buffer_emptied_is_not_repeated_at_the_turn_end() {
+        // (text in the live buffer at attach, final content, text still owed)
+        for (shown, final_content, owed) in [
+            ("hello from provider", "hello from provider", None),
+            ("hello", "hello from provider", Some(" from provider")),
+            ("thinking aloud", "another answer", Some("another answer")),
+        ] {
+            let mut state = shared_state();
+            state.current_turn_started_at = Some(std::time::Instant::now());
+            let id = state.begin_turn_identity();
+            state.append_current_response(shown);
+            let registration = SessionRegistration {
+                session_id: SESSION.to_owned(),
+                registration_epoch: 9,
+            };
+            let (mut publisher, _) = SessionPublisher::register(&state, registration, true);
+            // The finished response leaves the live buffer while the turn is
+            // still the active one and its end event is still on its way.
+            state.clear_current_response();
+            let texts = |messages: &[OwnerMessage]| -> Vec<String> {
+                events(messages)
+                    .into_iter()
+                    .filter_map(|(_, event)| match event {
+                        RemoteEvent::TextDelta { text, .. } if !text.is_empty() => Some(text),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            assert!(texts(&publisher.publish(&state, true)).is_empty());
+            let timing = state
+                .freeze_turn_timing(Some(crate::app::TurnOutcome::Completed))
+                .unwrap();
+            state.enter_idle();
+            state.end_turn_identity(&id);
+            publisher.observe(&AgentUiEvent::TurnFinished {
+                content: final_content.to_owned(),
+                completed: true,
+                timing: Some(timing),
+            });
+            let sent = publisher.publish(&state, true);
+            assert_eq!(
+                texts(&sent),
+                owed.map(str::to_owned).into_iter().collect::<Vec<_>>(),
+                "{shown:?} then {final_content:?}"
+            );
+            assert!(
+                events(&sent)
+                    .iter()
+                    .any(|(_, event)| matches!(event, RemoteEvent::TurnFinished { .. }))
+            );
         }
     }
 

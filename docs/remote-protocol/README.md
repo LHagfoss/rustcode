@@ -592,6 +592,15 @@ reuse the same ID or query `get_request_status`; never generate a new ID merely
 because confirmation has not arrived. Session owners hold a private per-session
 lease, so concurrent launch/reconnect attempts cannot create duplicate owners.
 
+A new owner has 20 seconds to register. When it exits first or does not make
+it, the gateway stops it, withdraws the receipt and answers with error
+`internal` and receipt `rejected`: the session was not created, and the message
+names the session, the reason, the owner's last output and its log on the host.
+That outcome is final for the attempt, so the client may ask again with the
+same or a new request ID. `owner_unavailable` with receipt `unknown` remains
+the answer when the outcome is not known, for example when an owner from an
+earlier attempt is running but has not registered with this gateway yet.
+
 The gateway preserves pairing credentials when upgrading. Existing terminal-owned
 sessions keep running and reconnect, but retain their owner's older capabilities
 until that terminal session is reopened with the updated binary. Newly created

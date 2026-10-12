@@ -176,6 +176,14 @@ impl RemoteLifecycle {
     pub fn log_path(&self) -> PathBuf {
         self.directory.join("gateway.log")
     }
+    /// Lease and log of every session owner started from a device.
+    pub fn owners_directory(&self) -> PathBuf {
+        self.directory.join("owners")
+    }
+    /// Receipts of the sessions devices asked for.
+    pub fn creations_directory(&self) -> PathBuf {
+        self.directory.join("created")
+    }
     pub fn registration_path(&self) -> PathBuf {
         self.directory.join("registration.json")
     }

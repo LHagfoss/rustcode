@@ -71,11 +71,30 @@ With no usable network interface, it falls back to `127.0.0.1` and explains
 that a phone cannot reach it. Explicit `--bind 127.0.0.1` keeps local-only
 access for a Simulator or test client.
 
-To move a running gateway to another address: `rustcode remote stop`, then
-`rustcode remote serve` for automatic selection, or add an explicit `--bind`.
-This also upgrades a gateway started by an older loopback-default version.
-Sessions that were shared register
-with the new gateway on their own within two minutes; devices stay paired.
+The selection is repeated every five seconds while the gateway runs. When the
+answer changes (DHCP handed out another address, the machine joined another
+network, Wi-Fi came up after the gateway did) the listener moves to the new
+address on the same port, without a restart: pairing details, the QR code,
+`remote status` and `/remote status` name the new address, shared sessions
+stay registered and devices stay paired. A device that still dials the old address
+needs the new one: the app's nearby list or a fresh QR code gives it. An explicit `--bind <ip>` is never moved.
+
+For an address that does not change at all, give the gateway a stable name
+instead of an IP: `--advertise mac.netbird.cloud` (or `[remote] advertise`)
+with the NetBird address as `--bind`, or `--bind 0.0.0.0 --advertise <name>`
+on a trusted network. Prefer an IPv4 address or such a name over the Mac's
+`.local` name: `.local` also resolves to IPv6 and to other interfaces (VM
+bridges, VPNs) where the gateway does not listen. Bonjour announces only the
+service name, port and protocol version, never an address or pairing material.
+
+`rustcode remote status` lists the machine's current addresses next to the
+listen and advertised address, and warns when the listener sits on an address
+the machine no longer has.
+
+To choose another address by hand: `rustcode remote stop`, then
+`rustcode remote serve` with an explicit `--bind`. Sessions that were shared
+register with the new gateway on their own within two minutes; devices stay
+paired.
 
 ## In the terminal
 
@@ -106,7 +125,7 @@ terminal's own draft, cursor and attachments are never touched.
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address and code. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
-| `rustcode remote status` | The running gateway: addresses, connected devices, shared sessions and who is attached to each. |
+| `rustcode remote status` | The running gateway: listen and advertised address, the machine's current addresses, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
 
 One gateway runs per configuration directory. A second `remote serve` is
@@ -153,6 +172,12 @@ challenges, lock pairing for the rest of that window; while locked, even a
 correct code is refused. A peer on the network can therefore block pairing for
 a while, but cannot buy more guesses by reconnecting.
 
+The pairing details state the lifetime and the number of wrong codes allowed.
+They are a snapshot, not a countdown: `rustcode remote status` shows how many
+seconds and wrong codes the open challenge has left, or for how long pairing
+is locked. An expired or used-up challenge is replaced by running `/remote` or
+`rustcode remote pair` again.
+
 A paired device receives a random token once. The host stores only its
 SHA-256 digest in `remote/devices.json` under the configuration directory
 (directory `0700`, file `0600`, replaced atomically). Device names are
@@ -170,6 +195,43 @@ every session this host shares, now and later, until it is revoked.
 - `rustcode remote stop` stops the gateway. Shared sessions keep running in
   their terminals and look for a gateway again for two minutes; after that
   they report that sharing stopped.
+
+## Sessions started from a device
+
+A paired device can browse the host's directories and start a new session in
+one (`list_directories`, `create_session`). No terminal is involved: the
+gateway starts a **session owner**, a `rustcode` process without a terminal
+that runs in that directory, owns the session and registers it like `/remote`
+does. It keeps running after the device disconnects and across gateway
+restarts, and ends when it is killed or the machine restarts.
+
+- Each owner writes to `remote/owners/<session id>.log`: its start, its
+  registration and the reason whenever it gives up. The request's receipt is
+  `remote/created/<hash>.json`.
+- An owner has 20 seconds to register. One that exits first, or does not make
+  it, is stopped by the gateway, and the device gets an `internal` error with
+  receipt `rejected` that names the session, the reason, the owner's last
+  output and its log. Nothing is left behind, so the device may ask again,
+  with the same request ID or a new one.
+- A session has at most one owner process. A retry that finds the owner of an
+  earlier attempt still running (after a gateway restart, say) waits for that
+  one instead of starting another; if it still does not register, the answer
+  is `owner_unavailable` with receipt `unknown`, naming the receipt and the
+  log. `get_request_status` with the request ID reports `applied` and the
+  session once the owner has registered.
+- An owner never starts or replaces a gateway. One whose first registration is
+  refused exits with the reason in its log. A registered owner that the
+  gateway drops (the machine slept, for example) registers again by itself;
+  after five refusals in a row it exits.
+- `rustcode remote stop` stops the gateway only. Owners keep running and
+  register with the next gateway. `rustcode remote status` lists owners that
+  are running without being shared under `idle owners`; end one with `kill`.
+
+On macOS an installed `rustcode` runs the gateway as a login agent. The agent
+keeps the search path it was installed with, so asking for the gateway from a
+terminal with another environment no longer rewrites the agent and restarts
+the gateway under its devices. `rustcode remote stop` removes the agent; the
+next start installs it with the current environment.
 
 ## How it holds together
 
@@ -221,6 +283,8 @@ delays the terminal or another device.
 | Frames queued for one device | 64; responses that overflow close that device with `slow_consumer` |
 | Requests one connection may have waiting on terminals | 16; more are refused with `rate_limited` |
 | Wait for a terminal's answer | 30 s, then `owner_unavailable` |
+| Wait for a new session's owner to register | 20 s, then the owner is stopped and the request fails with `internal` |
+| Interval at which the listen address is resolved again | 5 s |
 | Replay kept per session | 4 MiB of events |
 | Mutation receipts per registration | 1024; more mutations are refused with `receipt_capacity` |
 | Silence before a device connection is closed | 90 s; any frame or WebSocket ping from the device counts (the gateway pings every 30 s) |
@@ -232,7 +296,11 @@ gateway.
 ## Not covered yet
 
 - No TLS; see the warning at the top.
-- The terminal owns execution. Closing it ends the session's availability.
-- No push notifications and no starting of new sessions from a device.
+- The terminal owns execution. Closing it ends the session's availability. A
+  session started from a device is owned by its session owner process instead.
+- No push notifications.
+- Pairing details show the challenge's lifetime but do not count it down.
+- Access is per host: a paired device sees every shared session. There are no
+  per-session grants.
 - Reachability from a real iPhone (local-network permission, NetBird routing)
   is verified with the app, not by this repository's tests.

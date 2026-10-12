@@ -33,6 +33,16 @@ fn xml(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// The search path an installed agent already runs with, as written in its
+/// document. Terminals differ in theirs: taking each caller's would rewrite
+/// the agent, and restart the gateway under its devices, whenever a terminal
+/// with another environment asked for it.
+#[cfg(target_os = "macos")]
+fn installed_path(document: &str) -> Option<&str> {
+    let (_, rest) = document.split_once("<key>PATH</key><string>")?;
+    Some(rest.split_once("</string>")?.0)
+}
+
 /// Development/test binaries never register a persistent login service.
 fn installed_program(program: &Path) -> bool {
     let mut directories = vec![
@@ -108,11 +118,15 @@ pub async fn start(
             .iter()
             .map(|v| format!("<string>{}</string>", xml(v)))
             .collect::<String>();
+        let installed = std::fs::read_to_string(&agent).ok();
+        let path = match installed.as_deref().and_then(installed_path) {
+            Some(path) => path.to_owned(),
+            None => xml(&std::env::var("PATH")
+                .unwrap_or_else(|_| "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin".into())),
+        };
         let document = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array>{arguments}</array><key>EnvironmentVariables</key><dict><key>RUSTCODE_REMOTE_MANAGED</key><string>1</string><key>RUSTCODE_CONFIG_DIR</key><string>{config}</string><key>PATH</key><string>{path}</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>StandardOutPath</key><string>{log}</string><key>StandardErrorPath</key><string>{log}</string></dict></plist>"#,
             config = xml(&launcher.config_directory.to_string_lossy()),
-            path = xml(&std::env::var("PATH")
-                .unwrap_or_else(|_| "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin".into())),
             log = xml(&lifecycle.log_path().to_string_lossy())
         );
         // SAFETY: geteuid has no preconditions.
@@ -125,13 +139,30 @@ pub async fn start(
             .status()
             .await?
             .success();
-        let unchanged = std::fs::read_to_string(&agent).ok().as_deref() == Some(document.as_str());
+        let unchanged = installed.as_deref() == Some(document.as_str());
         if !loaded || !unchanged {
+            let loaded_now = || async {
+                tokio::process::Command::new("/bin/launchctl")
+                    .args(["print", &service])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await
+                    .is_ok_and(|status| status.success())
+            };
             if loaded {
                 let _ = tokio::process::Command::new("/bin/launchctl")
                     .args(["bootout", &service])
                     .status()
                     .await;
+                // Removal finishes after the command returns; registering
+                // again before it has is refused.
+                for _ in 0..50 {
+                    if !loaded_now().await {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
             }
             // Adoption closes only the gateway, never its independent session owners.
             lifecycle.stop().await?;
@@ -149,13 +180,21 @@ pub async fn start(
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(&agent)?;
             file.write_all(document.as_bytes())?;
-            let result = tokio::process::Command::new("/bin/launchctl")
-                .args(["bootstrap", &domain])
-                .arg(&agent)
-                .output()
-                .await?;
+            let mut attempts = 0;
+            let result = loop {
+                let result = tokio::process::Command::new("/bin/launchctl")
+                    .args(["bootstrap", &domain])
+                    .arg(&agent)
+                    .output()
+                    .await?;
+                attempts += 1;
+                if result.status.success() || attempts == 5 || loaded_now().await {
+                    break result;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            };
             anyhow::ensure!(
-                result.status.success(),
+                result.status.success() || loaded_now().await,
                 "could not register background gateway: {}",
                 String::from_utf8_lossy(&result.stderr)
             );
@@ -283,6 +322,13 @@ mod tests {
         assert_eq!(adopted.bind, explicit.bind);
         assert_eq!(adopted.advertise, explicit.advertise);
         assert_eq!(adopted.port, explicit.port);
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_installed_agent_keeps_its_search_path() {
+        let document = "<dict><key>PATH</key><string>/opt/bin:/usr/bin&amp;x</string></dict>";
+        assert_eq!(installed_path(document), Some("/opt/bin:/usr/bin&amp;x"));
+        assert_eq!(installed_path("<dict></dict>"), None);
     }
     #[test]
     fn cargo_installs_are_managed_but_development_builds_are_not() {

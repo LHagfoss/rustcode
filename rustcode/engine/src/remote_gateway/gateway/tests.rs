@@ -81,6 +81,7 @@ impl Harness {
         let gateway = Gateway::bind(
             &lifecycle,
             GatewayConfig {
+                replan: None,
                 plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
                 port: 0,
                 router: router.clone(),
@@ -669,6 +670,7 @@ async fn single_instance_stop_and_cleanup() {
     let second = Gateway::bind(
         &lifecycle,
         GatewayConfig {
+            replan: None,
             plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
             port: 0,
             router: Arc::new(NoSessionsRouter),
@@ -711,6 +713,7 @@ async fn single_instance_stop_and_cleanup() {
     let deadline = Instant::now() + WAIT;
     let restarted = loop {
         let config = GatewayConfig {
+            replan: None,
             plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
             port: 0,
             router: Arc::new(NoSessionsRouter),
@@ -755,6 +758,7 @@ async fn pairing_details_use_the_advertised_address_not_the_bind_address() {
     let gateway = Gateway::bind(
         &lifecycle,
         GatewayConfig {
+            replan: None,
             plan: plan_listen("127.0.0.1", Some("workstation.netbird.test"), &[]).unwrap(),
             port: 0,
             router: Arc::new(NoSessionsRouter),
@@ -784,6 +788,130 @@ async fn pairing_details_use_the_advertised_address_not_the_bind_address() {
 
     shutdown.cancel();
     bounded(task).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn the_listener_and_pairing_details_follow_a_changed_plan() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let lifecycle = RemoteLifecycle::new(dir.path());
+    let hub = SessionHub::start(Default::default());
+    let wanted = Arc::new(std::sync::Mutex::new(
+        plan_listen("127.0.0.1", Some("before.test"), &[]).unwrap(),
+    ));
+    let gateway = Gateway::bind(
+        &lifecycle,
+        GatewayConfig {
+            plan: wanted.lock().unwrap().clone(),
+            replan: Some({
+                let wanted = Arc::clone(&wanted);
+                Arc::new(move || Some(wanted.lock().unwrap().clone()))
+            }),
+            port: 0,
+            router: Arc::new(NoSessionsRouter),
+            sessions: Some(hub.clone()),
+            limits: Limits {
+                replan_interval: Duration::from_millis(20),
+                ..Limits::default()
+            },
+        },
+    )
+    .await
+    .unwrap();
+    let port = gateway.local_addr().port();
+    let mut advertised = gateway.advertised_changes();
+    let shutdown = gateway.shutdown_token();
+    let task = tokio::spawn(gateway.run());
+    let instance = bounded(lifecycle.status())
+        .await
+        .unwrap()
+        .unwrap()
+        .instance_id;
+
+    // Only the advertised name changes: the listener stays where it is.
+    *wanted.lock().unwrap() = plan_listen("127.0.0.1", Some("after.test"), &[]).unwrap();
+    bounded(advertised.changed()).await.unwrap();
+    let expected = format!("after.test:{port}");
+    assert_eq!(advertised.borrow_and_update().to_string(), expected);
+    assert_eq!(
+        bounded(lifecycle.pair()).await.unwrap().advertised_address,
+        expected
+    );
+    let status = bounded(lifecycle.status()).await.unwrap().unwrap();
+    assert_eq!(status.advertised_address, expected);
+    assert_eq!(status.listen_address, format!("127.0.0.1:{port}"));
+    assert_eq!(status.instance_id, instance);
+    let registration = GatewayRegistration::read(&lifecycle.registration_path()).unwrap();
+    assert_eq!(registration.advertised_address, expected);
+
+    // The address itself changes: the gateway listens there, on its port,
+    // without a restart. Skipped where this machine has no IPv6 loopback.
+    if std::net::TcpListener::bind("[::1]:0").is_ok() {
+        *wanted.lock().unwrap() = plan_listen("::1", None, &[]).unwrap();
+        bounded(advertised.changed()).await.unwrap();
+        let moved = format!("[::1]:{port}");
+        let status = bounded(lifecycle.status()).await.unwrap().unwrap();
+        assert_eq!(status.listen_address, moved);
+        assert_eq!(status.advertised_address, moved);
+        assert_eq!(status.instance_id, instance);
+        let offer = bounded(lifecycle.pair()).await.unwrap();
+        assert_eq!(offer.advertised_address, moved);
+        let paired = Client::pair(
+            moved.parse().unwrap(),
+            "credential",
+            offer.credential.expose(),
+        )
+        .await;
+        assert_eq!(paired["type"], "paired", "{paired}");
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err(),
+            "the old address still accepts connections"
+        );
+    }
+
+    shutdown.cancel();
+    bounded(task).await.unwrap().unwrap();
+    // The moved registration is still this gateway's to remove.
+    assert!(!lifecycle.registration_path().exists());
+}
+
+#[tokio::test]
+async fn status_reports_pairing_devices_and_log_locations() {
+    let harness = Harness::start().await;
+    let status = harness.status().await;
+    let pairing = status.pairing.clone().unwrap();
+    assert_eq!(
+        (pairing.expires_in_secs, pairing.attempts_left),
+        (None, None)
+    );
+    assert_eq!(status.log_path, Some(harness.lifecycle.log_path()));
+    assert_eq!(
+        status.owner_log_directory,
+        Some(harness.lifecycle.owners_directory())
+    );
+    assert!(status.devices.is_empty() && status.unregistered_owners.is_empty());
+
+    let (_client, id, _token) = harness.paired_device("phone").await;
+    harness.offer().await;
+    let status = harness.status().await;
+    assert_eq!(status.devices.len(), 1);
+    assert_eq!(
+        (
+            status.devices[0].id.as_str(),
+            status.devices[0].name.as_str()
+        ),
+        (id.as_str(), "phone")
+    );
+    let pairing = status.pairing.unwrap();
+    assert!(
+        pairing
+            .expires_in_secs
+            .is_some_and(|left| left > 100 && left <= 120)
+    );
+    assert_eq!(pairing.attempts_left, Some(5));
+    assert_eq!(pairing.locked_for_secs, None);
+    harness.stop().await;
 }
 
 #[tokio::test]
@@ -819,6 +947,7 @@ async fn a_long_configuration_path_still_gets_working_sockets() {
     let gateway = Gateway::bind(
         &lifecycle,
         GatewayConfig {
+            replan: None,
             plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
             port: 0,
             router: Arc::new(NoSessionsRouter),

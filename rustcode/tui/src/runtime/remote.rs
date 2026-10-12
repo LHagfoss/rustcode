@@ -56,6 +56,11 @@ pub(crate) struct RemoteBridge {
     /// A turn's start was applied and its end not yet. Tracked while nothing
     /// is shared too, so a registration made mid-turn publishes that end.
     turn_stream_open: bool,
+    /// Why sharing last ended or could not start, until someone asks.
+    stopped: Option<String>,
+    /// Nobody is looking at this owner: it never asks for pairing details,
+    /// which would replace the challenge a terminal is showing.
+    headless: bool,
 }
 
 impl RemoteBridge {
@@ -68,7 +73,34 @@ impl RemoteBridge {
             connector,
             share: None,
             turn_stream_open: false,
+            stopped: None,
+            headless: false,
         }
+    }
+
+    /// For an owner without a terminal.
+    pub(super) fn headless(mut self) -> Self {
+        self.headless = true;
+        self
+    }
+
+    /// Whether this session is registered or registering with a gateway.
+    pub(super) fn is_shared(&self) -> bool {
+        self.share.is_some()
+    }
+
+    /// The address of the gateway that accepted the registration, while it
+    /// is reachable.
+    pub(super) fn gateway_address(&self) -> Option<&str> {
+        let gateway = self.share.as_ref()?.gateway.as_ref()?;
+        gateway
+            .connected
+            .then_some(gateway.advertised_address.as_str())
+    }
+
+    /// Why sharing is off, once per time it stopped.
+    pub(super) fn take_stopped(&mut self) -> Option<String> {
+        self.stopped.take()
     }
 
     #[cfg(test)]
@@ -111,6 +143,9 @@ impl RemoteBridge {
                 if self.show_pairing_details(app_state) {
                     return;
                 }
+                if self.share.is_none() {
+                    self.stopped = Some(report.clone());
+                }
                 report
             }
             SharingCommand::Status => self.status(),
@@ -145,6 +180,9 @@ impl RemoteBridge {
         }
         if let Some(share) = self.share.as_mut() {
             share.pairing_due = false;
+        }
+        if self.headless {
+            return false;
         }
         #[cfg(unix)]
         if let Some(directory) = self.connector.gateway_directory() {
@@ -247,7 +285,8 @@ impl RemoteBridge {
              Epoch  {}\n\
              {gateway}\n\
              Published  {} updates{}\n\
-             Run /remote off to stop sharing. Switching to another session stops it too.",
+             Run /remote off to stop sharing. Switching to another session stops it too.\n\
+             `rustcode remote status` shows the gateway's addresses, paired devices, pairing state and logs.",
             registration.session_id,
             registration.registration_epoch,
             share.publisher.sequence(),
@@ -380,6 +419,7 @@ impl RemoteBridge {
 
         if let Some(notice) = closed {
             self.close(SessionCloseReason::OwnerExited);
+            self.stopped = Some(notice.clone());
             let mut state = app_state.lock().await;
             // The panel may still say that sharing is starting.
             state.update_command_panel(PANEL_TITLE, format!("{notice}\nThis session is private."));
@@ -934,6 +974,7 @@ mod tests {
         let gateway = Gateway::bind(
             &lifecycle,
             GatewayConfig {
+                replan: None,
                 plan: plan_listen("127.0.0.1", None, &[]).expect("loopback plan"),
                 port: 0,
                 router: hub.clone(),
@@ -1351,15 +1392,26 @@ mod tests {
         assert_eq!(provider.requests(), 1, "queueing starts nothing");
 
         provider.release();
+        // An accepted steer runs as a turn of its own between the terminal's
+        // prompt and the queued one. Once released, the provider answers at
+        // once, so two of the turns may end within one iteration of the loop:
+        // wait for all of them, not for a count the loop might step over.
+        let turns = if steerable { 3 } else { 2 };
         let mut received = Vec::new();
         publish_until(&mut runtime, &mut link, &mut received, |messages| {
             events(messages)
                 .iter()
                 .filter(|(_, event)| matches!(event, RemoteEvent::TurnFinished { .. }))
                 .count()
-                == 2
+                >= turns
         })
         .await;
+        let finished = events(&received)
+            .iter()
+            .filter(|(_, event)| matches!(event, RemoteEvent::TurnFinished { .. }))
+            .count();
+        assert_eq!(finished, turns, "every accepted prompt ran exactly once");
+        assert_eq!(provider.requests(), turns);
         let state = runtime.app_state().await;
         let prompts: Vec<&str> = state
             .history

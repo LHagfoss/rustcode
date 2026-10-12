@@ -127,6 +127,20 @@ impl PairingState {
             .is_some_and(|challenge| now < challenge.expires_at && challenge.attempts_left > 0)
     }
 
+    /// Lifetime and wrong attempts left of the open challenge, if there is one.
+    pub fn open_challenge(&self, now: Instant) -> Option<(Duration, u8)> {
+        let challenge = self.challenge.as_ref().filter(|_| self.is_open(now))?;
+        Some((
+            challenge.expires_at.duration_since(now),
+            challenge.attempts_left,
+        ))
+    }
+
+    /// Remaining lockout, if too many attempts failed on this host.
+    pub fn lockout(&mut self, now: Instant) -> Option<Duration> {
+        self.locked_for(now)
+    }
+
     /// Try to redeem the outstanding challenge. Success destroys it, and with
     /// it both representations.
     pub fn redeem(
@@ -241,6 +255,30 @@ mod tests {
         assert_eq!(code.as_bytes()[4], b'-');
         assert!(code.chars().filter(char::is_ascii_digit).count() == 8);
         assert_eq!(first.lifetime, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn the_open_challenge_and_the_lockout_are_reported_without_secrets() {
+        let mut state = PairingState::default();
+        let now = Instant::now();
+        assert_eq!(state.open_challenge(now), None);
+        state.issue(now);
+        assert_eq!(
+            state.open_challenge(now + Duration::from_secs(20)),
+            Some((Duration::from_secs(100), ATTEMPTS_PER_CHALLENGE))
+        );
+        let _ = wrong_code(&mut state, now);
+        assert_eq!(
+            state.open_challenge(now).map(|(_, attempts)| attempts),
+            Some(ATTEMPTS_PER_CHALLENGE - 1)
+        );
+        assert_eq!(state.open_challenge(now + CHALLENGE_LIFETIME), None);
+        assert_eq!(state.lockout(now), None);
+        for _ in 1..HOST_FAILURE_LIMIT {
+            let _ = wrong_code(&mut state, now);
+        }
+        assert_eq!(state.lockout(now), Some(HOST_FAILURE_WINDOW));
+        assert_eq!(state.lockout(now + HOST_FAILURE_WINDOW), None);
     }
 
     #[test]
