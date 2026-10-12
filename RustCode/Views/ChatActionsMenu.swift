@@ -1,13 +1,23 @@
 import SwiftUI
 
-enum ChatAction { case newSession, commands, folder, camera, photos, files, dismissKeyboard, stop }
+enum ChatAction: Equatable { case newSession, commands, folder, camera, photos, files, dismissKeyboard, stop }
 
-/// A compact glass menu anchored to the composer's attachment button.
+/// Locate the attachment button in the transcript overlay without changing layout.
+struct ChatActionsAnchor: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+/// A glass menu anchored to the composer's attachment button.
 struct ChatActionsMenu: View {
     let hadKeyboard: Bool
     let isRunning: Bool
     let select: (ChatAction) -> Void
-    @ScaledMetric(relativeTo: .footnote) private var rowHeight = 40.0
+    @ScaledMetric(relativeTo: .body) private var rowHeight = 60.0
+    @ScaledMetric(relativeTo: .body) private var iconSize = 38.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingMore = false
 
     private var rowCount: Int {
@@ -19,11 +29,11 @@ struct ChatActionsMenu: View {
             VStack(spacing: 0) {
                 if showingMore {
                     Button {
-                        withAnimation(.snappy(duration: 0.18)) { showingMore = false }
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.18)) { showingMore = false }
                     } label: {
                         row("Back", symbol: "chevron.left")
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(ComposerPressStyle())
                     .accessibilityLabel("Back to attachments")
                     action("New Session", symbol: "square.and.pencil", .newSession)
                     action("Slash Commands", symbol: "command", .commands)
@@ -35,21 +45,21 @@ struct ChatActionsMenu: View {
                     action("Photos", symbol: "photo", .photos)
                     action("Files", symbol: "paperclip", .files)
                     Button {
-                        withAnimation(.snappy(duration: 0.18)) { showingMore = true }
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.18)) { showingMore = true }
                     } label: {
                         row("More", symbol: "ellipsis")
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(ComposerPressStyle())
                     .accessibilityLabel("More")
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
-        .frame(width: 180, height: min(rowHeight * Double(rowCount) + 18, 300))
+        .frame(width: 248, height: min(rowHeight * Double(rowCount) + 24, 420))
         .scrollIndicators(.hidden)
         .foregroundStyle(.primary)
-        // The native popover supplies Liquid Glass on iOS 26 and material earlier.
+        .glassSurface(in: .rect(cornerRadius: 36))
         .accessibilityIdentifier("chatActionsMenu")
     }
 
@@ -57,25 +67,23 @@ struct ChatActionsMenu: View {
         Button { select(action) } label: {
             row(title, symbol: symbol)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(ComposerPressStyle())
         .accessibilityLabel(title)
     }
 
     private func row(_ title: String, symbol: String) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 14) {
             Image(systemName: symbol)
-                .font(.subheadline.weight(.medium))
-                .frame(width: 28, height: 28)
+                .font(.body.weight(.medium))
+                .frame(width: iconSize, height: iconSize)
                 .background(.fill.tertiary, in: .circle)
                 .accessibilityHidden(true)
             Text(title)
-                .font(.subheadline)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
+                .font(.body)
+                .lineLimit(2)
             Spacer(minLength: 0)
         }
         .frame(minHeight: rowHeight)
-        .padding(.horizontal, 4)
         .contentShape(.rect)
     }
 }

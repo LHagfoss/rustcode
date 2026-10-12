@@ -12,8 +12,10 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.buttons["Files"].isHittable)
         XCTAssertTrue(app.buttons["More"].isHittable)
         let menu = app.scrollViews["chatActionsMenu"]
-        XCTAssertLessThanOrEqual(menu.frame.width, 200)
-        XCTAssertLessThanOrEqual(menu.frame.height, 220)
+        XCTAssertGreaterThanOrEqual(menu.frame.width, 240)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        XCTAssertGreaterThanOrEqual(menu.frame.height, 240)
+        XCTAssertLessThan(menu.frame.maxY, app.buttons["Chat actions"].frame.minY)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Compact attachment menu above the composer"
         screenshot.lifetime = .keepAlways
@@ -452,6 +454,7 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Done"].exists)
         app.buttons["Chat actions"].tap()
+        app.buttons["More"].tap()
         app.buttons["Dismiss Keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         let field = composer(in: app)
@@ -475,11 +478,20 @@ final class InputAndTranscriptTests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         app.buttons["Chat actions"].tap()
+        app.buttons["More"].tap()
         app.buttons["Dismiss Keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertTrue(field.waitForExistence(timeout: 3))
         let compactHeight = app.buttons["Send message"].frame.maxY - field.frame.minY
         XCTAssertLessThan(compactHeight, expandedHeight)
+        let actions = app.buttons["Chat actions"].frame
+        let send = app.buttons["Send message"].frame
+        XCTAssertEqual(actions.minY, send.minY, accuracy: 1)
+        XCTAssertEqual(actions.minX - 12, app.frame.maxX - 12 - send.maxX, accuracy: 1)
+        let compactScreenshot = XCTAttachment(screenshot: app.screenshot())
+        compactScreenshot.name = "Compact composer with even control insets"
+        compactScreenshot.lifetime = .keepAlways
+        add(compactScreenshot)
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
         XCTAssertGreaterThan(app.buttons["Send message"].frame.maxY - field.frame.minY, compactHeight)

@@ -69,6 +69,8 @@ struct TranscriptView: View {
     @State private var showsRequests = false
     @State private var showsHostUpdate = false
     @State private var showsModels = false
+    @State private var showsChatActions = false
+    @State private var nextChatAction: ChatAction?
     @State private var hasAutoPresented = false
     @State private var followsLatest = true
     @State private var isDraggingTranscript = false
@@ -334,6 +336,25 @@ struct TranscriptView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composerDock
             }
+            .overlayPreferenceValue(ChatActionsAnchor.self) { anchor in
+                if showsChatActions, let anchor {
+                    GeometryReader { geometry in
+                        let button = geometry[anchor]
+                        Color.clear
+                            .contentShape(.rect)
+                            .onTapGesture { showsChatActions = false }
+                            .accessibilityLabel("Dismiss chat actions")
+                            .accessibilityAddTraits(.isButton)
+                        ChatActionsMenu(hadKeyboard: isComposerFocused, isRunning: snapshot.isRunning) { action in
+                            nextChatAction = action
+                            showsChatActions = false
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(.leading, max(12, button.minX - 8))
+                        .padding(.bottom, max(8, geometry.size.height - button.minY + 8))
+                    }
+                }
+            }
         }
     }
 
@@ -371,6 +392,8 @@ struct TranscriptView: View {
                 },
                 controls: { sessionControls(snapshot) },
                 keepsExpanded: snapshot.pendingApproval != nil || snapshot.pendingQuestion != nil || !store.visibleRequests.isEmpty,
+                showsActions: $showsChatActions,
+                nextAction: $nextChatAction,
                 isFocused: $isComposerFocused
             )
             .padding(12)

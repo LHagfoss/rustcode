@@ -21,13 +21,12 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
 
     @State private var sendCount = 0
     @State private var stopCount = 0
-    @State private var showsActions = false
+    @Binding var showsActions: Bool
+    @Binding var nextAction: ChatAction?
     @State private var showsFolder = false
     @State private var showsPhotos = false
     @State private var showsFiles = false
     @State private var showsCamera = false
-    @State private var hadKeyboard = false
-    @State private var nextAction: ChatAction?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var isImporting = false
     @State private var isSending = false
@@ -69,12 +68,11 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             if !images.isEmpty { imagePreviews }
             ZStack(alignment: .bottom) {
                 messageField
-                    .padding(.leading, isCompact ? buttonSize + 16 : 18)
-                    .padding(.trailing, isCompact ? buttonSize + 16 : 18)
-                    .padding(.top, isCompact ? 0 : 8)
+                    .padding(.leading, isCompact ? buttonSize + 8 : 8)
+                    .padding(.trailing, isCompact ? buttonSize + 8 : 8)
                     .padding(.bottom, isCompact ? 0 : buttonSize + 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: isCompact ? buttonSize : buttonSize * 2 + 16)
+                    .frame(minHeight: isCompact ? buttonSize : buttonSize * 2 + 8)
 
                 HStack(spacing: 8) {
                     chatActionsButton
@@ -82,18 +80,18 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                     if !isCompact { controls().disabled(isSending || isImporting) }
                     trailingAction
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, isCompact ? 6 : 8)
             }
-            .padding(.horizontal, 8)
+            .padding(8)
         }
-        .frame(minHeight: isCompact ? 64 : nil)
         .contentShape(shape)
         .glassSurface(in: shape, interactive: true)
         .sensoryFeedback(.selection, trigger: isFocused)
         .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: isCompact)
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
         .sensoryFeedback(.impact(weight: .medium, intensity: 0.8), trigger: stopCount)
+        .onChange(of: showsActions) { _, presented in
+            if !presented { performNextAction() }
+        }
         .sensoryFeedback(.selection, trigger: showsActions)
         .sensoryFeedback(.success, trigger: images.count) { old, new in new > old }
         .sheet(isPresented: $showsFolder) { NewSessionView() }
@@ -124,9 +122,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
 
     private var chatActionsButton: some View {
         Button {
-            hadKeyboard = isFocused
-            isFocused = false
-            showsActions = true
+            showsActions.toggle()
         } label: {
             Image(systemName: "plus")
                 .font(.title3)
@@ -135,14 +131,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         }
         .buttonStyle(ComposerPressStyle()).accessibilityLabel("Chat actions")
         .disabled(isSending || isImporting)
-        .popover(isPresented: $showsActions, arrowEdge: .bottom) {
-            ChatActionsMenu(hadKeyboard: hadKeyboard, isRunning: isRunning) { action in
-                nextAction = action
-                showsActions = false
-            }
-            .presentationCompactAdaptation(.popover)
-            .onDisappear(perform: performNextAction)
-        }
+        .anchorPreference(key: ChatActionsAnchor.self, value: .bounds) { $0 }
     }
 
     @ViewBuilder
@@ -490,7 +479,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     }
 }
 
-private struct ComposerPressStyle: ButtonStyle {
+struct ComposerPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
