@@ -1,3 +1,11 @@
+## [v0.64.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.7) - 2026-10-12
+
+### Features
+- Bound workspace snapshot walks that stalled oversized roots: discovery is capped at 50k entries with pruned-subtree frontiers, root children stay tracked, churn-triggered rediscovery on truncated workspaces is held, and evidence and read-cache call sites share one fresh generation per turn (#1955)
+- Prefer the NetBird interface for an auto gateway bind via `[remote] prefer_interface` or `rustcode remote serve --prefer-interface`, with a LAN-first fallback (#1956)
+- Toggle the gateway and sharing with `on`/`off`: `/remote on` and `rustcode remote on`/`off`, plus telemetry when a phone session is created at the home directory and trusted-mode docs for device-driven sessions (#1957)
+- Adopt phone-created sessions in the terminal with `/adopt <session-id>`, which stops the detached owner safely and opens the session like a resume (#1958)
+- Ask a terminal to share an open-but-unshared session from a device with `request_share`: the terminal announces presence only, approves with y or declines with n, and the outcome resolves on registration or timeout and is replayable with `get_request_status` (#1959)
 ## [v0.64.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.6) - 2026-10-12
 
 ### Features
