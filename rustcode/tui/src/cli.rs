@@ -298,6 +298,10 @@ pub enum RemoteCommands {
         /// Address devices should dial, when it differs from --bind (required for 0.0.0.0 with several interfaces)
         #[arg(long)]
         advertise: Option<String>,
+        /// Prefer interfaces matching this name with an auto bind ("netbird"
+        /// selects the mesh address first so the QR survives Wi-Fi changes)
+        #[arg(long)]
+        prefer_interface: Option<String>,
     },
     /// Create a pairing challenge on the running gateway and show it
     Pair,
@@ -796,6 +800,7 @@ mod tests {
                     ref bind,
                     port: 17879,
                     advertise: None,
+                    prefer_interface: None,
                 }
             }) if bind == "auto"
         ));

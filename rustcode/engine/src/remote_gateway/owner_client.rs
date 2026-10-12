@@ -79,6 +79,7 @@ pub struct Launcher {
     pub bind: Option<String>,
     pub port: Option<u16>,
     pub advertise: Option<String>,
+    pub prefer_interface: Option<String>,
 }
 
 impl Launcher {
@@ -95,6 +96,9 @@ impl Launcher {
         }
         if let Some(advertise) = &self.advertise {
             command.args(["--advertise", advertise]);
+        }
+        if let Some(prefer_interface) = &self.prefer_interface {
+            command.args(["--prefer-interface", prefer_interface]);
         }
         command
     }
@@ -145,6 +149,7 @@ impl GatewayConnector {
             bind: None,
             port: None,
             advertise: None,
+            prefer_interface: None,
         }))
     }
 }
@@ -440,6 +445,7 @@ impl Client {
             launcher.bind = config.remote.bind;
             launcher.port = config.remote.port;
             launcher.advertise = config.remote.advertise;
+            launcher.prefer_interface = config.remote.prefer_interface;
         }
         let _ = std::fs::remove_file(launcher.config_directory.join("remote/disabled"));
         super::service::start(&launcher, lifecycle)

@@ -1617,10 +1617,18 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     let mut instructions =
         history::RequestInstructions::new(&system_prompt, developer_instructions.as_deref());
     let evidence_root = state.lock().await.effective_workspace_root();
-    instructions.generation = evidence_root
-        .as_deref()
-        .and_then(|root| crate::workspace_intelligence::snapshot(root).ok())
-        .map(|snapshot| snapshot.generation);
+    // Informational only: share the turn's refresh instead of triggering a
+    // second workspace scan on oversized roots (#1954).
+    const EVIDENCE_GENERATION_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+    instructions.generation = evidence_root.as_deref().and_then(|root| {
+        crate::workspace_intelligence::fresh_generation(root, EVIDENCE_GENERATION_MAX_AGE)
+            .map(|(_, generation)| generation)
+            .or_else(|| {
+                crate::workspace_intelligence::snapshot(root)
+                    .ok()
+                    .map(|snapshot| snapshot.generation)
+            })
+    });
     let context_budget = state.lock().await.active_context_budget();
     let mut history_scope = history::RequestHistoryScope::Full;
     let mut rendered_history = history::to_messages_for_request(&history_snapshot, instructions);
