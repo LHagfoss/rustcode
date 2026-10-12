@@ -613,42 +613,9 @@ pub fn adopt_detached_session(s: &mut AppState, session_id: &str) -> String {
     let Some(config_dir) = crate::config::get_config_dir() else {
         return "No configuration directory is available.".to_owned();
     };
-    let owners = config_dir.join("remote").join("owners");
-    if !crate::remote_gateway::workspace::owner_alive(&owners, session_id) {
-        return format!(
-            "Session '{session_id}' has no running owner; resume it from /history instead."
-        );
-    }
-    let Some(pid) = crate::remote_gateway::workspace::owner_pid(&owners, session_id) else {
-        return format!(
-            "Session '{session_id}' is owned but recorded no process; stop it on the device or with kill, then resume from /history."
-        );
-    };
-    if !owner_pid_is_rustcode(pid) {
-        return format!(
-            "Session '{session_id}' names pid {pid}, which is not this rustcode binary; refusing to signal it."
-        );
-    }
-    // SAFETY: pid was just validated as a live rustcode process holding this
-    // session's lease. SIGTERM asks the detached owner for a graceful exit
-    // (it saves history on the way out); the lease check below proves it left
-    // before this terminal touches the session.
-    let signaled = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } == 0;
-    if !signaled {
-        return format!(
-            "Could not signal the owner of '{session_id}' ({}); it may have exited already.",
-            std::io::Error::last_os_error()
-        );
-    }
-    let waited = std::time::Instant::now();
-    while crate::remote_gateway::workspace::owner_alive(&owners, session_id) {
-        if waited.elapsed() >= std::time::Duration::from_secs(5) {
-            return format!(
-                "The owner of '{session_id}' did not exit within 5s; check {} then retry.",
-                owners.join(format!("{session_id}.log")).display()
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    if let Err(reason) = stop_detached_owner(&config_dir.join("remote").join("owners"), session_id)
+    {
+        return reason;
     }
     if load_session_into(s, &meta) {
         format!(
@@ -660,8 +627,58 @@ pub fn adopt_detached_session(s: &mut AppState, session_id: &str) -> String {
     }
 }
 
+/// Ask a detached session owner to exit and wait for its lease to release.
+/// Detached owners only exist on unix (they are spawned with setsid); other
+/// platforms refuse instead of signalling blindly.
+#[cfg(unix)]
+fn stop_detached_owner(owners: &std::path::Path, session_id: &str) -> Result<(), String> {
+    if !crate::remote_gateway::workspace::owner_alive(owners, session_id) {
+        return Err(format!(
+            "Session '{session_id}' has no running owner; resume it from /history instead."
+        ));
+    }
+    let Some(pid) = crate::remote_gateway::workspace::owner_pid(owners, session_id) else {
+        return Err(format!(
+            "Session '{session_id}' is owned but recorded no process; stop it on the device or with kill, then resume from /history."
+        ));
+    };
+    if !owner_pid_is_rustcode(pid) {
+        return Err(format!(
+            "Session '{session_id}' names pid {pid}, which is not this rustcode binary; refusing to signal it."
+        ));
+    }
+    // SAFETY: pid was just validated as a live rustcode process holding this
+    // session's lease. SIGTERM asks the detached owner for a graceful exit
+    // (it saves history on the way out); the lease check below proves it left
+    // before this terminal touches the session.
+    let signaled = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } == 0;
+    if !signaled {
+        return Err(format!(
+            "Could not signal the owner of '{session_id}' ({}); it may have exited already.",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let waited = std::time::Instant::now();
+    while crate::remote_gateway::workspace::owner_alive(owners, session_id) {
+        if waited.elapsed() >= std::time::Duration::from_secs(5) {
+            return Err(format!(
+                "The owner of '{session_id}' did not exit within 5s; check {} then retry.",
+                owners.join(format!("{session_id}.log")).display()
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn stop_detached_owner(_owners: &std::path::Path, _session_id: &str) -> Result<(), String> {
+    Err("Adopting a phone session is only supported on macOS and Linux.".to_owned())
+}
+
 /// True when `pid` is a live process running this same binary. Guards `/adopt`
 /// against signalling a recycled pid.
+#[cfg(unix)]
 fn owner_pid_is_rustcode(pid: u32) -> bool {
     use sysinfo::{Pid, System};
     let mut system = System::new();
