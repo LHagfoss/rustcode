@@ -238,6 +238,9 @@ fn targeted_no_progress_guidance(
         .char_indices()
         .nth(160)
         .map_or(action, |(end, _)| &action[..end]);
+    if action == "list_mcp_tools" {
+        return "MCP discovery is repeating already-known tools. Stop listing the inventory. Invoke the discovered callable_name using its bound argument schema; if invocation is unavailable, explain the concrete blocker or ask a useful task question. Do not claim a tool ran without its result.".to_string();
+    }
     let repeated_verification = action.starts_with("verification:");
     if repeated_verification {
         return format!(
@@ -1777,25 +1780,36 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         let end = line(returned.and_then(|range| range.end)).or(end_line)?;
                         Some((path, start, end))
                     });
-                let assessment = ctx.progress.ledger.observe_with_read_range(
-                    &loop_detect::ProgressObservation {
-                        action,
-                        output_fingerprint,
-                        state_fingerprint,
-                        failure_fingerprint,
-                        changed_workspace,
-                        fresh_read: call_is_read_only && !metadata.replayed,
-                        search_result,
-                        no_result,
-                        verification: verification_command,
-                        read_only: call_is_read_only,
-                        replayed: metadata.replayed,
-                        success: metadata.success && semantic_failure.is_none(),
-                    },
-                    read_range
-                        .as_ref()
-                        .map(|(path, start, end)| (path.as_str(), *start, *end)),
-                );
+                let observation = loop_detect::ProgressObservation {
+                    action,
+                    output_fingerprint,
+                    state_fingerprint,
+                    failure_fingerprint,
+                    changed_workspace,
+                    fresh_read: call_is_read_only && !metadata.replayed,
+                    search_result,
+                    no_result,
+                    verification: verification_command,
+                    read_only: call_is_read_only,
+                    replayed: metadata.replayed,
+                    success: metadata.success && semantic_failure.is_none(),
+                };
+                let assessment = if name == "list_mcp_tools" {
+                    let inventory = serde_json::from_str::<serde_json::Value>(
+                        content.strip_prefix("list_mcp_tools: ").unwrap_or(&content),
+                    )
+                    .ok();
+                    ctx.progress
+                        .ledger
+                        .observe_mcp_discovery(&observation, inventory.as_ref())
+                } else {
+                    ctx.progress.ledger.observe_with_read_range(
+                        &observation,
+                        read_range
+                            .as_ref()
+                            .map(|(path, start, end)| (path.as_str(), *start, *end)),
+                    )
+                };
                 let target_file = call.and_then(|c| {
                     c.arguments
                         .get("path")

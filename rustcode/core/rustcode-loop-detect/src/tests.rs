@@ -1780,3 +1780,64 @@ fn only_a_recurring_failure_is_labelled_repeated() {
         (ProgressReason::Failure, 1)
     );
 }
+
+#[test]
+fn mcp_discovery_variants_recover_without_hiding_new_tools() {
+    let mut ledger = ProgressLedger::default();
+    let mut read = observation("inventory", None, None);
+    read.read_only = true;
+    read.fresh_read = true;
+    let identity = serde_json::json!({"results":[{"server":"worklog","name":"solidtime_whoami"}]});
+    assert!(
+        ledger
+            .observe_mcp_discovery(&read, Some(&identity))
+            .meaningful
+    );
+    for index in 1..=3 {
+        read.action = format!("list_mcp_tools:query-{index}:limit-{index}");
+        read.output_fingerprint = stable_hash(&read.action);
+        let result = ledger.observe_mcp_discovery(&read, Some(&identity));
+        assert!(!result.meaningful, "rediscovery is not new evidence");
+        assert_eq!(result.streak, index);
+    }
+    let new_tool = serde_json::json!({"results":[
+        {"server":"worklog","name":"solidtime_whoami"},
+        {"server":"worklog","name":"solidtime_list_entries"}
+    ]});
+    assert!(
+        ledger
+            .observe_mcp_discovery(&read, Some(&new_tool))
+            .meaningful
+    );
+    assert!(
+        !ledger
+            .observe_mcp_discovery(&read, Some(&identity))
+            .meaningful
+    );
+    read.replayed = true;
+    assert_eq!(ledger.observe_mcp_discovery(&read, None).streak, 2);
+    assert_eq!(ledger.observe_mcp_discovery(&read, None).streak, 3);
+}
+
+#[test]
+fn discovery_server_growth_and_cross_server_tools_are_new_evidence() {
+    let mut ledger = ProgressLedger::default();
+    let read = observation("inventory", None, None);
+    let servers = serde_json::json!({"servers":[{"name":"mail","tool_count":1}]});
+    assert!(
+        ledger
+            .observe_mcp_discovery(&read, Some(&servers))
+            .meaningful
+    );
+    assert!(
+        !ledger
+            .observe_mcp_discovery(&read, Some(&servers))
+            .meaningful
+    );
+    let grown = serde_json::json!({"servers":[{"name":"mail","tool_count":2}]});
+    assert!(ledger.observe_mcp_discovery(&read, Some(&grown)).meaningful);
+    for server in ["mail", "chat"] {
+        let tools = serde_json::json!({"results":[{"server":server,"name":"send_message"}]});
+        assert!(ledger.observe_mcp_discovery(&read, Some(&tools)).meaningful);
+    }
+}

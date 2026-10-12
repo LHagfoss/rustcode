@@ -414,7 +414,7 @@ pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
 /// Collect MCP schemas with their configured server name alongside the
 /// provider-facing tool name. The owner is needed for per-server reservations;
 /// the provider-facing name remains unchanged for compatibility.
-fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, String, Value)> {
+pub(super) fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, String, Value)> {
     let mut discovered = Vec::new();
     let mut clients_for_names = Vec::new();
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {

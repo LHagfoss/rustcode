@@ -775,6 +775,7 @@ pub struct ProgressAssessment {
 pub struct ProgressLedger {
     seen_outputs: HashSet<u64>,
     seen_reads: HashSet<u64>,
+    seen_mcp_discovery: HashSet<u64>,
     /// Merged line ranges already read per file. The read action key buckets
     /// 200 lines, which is too coarse to tell an unseen range from a repeat.
     read_ranges: HashMap<String, Vec<(usize, usize)>>,
@@ -798,6 +799,7 @@ impl Default for ProgressLedger {
         Self {
             seen_outputs: HashSet::new(),
             seen_reads: HashSet::new(),
+            seen_mcp_discovery: HashSet::new(),
             read_ranges: HashMap::new(),
             seen_verifications: HashSet::new(),
             recent_states: VecDeque::with_capacity(4),
@@ -813,6 +815,50 @@ impl Default for ProgressLedger {
 impl ProgressLedger {
     const MAX_FINGERPRINTS: usize = 128;
     pub const RECOVERY_STREAK: usize = 3;
+
+    /// Discovery adds evidence only when it reveals a new tool or server
+    /// inventory. Query/limit variants and cached notices share one streak.
+    pub fn observe_mcp_discovery(
+        &mut self,
+        observation: &ProgressObservation,
+        inventory: Option<&serde_json::Value>,
+    ) -> ProgressAssessment {
+        let mut discovery = observation.clone();
+        discovery.action = "list_mcp_tools".to_string();
+        discovery.fresh_read = false;
+        discovery.read_only = false;
+        discovery.search_result = true;
+        let mut identities = Vec::new();
+        if observation.success && !observation.replayed {
+            if let Some(rows) = inventory.and_then(|value| value["results"].as_array()) {
+                for row in rows {
+                    if let (Some(server), Some(name)) =
+                        (row["server"].as_str(), row["name"].as_str())
+                    {
+                        identities.push(format!("tool:{server}:{name}"));
+                    }
+                }
+            }
+            if let Some(rows) = inventory.and_then(|value| value["servers"].as_array()) {
+                for row in rows {
+                    if let (Some(server), Some(count)) =
+                        (row["name"].as_str(), row["tool_count"].as_u64())
+                    {
+                        identities.push(format!("server:{server}:{count}"));
+                    }
+                }
+            }
+        }
+        identities.sort();
+        identities.dedup();
+        let mut novel = false;
+        for identity in &identities {
+            novel |= self.seen_mcp_discovery.insert(stable_hash(identity));
+        }
+        discovery.no_result = !novel;
+        discovery.output_fingerprint = stable_hash(&identities.join("\n"));
+        self.observe(&discovery)
+    }
 
     pub fn observe(&mut self, observation: &ProgressObservation) -> ProgressAssessment {
         self.observe_with_read_range(observation, None)

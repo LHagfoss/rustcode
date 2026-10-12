@@ -324,7 +324,7 @@ fn list_mcp_tools_schema() -> Value {
 
 pub const LIST_MCP_TOOLS: Tool = Tool {
     name: "list_mcp_tools",
-    description: "Discover MCP tools: no arguments lists servers, server lists one server's tools, query searches names and descriptions. A result's callable_name works even without its schema in this request. Never read source files or secrets for discovery.",
+    description: "Discover MCP tools by server or query. Invoke callable_name with input_schema; matching schemas bind next request. Do not rediscover known tools or read source files or secrets for discovery.",
     arguments: r#"{"server":"exact server name", "query":"name or description text", "limit":20}"#,
     handler: list_mcp_tools,
     requires_confirmation: false,
@@ -827,6 +827,7 @@ pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
         return Err(format!("unknown MCP server '{server}'"));
     }
 
+    let advertised_tools = super::schema::collect_mcp_tools_with_servers();
     let inventories = clients
         .iter()
         .filter(|client| server.is_none_or(|server| client.name == server))
@@ -847,10 +848,19 @@ pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
                     }
                     Some(McpDiscoveryTool {
                         name: name.to_owned(),
-                        callable_name: super::schema::mcp_canonical_name_for_clients(
-                            &client.name,
-                            name,
-                            &clients,
+                        callable_name: advertised_tools
+                            .iter()
+                            .find(|(_, owner, raw, _, _)| owner == &client.name && raw == name)
+                            .map(|(advertised, _, _, _, _)| advertised.clone())
+                            .unwrap_or_else(|| {
+                                super::schema::mcp_canonical_name_for_clients(
+                                    &client.name,
+                                    name,
+                                    &clients,
+                                )
+                            }),
+                        input_schema: tool.get("inputSchema").cloned().unwrap_or_else(
+                            || serde_json::json!({"type":"object","properties":{}}),
                         ),
                         description: tool
                             .get("description")
@@ -883,6 +893,7 @@ fn optional_nonempty_string<'a>(args: &'a Value, key: &str) -> Result<Option<&'a
 struct McpDiscoveryTool {
     name: String,
     callable_name: String,
+    input_schema: Value,
     description: String,
 }
 
@@ -949,6 +960,7 @@ fn format_mcp_discovery(
                         "server": server_name,
                         "name": tool.name,
                         "callable_name": tool.callable_name,
+                        "input_schema": tool.input_schema,
                         "description": truncate_mcp_description(&tool.description)
                     }),
                 ));
@@ -1660,6 +1672,7 @@ mod tests {
                     .map(|index| McpDiscoveryTool {
                         name: format!("event_{index:02}"),
                         callable_name: format!("event_{index:02}"),
+                        input_schema: serde_json::json!({"type":"object"}),
                         description: format!(
                             "Create and update calendar events with attendee metadata and long description {index}"
                         ),
@@ -1672,11 +1685,13 @@ mod tests {
                     McpDiscoveryTool {
                         name: "search_messages".to_string(),
                         callable_name: "search_messages".to_string(),
+                        input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}}}),
                         description: "Search email messages by sender or subject".to_string(),
                     },
                     McpDiscoveryTool {
                         name: "send_message".to_string(),
                         callable_name: "send_message".to_string(),
+                        input_schema: serde_json::json!({"type":"object"}),
                         description: "Send an email message".to_string(),
                     },
                 ],
@@ -1760,6 +1775,10 @@ mod tests {
         let result: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(result["results"][0]["name"], "search_messages");
         assert_eq!(result["results"][0]["callable_name"], "search_messages");
+        assert_eq!(
+            result["results"][0]["input_schema"]["properties"]["query"]["type"],
+            "string"
+        );
     }
 
     #[test]
