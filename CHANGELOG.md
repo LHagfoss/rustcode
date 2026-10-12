@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.18 — 2026-10-12
+
+- Render assistant summaries as readable cards, format standalone JSON, and improve the composer's spacing and touch response ([PR #33](https://github.com/LHagfoss/rustcode_app/pull/33)).
+
 ## 0.1.17 — 2026-10-12
 
 - Compact the empty composer when the keyboard is dismissed, expand it while editing, and add responsive touch feedback ([PR #32](https://github.com/LHagfoss/rustcode_app/pull/32)).

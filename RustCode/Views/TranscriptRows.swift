@@ -112,8 +112,18 @@ private struct AssistantMessage: View {
         AssistantBlock.parse(assistant.text, isStreaming: assistant.isStreaming)
     }
 
+    private var summary: AssistantSummaryPresentation? {
+        guard !assistant.isStreaming else { return nil }
+        return AssistantSummaryPresentation.parse(assistant.text)
+    }
+
     private var readableText: String {
-        blocks.map { block in
+        if let summary {
+            var text = "Summary\n\(summary.summary)"
+            if let nextAction = summary.nextAction { text += "\n\nNext action\n\(nextAction)" }
+            return text
+        }
+        return blocks.map { block in
             switch block {
             case .markdown(let text): MarkdownText.plainText(text)
             case .thinking(let text, _): "Thinking\n" + MarkdownText.plainText(text)
@@ -122,6 +132,7 @@ private struct AssistantMessage: View {
     }
 
     private var previewText: String {
+        if let summary { return readableText }
         for case .markdown(let text) in blocks {
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return MarkdownText.plainText(text)
@@ -132,15 +143,19 @@ private struct AssistantMessage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                switch block {
-                case .markdown(let text):
-                    MarkdownText(text: text)
-                case .thinking(let text, let isComplete):
-                    ThinkingBlock(text: text, isThinking: assistant.isStreaming && !isComplete,
-                        title: TimingPresentation.thinkingLabel(at: index, in: blocks,
-                            milliseconds: assistant.thoughtTimeMilliseconds,
-                            tokens: assistant.thoughtTokens, estimated: assistant.thoughtTokensEstimated) ?? "Thinking")
+            if let summary {
+                AssistantSummaryCard(presentation: summary)
+            } else {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                    switch block {
+                    case .markdown(let text):
+                        MarkdownText(text: text)
+                    case .thinking(let text, let isComplete):
+                        ThinkingBlock(text: text, isThinking: assistant.isStreaming && !isComplete,
+                            title: TimingPresentation.thinkingLabel(at: index, in: blocks,
+                                milliseconds: assistant.thoughtTimeMilliseconds,
+                                tokens: assistant.thoughtTokens, estimated: assistant.thoughtTokensEstimated) ?? "Thinking")
+                    }
                 }
             }
             if assistant.isStreaming {
@@ -157,6 +172,38 @@ private struct AssistantMessage: View {
         } preview: {
             MessageActionPreview(text: previewText)
         }
+    }
+}
+
+private struct AssistantSummaryCard: View {
+    let presentation: AssistantSummaryPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Summary", systemImage: "text.quote")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(presentation.summary)
+                .font(.body)
+                .fixedSize(horizontal: false, vertical: true)
+            if let nextAction = presentation.nextAction {
+                Divider()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Next action")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(nextAction)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.fill.quaternary, in: .rect(cornerRadius: 14))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Summary. \(presentation.summary)" + (presentation.nextAction.map { ". Next action: \($0)" } ?? ""))
+        .accessibilityIdentifier("assistantSummaryCard")
     }
 }
 

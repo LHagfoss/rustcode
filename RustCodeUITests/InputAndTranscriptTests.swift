@@ -465,6 +465,10 @@ final class InputAndTranscriptTests: XCTestCase {
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         let expandedHeight = app.buttons["Send message"].frame.maxY - field.frame.minY
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Expanded composer with keyboard"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         app.buttons["Chat actions"].tap()
         app.buttons["Dismiss Keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
@@ -474,6 +478,20 @@ final class InputAndTranscriptTests: XCTestCase {
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
         XCTAssertGreaterThan(app.buttons["Send message"].frame.maxY - field.frame.minY, compactHeight)
+    }
+
+    func testStructuredAssistantSummaryIsShownAsReadableCard() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoSession", "idle", "-demoSummary"]
+        app.launch()
+        let summary = app.descendants(matching: .any)["assistantSummaryCard"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        XCTAssertEqual(summary.label, "Summary. A short recap from the demo session.")
+        XCTAssertFalse(summary.label.contains("{\"summary\""))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Structured assistant summary card"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     func testOpeningKeyboardPreservesReadingPosition() {

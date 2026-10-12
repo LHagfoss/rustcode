@@ -103,6 +103,23 @@ import Testing
 }
 
 @Suite struct MarkdownBlockTests {
+    @Test func formatsPlainJSONAsReadableCode() {
+        let blocks = MarkdownBlock.parse("{\"ok\":true,\"count\":2}")
+        guard case .code(let language, let text) = blocks.first else {
+            Issue.record("Expected a JSON code block, got \(blocks)")
+            return
+        }
+        #expect(language == "json")
+        #expect(text.contains("\n"))
+        #expect(text.contains("\"ok\""))
+        #expect(text.contains("\"count\""))
+    }
+
+    @Test func leavesInvalidJSONAndSurroundingProseAsMarkdown() {
+        #expect(MarkdownBlock.parse("{not json}") == [.paragraph("{not json}")])
+        #expect(MarkdownBlock.parse("Result: {\"ok\":true}") == [.paragraph("Result: {\"ok\":true}")])
+    }
+
     @Test func tablesStopAtFollowingMarkdownBlocksWithPipes() {
         #expect(MarkdownBlock.parse("a | b\n--- | ---\n1 | 2\n# A | B | C\n- x | y\n> quote | text") == [
             .table(headers: ["a", "b"], rows: [["1", "2"]]),
@@ -189,5 +206,25 @@ import Testing
     @Test func demoChunksReassembleToTheOriginalText() {
         let text = "One two  three\nfour five."
         #expect(DemoRemoteClient.chunks(of: text).joined() == text)
+    }
+}
+
+@Suite struct AssistantSummaryPresentationTests {
+    @Test func parsesTheHostSummaryShapeAndOmitsNullNextAction() {
+        #expect(AssistantSummaryPresentation.parse(
+            #"{"summary":"A short recap.","next_action":null}"#
+        ) == AssistantSummaryPresentation(summary: "A short recap.", nextAction: nil))
+    }
+
+    @Test func parsesANextActionWhenPresent() {
+        #expect(AssistantSummaryPresentation.parse(
+            #"{"summary":"A short recap.","next_action":"Run the tests."}"#
+        ) == AssistantSummaryPresentation(summary: "A short recap.", nextAction: "Run the tests."))
+    }
+
+    @Test func leavesUnrelatedOrInvalidJSONUnclassified() {
+        #expect(AssistantSummaryPresentation.parse(#"{"ok":true}"#) == nil)
+        #expect(AssistantSummaryPresentation.parse(#"{"summary":"  "}"#) == nil)
+        #expect(AssistantSummaryPresentation.parse("{not json}") == nil)
     }
 }

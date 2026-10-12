@@ -10,7 +10,8 @@ struct RustCodeApp: App {
         demoClient: {
             DemoRemoteClient(
                 includeQuestionChain: LaunchOptions.current.demoSessionID == DemoRemoteClient.questionsSessionID,
-                unconfirmedCreations: LaunchOptions.current.leavesFirstCreateUnconfirmed ? 1 : 0
+                unconfirmedCreations: LaunchOptions.current.leavesFirstCreateUnconfirmed ? 1 : 0,
+                includeSummaryPresentation: LaunchOptions.current.showsSummaryDemo
             )
         },
         credentials: KeychainCredentialStore()

@@ -35,10 +35,23 @@ public actor DemoRemoteClient: RemoteClient {
     /// How many more `createSession` calls go unanswered, to show the unconfirmed state.
     private var unconfirmedCreations: Int
 
-    public init(pace: Duration = .milliseconds(45), includeQuestionChain: Bool = false, unconfirmedCreations: Int = 0) {
+    public init(
+        pace: Duration = .milliseconds(45),
+        includeQuestionChain: Bool = false,
+        unconfirmedCreations: Int = 0,
+        includeSummaryPresentation: Bool = false
+    ) {
         self.unconfirmedCreations = unconfirmedCreations
         self.pace = pace
         var seed = Self.seed()
+        if includeSummaryPresentation,
+           let index = seed.firstIndex(where: { $0.summary.id == Self.idleSessionID }) {
+            seed[index].state.items.append(TranscriptItem(
+                id: "demo-summary",
+                .assistant(AssistantText(text: #"{"summary":"A short recap from the demo session.","next_action":null}"#))
+            ))
+            seed[index].state.sequence &+= 1
+        }
         if includeQuestionChain, var chain = seed.first(where: { $0.summary.id == Self.questionSessionID }) {
             let ref = SessionRef(sessionID: Self.questionsSessionID, registrationEpoch: 1)
             chain.summary.ref = ref

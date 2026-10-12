@@ -73,10 +73,10 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                 messageField
                     .padding(.leading, isCompact ? buttonSize + 16 : 18)
                     .padding(.trailing, isCompact ? buttonSize + 16 : 18)
-                    .padding(.top, isCompact ? 0 : 10)
-                    .padding(.bottom, isCompact ? 0 : buttonSize + 12)
+                    .padding(.top, isCompact ? 0 : 8)
+                    .padding(.bottom, isCompact ? 0 : buttonSize + 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: isCompact ? buttonSize : buttonSize * 2 + 20)
+                    .frame(minHeight: isCompact ? buttonSize : buttonSize * 2 + 16)
 
                 HStack(spacing: 8) {
                     chatActionsButton
@@ -91,7 +91,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         }
         .frame(minHeight: isCompact ? 64 : nil)
         .contentShape(shape)
-        .glassSurface(in: shape)
+        .glassSurface(in: shape, interactive: true)
         .sensoryFeedback(.selection, trigger: isFocused)
         .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: isCompact)
         .sensoryFeedback(.impact(weight: .light), trigger: sendCount)

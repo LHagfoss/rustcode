@@ -14,6 +14,12 @@ public enum MarkdownBlock: Sendable, Equatable {
 
     /// Tolerates text that is still streaming: an unterminated fence is a code block so far.
     public static func parse(_ text: String) -> [MarkdownBlock] {
+        let normalizedText = text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        if let json = formattedJSON(in: normalizedText) {
+            return [.code(language: "json", text: json)]
+        }
+
         var blocks: [MarkdownBlock] = []
         var paragraph: [String] = []
         var code: (fence: MarkdownFence, lines: [String])?
@@ -24,8 +30,7 @@ public enum MarkdownBlock: Sendable, Equatable {
             paragraph.removeAll()
         }
 
-        let lines = text.replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
+        let lines = normalizedText.components(separatedBy: "\n")
         var index = 0
         while index < lines.count {
             let line = lines[index]
@@ -82,6 +87,19 @@ public enum MarkdownBlock: Sendable, Equatable {
             blocks.append(.code(language: open.fence.language, text: open.lines.joined(separator: "\n")))
         }
         return blocks
+    }
+
+    private static func formattedJSON(in text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.first == "{" || trimmed.first == "[",
+              let data = trimmed.data(using: .utf8),
+              let value = try? JSONSerialization.jsonObject(with: data),
+              value is [String: Any] || value is [Any],
+              let formatted = try? JSONSerialization.data(
+                withJSONObject: value,
+                options: [.prettyPrinted, .sortedKeys]
+              ) else { return nil }
+        return String(data: formatted, encoding: .utf8)
     }
 
     private static func isRule(_ line: String) -> Bool {

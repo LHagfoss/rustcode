@@ -14,6 +14,7 @@ import RustCodeRemote
 /// - `-demoExpandTools`: show tool rows expanded.
 /// - `-demoSettings`: present Settings.
 /// - `-demoSelectOption`: select the first option of a presented question.
+/// - `-demoSummary`: show the structured assistant summary presentation.
 struct LaunchOptions {
     static let current = LaunchOptions(arguments: ProcessInfo.processInfo.arguments)
 
@@ -27,6 +28,7 @@ struct LaunchOptions {
     var presentsSettings = false
     var selectsFirstOption = false
     var leavesFirstCreateUnconfirmed = false
+    var showsSummaryDemo = false
 
     init(arguments: [String]) {
         startsDemo = arguments.contains("-demo")
@@ -47,6 +49,7 @@ struct LaunchOptions {
         presentsSettings = arguments.contains("-demoSettings")
         selectsFirstOption = arguments.contains("-demoSelectOption")
         leavesFirstCreateUnconfirmed = arguments.contains("-demoUnconfirmedCreate")
+        showsSummaryDemo = arguments.contains("-demoSummary")
         if let index = arguments.firstIndex(of: "-demoDraft"), arguments.indices.contains(index + 1) {
             composerDraft = arguments[index + 1]
         }
