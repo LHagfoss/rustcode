@@ -280,6 +280,7 @@ pub enum DaemonCommands {
 #[derive(clap::Subcommand, Debug)]
 pub enum RemoteCommands {
     /// Enable the persistent background gateway
+    #[command(alias = "on")]
     Start,
     /// Own a mobile-created session without a terminal
     #[command(hide = true)]
@@ -318,6 +319,7 @@ pub enum RemoteCommands {
     /// Show gateway status
     Status,
     /// Stop the running gateway
+    #[command(alias = "off")]
     Stop,
 }
 
@@ -829,6 +831,18 @@ mod tests {
         for action in ["pair", "devices", "status", "stop"] {
             let cli = Cli::try_parse_from(["rustcode", "remote", action]).unwrap();
             assert!(matches!(cli.command, Some(Commands::Remote { .. })));
+        }
+        for (alias, want) in [
+            ("on", "Start"),
+            ("off", "Stop"),
+            ("start", "Start"),
+            ("stop", "Stop"),
+        ] {
+            let cli = Cli::try_parse_from(["rustcode", "remote", alias]).unwrap();
+            assert!(
+                matches!(&cli.command, Some(Commands::Remote { command }) if format!("{command:?}").starts_with(want)),
+                "unexpected parse for remote {alias}: {cli:?}"
+            );
         }
         let cli = Cli::try_parse_from(["rustcode", "remote", "revoke", "phone"]).unwrap();
         assert!(matches!(

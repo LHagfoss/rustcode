@@ -108,7 +108,7 @@ paired.
 
 | Command | Behavior |
 | --- | --- |
-| `/remote` | Share the session on screen. Finds the running gateway or starts one, then shows the gateway address, a QR code and a manual pairing code. Repeating it keeps the registration and shows a fresh pairing challenge. |
+| `/remote` (`/remote on`) | Share the session on screen. Finds the running gateway or starts one, then shows the gateway address, a QR code and a manual pairing code. Repeating it keeps the registration and shows a fresh pairing challenge. |
 | `/remote status` | Whether this session is shared, the gateway address, the devices attached to this session and the devices connected to the gateway. Names only, never a credential. |
 | `/remote off` | Stop sharing. The session disappears from every device at once; a running turn is not affected. |
 
@@ -120,10 +120,20 @@ shares is refused; the first one keeps it.
 
 What a device can do with a shared session: read it, submit a prompt when it
 is idle, steer or queue while it runs, cancel the running turn, answer a
-question, approve or deny an approval batch. What it cannot do: run slash
-commands (a prompt starting with `/` is refused), change the approval mode,
-switch sessions, or read anything that is not part of a shared session. The
-terminal's own draft, cursor and attachments are never touched.
+question, approve or deny an approval batch, and run session slash commands
+such as `/yolo`. What it cannot do: switch sessions, or read anything that is
+not part of a shared session. The terminal's own draft, cursor and
+attachments are never touched.
+
+## Approvals and trusted mode
+
+Every tool batch that needs confirmation waits for a tap on the device, which
+is slow over intermittent links. `/yolo on` (also from the device) enables
+full auto-approve for the session: batches run without asking. `/yolo off`
+restores per-batch approval. The mode is per session and never persists to
+config; a fresh session always starts asking. Prefer `/yolo on` only on
+sessions whose workspace you trust, and turn it back off when leaving the
+device unattended.
 
 A device can also ask a terminal to share a session it has open but never
 shared (`request_share` with the session id). The terminal announces its open
@@ -140,6 +150,8 @@ ask; nothing is shared without the terminal's explicit yes.
 | Command | Behavior |
 | --- | --- |
 | `rustcode remote serve [--bind <ip>] [--port <port>] [--advertise <host>] [--prefer-interface <name>]` | Run the gateway in the foreground until Ctrl-C, SIGTERM or `remote stop`. |
+| `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
+| `rustcode remote off` | Stop the running gateway (alias of `stop`). |
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address and code. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
@@ -243,7 +255,14 @@ restarts, and ends when it is killed or the machine restarts.
   after five refusals in a row it exits.
 - `rustcode remote stop` stops the gateway only. Owners keep running and
   register with the next gateway. `rustcode remote status` lists owners that
-  are running without being shared under `idle owners`; end one with `kill`.
+  are running without being shared under `idle owners`.
+
+To continue a device-started session in a terminal, run
+`/adopt <session-id>` there: it asks the detached owner to exit (gracefully,
+saving history first), waits for its lease to release, then opens the session
+exactly like a resume. Run `/remote` afterwards to share it again; devices
+re-attach with a fresh epoch. `/adopt` needs the full session id, never runs
+from a device, and refuses when the owner cannot be identified safely.
 
 On macOS an installed `rustcode` runs the gateway as a login agent. The agent
 keeps the search path it was installed with, so asking for the gateway from a
