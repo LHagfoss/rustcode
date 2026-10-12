@@ -132,6 +132,7 @@ that gateway listens comes from the `[remote]` section:
 bind = "100.92.13.44"                # address to listen on; default 127.0.0.1
 port = 17879                         # optional; default 17879
 advertise = "mac.netbird.cloud"      # optional; what devices dial, if not `bind`
+prefer_interface = "netbird"         # optional; with an auto bind, try this interface first
 ```
 
 Everything unset means loopback, which a phone cannot reach; `/remote` then

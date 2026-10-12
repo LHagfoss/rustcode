@@ -261,6 +261,7 @@ pub async fn resume_enabled() -> Result<()> {
         bind: config.remote.bind,
         port: config.remote.port,
         advertise: config.remote.advertise,
+        prefer_interface: config.remote.prefer_interface,
     };
     start(&launcher, &lifecycle).await?;
     Ok(())
@@ -307,6 +308,7 @@ mod tests {
             bind: None,
             advertise: None,
             port: None,
+            prefer_interface: None,
         };
         let adopted = retain_port(&original, Some("192.168.1.15:17879"));
         assert_eq!(adopted.bind, None);

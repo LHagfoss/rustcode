@@ -162,6 +162,13 @@ pub struct RemoteConfig {
     /// Address devices dial when it differs from `bind`, as `--advertise`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advertise: Option<String>,
+    /// Interface-name preference for an `auto` bind, as `--prefer-interface`.
+    /// `"netbird"` (or an interface substring like `"wt0"`) selects the mesh
+    /// address first so the QR stays valid across Wi-Fi changes and off-LAN;
+    /// anything else falls back to the LAN-first default. Only the user
+    /// config may set this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefer_interface: Option<String>,
 }
 
 /// Loop-guard budgets, configurable under `[loop_guard]` in config.toml.
