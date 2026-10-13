@@ -13,7 +13,7 @@ pub(in crate::ui) fn render_tool_confirmation_modal(
         Some(confirmations) if !confirmations.is_empty() => confirmations,
         _ => return,
     };
-    let panel = crate::ui::theme::get_palette(&state.config().theme).panel;
+    let panel = crate::ui::theme::palette_for(&state.config().theme).panel;
     let content_area = render_padded_panel_with_color(f, area, panel);
 
     let mut lines = Vec::new();
