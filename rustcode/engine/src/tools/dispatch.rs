@@ -101,13 +101,21 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
     ) {
         return execute_video_with_progress(name, args, cancel_token, None);
     }
+    // A built-in name never resolves to an MCP tool: canonical MCP names carry
+    // the `mcp__` prefix and `mcp_raw_name_is_unique` rejects built-in names.
+    // Skip the catalogue scan for them; it clones every server's tool list.
+    let is_builtin = TOOLS.iter().any(|tool| tool.name == name);
     // Snapshot the clients and release the registry before the call: the UI
     // locks the same registry to label tool rows, so holding it across a slow
     // `tools/call` freezes rendering and serializes calls to other servers.
-    let mcp_clients = crate::mcp::get_mcp_registry()
-        .lock()
-        .map(|reg| reg.values().cloned().collect::<Vec<_>>())
-        .ok();
+    let mcp_clients = if is_builtin {
+        None
+    } else {
+        crate::mcp::get_mcp_registry()
+            .lock()
+            .map(|reg| reg.values().cloned().collect::<Vec<_>>())
+            .ok()
+    };
     if let Some(mut clients) = mcp_clients {
         clients.sort_by(|a, b| a.name.cmp(&b.name));
         for client in &clients {
