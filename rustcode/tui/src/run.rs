@@ -320,12 +320,10 @@ async fn run_remote_command(
             );
         }
         RemoteCommands::Stop => {
-            std::fs::create_dir_all(config_dir.join("remote"))?;
-            std::fs::write(config_dir.join("remote/disabled"), "explicitly stopped")?;
-            rustcode::remote_gateway::service::uninstall(&config_dir).await?;
-            match lifecycle.stop().await? {
-                Some(status) => println!("Remote gateway stopped (pid {}).", status.pid),
-                None => println!("Remote gateway is not running."),
+            if rustcode::remote_gateway::service::disable(&config_dir).await? {
+                println!("Remote gateway stopped.");
+            } else {
+                println!("Remote gateway is not running.");
             }
         }
     }

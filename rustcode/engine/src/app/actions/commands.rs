@@ -560,7 +560,7 @@ pub fn build_help_text() -> String {
                 ("/stop", "Stop all running tasks"),
                 (
                     "/remote",
-                    "Share this session with a paired device (status|off)",
+                    "Turn remote access on: every session is shared with paired devices (pair|status|off)",
                 ),
                 ("/changelog", "Show recent changelog updates"),
             ],

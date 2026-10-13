@@ -6,8 +6,8 @@ open; the device is a remote control. macOS and Linux only.
 
 Three pieces are involved:
 
-- the **terminal session** you run `/remote` in, which owns the session and
-  applies every command;
+- each **terminal session**, which owns its session and applies every
+  command;
 - the **remote gateway**, a small host process that pairs devices, keeps the
   list of shared sessions and routes each device command to the terminal that
   owns the session. It never runs agent turns;
@@ -28,8 +28,8 @@ unchanged.
 
 ## Quick start
 
-Connect the phone and Mac to the same trusted Wi-Fi or LAN. In the terminal
-session you want to share, run:
+Connect the phone and Mac to the same trusted Wi-Fi or LAN. In any terminal
+session, run:
 
 ```text
 /remote
@@ -37,8 +37,10 @@ session you want to share, run:
 
 The gateway starts automatically and chooses this machine's Wi-Fi or Ethernet
 address. `/remote` shows its address and a QR code in a full-height panel. Open
-the app, tap **Scan QR**, and scan it. The shared session appears in the app's
-session list. No IP address needs to be typed. Address and code are available
+the app, tap **Scan QR**, and scan it. Every session open in a terminal on
+this machine appears in the app's session list, and so does every session
+opened later: `/remote` switches remote access on for the machine, not for one
+session. No IP address needs to be typed. Address and code are available
 as a fallback when the camera cannot scan.
 
 The QR uses the Mac's address, not the router's address or its public internet
@@ -111,12 +113,16 @@ paired.
 
 | Command | Behavior |
 | --- | --- |
-| `/remote` (`/remote on`) | Share the session on screen. Finds the running gateway or starts one, then shows the gateway address, a QR code and a manual pairing code. Repeating it keeps the registration and shows a fresh pairing challenge. |
+| `/remote` (`/remote on`) | Switch remote access on for this machine. Finds the running gateway or starts one and shares the session on screen; every other terminal shares its session within a couple of seconds, and so does every terminal started later. While no device is paired it shows the gateway address, a QR code and a manual pairing code; afterwards it shows the status. |
+| `/remote pair` | Same, and always shows a fresh pairing challenge, to add another device. |
 | `/remote status` | Whether this session is shared, the gateway address, the devices attached to this session and the devices connected to the gateway. Names only, never a credential. |
-| `/remote off` | Stop sharing. The session disappears from every device at once; a running turn is not affected. |
+| `/remote off` | Switch remote access off for this machine: the gateway stops, every session disappears from every device, and nothing is shared until `/remote` is run again. Pairings are kept; running turns are not affected. |
 
-Switching to another session, resuming, forking or starting a new one ends the
-registration. The new session is private until `/remote` is run in it.
+The switch is remembered across restarts. While it is on, each interactive
+terminal shares the session on its screen by itself: at start, and again under
+a new registration after switching, resuming, forking or starting a session.
+There is no per-session opt-out; a paired device can read and drive every
+session that is open in a terminal. Headless runs (`-p`) are not shared.
 
 A second terminal that tries to share a session another terminal already
 shares is refused; the first one keeps it.
@@ -146,7 +152,8 @@ it, n to decline.` Answering y runs `/remote` there and resolves the request
 as accepted — the device attaches with a fresh epoch. No answer within two
 minutes, a decline, or the terminal going away resolves it as denied, which
 `get_request_status` on the request id also reports. Any paired device can
-ask; nothing is shared without the terminal's explicit yes.
+ask. This applies only while a terminal's session is not shared, which with
+remote access on is the short moment before it has registered.
 
 ## Gateway commands
 
@@ -228,7 +235,8 @@ day they were made.
 
 ## Revoking and stopping
 
-- `/remote off` ends access to one session for every device.
+- `/remote off` (or `rustcode remote stop`) ends access to every session for
+  every device until `/remote` is run again.
 - `rustcode remote revoke <device>` forgets the device and, when the gateway
   is running, closes all of its connections and subscriptions in the same
   step; the device receives a `revoked` error and must be paired again. With
@@ -272,7 +280,7 @@ restarts, and ends when it is killed or the machine restarts.
 To continue a device-started session in a terminal, run
 `/adopt <session-id>` there: it asks the detached owner to exit (gracefully,
 saving history first), waits for its lease to release, then opens the session
-exactly like a resume. Run `/remote` afterwards to share it again; devices
+exactly like a resume. The terminal shares it again by itself; devices
 re-attach with a fresh epoch. `/adopt` needs the full session id, never runs
 from a device, and refuses when the owner cannot be identified safely.
 
@@ -349,7 +357,7 @@ gateway.
   session started from a device is owned by its session owner process instead.
 - No push notifications.
 - Pairing details show the challenge's lifetime but do not count it down.
-- Access is per host: a paired device sees every shared session. There are no
-  per-session grants.
+- Access is per host: a paired device sees every session open in a terminal.
+  There are no per-session grants and no per-session opt-out.
 - Reachability from a real iPhone (local-network permission, NetBird routing)
   is verified with the app, not by this repository's tests.
