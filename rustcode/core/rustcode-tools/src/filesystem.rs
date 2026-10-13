@@ -771,7 +771,14 @@ pub fn edit_target_and_replacement(args: &Value) -> (Option<String>, Option<Stri
 }
 
 fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
-    if let Some(edits_arr) = args.get("edits").and_then(coerce_array) {
+    // A schema-filled empty `edits` beside a top-level target is the
+    // single-edit form, not an empty batch.
+    let has_single_edit = edit_target_and_replacement(args).0.is_some();
+    if let Some(edits_arr) = args
+        .get("edits")
+        .and_then(coerce_array)
+        .filter(|edits| !(edits.is_empty() && has_single_edit))
+    {
         if edits_arr.is_empty() {
             return Err("edits array cannot be empty".to_string());
         }

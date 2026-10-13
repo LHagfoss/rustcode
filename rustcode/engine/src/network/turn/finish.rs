@@ -272,6 +272,10 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
             )
         {
             Some(crate::app::TurnOutcome::Completed)
+        } else if matches!(stop_reason, lifecycle::StopReason::Unverified) {
+            // The model ended on its own final answer. That the work could
+            // not be verified is reported separately; the turn did not fail.
+            Some(crate::app::TurnOutcome::Completed)
         } else {
             Some(crate::app::TurnOutcome::Failed)
         };
