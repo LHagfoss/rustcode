@@ -389,6 +389,138 @@ pub(crate) async fn confirm_and_execute_for_call(
     .await
 }
 
+/// Run one authorized tool call and return its output.
+///
+/// Shared by the immediate path and the path that runs after the user approves
+/// the call, so both stream live command output, both honor cancellation the
+/// same way, and both record the mutation diff. Blocking tools run on a
+/// blocking thread; `search_web` is awaited in place.
+#[allow(clippy::too_many_arguments)]
+async fn run_authorized_tool(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    name: &str,
+    args: &serde_json::Value,
+    call_id: Option<&str>,
+    live_key: Option<&str>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    execution_workspace_root: Option<std::path::PathBuf>,
+    task_working_directory: Option<std::path::PathBuf>,
+    mutation_diff: &Arc<std::sync::Mutex<Option<String>>>,
+) -> crate::tools::ToolExecutionOutput {
+    let name_owned = name.to_string();
+    let args_owned = args.clone();
+    let call_id_owned = call_id.map(str::to_owned);
+    let session_id = { state.lock().await.active_session_id.clone() };
+    let sandbox_mode_for_task = { state.lock().await.effective_sandbox_mode() };
+    let workspace_root_for_task = execution_workspace_root.clone();
+    let task_working_directory_for_task = task_working_directory.clone();
+    let live_key_owned = live_key.map(str::to_owned);
+    let cancel_token_for_task = cancel_token.clone();
+    let client_for_task = client.clone();
+    let mutation_diff_for_task = Arc::clone(&mutation_diff);
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+    let run_fut = async move {
+        if name_owned == "search_web" {
+            return match crate::tools::search_web_async(&args_owned, &client_for_task).await {
+                Ok(output) => crate::tools::ToolExecutionOutput::success(output),
+                Err(error) => crate::tools::ToolExecutionOutput::failure(format!("error: {error}")),
+            };
+        }
+
+        let mcp_registry = crate::mcp::get_mcp_registry();
+        tokio::task::spawn_blocking(move || {
+            crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
+                crate::tools::set_active_session_id(Some(session_id));
+                let workspace_root_for_command = workspace_root_for_task.clone();
+                crate::tools::set_active_workspace_context(
+                    workspace_root_for_task,
+                    task_working_directory_for_task,
+                    false,
+                    Some(sandbox_mode_for_task),
+                );
+                let tool_context = crate::tools::current_tool_context();
+                let mutation_snapshot = capture_text_mutation_before(
+                    &name_owned,
+                    &args_owned,
+                    &tool_context,
+                );
+                let result = if name_owned == "run_command" {
+                    if live_key_owned.is_some() {
+                        let callback: crate::tools::CommandProgressCallback =
+                            Arc::new(move |bytes, stderr| {
+                                let _ = progress_tx.send((bytes.to_vec(), stderr));
+                            });
+                        crate::tools::run_command_output_with_progress_cancellable_for_call_and_workspace(
+                            &args_owned,
+                            callback,
+                            Some(cancel_token_for_task),
+                            call_id_owned.as_deref(),
+                            workspace_root_for_command,
+                        )
+                    } else {
+                        crate::tools::run_command_output_with_workspace_for_call(
+                            &args_owned,
+                            Some(cancel_token_for_task),
+                            call_id_owned.as_deref(),
+                            workspace_root_for_command,
+                        )
+                    }
+                } else {
+                    crate::tools::execute_with_metadata_cancellable_for_call(
+                        &name_owned,
+                        &args_owned,
+                        Some(cancel_token_for_task),
+                        call_id_owned.as_deref(),
+                    )
+                };
+                if result.success
+                    && let Ok(mut diff) = mutation_diff_for_task.lock()
+                {
+                    *diff = finish_text_mutation_diff(mutation_snapshot, &tool_context);
+                }
+                crate::tools::set_active_workspace_context(None, None, false, None);
+                crate::tools::set_active_session_id(None);
+                result
+            })
+        })
+        .await
+        .unwrap_or_else(|e| {
+            crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
+        })
+    };
+    tokio::pin!(run_fut);
+    let is_cancellable_process = name == "run_command";
+    let mut progress_open = true;
+    loop {
+        tokio::select! {
+            res = &mut run_fut => {
+                break res;
+            }
+            event = progress_rx.recv(), if progress_open => {
+                if let Some((bytes, stderr)) = event {
+                    if let Some(key) = live_key {
+                        state.lock().await.append_live_tool_output(key, &bytes, stderr);
+                    }
+                } else {
+                    progress_open = false;
+                }
+            }
+            _ = cancel_token.cancelled(), if !is_cancellable_process => {
+                if parallel::parallel_inspection(&crate::tools::ToolCall { name: name.to_owned(), arguments: args.clone(), call_id: None }) {
+                    let _ = (&mut run_fut).await;
+                }
+                dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
+                break crate::tools::ToolExecutionOutput::failure_with_kind(
+                    "error: tool execution cancelled by user".to_string(),
+                    crate::tools::ToolErrorKind::Cancelled,
+                    true,
+                );
+            }
+        }
+    }
+}
+
 pub(crate) async fn confirm_and_execute_for_call_with_assessment(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -568,119 +700,19 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             tool_name,
         };
 
-        let name_owned = name.to_string();
-        let args_owned = args.clone();
-        let call_id_owned = call_id.map(str::to_owned);
-        let session_id = { state.lock().await.active_session_id.clone() };
-        let sandbox_mode_for_task = { state.lock().await.effective_sandbox_mode() };
-        let workspace_root_for_task = execution_workspace_root.clone();
-        let task_working_directory_for_task = task_working_directory.clone();
-        let live_key_owned = live_key.map(str::to_owned);
-        let cancel_token_for_task = cancel_token.clone();
-        let client_for_task = client.clone();
-        let mutation_diff_for_task = Arc::clone(&mutation_diff);
-        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let run_fut = async move {
-            if name_owned == "search_web" {
-                return match crate::tools::search_web_async(&args_owned, &client_for_task).await {
-                    Ok(output) => crate::tools::ToolExecutionOutput::success(output),
-                    Err(error) => {
-                        crate::tools::ToolExecutionOutput::failure(format!("error: {error}"))
-                    }
-                };
-            }
-
-            let mcp_registry = crate::mcp::get_mcp_registry();
-            tokio::task::spawn_blocking(move || {
-                crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
-                    crate::tools::set_active_session_id(Some(session_id));
-                    let workspace_root_for_command = workspace_root_for_task.clone();
-                    crate::tools::set_active_workspace_context(
-                        workspace_root_for_task,
-                        task_working_directory_for_task,
-                        false,
-                        Some(sandbox_mode_for_task),
-                    );
-                    let tool_context = crate::tools::current_tool_context();
-                    let mutation_snapshot = capture_text_mutation_before(
-                        &name_owned,
-                        &args_owned,
-                        &tool_context,
-                    );
-                    let result = if name_owned == "run_command" {
-                        if live_key_owned.is_some() {
-                            let callback: crate::tools::CommandProgressCallback =
-                                Arc::new(move |bytes, stderr| {
-                                    let _ = progress_tx.send((bytes.to_vec(), stderr));
-                                });
-                            crate::tools::run_command_output_with_progress_cancellable_for_call_and_workspace(
-                                &args_owned,
-                                callback,
-                                Some(cancel_token_for_task),
-                                call_id_owned.as_deref(),
-                                workspace_root_for_command,
-                            )
-                        } else {
-                            crate::tools::run_command_output_with_workspace_for_call(
-                                &args_owned,
-                                Some(cancel_token_for_task),
-                                call_id_owned.as_deref(),
-                                workspace_root_for_command,
-                            )
-                        }
-                    } else {
-                        crate::tools::execute_with_metadata_cancellable_for_call(
-                            &name_owned,
-                            &args_owned,
-                            Some(cancel_token_for_task),
-                            call_id_owned.as_deref(),
-                        )
-                    };
-                    if result.success
-                        && let Ok(mut diff) = mutation_diff_for_task.lock()
-                    {
-                        *diff = finish_text_mutation_diff(mutation_snapshot, &tool_context);
-                    }
-                    crate::tools::set_active_workspace_context(None, None, false, None);
-                    crate::tools::set_active_session_id(None);
-                    result
-                })
-            })
-            .await
-            .unwrap_or_else(|e| {
-                crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
-            })
-        };
-        tokio::pin!(run_fut);
-        let is_cancellable_process = name == "run_command";
-        let mut progress_open = true;
-        loop {
-            tokio::select! {
-                res = &mut run_fut => {
-                    break res;
-                }
-                event = progress_rx.recv(), if progress_open => {
-                    if let Some((bytes, stderr)) = event {
-                        if let Some(key) = live_key {
-                            state.lock().await.append_live_tool_output(key, &bytes, stderr);
-                        }
-                    } else {
-                        progress_open = false;
-                    }
-                }
-                _ = cancel_token.cancelled(), if !is_cancellable_process => {
-                    if parallel::parallel_inspection(&crate::tools::ToolCall { name: name.to_owned(), arguments: args.clone(), call_id: None }) {
-                        let _ = (&mut run_fut).await;
-                    }
-                    dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
-                    break crate::tools::ToolExecutionOutput::failure_with_kind(
-                        "error: tool execution cancelled by user".to_string(),
-                        crate::tools::ToolErrorKind::Cancelled,
-                        true,
-                    );
-                }
-            }
-        }
+        run_authorized_tool(
+            client,
+            state,
+            name,
+            args,
+            call_id,
+            live_key,
+            cancel_token,
+            execution_workspace_root.clone(),
+            task_working_directory.clone(),
+            &mutation_diff,
+        )
+        .await
     } else {
         dbg_log!("Tool '{}' requires confirmation", name);
         let mcp_approval =
@@ -839,72 +871,19 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     tool_name,
                 };
 
-                let name_owned = name.to_string();
-                let args_owned = args.clone();
-                let call_id_owned = call_id.map(str::to_owned);
-                let session_id = { state.lock().await.active_session_id.clone() };
-                let sandbox_mode_for_task = { state.lock().await.effective_sandbox_mode() };
-                let workspace_root_for_task = execution_workspace_root.clone();
-                let task_working_directory_for_task = task_working_directory.clone();
-                let cancel_token_for_task = cancel_token.clone();
-                let mutation_diff_for_task = Arc::clone(&mutation_diff);
-                let mcp_registry = crate::mcp::get_mcp_registry();
-                let run_fut = tokio::task::spawn_blocking(move || {
-                    crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
-                        crate::tools::set_active_session_id(Some(session_id));
-                        let workspace_root_for_command = workspace_root_for_task.clone();
-                        crate::tools::set_active_workspace_context(
-                            workspace_root_for_task,
-                            task_working_directory_for_task,
-                            false,
-                            Some(sandbox_mode_for_task),
-                        );
-                        let tool_context = crate::tools::current_tool_context();
-                        let mutation_snapshot =
-                            capture_text_mutation_before(&name_owned, &args_owned, &tool_context);
-                        let result = if name_owned == "run_command" {
-                            crate::tools::run_command_output_with_workspace_for_call(
-                                &args_owned,
-                                Some(cancel_token_for_task),
-                                call_id_owned.as_deref(),
-                                workspace_root_for_command,
-                            )
-                        } else {
-                            crate::tools::execute_with_metadata_cancellable_for_call(
-                                &name_owned,
-                                &args_owned,
-                                Some(cancel_token_for_task),
-                                call_id_owned.as_deref(),
-                            )
-                        };
-                        if result.success
-                            && let Ok(mut diff) = mutation_diff_for_task.lock()
-                        {
-                            *diff = finish_text_mutation_diff(mutation_snapshot, &tool_context);
-                        }
-                        crate::tools::set_active_workspace_context(None, None, false, None);
-                        crate::tools::set_active_session_id(None);
-                        result
-                    })
-                });
-                let is_cancellable_process = name == "run_command";
-
-                tokio::pin!(run_fut);
-                tokio::select! {
-                    res = &mut run_fut => {
-                        res.unwrap_or_else(|e| {
-                            crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
-                        })
-                    }
-                    _ = cancel_token.cancelled(), if !is_cancellable_process => {
-                        dbg_log!("Tool execution cancelled during spawn_blocking await");
-                        crate::tools::ToolExecutionOutput::failure_with_kind(
-                            "error: tool execution cancelled by user".to_string(),
-                            crate::tools::ToolErrorKind::Cancelled,
-                            true,
-                        )
-                    }
-                }
+                run_authorized_tool(
+                    client,
+                    state,
+                    name,
+                    args,
+                    call_id,
+                    live_key,
+                    cancel_token,
+                    execution_workspace_root.clone(),
+                    task_working_directory.clone(),
+                    &mutation_diff,
+                )
+                .await
             }
             Ok(crate::app::ToolConfirmationResponse::Deny) => {
                 dbg_log!("User denied tool call '{}'", name);
@@ -1961,6 +1940,74 @@ mod workspace_propagation_tests {
                 .contains(&workspace.path().display().to_string())
         );
         assert!(output_path.is_file());
+    }
+
+    #[tokio::test]
+    async fn approved_run_command_streams_live_output() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let state = Arc::new(Mutex::new(AppState::new_with_workspace_session(
+            workspace.path(),
+            Some("approved-live-output-test"),
+        )));
+        let active_workspace = {
+            let mut state = state.lock().await;
+            Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
+                "live-key",
+                None,
+                "run_command",
+                "Bash",
+                "touch",
+            ));
+            state.effective_workspace_root()
+        };
+        let state_for_task = Arc::clone(&state);
+        let marker = workspace.path().join("marker.txt");
+        // Writes a file so the call needs approval, and prints so there is
+        // output to stream.
+        let command = format!("echo streamed-line && touch '{}'", marker.display());
+        let task = tokio::spawn(async move {
+            confirm_and_execute_for_call_with_assessment(
+                &reqwest::Client::new(),
+                &state_for_task,
+                &tokio_util::sync::CancellationToken::new(),
+                "run_command",
+                &serde_json::json!({"command": command}),
+                "run_command",
+                false,
+                active_workspace,
+                Some("live-key"),
+                Some("approved-live-output-call"),
+                None,
+            )
+            .await
+        });
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(response) = state.lock().await.tool_confirmation_response.take() {
+                    break response;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("command should request confirmation");
+        response
+            .send(crate::app::ToolConfirmationResponse::Approve)
+            .expect("confirmation task should still be waiting");
+
+        let (output, _, _) = task.await.expect("command task should finish");
+        assert!(output.success, "{}", output.content);
+        let state = state.lock().await;
+        let streamed = state.live_tool_calls[0]
+            .output
+            .iter()
+            .map(|chunk| chunk.text.as_str())
+            .collect::<String>();
+        assert!(
+            streamed.contains("streamed-line"),
+            "an approved command must stream its output like an unprompted one: {streamed:?}"
+        );
     }
 
     #[tokio::test]
