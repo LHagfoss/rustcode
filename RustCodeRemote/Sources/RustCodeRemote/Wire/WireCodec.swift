@@ -203,6 +203,11 @@ public struct WireCodec: RemoteCodec {
 
     // MARK: Gateway frames
 
+    /// A date the host could not have meant is dropped, not guessed at.
+    private static func linkExpiry(_ text: String?) -> Date? {
+        text.flatMap { try? Date($0, strategy: .iso8601) }
+    }
+
     static func message(for frame: WireGatewayFrame) -> RemoteMessage {
         switch frame {
         case .paired(let paired):
@@ -210,7 +215,8 @@ public struct WireCodec: RemoteCodec {
                 identity: ConnectionIdentity(
                     gatewayID: paired.gatewayID,
                     instanceID: paired.instanceID,
-                    hostName: paired.hostName
+                    hostName: paired.hostName,
+                    linkExpiresAt: linkExpiry(paired.expiresAt)
                 ),
                 device: DeviceIdentity(id: paired.deviceID, name: paired.deviceName),
                 deviceToken: paired.token
@@ -219,7 +225,8 @@ public struct WireCodec: RemoteCodec {
             .handshake(.authenticated(ConnectionIdentity(
                 gatewayID: authenticated.gatewayID,
                 instanceID: authenticated.instanceID,
-                hostName: authenticated.hostName
+                hostName: authenticated.hostName,
+                linkExpiresAt: linkExpiry(authenticated.expiresAt)
             )))
         case .error(let failure):
             .gatewayFailure(gatewayFailure(failure))

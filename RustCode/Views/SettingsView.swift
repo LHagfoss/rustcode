@@ -23,6 +23,9 @@ struct SettingsView: View {
                         if !store.isDemo {
                             LabeledContent("Address", value: host.address.description)
                             LabeledContent("Paired", value: host.pairedAt.formatted(date: .abbreviated, time: .shortened))
+                            if let expiresAt = host.expiresAt {
+                                LabeledContent("Linked Until", value: expiresAt.formatted(date: .abbreviated, time: .shortened))
+                            }
                         }
                         LabeledContent("This Device", value: host.device.name)
                         LabeledContent("Status", value: store.connection.summary)

@@ -113,11 +113,12 @@ private actor StubClient: RemoteClient {
     @discardableResult
     func connect(using credential: StoredCredential) async throws -> ConnectionIdentity {
         connectCalls += 1
+        dialed.append(credential.host.address)
         if !connectResults.isEmpty {
             try connectResults.removeFirst().get()
         }
         let instance = instanceIDs.count > 1 ? instanceIDs.removeFirst() : instanceIDs[0]
-        return ConnectionIdentity(gatewayID: "gateway", instanceID: instance, hostName: hostName)
+        return ConnectionIdentity(gatewayID: "gateway", instanceID: instance, hostName: hostName, linkExpiresAt: linkExpiresAt)
     }
 
     func getContent(_ contentID: String, in session: SessionRef, offset: UInt64, maxBytes: Int) async throws -> ContentChunk {
@@ -144,6 +145,9 @@ private actor StubClient: RemoteClient {
     private(set) var refreshCalls = 0
     var hostName: String?
     func set(hostName: String) { self.hostName = hostName }
+    private(set) var dialed: [HostAddress] = []
+    var linkExpiresAt: Date?
+    func set(linkExpiresAt: Date) { self.linkExpiresAt = linkExpiresAt }
 
     func refreshSessions() async throws {
         refreshCalls += 1
@@ -283,12 +287,16 @@ private final class DelayLog: Sendable {
         _ client: StubClient,
         credentials: InMemoryCredentialStore = InMemoryCredentialStore(makeCredential()),
         backoff: BackoffPolicy = BackoffPolicy(maximumAttempts: 3),
-        demoPace: Duration = .zero
+        demoPace: Duration = .zero,
+        locateHost: @escaping @Sendable (String) async -> HostAddress? = { _ in nil },
+        now: @escaping @Sendable () -> Date = { Date() }
     ) -> RemoteStore {
         RemoteStore(
             client: client,
             demoClient: { DemoRemoteClient(pace: demoPace) },
             credentials: credentials,
+            locateHost: locateHost,
+            now: now,
             backoff: backoff,
             sleep: { [delays] delay in delays.append(delay) },
             randomUnit: { 0.5 }
@@ -504,6 +512,51 @@ private final class DelayLog: Sendable {
         try? await Task.sleep(for: .milliseconds(30))
         #expect(await client.connectCalls == 1)
         #expect(delays.values.isEmpty)
+    }
+
+    @Test func aHostThatMovedIsDialedAtItsNewAddressWithoutPairingAgain() async {
+        let client = StubClient()
+        await client.set(connectResults: [.failure(.transport("unreachable")), .success(())])
+        let credentials = InMemoryCredentialStore(makeCredential())
+        let moved = HostAddress(host: "192.168.1.77", port: 7878)
+        let store = makeStore(client, credentials: credentials, locateHost: { $0 == "gateway" ? moved : nil })
+        store.bootstrap()
+
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(await client.dialed == [makeCredential().host.address, moved])
+        #expect(store.host?.address == moved)
+        #expect(credentials.load()?.host.address == moved)
+        #expect(credentials.load()?.deviceToken == "token")
+        // Found at once, so there was nothing to wait for.
+        #expect(delays.values.isEmpty)
+    }
+
+    @Test func aHostFoundAtTheSameAddressBacksOffAsBefore() async {
+        let client = StubClient()
+        await client.set(connectResults: [.failure(.timeout), .success(())])
+        let store = makeStore(client, locateHost: { _ in makeCredential().host.address })
+        store.bootstrap()
+
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(delays.values == [.seconds(1)])
+        #expect(await client.connectCalls == 2)
+    }
+
+    @Test func theLinkExpiryTheHostReportsIsStoredAndNamedWhenItRunsOut() async {
+        let client = StubClient()
+        let expiry = Date(timeIntervalSince1970: 1_000)
+        await client.set(linkExpiresAt: expiry)
+        let credentials = InMemoryCredentialStore(makeCredential())
+        let store = makeStore(client, credentials: credentials, now: { expiry.addingTimeInterval(1) })
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        #expect(store.host?.expiresAt == expiry)
+        #expect(credentials.load()?.host.expiresAt == expiry)
+
+        await client.dropConnection(.unauthorized)
+        #expect(await waitUntil { store.connection == .unauthorized })
+        #expect(store.pairing == .failed(RemoteError.linkExpired.localizedDescription))
+        #expect(credentials.load() == nil)
     }
 
     @Test func revocationWhileConnectedAlsoStops() async {

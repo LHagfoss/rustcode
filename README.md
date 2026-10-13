@@ -68,6 +68,12 @@ sharing it; closing the terminal ends it. `rustcode remote devices` lists paired
 and `rustcode remote revoke <device>` removes one, which sends the app back to the
 pairing screen.
 
+Pairing is needed once. The app keeps a device token in the Keychain and reconnects with
+it, with no code, for as long as the host accepts it: 30 days from pairing, shown as
+**Linked Until** in Settings. When the Mac gets another address on the same Wi-Fi, the app
+finds it through Bonjour and reconnects there by itself. After the 30 days, or off that
+Wi-Fi with a changed address, pair again with a fresh code.
+
 A pairing code lasts two minutes and works once. If pairing reports an expired or invalid
 code, run `/remote` or `rustcode remote pair` again and scan the fresh code. After too many
 wrong attempts the host locks pairing for a few minutes and the app says for how long.

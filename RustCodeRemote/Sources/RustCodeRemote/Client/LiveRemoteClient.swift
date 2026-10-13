@@ -67,7 +67,8 @@ public actor LiveRemoteClient: RemoteClient {
                     name: grant.identity.hostName ?? target.hostName ?? target.address.host,
                     address: target.address,
                     device: grant.device,
-                    pairedAt: Date()
+                    pairedAt: Date(),
+                    expiresAt: grant.identity.linkExpiresAt
                 ),
                 deviceToken: grant.deviceToken
             )

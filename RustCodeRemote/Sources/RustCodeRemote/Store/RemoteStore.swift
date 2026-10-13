@@ -107,6 +107,8 @@ public final class RemoteStore {
     @ObservationIgnored private let liveClient: any RemoteClient
     @ObservationIgnored private let makeDemoClient: @Sendable () -> any RemoteClient
     @ObservationIgnored private let credentials: any CredentialStore
+    @ObservationIgnored private let locateHost: @Sendable (_ gatewayID: String) async -> HostAddress?
+    @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let backoff: BackoffPolicy
     @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private let randomUnit: @Sendable () -> Double
@@ -129,6 +131,8 @@ public final class RemoteStore {
         client: any RemoteClient,
         demoClient: @escaping @Sendable () -> any RemoteClient = { DemoRemoteClient() },
         credentials: any CredentialStore,
+        locateHost: @escaping @Sendable (_ gatewayID: String) async -> HostAddress? = { _ in nil },
+        now: @escaping @Sendable () -> Date = { Date() },
         backoff: BackoffPolicy = .standard,
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         randomUnit: @escaping @Sendable () -> Double = { Double.random(in: 0...1) }
@@ -137,6 +141,8 @@ public final class RemoteStore {
         self.client = client
         self.makeDemoClient = demoClient
         self.credentials = credentials
+        self.locateHost = locateHost
+        self.now = now
         self.backoff = backoff
         self.sleep = sleep
         self.randomUnit = randomUnit
@@ -634,13 +640,14 @@ public final class RemoteStore {
     }
 
     private func runConnection(_ credential: StoredCredential, client: any RemoteClient) async {
+        var credential = credential
         var reconnect = ReconnectState(policy: backoff)
         while !Task.isCancelled {
             do {
                 let identity = try await client.connect(using: credential)
                 try Task.checkCancellation()
                 currentInstanceID = identity.instanceID
-                adoptHostName(identity.hostName, for: credential)
+                adoptIdentity(identity, for: credential)
                 let receiptStream = await client.receiptUpdates()
                 receiptTask?.cancel()
                 receiptTask = Task { [weak self] in
@@ -676,6 +683,18 @@ public final class RemoteStore {
                     connection = .offline(reason: reason)
                     return
                 }
+                // The host may have moved to another address. Its token still holds there,
+                // so no code is needed: find it and dial again at once.
+                if failure.suggestsHostMoved, !isDemo,
+                   let address = await locateHost(credential.host.gatewayID),
+                   address != credential.host.address {
+                    if Task.isCancelled { return }
+                    credential.host.address = address
+                    adoptAddress(address, for: credential)
+                    connection = .connecting
+                    continue
+                }
+                if Task.isCancelled { return }
                 switch reconnect.registerFailure(unauthorized: failure.isUnauthorized, randomUnit: randomUnit()) {
                 case .stop:
                     handleUnauthorized()
@@ -702,15 +721,29 @@ public final class RemoteStore {
         }
     }
 
-    /// The host can be renamed, and an older pairing only knows its address. Keep the name
-    /// it reports now, in memory and in the credential store.
-    private func adoptHostName(_ name: String?, for stored: StoredCredential) {
-        guard let name, !name.isEmpty, host?.gatewayID == stored.host.gatewayID, host?.name != name else { return }
-        host?.name = name
-        guard !isDemo, var updated = credential else { return }
-        updated.host.name = name
-        credential = updated
-        try? credentials.save(updated)
+    /// The host can be renamed, and an older pairing only knows its address or not when it
+    /// expires. Keep what the host reports now, in memory and in the credential store.
+    private func adoptIdentity(_ identity: ConnectionIdentity, for stored: StoredCredential) {
+        guard var updated = host, updated.gatewayID == stored.host.gatewayID else { return }
+        if let name = identity.hostName, !name.isEmpty { updated.name = name }
+        if let expiresAt = identity.linkExpiresAt { updated.expiresAt = expiresAt }
+        persist(updated)
+    }
+
+    /// The paired host answered at another address; dial that one from now on.
+    private func adoptAddress(_ address: HostAddress, for stored: StoredCredential) {
+        guard var updated = host, updated.gatewayID == stored.host.gatewayID else { return }
+        updated.address = address
+        persist(updated)
+    }
+
+    private func persist(_ updated: PairedHost) {
+        guard host != updated else { return }
+        host = updated
+        guard !isDemo, var stored = credential else { return }
+        stored.host = updated
+        credential = stored
+        try? credentials.save(stored)
     }
 
     /// Revoked or unauthorized: stop reconnecting and drop the token, which is now useless.
@@ -718,9 +751,11 @@ public final class RemoteStore {
         if !isDemo {
             try? credentials.delete()
         }
+        // A pairing that ran out is routine, not a revocation; say which one it was.
+        let expired = host?.expiresAt.map { $0 <= now() } ?? false
         resetHostState()
         connection = .unauthorized
-        pairing = .failed(RemoteError.unauthorized.localizedDescription)
+        pairing = .failed((expired ? RemoteError.linkExpired : .unauthorized).localizedDescription)
     }
 
     private func applySessionList(_ list: [SessionSummary]) {
@@ -912,8 +947,16 @@ extension RemoteError {
     /// Failures that another attempt cannot fix are not retried automatically.
     var isWorthRetrying: Bool {
         switch self {
-        case .codecUnavailable, .incompatibleProtocol, .unauthorized: false
+        case .codecUnavailable, .incompatibleProtocol, .unauthorized, .linkExpired: false
         default: true
+        }
+    }
+
+    /// Nothing answered at the stored address, or something else did.
+    var suggestsHostMoved: Bool {
+        switch self {
+        case .transport, .timeout, .hostIdentityChanged: true
+        default: false
         }
     }
 }

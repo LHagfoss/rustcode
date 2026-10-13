@@ -132,13 +132,24 @@ public struct PairedHost: Hashable, Sendable, Codable {
     public var address: HostAddress
     public var device: DeviceIdentity
     public var pairedAt: Date
+    /// When the host stops accepting this pairing and asks for a code again. Unknown for a
+    /// host that does not say.
+    public var expiresAt: Date?
 
-    public init(gatewayID: String, name: String, address: HostAddress, device: DeviceIdentity, pairedAt: Date) {
+    public init(
+        gatewayID: String,
+        name: String,
+        address: HostAddress,
+        device: DeviceIdentity,
+        pairedAt: Date,
+        expiresAt: Date? = nil
+    ) {
         self.gatewayID = gatewayID
         self.name = name
         self.address = address
         self.device = device
         self.pairedAt = pairedAt
+        self.expiresAt = expiresAt
     }
 }
 
@@ -160,11 +171,14 @@ public struct ConnectionIdentity: Hashable, Sendable {
     public var instanceID: String
     /// The host's own name, when it says. A label for display, never an identity.
     public var hostName: String?
+    /// When the host stops accepting this device's pairing, when it says.
+    public var linkExpiresAt: Date?
 
-    public init(gatewayID: String, instanceID: String, hostName: String? = nil) {
+    public init(gatewayID: String, instanceID: String, hostName: String? = nil, linkExpiresAt: Date? = nil) {
         self.gatewayID = gatewayID
         self.instanceID = instanceID
         self.hostName = hostName
+        self.linkExpiresAt = linkExpiresAt
     }
 }
 

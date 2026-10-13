@@ -75,6 +75,8 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
         public var token: String
         /// The host's own name, for display.
         public var hostName: String?
+        /// When the pairing stops being accepted, RFC 3339. Absent from older hosts.
+        public var expiresAt: String?
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
@@ -84,6 +86,7 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
             case deviceName = "device_name"
             case token
             case hostName = "host_name"
+            case expiresAt = "expires_at"
         }
     }
 
@@ -94,6 +97,8 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
         public var deviceID: String
         public var deviceName: String
         public var hostName: String?
+        /// When the pairing stops being accepted, RFC 3339. Absent from older hosts.
+        public var expiresAt: String?
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
@@ -102,6 +107,7 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
             case deviceID = "device_id"
             case deviceName = "device_name"
             case hostName = "host_name"
+            case expiresAt = "expires_at"
         }
     }
 

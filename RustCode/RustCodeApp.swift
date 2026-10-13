@@ -14,7 +14,8 @@ struct RustCodeApp: App {
                 includeSummaryPresentation: LaunchOptions.current.showsSummaryDemo
             )
         },
-        credentials: KeychainCredentialStore()
+        credentials: KeychainCredentialStore(),
+        locateHost: { await NearbyHostDiscovery.locate(gatewayID: $0) }
     )
 
     private let options = LaunchOptions(arguments: ProcessInfo.processInfo.arguments)

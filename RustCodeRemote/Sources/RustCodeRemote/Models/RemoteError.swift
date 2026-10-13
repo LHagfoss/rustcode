@@ -23,6 +23,8 @@ public enum RemoteError: Error, Sendable, Equatable {
     case sessionClosed(String)
     /// The host at the stored address is not the gateway this device paired with.
     case hostIdentityChanged
+    /// The pairing reached the end of its lifetime on the host. Pair again with a new code.
+    case linkExpired
     case transport(String)
     case rejected(RemoteRejection)
 
@@ -50,6 +52,7 @@ extension RemoteError: LocalizedError {
         case .outcomeUnknown(let detail): detail.flatMap { $0.isEmpty ? nil : $0 } ?? "The host could not confirm the request."
         case .sessionClosed(let reason): reason
         case .hostIdentityChanged: "The host at this address is not the one this device was paired with. Pair again."
+        case .linkExpired: "The link to this Mac expired. Run /remote on it and enter the new code."
         case .transport(let detail): detail
         case .rejected(let rejection): rejection.message
         }

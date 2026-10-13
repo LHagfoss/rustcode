@@ -1,7 +1,9 @@
 import Foundation
 import Observation
+import RustCodeRemote
 
-/// Bonjour discovery is local-network only. A discovered address still needs a pairing code.
+/// Bonjour discovery is local-network only. A discovered address still needs a pairing
+/// code, unless it is the host this device is already paired with: see `locate`.
 @MainActor
 @Observable
 final class NearbyHostDiscovery: NSObject {
@@ -9,6 +11,33 @@ final class NearbyHostDiscovery: NSObject {
         let id: String
         let name: String
         let address: String
+        /// The gateway's identity, when it announces one. Never a credential.
+        var gatewayID: String?
+    }
+
+    /// How long `locate` listens before it concludes the host is not on this network.
+    private static let locateTimeout: Duration = .seconds(3)
+
+    /// The current address of the gateway with this identity, if it announces itself on
+    /// the local network within a few seconds.
+    static func locate(gatewayID: String) async -> HostAddress? {
+        let discovery = NearbyHostDiscovery()
+        discovery.start()
+        defer { discovery.stop() }
+        let deadline = ContinuousClock.now + locateTimeout
+        while ContinuousClock.now < deadline, discovery.error == nil, !Task.isCancelled {
+            if let host = discovery.hosts.first(where: { $0.gatewayID == gatewayID }) {
+                return try? HostAddress.parse(host.address)
+            }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        return nil
+    }
+
+    nonisolated static func gatewayID(inTXTRecord data: Data?) -> String? {
+        guard let data, let value = NetService.dictionary(fromTXTRecord: data)["gateway"],
+              let id = String(data: value, encoding: .utf8), !id.isEmpty else { return nil }
+        return id
     }
 
     private(set) var hosts: [Host] = []
@@ -81,7 +110,12 @@ extension NearbyHostDiscovery: @preconcurrency NetServiceDelegate {
         // The host listens on one IPv4 address, while its .local name also resolves to
         // IPv6 and other interfaces that refuse the connection.
         let target = Self.ipv4Address(in: sender.addresses ?? []) ?? addressName
-        let host = Host(id: key(sender), name: sender.name, address: "\(target):\(sender.port)")
+        let host = Host(
+            id: key(sender),
+            name: sender.name,
+            address: "\(target):\(sender.port)",
+            gatewayID: Self.gatewayID(inTXTRecord: sender.txtRecordData())
+        )
         hosts.removeAll { $0.id == host.id }
         hosts.append(host)
         hosts.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }

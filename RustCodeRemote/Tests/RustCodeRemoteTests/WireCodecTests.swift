@@ -61,6 +61,25 @@ import Testing
         #expect(grant.device == DeviceIdentity(id: "0011223344556677", name: "Lars's iPhone"))
     }
 
+    @Test func handshakeRepliesCarryTheLinkExpiryWhenTheHostSendsOne() throws {
+        let expiry = Date(timeIntervalSince1970: 1_787_390_100)
+        let identity = ConnectionIdentity(gatewayID: "gw", instanceID: "inst", linkExpiresAt: expiry)
+        #expect(try codec.decode(
+            #"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","expires_at":"2026-08-22T09:15:00Z"}"#
+        ) == .handshake(.authenticated(identity)))
+        guard case .handshake(.paired(let grant)) = try codec.decode(
+            #"{"type":"paired","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","token":"tok","expires_at":"2026-08-22T09:15:00Z"}"#
+        ) else {
+            Issue.record("expected a pairing grant")
+            return
+        }
+        #expect(grant.identity == identity)
+        // A date that does not parse is dropped; the connection still stands.
+        #expect(try codec.decode(
+            #"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","expires_at":"soon"}"#
+        ) == .handshake(.authenticated(ConnectionIdentity(gatewayID: "gw", instanceID: "inst"))))
+    }
+
     @Test func gatewayErrorsMapToWhatTheAppDoesAboutThem() throws {
         func failure(_ code: String, extra: String = "") throws -> GatewayFailure {
             guard case .gatewayFailure(let failure) = try codec.decode(#"{"type":"error","code":"\#(code)","message":"m"\#(extra)}"#) else {
