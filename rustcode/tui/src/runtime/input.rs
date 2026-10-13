@@ -2466,6 +2466,38 @@ pub(super) async fn handle_app_event(
                     event::MouseEventKind::ScrollDown => {
                         transcript_state.scroll_down(ui::WHEEL_SCROLL_LINES);
                     }
+                    // A right-click on a tool call copies the call and what it
+                    // returned; a live selection keeps the right-click for
+                    // itself.
+                    event::MouseEventKind::Down(event::MouseButton::Right)
+                        if !transcript_state.selection.has_selection()
+                            && transcript_state.panel_selection_area.is_none()
+                            && transcript_state
+                                .tool_block_at(mouse.column, mouse.row)
+                                .is_some() =>
+                    {
+                        let (call, _) = transcript_state
+                            .tool_block_at(mouse.column, mouse.row)
+                            .expect("checked");
+                        let text = {
+                            let state = app_state.lock().await;
+                            let snapshot = ui::render_snapshot::render_snapshot(
+                                &rustcode::controller::render_state(&state),
+                            );
+                            ui::tool_call_copy_text(&snapshot, call)
+                        };
+                        if let Some(text) = text {
+                            report_copy(
+                                app_state,
+                                &text,
+                                "tool call",
+                                rustcode::clipboard::copy_to_clipboard,
+                            )
+                            .await;
+                        }
+                        frame_requester.schedule_frame();
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     // A right-click on a message copies the whole message; a
                     // live selection keeps the right-click for itself.
                     event::MouseEventKind::Down(event::MouseButton::Right)

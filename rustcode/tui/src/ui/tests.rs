@@ -3498,6 +3498,24 @@ fn a_hovered_message_is_one_block_across_its_blank_paragraph_rows() {
     // The spacing after the message is not part of it.
     assert_eq!(flags.get(second + 1).copied().flatten(), None);
     assert_eq!(flags[row("question")], Some(0));
+
+    // Neither is the line that says how long the turn took.
+    state.history[1].completed_at = Some(chrono::Local::now().to_rfc3339());
+    state.history[1].response_time_ms = Some(34_000);
+    let snapshot = render_snapshot(&state);
+    let mut transcript = TranscriptState::default();
+    let lines =
+        super::render_visible_conversation_with_transcript(&snapshot, 80, 40, &mut transcript);
+    let flags = transcript.message_line_flags.take().expect("message rows");
+    let row = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.to_string().contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle}"))
+    };
+    assert_eq!(flags[row("second paragraph")], Some(1));
+    assert_eq!(flags[row("Worked for 34s")], None);
+    assert_eq!(flags[row("Worked for 34s") - 1], None);
 }
 
 #[test]
@@ -7312,7 +7330,7 @@ fn footer_counts_tasks_and_reports_where_the_counter_is() {
 }
 
 #[test]
-fn tool_blocks_are_hover_and_click_targets_and_prose_is_not() {
+fn tool_calls_are_hover_and_click_targets_one_by_one_and_prose_is_not() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord};
@@ -7321,22 +7339,31 @@ fn tool_blocks_are_hover_and_click_targets_and_prose_is_not() {
     state
         .history
         .push(ChatMessage::new("user", "check the tree"));
-    state.history.push(
-        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
-            id: "call-1".to_owned(),
-            name: "run_command".to_owned(),
-            arguments: r#"{"command":"git status --short"}"#.to_owned(),
-        }]),
-    );
-    state.history.push(
-        ChatMessage::new("tool", "run_command: exit code: 0\nsome output")
-            .answering(Some("call-1".to_owned()))
-            .with_tool_result(ToolResultRecord {
-                tool_name: "run_command".to_owned(),
-                success: true,
-                ..Default::default()
-            }),
-    );
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"git status --short"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"git log --oneline"}"#.to_owned(),
+            },
+        ]));
+    for (id, output) in [("call-1", "some output"), ("call-2", "abc123 first")] {
+        state.history.push(
+            ChatMessage::new("tool", format!("run_command: exit code: 0\n{output}"))
+                .answering(Some(id.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: "run_command".to_owned(),
+                    success: true,
+                    ..Default::default()
+                }),
+        );
+    }
     state
         .history
         .push(ChatMessage::new("assistant", "The tree is clean."));
@@ -7358,26 +7385,34 @@ fn tool_blocks_are_hover_and_click_targets_and_prose_is_not() {
             .unwrap_or_else(|| panic!("{needle:?} is not painted"))
     };
 
-    // The heading and the call's row both belong to the block.
+    // Each call is its own target; the heading they share belongs to
+    // neither.
     let heading = row_of("• Ran");
     let call = row_of("Bash git status --short");
-    let block = transcript
-        .tool_block_at(4, call)
-        .expect("the call is a target");
-    assert_eq!(block, (2, 3));
-    assert_eq!(transcript.tool_block_at(4, heading), Some(block));
+    let second = row_of("Bash git log --oneline");
+    assert_eq!(transcript.tool_block_at(4, call), Some((2, 3)));
+    assert_eq!(transcript.tool_block_at(4, second), Some((3, 4)));
+    assert_eq!(transcript.tool_block_at(4, heading), None);
     assert_eq!(
         transcript.tool_block_at(4, row_of("The tree is clean.")),
         None
     );
     assert_eq!(transcript.tool_block_at(4, row_of("check the tree")), None);
     // The spacer under the block belongs to it but is not a target.
-    assert_eq!(transcript.tool_block_at(4, call + 1), None);
+    assert_eq!(transcript.tool_block_at(4, second + 1), None);
 
-    // Hover changes only when the pointer reaches or leaves the block.
+    // Hover changes only when the pointer reaches or leaves a call.
     assert!(transcript.hover_at(4, call));
-    assert!(!transcript.hover_at(9, heading));
+    assert!(!transcript.hover_at(9, call));
+    assert!(transcript.hover_at(4, second));
+    assert!(transcript.hover_at(4, heading));
     assert!(transcript.hover_at(4, row_of("The tree is clean.")));
+
+    // A right-click copies the call and what it returned.
+    assert_eq!(
+        super::tool_call_copy_text(&render_snapshot(&state), 3).as_deref(),
+        Some("git log --oneline\n\nrun_command: exit code: 0\nabc123 first")
+    );
 }
 
 #[test]
