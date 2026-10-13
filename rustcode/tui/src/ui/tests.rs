@@ -2861,7 +2861,7 @@ fn theme_change_changes_cache_keys() {
 
 #[test]
 fn cached_expand_progress_follows_expansion_and_history_changes() {
-    use rustcode::app::ToolCallRef;
+    use rustcode::controller::ToolCallRef;
 
     fn round(state: &mut RenderState, id: &str) {
         state.history.push(
