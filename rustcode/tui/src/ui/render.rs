@@ -157,7 +157,7 @@ fn render_transcript_status_row(
     if state.expanded_thoughts().is_empty() {
         return;
     }
-    let (expanded, collapsible) = super::tool_transcript::expand_progress(state, f.area().width);
+    let (expanded, collapsible) = transcript.expand_progress(state, f.area().width);
     if collapsible == 0 {
         return;
     }

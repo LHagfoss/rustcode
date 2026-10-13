@@ -83,6 +83,10 @@ pub(crate) struct TranscriptState {
     pub(crate) panel_max_scroll_row: u16,
     pub(crate) task_log_max_scroll_row: usize,
     committed_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Line<'static>>>>>,
+    /// `(inputs fingerprint, (expanded, collapsible))` of the last expand
+    /// readout. Finding the collapsible rows renders every tool result in the
+    /// session, which is far too much to redo on each frame.
+    expand_progress: Option<(u64, (usize, usize))>,
     /// For each transcript line of the projection just built, the tool block
     /// it belongs to. `None` while a selection pins the view: the rows painted
     /// before the press stay the click targets.
@@ -170,6 +174,7 @@ impl Default for TranscriptState {
             panel_max_scroll_row: 0,
             task_log_max_scroll_row: 0,
             committed_cache: None,
+            expand_progress: None,
             tool_line_flags: None,
             tool_rows: (ratatui::layout::Rect::default(), Vec::new()),
             tool_click: None,
@@ -738,6 +743,49 @@ impl TranscriptState {
             width,
             theme_hash.finish(),
         )
+    }
+
+    /// How much of the transcript is expanded, as `(expanded, collapsible)`,
+    /// recomputed only when something it depends on changed.
+    pub(super) fn expand_progress(
+        &mut self,
+        state: &super::RenderSnapshot,
+        width: u16,
+    ) -> (usize, usize) {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        state.active_session_id().hash(&mut hasher);
+        state.selected_subagent_id().hash(&mut hasher);
+        state.history().revision().hash(&mut hasher);
+        width.hash(&mut hasher);
+        super::theme::active_palette().name.hash(&mut hasher);
+        state.verbosity().hash(&mut hasher);
+        state.home_path().hash(&mut hasher);
+        // A subagent's history has no revision of its own: fingerprint the
+        // shape of whichever history is on screen.
+        let history = state.active_history();
+        history.len().hash(&mut hasher);
+        for message in history {
+            message.content.len().hash(&mut hasher);
+            message.tool_calls.len().hash(&mut hasher);
+        }
+        // Order-independent: the set iterates in arbitrary order.
+        let expanded = state.expanded_thoughts();
+        expanded.len().hash(&mut hasher);
+        expanded
+            .iter()
+            .fold(0u64, |acc, index| {
+                acc ^ (*index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            })
+            .hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some((cached_key, progress)) = self.expand_progress
+            && cached_key == key
+        {
+            return progress;
+        }
+        let progress = super::tool_transcript::expand_progress(state, width);
+        self.expand_progress = Some((key, progress));
+        progress
     }
 
     fn committed_cache(

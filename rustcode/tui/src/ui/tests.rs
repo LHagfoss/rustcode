@@ -2860,6 +2860,50 @@ fn theme_change_changes_cache_keys() {
 }
 
 #[test]
+fn cached_expand_progress_follows_expansion_and_history_changes() {
+    use rustcode::app::ToolCallRef;
+
+    fn round(state: &mut RenderState, id: &str) {
+        state.history.push(
+            ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+                id: id.to_owned(),
+                name: "run_command".to_owned(),
+                arguments: format!("{{\"command\":\"cargo test {id}\"}}"),
+            }]),
+        );
+        let body = (0..40)
+            .map(|line| format!("line {line} of {id}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.history.push(
+            ChatMessage::new("tool", format!("run_command: {body}")).answering(Some(id.to_owned())),
+        );
+    }
+
+    let mut state = RenderState::new();
+    state
+        .history
+        .push(ChatMessage::new("user", "run the tests"));
+    round(&mut state, "one");
+    round(&mut state, "two");
+    let mut transcript = super::history_cell::TranscriptState::default();
+
+    let snapshot = super::render_snapshot::render_snapshot(&state);
+    let direct = super::tool_transcript::expand_progress(&snapshot, 80);
+    assert_eq!(direct, (0, 2), "both command results are collapsible");
+    assert_eq!(transcript.expand_progress(&snapshot, 80), direct);
+    assert_eq!(transcript.expand_progress(&snapshot, 80), direct);
+
+    state.expanded_thoughts.insert(2);
+    let snapshot = super::render_snapshot::render_snapshot(&state);
+    assert_eq!(transcript.expand_progress(&snapshot, 80), (1, 2));
+
+    round(&mut state, "three");
+    let snapshot = super::render_snapshot::render_snapshot(&state);
+    assert_eq!(transcript.expand_progress(&snapshot, 80), (1, 3));
+}
+
+#[test]
 fn sky_theme_loads_and_updates_syntax_highlighting() {
     use super::theme;
 
