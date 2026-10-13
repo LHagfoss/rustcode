@@ -94,6 +94,7 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
     let name_lower = name.to_ascii_lowercase();
     let (action, target) = match name_lower.as_str() {
         "search_web" | "searchweb" => ("Search", "query".to_owned()),
+        "read_url" | "readurl" => ("Fetch", value(&["url"], "?")),
         "run_command" | "runcommand" | "execute_command" | "bash" => (
             rustcode_command::shell_label(),
             value(&["CommandLine", "command_line", "command"], "?"),

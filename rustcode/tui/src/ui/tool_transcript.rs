@@ -59,6 +59,7 @@ pub(super) fn format_pi_tool_action(
             rustcode::controller::shell_label().to_string()
         }
         "search_web" | "searchweb" | "codebase_search" | "codebasesearch" => "Search".to_string(),
+        "read_url" | "readurl" => "Fetch".to_string(),
         "get_project_map" | "getprojectmap" => "ProjectMap".to_string(),
         "manage_task" | "managetask" => "ManageTask".to_string(),
         "background_task" | "backgroundtask" => "Task".to_string(),
@@ -148,6 +149,11 @@ pub(super) fn format_pi_tool_action(
         "run_command" => args
             .get("CommandLine")
             .or_else(|| args.get("command"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        "read_url" => args
+            .get("url")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),

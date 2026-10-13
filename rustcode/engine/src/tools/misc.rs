@@ -548,6 +548,27 @@ pub const SEARCH_WEB: Tool = Tool {
     safety: ToolSafety::ReadOnly,
 };
 
+fn read_url_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "url": { "type": "string" },
+            "offset": { "type": "integer", "minimum": 0 },
+            "max_chars": { "type": "integer", "minimum": 500, "maximum": 20000 }
+        }, "required": ["url"]
+    })
+}
+
+pub const READ_URL: Tool = Tool {
+    name: "read_url",
+    description: "Fetch one http(s) page and return its readable text. Use it for a link the user gave or a search result worth reading in full.",
+    arguments: r#"{"url": "https://example.com/page", "offset": "optional character offset to continue a long page", "max_chars": "optional, default 8000, max 20000"}"#,
+    handler: read_url,
+    requires_confirmation: false,
+    schema: read_url_schema,
+    capabilities: &[ToolCapability::Network],
+    safety: ToolSafety::ReadOnly,
+};
+
 fn complete_task_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": { "result": { "type": "string" } }, "required": ["result"]
@@ -1332,6 +1353,165 @@ pub fn complete_task_tool(args: &Value) -> Result<String, String> {
     ))
 }
 
+const READ_URL_DEFAULT_CHARS: usize = 8_000;
+const READ_URL_MAX_CHARS: usize = 20_000;
+const READ_URL_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+pub fn read_url(args: &Value) -> Result<String, String> {
+    let url = args
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .ok_or("missing 'url' argument")?;
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("'url' must start with http:// or https://".to_string());
+    }
+    let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let max_chars = args
+        .get("max_chars")
+        .and_then(Value::as_u64)
+        .map_or(READ_URL_DEFAULT_CHARS, |value| value as usize)
+        .clamp(500, READ_URL_MAX_CHARS);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("failed to create async runtime: {e}"))?;
+    let (content_type, body) = runtime.block_on(async {
+        let mut response = reqwest::Client::new()
+            .get(url)
+            .timeout(std::time::Duration::from_secs(20))
+            .header(
+                "User-Agent",
+                concat!("rustcode/", env!("CARGO_PKG_VERSION"), " (read_url)"),
+            )
+            .send()
+            .await
+            .map_err(|error| format!("request failed: {error}"))?;
+        if !response.status().is_success() {
+            return Err(format!("the server answered {}", response.status()));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| format!("reading the page failed: {error}"))?
+        {
+            body.extend_from_slice(&chunk);
+            if body.len() >= READ_URL_MAX_BYTES {
+                body.truncate(READ_URL_MAX_BYTES);
+                break;
+            }
+        }
+        Ok((content_type, body))
+    })?;
+    let is_text = content_type.is_empty()
+        || content_type.starts_with("text/")
+        || ["json", "xml", "javascript", "html"]
+            .iter()
+            .any(|kind| content_type.contains(kind));
+    if !is_text {
+        return Err(format!(
+            "the page is '{content_type}', not text; download it with run_command instead"
+        ));
+    }
+    let raw = String::from_utf8_lossy(&body);
+    let text = if content_type.contains("html") || raw.trim_start().starts_with('<') {
+        readable_page_text(&raw)
+    } else {
+        raw.into_owned()
+    };
+    Ok(page_slice(url, &text, offset, max_chars))
+}
+
+/// The title and visible text of an HTML page, one block per line.
+fn readable_page_text(html: &str) -> String {
+    let document = scraper::Html::parse_document(html);
+    let mut text = String::new();
+    if let Ok(selector) = scraper::Selector::parse("title")
+        && let Some(title) = document.select(&selector).next()
+    {
+        let title = title.text().collect::<String>();
+        if !title.trim().is_empty() {
+            text.push_str(&format!("# {}\n", title.trim()));
+        }
+    }
+    push_readable_text(document.root_element(), &mut text);
+    text.trim().to_string()
+}
+
+fn push_readable_text(element: scraper::ElementRef<'_>, text: &mut String) {
+    const SKIPPED: [&str; 6] = ["script", "style", "noscript", "template", "svg", "head"];
+    const BLOCKS: [&str; 16] = [
+        "p",
+        "div",
+        "br",
+        "li",
+        "tr",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "section",
+        "article",
+        "pre",
+        "table",
+        "blockquote",
+    ];
+    let name = element.value().name();
+    if SKIPPED.contains(&name) {
+        return;
+    }
+    let is_block = BLOCKS.contains(&name);
+    if is_block && !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    for child in element.children() {
+        if let Some(child) = scraper::ElementRef::wrap(child) {
+            push_readable_text(child, text);
+        } else if let Some(content) = child.value().as_text() {
+            let words = content.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !words.is_empty() {
+                if !text.is_empty() && !text.ends_with(['\n', ' ']) {
+                    text.push(' ');
+                }
+                text.push_str(&words);
+            }
+        }
+    }
+    if is_block && !text.ends_with('\n') {
+        text.push('\n');
+    }
+}
+
+/// `max_chars` characters of a page from `offset`, with what is left to read.
+fn page_slice(url: &str, text: &str, offset: usize, max_chars: usize) -> String {
+    let total = text.chars().count();
+    let slice = text
+        .chars()
+        .skip(offset)
+        .take(max_chars)
+        .collect::<String>();
+    let end = offset + slice.chars().count();
+    let mut result = format!("[{url} — characters {offset}-{end} of {total}]\n{slice}");
+    if end < total {
+        result.push_str(&format!(
+            "\n[{} more characters: call read_url again with offset={end}]",
+            total - end
+        ));
+    } else if total == 0 {
+        result.push_str("(the page has no readable text; it may be rendered by scripts)");
+    }
+    result
+}
+
 pub fn search_web(args: &Value) -> Result<String, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1781,6 +1961,31 @@ mod tests {
             result["results"][0]["input_schema"]["properties"]["query"]["type"],
             "string"
         );
+    }
+
+    #[test]
+    fn a_page_is_reduced_to_its_title_and_visible_text() {
+        let text = super::readable_page_text(
+            "<html><head><title> Release notes </title><style>p{color:red}</style></head>\
+             <body><script>track()</script><h1>Version 7</h1>\
+             <p>Expert   offload is <b>experimental</b>.</p><ul><li>one</li><li>two</li></ul>\
+             </body></html>",
+        );
+        assert_eq!(
+            text,
+            "# Release notes\nVersion 7\nExpert offload is experimental .\none\ntwo"
+        );
+    }
+
+    #[test]
+    fn a_long_page_is_read_in_slices_that_say_how_to_continue() {
+        let first = super::page_slice("https://example.test", "abcdefghij", 0, 4);
+        assert!(first.contains("characters 0-4 of 10"), "{first}");
+        assert!(first.contains("\nabcd\n"), "{first}");
+        assert!(first.contains("offset=4"), "{first}");
+        let last = super::page_slice("https://example.test", "abcdefghij", 8, 4);
+        assert!(last.ends_with("\nij"), "{last}");
+        assert!(super::read_url(&serde_json::json!({"url": "file:///etc/passwd"})).is_err());
     }
 
     #[test]

@@ -331,6 +331,16 @@ fn headless_failure(ctx: &crate::network::TurnContext) -> Option<String> {
     {
         return None;
     }
+    // The model answered without using a tool: there is nothing a
+    // verification could have checked, so the answer is the result.
+    if matches!(
+        ctx.lifecycle.stop_reason.as_ref(),
+        Some(crate::network::lifecycle::StopReason::Unverified)
+    ) && ctx.metrics.tool_calls == 0
+        && !ctx.response.final_content.trim().is_empty()
+    {
+        return None;
+    }
     ctx.lifecycle
         .stop_reason
         .as_ref()
@@ -807,6 +817,18 @@ mod tests {
         ctx.lifecycle.task_completed = true;
         ctx.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::Completed);
         assert!(headless_failure(&ctx).is_none());
+    }
+
+    #[test]
+    fn a_plain_answer_without_tool_use_is_a_finished_headless_turn() {
+        let mut ctx = crate::network::TurnContext::default();
+        ctx.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::Unverified);
+        ctx.response.final_content = "pong".to_string();
+        assert!(headless_failure(&ctx).is_none());
+
+        // Work that used tools and could not be verified stays incomplete.
+        ctx.metrics.tool_calls = 1;
+        assert_eq!(headless_failure(&ctx).as_deref(), Some("unverified"));
     }
 
     #[test]

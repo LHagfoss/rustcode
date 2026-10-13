@@ -1381,6 +1381,7 @@ pub const TOOLS: &[Tool] = &[
     exec::RUN_COMMAND,
     exec::MANAGE_TASK,
     misc::SEARCH_WEB,
+    misc::READ_URL,
     search::FIND_SYMBOL,
     search::GET_PROJECT_MAP,
     filesystem::VIEW_FILE,

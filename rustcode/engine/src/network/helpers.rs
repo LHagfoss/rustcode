@@ -39,7 +39,7 @@ pub(crate) fn classify_tool_msg(m: &ChatMessage) -> Option<&'static str> {
     let name = m.content.split(':').next().unwrap_or("").trim();
     Some(match name {
         "run_command" | "grep" | "glob" | "list_directory" | "get_time" | "find_symbol"
-        | "get_project_map" | "search_web" => "throwaway",
+        | "get_project_map" | "search_web" | "read_url" => "throwaway",
         "view_file" => "file",
         _ => "other",
     })
