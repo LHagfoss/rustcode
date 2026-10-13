@@ -1,3 +1,16 @@
+## [v0.65.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.65.0) - 2026-10-13
+
+### Performance
+- Remove the audio and video tools (`generate_sound_effect`, `generate_music`, `inspect_audio`, `inspect_media`, `validate_video_project`, `render_video`), the `[audio]` config section and `docs/media.md`; the built-in tool list goes from 47 to 41 and an existing `[audio]` section is ignored ([#1983](https://github.com/LHagfoss/rustcode/pull/1983)).
+- Stop marking history as rewritten on every model round, which made remote clients resync the whole transcript each round ([#1980](https://github.com/LHagfoss/rustcode/pull/1980)).
+- Wait briefly for the image upload lock instead of failing a phone upload when the lock is momentarily busy ([#1988](https://github.com/LHagfoss/rustcode/pull/1988)).
+- Keep frames fast after expanding a tool output: the `N/M expanded` readout is cached instead of rendering every tool result per frame, about 38 ms down to 0.5 ms per frame in a 400-round session ([#1987](https://github.com/LHagfoss/rustcode/pull/1987)).
+- Highlight only the new lines of a streaming code block, about 5 ms down to 1 ms per frame for a 600-line block ([#1989](https://github.com/LHagfoss/rustcode/pull/1989)).
+- Skip scrollback rendering when native scrollback is off, so a resize or resume no longer re-renders the whole transcript only to drop it ([#1981](https://github.com/LHagfoss/rustcode/pull/1981)).
+- Stop reading the themes directory on every frame while an approval or question prompt is open ([#1979](https://github.com/LHagfoss/rustcode/pull/1979)).
+- Reuse the `@` file listing for a second instead of walking the project on every frame the popup is open ([#1990](https://github.com/LHagfoss/rustcode/pull/1990)).
+- Cut per-round engine work: cache the built-in tool schema block per policy, count the prompt once when estimating tokens, compile the speculative tool-argument patterns once, and skip the MCP catalogue scan for built-in tool calls ([#1986](https://github.com/LHagfoss/rustcode/pull/1986), [#1985](https://github.com/LHagfoss/rustcode/pull/1985), [#1984](https://github.com/LHagfoss/rustcode/pull/1984), [#1982](https://github.com/LHagfoss/rustcode/pull/1982)).
+- Drop unused dependencies (`reqwest-middleware` and its duplicate `reqwest` 0.12, `tokio-stream`) and unused TUI render cache types and color accessors ([#1977](https://github.com/LHagfoss/rustcode/pull/1977), [#1991](https://github.com/LHagfoss/rustcode/pull/1991)).
 ## [v0.64.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.64.11) - 2026-10-12
 
 ### Fixes
