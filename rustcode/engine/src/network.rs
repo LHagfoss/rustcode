@@ -1266,7 +1266,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         };
         let pre_len = captured_history.len();
         let captured_revision = captured_history.revision();
-        let mut working_history = captured_history;
+        let mut working_history = captured_history.snapshot();
 
         // Lock released here: this await performs I/O.
         let summarized_or_pruned = compaction::maybe_compact_with_local_policy_and_usage_mode(
@@ -1309,11 +1309,14 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             && s.history.len() >= pre_len
             && s.history.is_append_only_since(captured_revision);
         if prefix_intact {
-            if s.history.len() > pre_len {
-                working_history.extend(s.history[pre_len..].iter().cloned());
-            }
-            let history_changed = working_history.revision() != captured_revision;
+            // Compare contents, not revisions: `as_mut_vec` marks the copy as
+            // rewritten whether or not compaction touched a message, and a
+            // rewrite makes every remote client resync its whole transcript.
+            let history_changed = working_history.as_slice() != captured_history.as_slice();
             if history_changed {
+                if s.history.len() > pre_len {
+                    working_history.extend(s.history[pre_len..].iter().cloned());
+                }
                 s.history.replace(working_history.into_vec());
             }
             if compacted {
@@ -1322,10 +1325,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 s.recent_read_outputs.clear();
                 s.read_file_mtimes.clear();
                 crate::config::save_history(&s.history);
-            } else if history_changed {
+            } else {
                 // Deterministic pruning can change the request history without
                 // invoking the summarizer. Persist that rewrite as well, but
-                // keep the read cache: no filesystem state changed.
+                // keep the read cache: no filesystem state changed. An
+                // untouched history is saved too: this is the write that
+                // persists the messages appended since the previous round.
                 crate::config::save_history(&s.history);
             }
         } else {
