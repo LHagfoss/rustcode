@@ -228,16 +228,6 @@ fn native_tools_schema_covers_builtins_and_agent_tools() {
     assert!(names.contains(&"grep"));
     assert!(names.contains(&"view_file"));
     assert!(names.contains(&"complete_task"));
-    let sound_schema = &tools
-        .iter()
-        .find(|tool| tool["function"]["name"] == "generate_sound_effect")
-        .expect("sound generation tool is advertised")["function"]["parameters"];
-    assert_eq!(sound_schema["properties"]["duration_seconds"]["minimum"], 0);
-    assert!(
-        sound_schema["properties"]["duration_seconds"]
-            .get("exclusiveMinimum")
-            .is_none()
-    );
     // Agent tools are included when requested.
     assert!(names.contains(&"spawn_agent"));
     assert!(names.contains(&"todo_write"));
@@ -966,13 +956,13 @@ fn previously_used_counts_a_tool_admitted_by_a_server_reservation() {
 #[test]
 fn withheld_tools_are_named_in_the_round_notice() {
     let notice = super::withheld_tools_notice(&super::McpSchemaSelectionStats {
-        withheld_builtin_names: vec!["render_video".to_string(), "remember".to_string()],
+        withheld_builtin_names: vec!["search_web".to_string(), "remember".to_string()],
         available: 485,
         selected: 13,
         ..Default::default()
     })
     .expect("withheld tools must produce a notice");
-    assert!(notice.contains("render_video, remember"));
+    assert!(notice.contains("search_web, remember"));
     assert!(notice.contains("472 registered MCP tools"));
     assert!(notice.contains("list_mcp_tools"));
 
@@ -1878,15 +1868,15 @@ fn api_native_builtin_selection_is_policy_only_and_protocol_agnostic() {
         "role": "user",
         "content": "Implement the parser fix, edit the Rust files, and run tests"
     })];
-    let media_messages = vec![serde_json::json!({
+    let research_messages = vec![serde_json::json!({
         "role": "user",
-        "content": "Render a video and generate music for it"
+        "content": "Search the web and remember what you find"
     })];
     let coding = native_names(
         &native_tools_schema_for_context(ToolSchemaPolicy::root(false), &coding_messages).0,
     );
-    let media = native_names(
-        &native_tools_schema_for_context(ToolSchemaPolicy::root(false), &media_messages).0,
+    let research = native_names(
+        &native_tools_schema_for_context(ToolSchemaPolicy::root(false), &research_messages).0,
     );
 
     for required in [
@@ -1895,8 +1885,7 @@ fn api_native_builtin_selection_is_policy_only_and_protocol_agnostic() {
         "replace_file_content",
         "run_command",
         "complete_task",
-        "render_video",
-        "generate_music",
+        "search_web",
         "get_time",
         "remember",
     ] {
@@ -1905,7 +1894,7 @@ fn api_native_builtin_selection_is_policy_only_and_protocol_agnostic() {
     // Keyword filtering silently hid 16 of 37 built-ins from every request and
     // let one assistant word flip five of them on for the rest of the session.
     // Membership is now a pure function of the policy. (#1589)
-    assert_eq!(coding, media);
+    assert_eq!(coding, research);
 
     let (_, stats) =
         native_tools_schema_for_context(ToolSchemaPolicy::root(false), &coding_messages);
@@ -1946,14 +1935,14 @@ fn builtin_tool_selection_is_stable_across_consecutive_turns() {
     }));
     messages.push(serde_json::json!({
         "role": "user",
-        "content": "Now render a video and remember the decision"
+        "content": "Now search the web and remember the decision"
     }));
     let second =
         native_names(&native_tools_schema_for_context(ToolSchemaPolicy::root(false), &messages).0);
 
     assert_eq!(first, second);
     assert!(first.contains(&"delete_file".to_string()));
-    assert!(first.contains(&"render_video".to_string()));
+    assert!(first.contains(&"search_web".to_string()));
     assert!(first.contains(&"list_mcp_tools".to_string()));
 }
 

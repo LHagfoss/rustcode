@@ -135,7 +135,6 @@ scrollback and motion settings — is in the
 | ACP server | [docs/acp.md](docs/acp.md) |
 | Remote sessions (`/remote`, iPhone) | [docs/remote.md](docs/remote.md) |
 | Remote frontends (experimental) | [docs/mobile.md](docs/mobile.md) · [frontends](docs/frontends.md) |
-| Audio and video tools | [docs/media.md](docs/media.md) |
 | Thinking routing | [docs/thinking-router.md](docs/thinking-router.md) |
 | Performance and traces | [docs/performance.md](docs/performance.md) · [stream traces](docs/provider-stream-traces.md) · [build benchmark](scripts/bench-build-boundaries.md) |
 | Architecture | [docs/architecture.md](docs/architecture.md) |

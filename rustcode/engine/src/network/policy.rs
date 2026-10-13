@@ -58,14 +58,10 @@ impl InteractivePolicy {
     ) -> bool {
         let mut confirmations = Vec::new();
         let mut confirmation_details = Vec::new();
-        let (auto_confirm, task_working_directory, workspace_root, sandbox_mode) = {
+        let (auto_confirm, workspace_root, sandbox_mode) = {
             let state = state.lock().await;
             (
                 state.auto_confirm,
-                state
-                    .task_working_directory
-                    .clone()
-                    .or_else(|| state.effective_workspace_root()),
                 state.effective_workspace_root(),
                 state.effective_sandbox_mode(),
             )
@@ -143,18 +139,7 @@ impl InteractivePolicy {
                     };
 
                     let diff_opt = crate::network::get_diff_preview(&call.name, &call.arguments);
-                    let render_preview = (call.name == "render_video")
-                        .then(|| {
-                            tools::render_confirmation_preview(
-                                &call.arguments,
-                                task_working_directory.as_deref(),
-                            )
-                        })
-                        .flatten();
-                    let (preview, content_bytes) = if let Some(preview) = render_preview {
-                        let content_bytes = preview.len();
-                        (preview, content_bytes)
-                    } else if call.name == "run_command" {
+                    let (preview, content_bytes) = if call.name == "run_command" {
                         let command = call
                             .arguments
                             .get("command")

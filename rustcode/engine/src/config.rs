@@ -1085,32 +1085,6 @@ impl McpServerConfig {
     }
 }
 
-/// Local audio generation preferences. Backends are external processes and
-/// are discovered lazily when an audio tool is called.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct AudioConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_audio_backend")]
-    pub sfx_backend: String,
-    #[serde(default = "default_audio_backend")]
-    pub music_backend: String,
-}
-
-fn default_audio_backend() -> String {
-    "auto".to_string()
-}
-
-impl Default for AudioConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            sfx_backend: default_audio_backend(),
-            music_backend: default_audio_backend(),
-        }
-    }
-}
-
 fn default_true() -> bool {
     true
 }
@@ -1264,8 +1238,6 @@ pub struct AppConfig {
     /// Effective OS sandbox permissions for shell commands.
     #[serde(default)]
     pub sandbox_mode: SandboxMode,
-    #[serde(default)]
-    pub audio: AudioConfig,
     /// Publish the active RustCode session to the local Discord desktop IPC
     /// client when available. This never contains Discord credentials.
     #[serde(default = "default_true")]
@@ -1411,8 +1383,6 @@ struct RuntimeConfig {
     denied_command_prefixes: Vec<String>,
     #[serde(default)]
     sandbox_mode: SandboxMode,
-    #[serde(default)]
-    audio: AudioConfig,
     #[serde(default = "default_true")]
     discord_rpc_enabled: bool,
     #[serde(default)]
@@ -1475,8 +1445,6 @@ struct TomlConfig {
     denied_command_prefixes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sandbox_mode: Option<SandboxMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     discord_rpc_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1642,7 +1610,6 @@ impl Default for AppConfig {
             approved_command_prefixes: Vec::new(),
             denied_command_prefixes: Vec::new(),
             sandbox_mode: SandboxMode::default(),
-            audio: AudioConfig::default(),
             discord_rpc_enabled: true,
             fullscreen: false,
             preserve_transcript_scrollback: false,
@@ -1892,7 +1859,6 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
                     config.theme = runtime.theme;
                     config.start_time = runtime.start_time;
-                    config.audio = runtime.audio;
                     config.discord_rpc_enabled = runtime.discord_rpc_enabled;
                     config.fullscreen = runtime.fullscreen;
                     config.preserve_transcript_scrollback = runtime.preserve_transcript_scrollback;
@@ -2032,7 +1998,6 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
         denied_command_prefixes: Some(config.denied_command_prefixes.clone()),
         sandbox_mode: Some(config.sandbox_mode),
-        audio: Some(config.audio.clone()),
         discord_rpc_enabled: Some(config.discord_rpc_enabled),
         fullscreen: Some(config.fullscreen),
         preserve_transcript_scrollback: Some(config.preserve_transcript_scrollback),
@@ -2143,9 +2108,6 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(sandbox_mode) = file.sandbox_mode {
         config.sandbox_mode = sandbox_mode;
-    }
-    if let Some(audio) = file.audio {
-        config.audio = audio;
     }
     if let Some(enabled) = file.discord_rpc_enabled {
         config.discord_rpc_enabled = enabled;
@@ -2280,9 +2242,6 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     if file.mcp_servers.is_some() {
         persisted.mcp_servers = global.mcp_servers.clone();
     }
-    if file.audio.is_some() {
-        persisted.audio = global.audio.clone();
-    }
     if file.discord_rpc_enabled.is_some() {
         persisted.discord_rpc_enabled = global.discord_rpc_enabled;
     }
@@ -2341,7 +2300,6 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         approved_command_prefixes: None,
         denied_command_prefixes: None,
         sandbox_mode: None,
-        audio: None,
         discord_rpc_enabled: None,
         fullscreen: None,
         preserve_transcript_scrollback: None,

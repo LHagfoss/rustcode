@@ -48,7 +48,7 @@ nothing. See `docs/frontends.md` for the frontend contract and
 | `rustcode-loop-detect` | Semantic loop, failure, progress, and reasoning guards |
 
 The root `rustcode` crate owns integration concerns: model/network turns,
-ACP, configuration, media/audio tools, the terminal UI state, and adapters
+ACP, configuration, the terminal UI state, and adapters
 between the smaller crates.
 
 ## Command and task flow

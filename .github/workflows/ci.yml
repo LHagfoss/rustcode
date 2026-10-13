@@ -78,7 +78,6 @@ jobs:
         # fail fast instead of burning the 6h default (seen 20min+ stuck).
         timeout-minutes: 20
         env:
-            RUSTCODE_REQUIRE_FFMPEG_TESTS: "1"
             AFFECTED_PACKAGES: ${{ needs.changes.outputs.packages }}
         steps:
             - name: Check out repository
@@ -93,8 +92,7 @@ jobs:
               uses: Swatinem/rust-cache@v2
               with:
                   # Share dependency and native build-script artifacts between
-                  # the Linux test and lint jobs. The test-only FFmpeg flag is
-                  # read at runtime, so it must not split this compile cache.
+                  # the Linux test and lint jobs.
                   shared-key: linux
                   env-vars: "CARGO CC CFLAGS CXX CMAKE RUSTC RUSTDOC RUSTUP"
 
@@ -102,17 +100,11 @@ jobs:
               if: env.AFFECTED_PACKAGES != ''
               uses: mozilla-actions/sccache-action@v0.0.11
 
-            - name: Install FFmpeg
+            - name: Install bubblewrap
               if: env.AFFECTED_PACKAGES != ''
               run: |
                   sudo apt-get update
-                  sudo apt-get install --no-install-recommends -y ffmpeg bubblewrap
-
-            - name: Verify FFmpeg tools
-              if: env.AFFECTED_PACKAGES != ''
-              run: |
-                  ffmpeg -version
-                  ffprobe -version
+                  sudo apt-get install --no-install-recommends -y bubblewrap
 
             - name: Run tests
               if: env.AFFECTED_PACKAGES != ''

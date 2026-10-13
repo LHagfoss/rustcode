@@ -4,7 +4,6 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Instant;
 
-mod audio;
 mod context_archive;
 mod delegate;
 mod dispatch;
@@ -21,7 +20,6 @@ mod parser;
 mod scheduled_jobs_tests;
 pub(crate) mod schema;
 mod search;
-mod video;
 
 #[allow(unused_imports)]
 pub use dispatch::{execute, needs_confirmation};
@@ -35,7 +33,7 @@ pub use schema::tool_system_prompt;
 
 #[allow(unused_imports)]
 pub(crate) use dispatch::{
-    execute_video_with_progress, execute_with_metadata, execute_with_metadata_cancellable,
+    execute_with_metadata, execute_with_metadata_cancellable,
     execute_with_metadata_cancellable_for_call,
 };
 #[cfg(test)]
@@ -89,7 +87,6 @@ pub use schema::mcp_tool_display_name;
 
 pub(crate) use filesystem::edit_target_and_replacement;
 pub(crate) use misc::{mcp_servers_approval, search_web_async};
-pub(crate) use video::render_confirmation_preview;
 
 pub use rustcode_tool_protocol::ToolCall;
 
@@ -1397,12 +1394,6 @@ pub const TOOLS: &[Tool] = &[
     misc::RECALL_MEMORY,
     misc::ZOOM_CONTEXT,
     misc::FORGET_MEMORY,
-    audio::GENERATE_SOUND_EFFECT,
-    audio::GENERATE_MUSIC,
-    audio::INSPECT_AUDIO,
-    video::INSPECT_MEDIA,
-    video::VALIDATE_VIDEO_PROJECT,
-    video::RENDER_VIDEO,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {

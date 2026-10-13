@@ -1,8 +1,5 @@
 use super::schema::{mcp_canonical_name_for_clients, mcp_raw_name_is_unique};
-use super::{
-    CommandProgressCallback, TOOLS, ToolErrorKind, ToolExecutionOutput, audio, exec, filesystem,
-    search, video,
-};
+use super::{TOOLS, ToolErrorKind, ToolExecutionOutput, exec, filesystem, search};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -81,26 +78,6 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
     cancel_token: Option<tokio_util::sync::CancellationToken>,
     call_id: Option<&str>,
 ) -> ToolExecutionOutput {
-    if let Some(kind) = match name {
-        "generate_sound_effect" => Some(audio::GenerationKind::Sfx),
-        "generate_music" => Some(audio::GenerationKind::Music),
-        _ => None,
-    } {
-        return match audio::generate_with_cancel(kind, args, cancel_token) {
-            Ok(output) => ToolExecutionOutput::success(output),
-            Err(error) => ToolExecutionOutput::failure_with_kind(
-                as_error_message(&error.message),
-                audio::map_error_kind(error.kind),
-                audio::is_retryable_error(error.kind),
-            ),
-        };
-    }
-    if matches!(
-        name,
-        "inspect_media" | "validate_video_project" | "render_video"
-    ) {
-        return execute_video_with_progress(name, args, cancel_token, None);
-    }
     // Snapshot the clients and release the registry before the call: the UI
     // locks the same registry to label tool rows, so holding it across a slow
     // `tools/call` freezes rendering and serializes calls to other servers.
@@ -282,25 +259,6 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                 false,
             )
         }
-    }
-}
-
-pub(crate) fn execute_video_with_progress(
-    name: &str,
-    args: &Value,
-    cancel_token: Option<tokio_util::sync::CancellationToken>,
-    progress: Option<CommandProgressCallback>,
-) -> ToolExecutionOutput {
-    match video::execute_with_cancel_and_progress(name, args, cancel_token, progress) {
-        Ok(output) => ToolExecutionOutput::success(output),
-        Err(error) => ToolExecutionOutput::failure_with_kind(
-            as_error_message(&error.message),
-            video::map_error_kind(error.kind),
-            matches!(
-                error.kind,
-                video::VideoErrorKind::ProcessFailed | video::VideoErrorKind::Cancelled
-            ),
-        ),
     }
 }
 
