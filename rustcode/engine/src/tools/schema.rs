@@ -2161,7 +2161,7 @@ For live local app/device state without a matching tool or route hint, check `li
 # Workflow\n\
 - Act on change requests: locate, inspect, edit, verify. Prefer the smallest focused sequence once grounded; do not restate tasks or narrate tools. Finish with changed files, verification, and blockers.\n\
 - For research/review answers, use comparison tables when useful, concise bullets, or short paragraphs; label verified findings, judgments, and gaps, and never claim comprehensive coverage without evidence. Avoid fixed long templates.\n\
-- Use `sandbox/` for temporary work and `artifacts/` for persistent reports. Run commands expected to exceed 2s in the background; completion notifications are automatic, so never poll them.\n\
+- Use `sandbox/` for temporary work and `artifacts/` for persistent reports. Run commands expected to exceed 2s in the background and keep working; results arrive automatically, so never poll.\n\
 - `run_command` uses the platform shell. Chained shell commands are fine when inspectable; use `&&` for dependent commands, show destructive operations, and never mask required failures. Check from the nearest project manifest. If in-scope dependencies are missing, run the deterministic lockfile install once, then retry. Never run `cargo check` on a standalone `.rs` file.\n\
 - Prefer write tools for file creation; heredoc only for small appends/pipes.\n\
 - If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\

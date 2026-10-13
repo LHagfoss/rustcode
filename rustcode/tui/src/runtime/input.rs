@@ -2005,6 +2005,19 @@ pub(super) async fn handle_app_event(
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
+                    ui::ComposerAction::BackgroundCommand => {
+                        let mut state = app_state.lock().await;
+                        let moved = rustcode::tools::move_foreground_commands_to_background(
+                            &state.active_session_id,
+                        );
+                        state.set_transient_notice(match moved {
+                            0 => "No running command to move to the background",
+                            1 => "Moved the running command to the background",
+                            _ => "Moved the running commands to the background",
+                        });
+                        *needs_redraw = true;
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     action @ (ui::ComposerAction::ToggleExpandAll
                     | ui::ComposerAction::ToggleExpandStep) => {
                         let step = matches!(action, ui::ComposerAction::ToggleExpandStep);

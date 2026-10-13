@@ -1322,8 +1322,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // by re-issuing a bounded read, so this is intentionally scoped
             // to the batch that requested completion.
             let mut batch_incomplete = unexecuted_call_count > 0;
-            let mut background_pending = false;
-            let mut batch_has_completed = false;
             let explicit_verification_user_index = s
                 .history
                 .iter()
@@ -1444,7 +1442,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     }
                 }
                 if metadata.pending {
-                    background_pending = true;
                     result_messages.push((
                         call_position,
                         tool_result_history_message(
@@ -1460,10 +1457,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     ));
                     continue;
                 }
-                // A completed result in the same batch gives the model
-                // something to act on: keep the turn alive instead of
-                // parking it on the background task.
-                batch_has_completed = true;
                 let mut verification_command = false;
                 let mut repeated_successful_verification = false;
                 if (name == "run_command" || metadata.command.is_some())
@@ -2100,29 +2093,6 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 ctx.lifecycle.task_completed = false;
                 ctx.lifecycle.stop_reason =
                     Some(lifecycle::StopReason::InfrastructureFailure(stop_reason));
-                ctx.lifecycle.turn_machine.finish_tools_if_executing();
-                return ToolHandlingOutcome::Stop;
-            }
-
-            // Park the turn on the background task only when the batch left
-            // the model nothing else to act on. Mixed batches keep going so
-            // background work does not block foreground progress.
-            if background_pending && !batch_has_completed {
-                crate::logger::operational_event(
-                    "turn.loop_signal",
-                    loop_signal_event(
-                        Some(&stagnation),
-                        Some(round_had_meaningful),
-                        evidence_recovery.as_ref().map(|(reason, _, _)| *reason),
-                        false,
-                        Some("background_pending"),
-                        false,
-                    ),
-                );
-                crate::config::save_session_history(&s.active_session_id, &s.history);
-                s.clear_current_response();
-                drop(s);
-                ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
                 ctx.lifecycle.turn_machine.finish_tools_if_executing();
                 return ToolHandlingOutcome::Stop;
             }

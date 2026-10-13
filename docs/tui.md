@@ -22,6 +22,10 @@ question and its answer (`Asked …`) wrap, since they are shown whole. A comman
 row whose command history no longer holds reads `(command not recorded)`, or
 `(task <id>)` for a background launch.
 
+`ctrl+b` moves the command that is running to the background, so the agent
+gets control back without the command being stopped (see
+[background tasks](background-tasks.md)).
+
 A command started in the background keeps its row: it reads `· background`
 while the task runs and takes the finished state (`✓`, `× … · exit 1`,
 `× … · failed`, `− … · cancelled`) once the task has ended. The launch row has
