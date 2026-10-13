@@ -1,6 +1,7 @@
 use super::*;
 use crate::ui::keymap::{KeyAction, KeyMap};
 use crossterm::event::KeyEvent;
+use rustcode::controller::text_edit::TextEdit;
 
 pub(super) enum InputFlow {
     ContinueIteration,
@@ -40,101 +41,26 @@ fn insert_question_answer_text(question: &mut rustcode::controller::PendingQuest
     question.insert_str(text);
 }
 
-fn move_question_cursor_vertical(question: &mut rustcode::controller::PendingQuestion, down: bool) {
-    let Some(text) = question.custom_input.as_ref() else {
-        return;
-    };
-    let cursor = question.custom_cursor.min(text.len());
-    if !text.is_char_boundary(cursor) {
-        return;
-    }
-    let before = &text[..cursor];
-    let current_line_start = before.rfind('\n').map_or(0, |index| index + 1);
-    let column = before[current_line_start..].chars().count();
-    if down {
-        let Some(next_line_start_rel) = text[cursor..].find('\n') else {
-            question.custom_cursor = text.len();
-            return;
-        };
-        let next_line_start = cursor + next_line_start_rel + 1;
-        let next_line_end = text[next_line_start..]
-            .find('\n')
-            .map_or(text.len(), |index| next_line_start + index);
-        let target_column = column.min(text[next_line_start..next_line_end].chars().count());
-        question.custom_cursor = next_line_start
-            + text[next_line_start..next_line_end]
-                .chars()
-                .take(target_column)
-                .map(char::len_utf8)
-                .sum::<usize>();
-    } else if current_line_start > 0 {
-        let previous_line_end = current_line_start - 1;
-        let previous_line_start = text[..previous_line_end]
-            .rfind('\n')
-            .map_or(0, |index| index + 1);
-        let previous_line = &text[previous_line_start..previous_line_end];
-        let target_column = column.min(previous_line.chars().count());
-        question.custom_cursor = previous_line_start
-            + previous_line
-                .chars()
-                .take(target_column)
-                .map(char::len_utf8)
-                .sum::<usize>();
-    } else {
-        question.custom_cursor = 0;
-    }
-}
-
-fn delete_question_word_forward(question: &mut rustcode::controller::PendingQuestion) {
-    let start = question.custom_cursor;
-    question.move_cursor_word_right();
-    let end = question.custom_cursor;
-    question.custom_cursor = start;
-    if start < end
-        && let Some(text) = question.custom_input.as_mut()
-    {
-        text.replace_range(start..end, "");
-    }
-}
-
-fn kill_question_line_to_start(question: &mut rustcode::controller::PendingQuestion) {
-    let end = question.custom_cursor;
-    let Some(text) = question.custom_input.as_mut() else {
-        return;
-    };
-    let start = text[..end].rfind('\n').map_or(0, |index| index + 1);
-    if start < end {
-        text.replace_range(start..end, "");
-        question.custom_cursor = start;
-    }
-}
-
 fn handle_question_custom_key(
     question: &mut rustcode::controller::PendingQuestion,
     key: KeyEvent,
 ) -> QuestionEditAction {
     use QuestionEditAction::{Handled, Paste, Submit};
 
-    match KeyMap::from_environment().resolve(key) {
-        KeyAction::Insert(character) => question.insert_char(character),
+    let action = KeyMap::from_environment().resolve(key);
+    match action {
         KeyAction::InsertNewline => question.insert_char('\n'),
         KeyAction::Submit => return Submit,
         KeyAction::Paste => return Paste,
-        KeyAction::MoveLeft => question.move_cursor_left(),
-        KeyAction::MoveRight => question.move_cursor_right(),
-        KeyAction::MoveWordLeft => question.move_cursor_word_left(),
-        KeyAction::MoveWordRight => question.move_cursor_word_right(),
-        KeyAction::MoveStart => question.move_cursor_home(),
-        KeyAction::MoveEnd => question.move_cursor_end(),
-        KeyAction::DeleteBackward => question.delete_char_before(),
-        KeyAction::DeleteForward => question.delete_char_after(),
-        KeyAction::DeleteWordBackward => question.delete_word_before(),
-        KeyAction::DeleteWordForward => delete_question_word_forward(question),
-        KeyAction::KillLineStart => kill_question_line_to_start(question),
-        KeyAction::HistoryPrevious => move_question_cursor_vertical(question, false),
-        KeyAction::HistoryNext => move_question_cursor_vertical(question, true),
+        // The answer may span lines: Up and Down move through them.
+        KeyAction::HistoryPrevious => question.edit(TextEdit::LineUp),
+        KeyAction::HistoryNext => question.edit(TextEdit::LineDown),
         // Modal and composer actions do not edit an answer.
-        _ => {}
+        _ => {
+            if let Some(edit) = action.text_edit(&mut [0; 4]) {
+                question.edit(edit);
+            }
+        }
     }
     Handled
 }
@@ -250,94 +176,33 @@ fn edit_picker_search(
     cursor: &mut usize,
     key: crossterm::event::KeyEvent,
 ) -> bool {
-    use crate::ui::keymap::KeyAction;
-
-    *cursor = picker_cursor_boundary(query, *cursor);
+    // A search query is one line; the list owns Up and Down.
     let action = crate::ui::keymap::KeyMap::from_environment().resolve(key);
-    match action {
-        KeyAction::Insert(character) => {
-            query.insert(*cursor, character);
-            *cursor += character.len_utf8();
+    match action.text_edit(&mut [0; 4]) {
+        Some(edit) => {
+            rustcode::controller::text_edit::apply(query, cursor, edit);
+            true
         }
-        KeyAction::MoveLeft => *cursor = previous_char_boundary(query, *cursor),
-        KeyAction::MoveRight => *cursor = next_char_boundary(query, *cursor),
-        KeyAction::MoveWordLeft => *cursor = picker_word_left(query, *cursor),
-        KeyAction::MoveWordRight => *cursor = picker_word_right(query, *cursor),
-        KeyAction::MoveStart => *cursor = query[..*cursor].rfind('\n').map_or(0, |i| i + 1),
-        KeyAction::MoveEnd => {
-            *cursor = query[*cursor..]
-                .find('\n')
-                .map_or(query.len(), |i| *cursor + i)
-        }
-        KeyAction::DeleteBackward => {
-            let start = previous_char_boundary(query, *cursor);
-            query.replace_range(start..*cursor, "");
-            *cursor = start;
-        }
-        KeyAction::DeleteForward => {
-            let end = next_char_boundary(query, *cursor);
-            query.replace_range(*cursor..end, "");
-        }
-        KeyAction::DeleteWordBackward => {
-            let start = picker_word_left(query, *cursor);
-            query.replace_range(start..*cursor, "");
-            *cursor = start;
-        }
-        KeyAction::DeleteWordForward => {
-            let end = picker_word_right(query, *cursor);
-            query.replace_range(*cursor..end, "");
-        }
-        KeyAction::KillLineStart => {
-            let end = *cursor;
-            let start = query[..end].rfind('\n').map_or(0, |i| i + 1);
-            query.replace_range(start..end, "");
-            *cursor = start;
-        }
-        _ => return false,
+        None => false,
     }
-    true
 }
 
 fn insert_picker_search_text(state: &mut AppState, target: PickerSearchTarget, text: &str) {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    match target {
-        PickerSearchTarget::Model => {
-            let cursor = picker_cursor_boundary(
-                &state.model_picker_search,
-                state.model_picker_search_cursor,
-            );
-            state.model_picker_search.insert_str(cursor, &normalized);
-            state.model_picker_search_cursor = cursor + normalized.len();
-            state.model_picker_index = 0;
-        }
-        PickerSearchTarget::Command => {
-            let cursor = picker_cursor_boundary(
-                &state.command_picker_search,
-                state.command_picker_search_cursor,
-            );
-            state.command_picker_search.insert_str(cursor, &normalized);
-            state.command_picker_search_cursor = cursor + normalized.len();
-            state.command_picker_index = 0;
-        }
-    }
-}
-
-fn insert_mcp_edit_paste(edit_state: &mut rustcode::app::McpEditState, text: &str) {
-    let (buffer, cursor) = edit_state.active_buf_and_pos_mut();
-    *cursor = picker_cursor_boundary(buffer, *cursor);
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    for character in normalized.chars().filter(|character| *character != '\n') {
-        buffer.insert(*cursor, character);
-        *cursor += character.len_utf8();
-    }
-}
-
-fn picker_cursor_boundary(text: &str, cursor: usize) -> usize {
-    let mut cursor = cursor.min(text.len());
-    while !text.is_char_boundary(cursor) {
-        cursor -= 1;
-    }
-    cursor
+    let (query, cursor, selected) = match target {
+        PickerSearchTarget::Model => (
+            &mut state.model_picker_search,
+            &mut state.model_picker_search_cursor,
+            &mut state.model_picker_index,
+        ),
+        PickerSearchTarget::Command => (
+            &mut state.command_picker_search,
+            &mut state.command_picker_search_cursor,
+            &mut state.command_picker_index,
+        ),
+    };
+    let text = rustcode::controller::text_edit::single_line(text);
+    rustcode::controller::text_edit::apply(query, cursor, TextEdit::Insert(&text));
+    *selected = 0;
 }
 
 async fn open_demo_if_requested(
@@ -356,54 +221,6 @@ async fn open_demo_if_requested(
     state.cursor_position = 0;
     state.reset_suggestion_cycle();
     true
-}
-
-fn previous_char_boundary(text: &str, cursor: usize) -> usize {
-    text[..cursor]
-        .char_indices()
-        .next_back()
-        .map_or(0, |(index, _)| index)
-}
-
-fn next_char_boundary(text: &str, cursor: usize) -> usize {
-    text[cursor..]
-        .chars()
-        .next()
-        .map_or(cursor, |character| cursor + character.len_utf8())
-}
-
-fn picker_word_left(text: &str, cursor: usize) -> usize {
-    let mut position = cursor;
-    while let Some(character) = text[..position].chars().next_back() {
-        if !character.is_whitespace() {
-            break;
-        }
-        position -= character.len_utf8();
-    }
-    while let Some(character) = text[..position].chars().next_back() {
-        if character.is_whitespace() {
-            break;
-        }
-        position -= character.len_utf8();
-    }
-    position
-}
-
-fn picker_word_right(text: &str, cursor: usize) -> usize {
-    let mut position = cursor;
-    while let Some(character) = text[position..].chars().next() {
-        if !character.is_whitespace() {
-            break;
-        }
-        position += character.len_utf8();
-    }
-    while let Some(character) = text[position..].chars().next() {
-        if character.is_whitespace() {
-            break;
-        }
-        position += character.len_utf8();
-    }
-    position
 }
 
 fn is_shift_tab(key: crossterm::event::KeyEvent) -> bool {
@@ -1552,17 +1369,15 @@ pub(super) async fn handle_app_event(
                         if crate::ui::keymap::KeyMap::from_environment().resolve(key)
                             == crate::ui::keymap::KeyAction::Paste
                         {
-                            if let Some(payload) = clipboard_paste_payload() {
-                                insert_mcp_edit_paste(edit_state, &payload);
+                            // Text only: an image marker has no place in a
+                            // server name or command.
+                            if let Some(text) = rustcode::clipboard::read_text_from_clipboard() {
+                                edit_state.insert_str(&text);
                             }
                             drop(s);
                             *needs_redraw = true;
                             return Ok(InputFlow::ContinueIteration);
                         }
-                        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                        let alt = key.modifiers.contains(KeyModifiers::ALT);
-                        let super_key = key.modifiers.contains(KeyModifiers::SUPER);
-
                         match key.code {
                             KeyCode::Esc => {
                                 s.mcp_edit_state = None;
@@ -1578,47 +1393,6 @@ pub(super) async fn handle_app_event(
                             KeyCode::Down | KeyCode::Tab => {
                                 let next = (edit_state.active_field + 1) % 3;
                                 edit_state.set_active_field(next);
-                            }
-                            KeyCode::Left => {
-                                if alt || ctrl {
-                                    edit_state.move_cursor_word_left();
-                                } else {
-                                    edit_state.move_cursor_left();
-                                }
-                            }
-                            KeyCode::Right => {
-                                if alt || ctrl {
-                                    edit_state.move_cursor_word_right();
-                                } else {
-                                    edit_state.move_cursor_right();
-                                }
-                            }
-                            KeyCode::Home => {
-                                edit_state.move_cursor_home();
-                            }
-                            KeyCode::End => {
-                                edit_state.move_cursor_end();
-                            }
-                            KeyCode::Backspace => {
-                                if super_key {
-                                    edit_state.delete_line_left();
-                                } else if alt || ctrl {
-                                    edit_state.delete_word_left();
-                                } else {
-                                    edit_state.delete_char_left();
-                                }
-                            }
-                            KeyCode::Delete => {
-                                edit_state.delete_char_right();
-                            }
-                            KeyCode::Char(c) => {
-                                if ctrl && (c == 'w' || c == 'W') {
-                                    edit_state.delete_word_left();
-                                } else if ctrl && (c == 'u' || c == 'U') {
-                                    edit_state.delete_line_left();
-                                } else if !ctrl && !super_key {
-                                    edit_state.insert_char(c);
-                                }
                             }
                             KeyCode::Enter => {
                                 let name = edit_state.name_input.trim().to_string();
@@ -1672,7 +1446,15 @@ pub(super) async fn handle_app_event(
                                     s.mcp_edit_state = None;
                                 }
                             }
-                            _ => {}
+                            // Everything else edits the active field with
+                            // the keys every other text field uses.
+                            _ => {
+                                let action =
+                                    crate::ui::keymap::KeyMap::from_environment().resolve(key);
+                                if let Some(edit) = action.text_edit(&mut [0; 4]) {
+                                    edit_state.edit(edit);
+                                }
+                            }
                         }
                     } else {
                         match key.code {
@@ -2766,7 +2548,7 @@ pub(super) async fn handle_app_event(
                     }
                 } else if s.show_mcp_config {
                     if let Some(ref mut edit_state) = s.mcp_edit_state {
-                        insert_mcp_edit_paste(edit_state, &normalized);
+                        edit_state.insert_str(&normalized);
                     }
                 } else {
                     composer.handle_paste(&mut s, &normalized);
@@ -2790,11 +2572,11 @@ mod tests {
         agent_context_return_target, clear_selection_for_composer_key,
         filtered_command_picker_items, handle_cmd_copy_chord, handle_cmd_copy_chord_with,
         handle_copy_or_exit_chord, handle_picker_search_key, handle_question_custom_key,
-        insert_clipboard_paste, insert_mcp_edit_paste, insert_question_answer_text,
-        is_cmd_copy_chord, is_copy_or_exit_chord, is_keyboard_range_key, is_shift_tab,
-        is_transcript_navigation, open_demo_if_requested, picker_selection_for_key,
-        report_selection_copy, return_to_latest_for_key, scroll_command_panel,
-        scroll_panel_selection, selection_owns_key, subagent_picker_action,
+        insert_clipboard_paste, insert_question_answer_text, is_cmd_copy_chord,
+        is_copy_or_exit_chord, is_keyboard_range_key, is_shift_tab, is_transcript_navigation,
+        open_demo_if_requested, picker_selection_for_key, report_selection_copy,
+        return_to_latest_for_key, scroll_command_panel, scroll_panel_selection, selection_owns_key,
+        subagent_picker_action,
     };
     use crate::ui::{Composer, TranscriptState};
     use crossterm::event::{
@@ -2892,14 +2674,15 @@ mod tests {
             &mut question,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT),
         );
-        assert_eq!(question.custom_input.as_deref(), Some("one three"));
+        // Forward word delete removes the word and leaves the space after it.
+        assert_eq!(question.custom_input.as_deref(), Some("one  three"));
         assert_eq!(question.custom_cursor, "one ".len());
 
         handle_question_custom_key(
             &mut question,
             KeyEvent::new(KeyCode::Backspace, KeyModifiers::SUPER),
         );
-        assert_eq!(question.custom_input.as_deref(), Some("three"));
+        assert_eq!(question.custom_input.as_deref(), Some(" three"));
         assert_eq!(question.custom_cursor, 0);
     }
 
@@ -3130,9 +2913,10 @@ mod tests {
             active_field: 0,
             cursor_pos: "caf".len(),
         };
-        insert_mcp_edit_paste(&mut edit_state, "X\r\nY");
-        assert_eq!(edit_state.name_input, "cafXYé");
-        assert_eq!(edit_state.cursor_pos, "cafXY".len());
+        // A pasted line break becomes a space: the field holds one line.
+        edit_state.insert_str("X\r\nY");
+        assert_eq!(edit_state.name_input, "cafX Yé");
+        assert_eq!(edit_state.cursor_pos, "cafX Y".len());
     }
 
     #[tokio::test]

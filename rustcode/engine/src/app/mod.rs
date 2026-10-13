@@ -16,6 +16,7 @@ pub mod transcript;
 pub(crate) mod workspace;
 pub use state::Verbosity;
 pub mod suggestion;
+pub mod text_edit;
 
 pub use actions::*;
 pub use geometry::UiRect;

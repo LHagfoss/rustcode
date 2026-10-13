@@ -166,162 +166,21 @@ impl PendingQuestion {
         }
     }
 
+    /// Apply one of the shared editing operations to the custom answer.
+    pub fn edit(&mut self, edit: crate::app::text_edit::TextEdit<'_>) {
+        let text = self.custom_input.get_or_insert_with(String::new);
+        crate::app::text_edit::apply(text, &mut self.custom_cursor, edit);
+    }
+
     pub fn insert_char(&mut self, c: char) {
-        self.clamp_cursor();
-        let cursor = self.custom_cursor;
-        let buf = self.custom_input.get_or_insert_with(String::new);
-        buf.insert(cursor, c);
-        self.custom_cursor = cursor + c.len_utf8();
+        self.edit(crate::app::text_edit::TextEdit::Insert(
+            c.encode_utf8(&mut [0; 4]),
+        ));
     }
 
     pub fn insert_str(&mut self, s: &str) {
-        for c in s.replace("\r\n", "\n").replace('\r', "\n").chars() {
-            self.insert_char(c);
-        }
-    }
-
-    pub fn delete_char_before(&mut self) {
-        self.clamp_cursor();
-        let cursor = self.custom_cursor;
-        if cursor > 0 {
-            let prev = self
-                .custom_input
-                .as_ref()
-                .and_then(|buf| buf[..cursor].chars().next_back())
-                .map_or(1, |c| c.len_utf8());
-            self.custom_cursor = cursor - prev;
-            if let Some(buf) = self.custom_input.as_mut() {
-                buf.remove(self.custom_cursor);
-            }
-        }
-    }
-
-    pub fn delete_char_after(&mut self) {
-        self.clamp_cursor();
-        let cursor = self.custom_cursor;
-        let has_char_after = self
-            .custom_input
-            .as_ref()
-            .is_some_and(|buf| cursor < buf.len());
-        if has_char_after {
-            if let Some(buf) = self.custom_input.as_mut() {
-                buf.remove(cursor);
-            }
-        }
-    }
-
-    pub fn move_cursor_left(&mut self) {
-        self.clamp_cursor();
-        if let Some(buf) = self.custom_input.as_ref() {
-            if self.custom_cursor > 0 {
-                let prev = buf[..self.custom_cursor]
-                    .chars()
-                    .next_back()
-                    .map_or(1, |c| c.len_utf8());
-                self.custom_cursor -= prev;
-            }
-        }
-    }
-
-    pub fn move_cursor_right(&mut self) {
-        self.clamp_cursor();
-        if let Some(buf) = self.custom_input.as_ref() {
-            if self.custom_cursor < buf.len() {
-                let next = buf[self.custom_cursor..]
-                    .chars()
-                    .next()
-                    .map_or(1, |c| c.len_utf8());
-                self.custom_cursor += next;
-            }
-        }
-    }
-
-    pub fn move_cursor_home(&mut self) {
-        self.custom_cursor = 0;
-    }
-
-    pub fn move_cursor_end(&mut self) {
-        if let Some(buf) = self.custom_input.as_ref() {
-            self.custom_cursor = buf.len();
-        }
-    }
-
-    pub fn delete_word_before(&mut self) {
-        self.clamp_cursor();
-        let start = self.custom_cursor;
-        self.move_cursor_word_left();
-        let end = self.custom_cursor;
-        if start > end {
-            if let Some(buf) = self.custom_input.as_mut() {
-                buf.drain(end..start);
-            }
-        }
-    }
-
-    pub fn move_cursor_word_left(&mut self) {
-        self.clamp_cursor();
-        if let Some(buf) = self.custom_input.as_ref() {
-            let mut char_indices: Vec<(usize, char)> =
-                buf[..self.custom_cursor].char_indices().collect();
-            while let Some((_, c)) = char_indices.last() {
-                if c.is_whitespace() {
-                    char_indices.pop();
-                } else {
-                    break;
-                }
-            }
-            while let Some((idx, c)) = char_indices.last() {
-                if !c.is_whitespace() {
-                    self.custom_cursor = *idx;
-                    char_indices.pop();
-                } else {
-                    break;
-                }
-            }
-            if char_indices.is_empty() {
-                self.custom_cursor = 0;
-            }
-        }
-    }
-
-    pub fn move_cursor_word_right(&mut self) {
-        self.clamp_cursor();
-        if let Some(buf) = self.custom_input.as_ref() {
-            let mut cursor = self.custom_cursor;
-            while cursor < buf.len() {
-                let Some(c) = buf[cursor..].chars().next() else {
-                    break;
-                };
-                if c.is_whitespace() {
-                    break;
-                }
-                cursor += c.len_utf8();
-            }
-            while cursor < buf.len() {
-                let Some(c) = buf[cursor..].chars().next() else {
-                    break;
-                };
-                if !c.is_whitespace() {
-                    break;
-                }
-                cursor += c.len_utf8();
-            }
-            self.custom_cursor = cursor;
-        }
-    }
-
-    fn clamp_cursor(&mut self) {
-        if let Some(buf) = self.custom_input.as_ref() {
-            self.custom_cursor = self.custom_cursor.min(buf.len());
-            while !buf.is_char_boundary(self.custom_cursor) {
-                if self.custom_cursor == 0 {
-                    break;
-                }
-                self.custom_cursor -= 1;
-            }
-        } else {
-            self.custom_cursor = 0;
-        }
+        let text = s.replace("\r\n", "\n").replace('\r', "\n");
+        self.edit(crate::app::text_edit::TextEdit::Insert(&text));
     }
 }
 
@@ -562,144 +421,17 @@ impl McpEditState {
         *pos = buf.len();
     }
 
-    pub fn insert_char(&mut self, c: char) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        buf.insert(*pos, c);
-        *pos += c.len_utf8();
+    /// Apply one of the shared editing operations to the active field. The
+    /// fields hold one line each, so vertical motions do nothing here.
+    pub fn edit(&mut self, edit: crate::app::text_edit::TextEdit<'_>) {
+        let (text, cursor) = self.active_buf_and_pos_mut();
+        crate::app::text_edit::apply(text, cursor, edit);
     }
 
-    pub fn delete_char_left(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        if *pos > 0
-            && let Some(c) = buf[..*pos].chars().next_back()
-        {
-            let len = c.len_utf8();
-            *pos -= len;
-            buf.remove(*pos);
-        }
-    }
-
-    pub fn delete_char_right(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        if *pos < buf.len() {
-            buf.remove(*pos);
-        }
-    }
-
-    pub fn delete_word_left(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        if *pos == 0 {
-            return;
-        }
-        let end = *pos;
-        let mut start = *pos;
-        while start > 0
-            && buf[..start]
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_whitespace())
-        {
-            if let Some(c) = buf[..start].chars().next_back() {
-                start -= c.len_utf8();
-            }
-        }
-        while start > 0
-            && buf[..start]
-                .chars()
-                .next_back()
-                .is_some_and(|c| !c.is_whitespace())
-        {
-            if let Some(c) = buf[..start].chars().next_back() {
-                start -= c.len_utf8();
-            }
-        }
-        buf.drain(start..end);
-        *pos = start;
-    }
-
-    pub fn delete_line_left(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        buf.drain(0..*pos);
-        *pos = 0;
-    }
-
-    pub fn move_cursor_left(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        if *pos > 0
-            && let Some(c) = buf[..*pos].chars().next_back()
-        {
-            *pos -= c.len_utf8();
-        }
-    }
-
-    pub fn move_cursor_right(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        if *pos < buf.len()
-            && let Some(c) = buf[*pos..].chars().next()
-        {
-            *pos += c.len_utf8();
-        }
-    }
-
-    pub fn move_cursor_word_left(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        let mut p = *pos;
-        while p > 0
-            && buf[..p]
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_whitespace())
-        {
-            if let Some(c) = buf[..p].chars().next_back() {
-                p -= c.len_utf8();
-            }
-        }
-        while p > 0
-            && buf[..p]
-                .chars()
-                .next_back()
-                .is_some_and(|c| !c.is_whitespace())
-        {
-            if let Some(c) = buf[..p].chars().next_back() {
-                p -= c.len_utf8();
-            }
-        }
-        *pos = p;
-    }
-
-    pub fn move_cursor_word_right(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = (*pos).min(buf.len());
-        let mut p = *pos;
-        while p < buf.len() && buf[p..].chars().next().is_some_and(|c| c.is_whitespace()) {
-            if let Some(c) = buf[p..].chars().next() {
-                p += c.len_utf8();
-            }
-        }
-        while p < buf.len() && buf[p..].chars().next().is_some_and(|c| !c.is_whitespace()) {
-            if let Some(c) = buf[p..].chars().next() {
-                p += c.len_utf8();
-            }
-        }
-        *pos = p;
-    }
-
-    pub fn move_cursor_home(&mut self) {
-        let (_, pos) = self.active_buf_and_pos_mut();
-        *pos = 0;
-    }
-
-    pub fn move_cursor_end(&mut self) {
-        let (buf, pos) = self.active_buf_and_pos_mut();
-        *pos = buf.len();
+    /// Insert pasted or typed text, flattened to the field's single line.
+    pub fn insert_str(&mut self, text: &str) {
+        let text = crate::app::text_edit::single_line(text);
+        self.edit(crate::app::text_edit::TextEdit::Insert(&text));
     }
 }
 
