@@ -62,6 +62,37 @@ public enum TimingPresentation {
         return legacy
     }
 
+    /// The whole turn footer on one line: outcome, work time, and when it ended.
+    ///
+    /// The end time drops the date when the turn ended today. A timestamp that
+    /// does not parse is shown as the host sent it.
+    public static func footerLine(
+        timing: TurnTiming?,
+        legacyCompletedAt: String?,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        locale: Locale = .current
+    ) -> String? {
+        var parts: [String] = []
+        if let timing, timing.outcome != nil {
+            parts.append(turnLabel(timing))
+        }
+        if let timestamp = endTimestamp(timing: timing, legacy: legacyCompletedAt) {
+            if parts.isEmpty { parts.append("Completed") }
+            if let date = date(timestamp) {
+                var style = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+                if !calendar.isDate(date, inSameDayAs: now) {
+                    style = style.month(.abbreviated).day()
+                    if !calendar.isDate(date, equalTo: now, toGranularity: .year) { style = style.year() }
+                }
+                parts.append(date.formatted(style))
+            } else {
+                parts.append(timestamp)
+            }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     public static func endLabel(outcome: String?) -> String {
         switch outcome {
         case "failed": "Failed at"

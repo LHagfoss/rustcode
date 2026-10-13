@@ -315,6 +315,13 @@ struct TranscriptView: View {
                     proxy.scrollTo("transcript-end", anchor: .bottom)
                 }
             }
+            // A lazy stack only estimates the height of rows it has not built, so the
+            // initial bottom anchor can land past the real end and show an empty
+            // screen. Once the first layout is in, scroll to the actual last row.
+            .task(id: snapshot.session) {
+                await Task.yield()
+                proxy.scrollTo("transcript-end", anchor: .bottom)
+            }
             .accessibilityIdentifier("transcript")
             .overlay(alignment: .bottomTrailing) {
                 if !followsLatest {

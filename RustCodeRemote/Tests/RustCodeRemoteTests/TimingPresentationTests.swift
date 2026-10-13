@@ -68,4 +68,33 @@ import Testing
         #expect(TimingPresentation.date("2026-10-09T16:40:32.123Z") != nil)
         #expect(TimingPresentation.date("future-format") == nil)
     }
+
+    @Test func footerIsOneLineWithOutcomeWorkTimeAndEndTime() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/Oslo")!
+        let locale = Locale(identifier: "en_GB")
+        let ended = "2026-10-09T18:40:32+02:00"
+        let timing = TurnTiming(turnID: "t", endedAt: ended, elapsedWorkMilliseconds: 32000, outcome: "completed")
+        func line(_ timing: TurnTiming?, legacy: String? = nil, now: String) -> String? {
+            TimingPresentation.footerLine(timing: timing, legacyCompletedAt: legacy,
+                now: TimingPresentation.date(now)!, calendar: calendar, locale: locale)
+        }
+
+        // Same day: the time alone. Another day: day and month. Another year: the year too.
+        #expect(line(timing, now: "2026-10-09T21:00:00+02:00") == "Completed · Worked for 32s · 18:40")
+        // The joining word between date and time is the system's, so only the parts are pinned.
+        let otherDay = line(timing, now: "2026-10-13T09:00:00+02:00") ?? ""
+        #expect(otherDay.hasPrefix("Completed · Worked for 32s · 9 Oct") && otherDay.hasSuffix("18:40"))
+        #expect(!otherDay.contains("2026"))
+        let otherYear = line(timing, now: "2027-01-02T09:00:00+01:00") ?? ""
+        #expect(otherYear.hasPrefix("Completed · Worked for 32s · 9 Oct 2026") && otherYear.hasSuffix("18:40"))
+
+        // No work time, a legacy timestamp, an unparseable one, and nothing to say.
+        let failed = TurnTiming(turnID: "t", endedAt: ended, outcome: "failed")
+        #expect(line(failed, now: "2026-10-09T21:00:00+02:00") == "Failed · 18:40")
+        #expect(line(nil, legacy: ended, now: "2026-10-09T21:00:00+02:00") == "Completed · 18:40")
+        #expect(line(nil, legacy: "saved-time", now: "2026-10-09T21:00:00+02:00") == "Completed · saved-time")
+        #expect(line(TurnTiming(turnID: "t"), now: "2026-10-09T21:00:00+02:00") == nil)
+        #expect(line(nil, now: "2026-10-09T21:00:00+02:00") == nil)
+    }
 }

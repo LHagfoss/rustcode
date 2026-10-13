@@ -39,21 +39,10 @@ struct TurnFooter: View {
     var legacyCompletedAt: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let timing, timing.outcome != nil {
-                Text(TimingPresentation.turnLabel(timing))
+        Group {
+            if let line = TimingPresentation.footerLine(timing: timing, legacyCompletedAt: legacyCompletedAt) {
+                Text(line)
                     .font(.caption).foregroundStyle(.secondary)
-            }
-            if let timestamp = TimingPresentation.endTimestamp(timing: timing, legacy: legacyCompletedAt) {
-                let prefix = TimingPresentation.endLabel(outcome: timing?.outcome)
-                Group {
-                    if let date = TimingPresentation.date(timestamp) {
-                        Text("\(prefix) \(date.formatted(date: .abbreviated, time: .standard))")
-                    } else {
-                        Text("\(prefix) \(timestamp)")
-                    }
-                }
-                .font(.caption).foregroundStyle(.tertiary)
             }
         }
         .accessibilityIdentifier("turnFooter")
@@ -311,7 +300,7 @@ private struct ToolRow: View {
             statusIcon
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(tool.name)
+                Text(ToolPresentation.title(tool.name))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                 Text(tool.summary)
@@ -323,7 +312,7 @@ private struct ToolRow: View {
             Spacer(minLength: 8)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Tool \(tool.name), \(statusDescription). \(tool.summary)")
+        .accessibilityLabel("\(ToolPresentation.title(tool.name)), \(statusDescription). \(tool.summary)")
     }
 
     private func detail(_ title: String, _ text: String) -> some View {

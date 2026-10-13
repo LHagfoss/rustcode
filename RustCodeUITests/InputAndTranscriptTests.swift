@@ -626,10 +626,11 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(thinking.waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons.matching(identifier: "Thinking · 420ms · ~96 tokens").count, 1)
         XCTAssertTrue(app.staticTexts["Response · 12s"].exists)
-        XCTAssertTrue(app.staticTexts["Completed · Worked for 32s"].exists)
-        XCTAssertEqual(app.staticTexts.matching(identifier: "Completed · Worked for 32s").count, 1)
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Completed at ")).firstMatch.exists)
-        XCTAssertTrue(app.staticTexts["Failed · Worked for 8s"].exists)
+        // One line per turn: outcome, work time, then when it ended.
+        let completed = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Completed · Worked for 32s · "))
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Failed · Worked for 8s · ")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Completed at ")).firstMatch.exists)
     }
 
     func testQuestionCustomAnswerAndSelectionAreExclusive() {
