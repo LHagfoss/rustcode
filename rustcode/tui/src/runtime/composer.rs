@@ -148,11 +148,16 @@ impl Composer {
                 ComposerAction::Handled
             }
             KeyAction::MoveStart => {
-                state.move_cursor_to_start();
+                state.move_cursor_line_start();
                 ComposerAction::Handled
             }
             KeyAction::MoveEnd => {
-                state.move_cursor_to_end();
+                state.move_cursor_line_end();
+                ComposerAction::Handled
+            }
+            KeyAction::KillLineEnd => {
+                state.kill_line_to_end();
+                state.reset_suggestion_cycle();
                 ComposerAction::Handled
             }
             KeyAction::DeleteBackward => {

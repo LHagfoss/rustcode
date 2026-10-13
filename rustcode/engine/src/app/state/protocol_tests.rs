@@ -1,4 +1,5 @@
 use super::{AppState, PendingQuestion};
+use crate::app::text_edit::TextEdit;
 use crate::config::ToolProtocol;
 
 #[test]
@@ -98,9 +99,9 @@ fn pending_question_editing_preserves_utf8_boundaries() {
     let mut question = PendingQuestion::new("Q".to_string(), vec![], false);
     question.activate_custom_input();
     question.insert_str("héllo");
-    question.move_cursor_home();
-    question.move_cursor_right();
-    question.delete_char_after();
+    question.edit(TextEdit::LineStart);
+    question.edit(TextEdit::Right);
+    question.edit(TextEdit::DeleteForward);
 
     assert_eq!(question.custom_input.as_deref(), Some("hllo"));
     assert_eq!(question.custom_cursor, "h".len());
@@ -111,14 +112,14 @@ fn pending_question_word_navigation_and_deletion_use_cursor_position() {
     let mut question = PendingQuestion::new("Q".to_string(), vec![], false);
     question.activate_custom_input();
     question.insert_str("one two three");
-    question.move_cursor_word_left();
+    question.edit(TextEdit::WordLeft);
     assert_eq!(question.custom_cursor, "one two ".len());
 
-    question.delete_word_before();
+    question.edit(TextEdit::DeleteWordBackward);
     assert_eq!(question.custom_input.as_deref(), Some("one three"));
     assert_eq!(question.custom_cursor, "one ".len());
 
-    question.move_cursor_word_right();
+    question.edit(TextEdit::WordRight);
     assert_eq!(question.custom_cursor, "one three".len());
 }
 
@@ -140,10 +141,11 @@ fn pending_question_word_navigation_preserves_multibyte_boundaries() {
     let mut question = PendingQuestion::new("Q".to_string(), vec![], false);
     question.activate_custom_input();
     question.insert_str("one  😀");
-    question.move_cursor_home();
-    question.move_cursor_word_right();
+    question.edit(TextEdit::LineStart);
+    question.edit(TextEdit::WordRight);
 
-    assert_eq!(question.custom_cursor, "one  ".len());
+    // Word-right stops at the end of a word, as in every other field.
+    assert_eq!(question.custom_cursor, "one".len());
     assert!(
         question
             .custom_input
@@ -151,7 +153,7 @@ fn pending_question_word_navigation_preserves_multibyte_boundaries() {
             .is_some_and(|text| text.is_char_boundary(question.custom_cursor))
     );
 
-    question.move_cursor_word_right();
+    question.edit(TextEdit::WordRight);
     assert_eq!(question.custom_cursor, "one  😀".len());
 }
 

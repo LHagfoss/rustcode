@@ -1917,6 +1917,21 @@ impl AppState {
         self.request_redraw();
     }
 
+    pub fn kill_line_to_end(&mut self) {
+        self.history_index = None;
+        self.clamp_cursor();
+        if self.delete_composer_selection() {
+            return;
+        }
+        let start = self.cursor_position;
+        let end = crate::app::text_edit::line_end(&self.input_buffer, start);
+        if start < end {
+            self.input_buffer.replace_range(start..end, "");
+        }
+        self.reset_suggestion_index();
+        self.request_redraw();
+    }
+
     pub fn kill_line_to_start(&mut self) {
         self.history_index = None;
         self.clamp_cursor();
@@ -2029,66 +2044,34 @@ impl AppState {
         true
     }
 
-    pub fn move_cursor_left(&mut self) {
-        self.clamp_cursor();
-        if let Some(len) = self.char_len_before_cursor() {
-            self.cursor_position -= len;
-        }
-        self.reset_suggestion_index();
+    /// Move the composer cursor with one of the shared editing motions.
+    fn move_cursor(&mut self, motion: crate::app::text_edit::TextEdit<'static>) {
+        // The composer's own insert and delete paths handle selection,
+        // history and markers; only motions go through here.
+        let mut text = std::mem::take(&mut self.input_buffer);
+        crate::app::text_edit::apply(&mut text, &mut self.cursor_position, motion);
+        self.input_buffer = text;
         self.request_redraw();
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        self.move_cursor(crate::app::text_edit::TextEdit::Left);
+        self.reset_suggestion_index();
     }
 
     pub fn move_cursor_right(&mut self) {
-        self.clamp_cursor();
-        if let Some(c) = self.input_buffer[self.cursor_position..].chars().next() {
-            self.cursor_position += c.len_utf8();
-        }
+        self.move_cursor(crate::app::text_edit::TextEdit::Right);
         self.reset_suggestion_index();
-        self.request_redraw();
     }
 
     pub fn move_cursor_word_left(&mut self) {
-        self.clamp_cursor();
-        let mut pos = self.cursor_position;
-
-        while let Some(c) = self.input_buffer[..pos].chars().next_back() {
-            if !c.is_whitespace() {
-                break;
-            }
-            pos -= c.len_utf8();
-        }
-
-        while let Some(c) = self.input_buffer[..pos].chars().next_back() {
-            if c.is_whitespace() {
-                break;
-            }
-            pos -= c.len_utf8();
-        }
-        self.cursor_position = pos;
+        self.move_cursor(crate::app::text_edit::TextEdit::WordLeft);
         self.reset_suggestion_index();
-        self.request_redraw();
     }
 
     pub fn move_cursor_word_right(&mut self) {
-        self.clamp_cursor();
-        let mut pos = self.cursor_position;
-
-        while let Some(c) = self.input_buffer[pos..].chars().next() {
-            if c.is_whitespace() {
-                break;
-            }
-            pos += c.len_utf8();
-        }
-
-        while let Some(c) = self.input_buffer[pos..].chars().next() {
-            if !c.is_whitespace() {
-                break;
-            }
-            pos += c.len_utf8();
-        }
-        self.cursor_position = pos;
+        self.move_cursor(crate::app::text_edit::TextEdit::WordRight);
         self.reset_suggestion_index();
-        self.request_redraw();
     }
 
     pub fn move_cursor_to_start(&mut self) {
@@ -2103,58 +2086,24 @@ impl AppState {
         self.request_redraw();
     }
 
-    pub fn move_cursor_line_up(&mut self) {
-        self.clamp_cursor();
-        let pos = self.cursor_position;
-        let before = &self.input_buffer[..pos];
-        let current_line_start = before.rfind('\n').map_or(0, |i| i + 1);
-        let col = before[current_line_start..].chars().count();
+    /// Home: the start of the line the cursor is on.
+    pub fn move_cursor_line_start(&mut self) {
+        self.move_cursor(crate::app::text_edit::TextEdit::LineStart);
+        self.reset_suggestion_index();
+    }
 
-        if current_line_start > 0 {
-            let prev_line_end = current_line_start - 1;
-            let prev_line_start = self.input_buffer[..prev_line_end]
-                .rfind('\n')
-                .map_or(0, |i| i + 1);
-            let prev_line = &self.input_buffer[prev_line_start..prev_line_end];
-            let prev_char_count = prev_line.chars().count();
-            let target_col = col.min(prev_char_count);
-            let target_byte_offset: usize = prev_line
-                .chars()
-                .take(target_col)
-                .map(|c| c.len_utf8())
-                .sum();
-            self.cursor_position = prev_line_start + target_byte_offset;
-        } else {
-            self.cursor_position = 0;
-        }
-        self.request_redraw();
+    /// End: the end of the line the cursor is on.
+    pub fn move_cursor_line_end(&mut self) {
+        self.move_cursor(crate::app::text_edit::TextEdit::LineEnd);
+        self.reset_suggestion_index();
+    }
+
+    pub fn move_cursor_line_up(&mut self) {
+        self.move_cursor(crate::app::text_edit::TextEdit::LineUp);
     }
 
     pub fn move_cursor_line_down(&mut self) {
-        self.clamp_cursor();
-        let pos = self.cursor_position;
-        let before = &self.input_buffer[..pos];
-        let current_line_start = before.rfind('\n').map_or(0, |i| i + 1);
-        let col = before[current_line_start..].chars().count();
-
-        if let Some(next_line_start_rel) = self.input_buffer[pos..].find('\n') {
-            let next_line_start = pos + next_line_start_rel + 1;
-            let next_line_end = self.input_buffer[next_line_start..]
-                .find('\n')
-                .map_or(self.input_buffer.len(), |i| next_line_start + i);
-            let next_line = &self.input_buffer[next_line_start..next_line_end];
-            let next_char_count = next_line.chars().count();
-            let target_col = col.min(next_char_count);
-            let target_byte_offset: usize = next_line
-                .chars()
-                .take(target_col)
-                .map(|c| c.len_utf8())
-                .sum();
-            self.cursor_position = next_line_start + target_byte_offset;
-        } else {
-            self.cursor_position = self.input_buffer.len();
-        }
-        self.request_redraw();
+        self.move_cursor(crate::app::text_edit::TextEdit::LineDown);
     }
 
     pub fn get_command_suggestion(&self) -> Option<String> {

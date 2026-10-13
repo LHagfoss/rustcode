@@ -608,12 +608,11 @@ pub(in crate::ui) fn render_mcp_config_modal(
             };
 
             let is_active = edit_state.active_field == field_idx;
+            let inner_width = usize::from(form_chunks[field_idx].width.saturating_sub(2));
             let display_val = if is_active {
-                let pos = edit_state.cursor_pos.min(val.len());
-                let (left, right) = val.split_at(pos);
-                format!("{left}█{right}")
+                single_line_field(val, edit_state.cursor_pos, inner_width)
             } else {
-                val.clone()
+                Line::from(val.clone())
             };
 
             let border_style = if is_active {
@@ -1094,6 +1093,44 @@ pub(in crate::ui) fn tool_confirmation_height(state: &RenderSnapshot, available:
     content.saturating_add(2).min(available.max(3))
 }
 
+/// One line of an edited field: the part of `text` around the cursor that fits
+/// `width`, with the cursor drawn on its own cell so the text does not shift.
+/// Text longer than the field scrolls to keep the cursor in view.
+pub(super) fn single_line_field(text: &str, cursor: usize, width: usize) -> Line<'static> {
+    let cursor = rustcode::app::text_edit::clamp(text, cursor);
+    let cursor_style = Style::default().add_modifier(Modifier::REVERSED);
+    if width == 0 {
+        return Line::default();
+    }
+    // Drop leading characters until the cursor's own cell fits the field.
+    let mut start = 0;
+    while text[start..cursor].width() + 1 > width {
+        start = rustcode::app::text_edit::right(text, start);
+    }
+    let before = text[start..cursor].to_owned();
+    let under_end = rustcode::app::text_edit::right(text, cursor);
+    let under = if under_end > cursor {
+        text[cursor..under_end].to_owned()
+    } else {
+        " ".to_owned()
+    };
+    let mut used = before.width() + under.width();
+    let mut after = String::new();
+    for character in text[under_end..].chars() {
+        let character_width = character.width().unwrap_or(0);
+        if used + character_width > width {
+            break;
+        }
+        used += character_width;
+        after.push(character);
+    }
+    Line::from(vec![
+        Span::raw(before),
+        Span::styled(under, cursor_style),
+        Span::raw(after),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::agent_picker_line;
@@ -1138,5 +1175,19 @@ mod tests {
                 "highlighted active row at width {width}: {highlighted_active:?}"
             );
         }
+    }
+    #[test]
+    fn a_long_field_scrolls_to_keep_the_cursor_in_view_without_shifting_text() {
+        let text = "abcdefghij";
+        // At the end: the tail of the text, then the cursor's own cell.
+        let line = super::single_line_field(text, text.len(), 5);
+        assert_eq!(line.to_string(), "ghij ");
+        // In the middle the cursor sits on its character; nothing moves.
+        let line = super::single_line_field(text, 2, 5);
+        assert_eq!(line.to_string(), "abcde");
+        assert_eq!(line.spans[1].content, "c");
+        // A stale cursor inside a wide character is tolerated.
+        let line = super::single_line_field("a界b", 2, 3);
+        assert!(line.width() <= 3, "{line}");
     }
 }

@@ -98,3 +98,22 @@ Description-based skill routing requires multiple matching intent terms and
 keeps coding requests from activating live-app workflows incidentally.
 [Selection benchmarks](benchmarks/tui-selection.md) distinguish backend
 frame latency from live terminal input-to-paint latency.
+
+## Text fields
+
+The composer, the model and command search, a question's own answer and the
+MCP server form share one set of editing keys:
+
+| Key | Edit |
+| --- | --- |
+| Left / Right | One character |
+| Alt or Ctrl + Left / Right, Alt+B / Alt+F | To the start of the previous word / the end of the next word |
+| Home, Ctrl+A / End, Ctrl+E | Start / end of the line the cursor is on |
+| Backspace / Delete | One character back / forward |
+| Alt or Ctrl + Backspace, Ctrl+W / Alt+Delete, Alt+D | One word back / forward |
+| Ctrl+U, Cmd+Backspace / Ctrl+K | To the start / end of the line |
+
+Up and Down move through the lines of the composer and of a question's answer;
+in a search field they move the list, and in the MCP form they change field.
+A paste into a search field or the MCP form is flattened to one line. A field
+whose text is longer than its box scrolls to keep the cursor in view.

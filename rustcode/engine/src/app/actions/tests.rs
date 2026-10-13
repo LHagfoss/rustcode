@@ -2467,3 +2467,24 @@ async fn enter_runs_a_prefix_match_and_completes_a_fuzzy_argument() {
         assert!(!s.auto_confirm);
     }
 }
+
+#[test]
+fn composer_line_keys_work_on_the_line_under_the_cursor() {
+    let mut state = crate::app::AppState::new();
+    state.input_buffer = "first line\nsecond line".to_owned();
+    state.cursor_position = "first line\nsecond".len();
+
+    state.move_cursor_line_start();
+    assert_eq!(state.cursor_position, "first line\n".len());
+    state.move_cursor_line_end();
+    assert_eq!(state.cursor_position, state.input_buffer.len());
+
+    state.cursor_position = "first".len();
+    state.kill_line_to_end();
+    assert_eq!(state.input_buffer, "first\nsecond line");
+    assert_eq!(state.cursor_position, "first".len());
+
+    // Word-right stops at the end of the next word.
+    state.move_cursor_word_right();
+    assert_eq!(state.cursor_position, "first\nsecond".len());
+}

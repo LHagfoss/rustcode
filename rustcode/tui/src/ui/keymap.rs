@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use rustcode::app::text_edit::TextEdit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalKind {
@@ -35,6 +36,7 @@ pub(crate) enum KeyAction {
     DeleteWordBackward,
     DeleteWordForward,
     KillLineStart,
+    KillLineEnd,
     HistoryPrevious,
     HistoryNext,
     Complete,
@@ -43,6 +45,30 @@ pub(crate) enum KeyAction {
     ToggleAgentMode,
     Escape,
     Unhandled,
+}
+
+impl KeyAction {
+    /// The text edit this action means in any text field, if it is one.
+    /// `scratch` holds the typed character for the lifetime of the edit.
+    /// Vertical motions are left out: a field decides what Up and Down do.
+    pub(crate) fn text_edit(self, scratch: &mut [u8; 4]) -> Option<TextEdit<'_>> {
+        Some(match self {
+            KeyAction::Insert(character) => TextEdit::Insert(character.encode_utf8(scratch)),
+            KeyAction::MoveLeft => TextEdit::Left,
+            KeyAction::MoveRight => TextEdit::Right,
+            KeyAction::MoveWordLeft => TextEdit::WordLeft,
+            KeyAction::MoveWordRight => TextEdit::WordRight,
+            KeyAction::MoveStart => TextEdit::LineStart,
+            KeyAction::MoveEnd => TextEdit::LineEnd,
+            KeyAction::DeleteBackward => TextEdit::DeleteBackward,
+            KeyAction::DeleteForward => TextEdit::DeleteForward,
+            KeyAction::DeleteWordBackward => TextEdit::DeleteWordBackward,
+            KeyAction::DeleteWordForward => TextEdit::DeleteWordForward,
+            KeyAction::KillLineStart => TextEdit::KillToLineStart,
+            KeyAction::KillLineEnd => TextEdit::KillToLineEnd,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -133,6 +159,7 @@ impl KeyMap {
             KeyCode::Char('u') | KeyCode::Char('U') if ctrl || super_key => {
                 KeyAction::KillLineStart
             }
+            KeyCode::Char('k') | KeyCode::Char('K') if ctrl => KeyAction::KillLineEnd,
             KeyCode::Char('w') | KeyCode::Char('W') if ctrl => KeyAction::DeleteWordBackward,
             KeyCode::Char('b') | KeyCode::Char('B') if alt => KeyAction::MoveWordLeft,
             KeyCode::Char('f') | KeyCode::Char('F') if alt => KeyAction::MoveWordRight,
@@ -242,5 +269,35 @@ mod tests {
             map.resolve(key(KeyCode::Char('ƒ'), KeyModifiers::NONE)),
             KeyAction::MoveWordRight
         );
+    }
+    #[test]
+    fn every_text_field_gets_the_same_edit_for_a_key() {
+        let keymap = KeyMap::for_terminal(TerminalKind::Generic);
+        let edit = |code, modifiers| {
+            let action = keymap.resolve(KeyEvent::new(code, modifiers));
+            action
+                .text_edit(&mut [0; 4])
+                .map(|edit| format!("{edit:?}"))
+        };
+        assert_eq!(
+            edit(KeyCode::Char('k'), KeyModifiers::CONTROL).as_deref(),
+            Some("KillToLineEnd")
+        );
+        // Alt+letter is a motion, never the letter itself.
+        assert_eq!(
+            edit(KeyCode::Char('b'), KeyModifiers::ALT).as_deref(),
+            Some("WordLeft")
+        );
+        assert_eq!(
+            edit(KeyCode::Home, KeyModifiers::NONE).as_deref(),
+            Some("LineStart")
+        );
+        assert_eq!(
+            edit(KeyCode::Char('é'), KeyModifiers::NONE).as_deref(),
+            Some("Insert(\"é\")")
+        );
+        // Not an edit: the field's owner decides.
+        assert_eq!(edit(KeyCode::Up, KeyModifiers::NONE), None);
+        assert_eq!(edit(KeyCode::Enter, KeyModifiers::NONE), None);
     }
 }
