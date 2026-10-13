@@ -55,9 +55,6 @@ pub fn is_editing_tool(tool_name: &str) -> bool {
             | "movefile"
             | "copy_file"
             | "copyfile"
-            | "generate_sound_effect"
-            | "generate_music"
-            | "render_video"
     )
 }
 

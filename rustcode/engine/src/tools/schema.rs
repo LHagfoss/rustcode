@@ -605,7 +605,7 @@ const CORE_CODING_TOOLS: &[&str] = &[
 ];
 
 /// The compact text protocol keeps the normal coding surface, but leaves
-/// specialized media, memory, web, and lifecycle tools out of the prompt.
+/// specialized memory, web, and lifecycle tools out of the prompt.
 /// Native requests apply the finer-grained relevance filter below.
 const TEXT_CODING_TOOLS: &[&str] = &[
     "set_session_title",

@@ -628,17 +628,6 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                                 workspace_root_for_command,
                             )
                         }
-                    } else if name_owned == "render_video" && live_key_owned.is_some() {
-                        let callback: crate::tools::CommandProgressCallback =
-                            Arc::new(move |bytes, stderr| {
-                                let _ = progress_tx.send((bytes.to_vec(), stderr));
-                            });
-                        crate::tools::execute_video_with_progress(
-                            &name_owned,
-                            &args_owned,
-                            Some(cancel_token_for_task),
-                            Some(callback),
-                        )
                     } else {
                         crate::tools::execute_with_metadata_cancellable_for_call(
                             &name_owned,
@@ -663,15 +652,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
             })
         };
         tokio::pin!(run_fut);
-        let is_cancellable_process = matches!(
-            name,
-            "generate_sound_effect"
-                | "generate_music"
-                | "inspect_media"
-                | "validate_video_project"
-                | "render_video"
-                | "run_command"
-        );
+        let is_cancellable_process = name == "run_command";
         let mut progress_open = true;
         loop {
             tokio::select! {
@@ -723,13 +704,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         } else {
             "?".to_string()
         };
-        let render_preview = (name == "render_video")
-            .then(|| crate::tools::render_confirmation_preview(args, workspace_root.as_deref()))
-            .flatten();
-        let (preview, content_bytes) = if let Some(preview) = render_preview {
-            let content_bytes = preview.len();
-            (preview, content_bytes)
-        } else if let Some(approval) = &mcp_approval {
+        let (preview, content_bytes) = if let Some(approval) = &mcp_approval {
             (approval.preview.clone(), approval.preview.len())
         } else if let Some(ref d) = diff_opt {
             (d.clone(), d.len())
@@ -872,9 +847,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let workspace_root_for_task = execution_workspace_root.clone();
                 let task_working_directory_for_task = task_working_directory.clone();
                 let cancel_token_for_task = cancel_token.clone();
-                let live_key_for_task = live_key.map(str::to_owned);
                 let mutation_diff_for_task = Arc::clone(&mutation_diff);
-                let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
                 let mcp_registry = crate::mcp::get_mcp_registry();
                 let run_fut = tokio::task::spawn_blocking(move || {
                     crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
@@ -889,19 +862,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                         let tool_context = crate::tools::current_tool_context();
                         let mutation_snapshot =
                             capture_text_mutation_before(&name_owned, &args_owned, &tool_context);
-                        let result = if name_owned == "render_video" && live_key_for_task.is_some()
-                        {
-                            let callback: crate::tools::CommandProgressCallback =
-                                Arc::new(move |bytes, stderr| {
-                                    let _ = progress_tx.send((bytes.to_vec(), stderr));
-                                });
-                            crate::tools::execute_video_with_progress(
-                                &name_owned,
-                                &args_owned,
-                                Some(cancel_token_for_task),
-                                Some(callback),
-                            )
-                        } else if name_owned == "run_command" {
+                        let result = if name_owned == "run_command" {
                             crate::tools::run_command_output_with_workspace_for_call(
                                 &args_owned,
                                 Some(cancel_token_for_task),
@@ -926,42 +887,22 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                         result
                     })
                 });
-                let is_cancellable_process = matches!(
-                    name,
-                    "generate_sound_effect"
-                        | "generate_music"
-                        | "inspect_media"
-                        | "validate_video_project"
-                        | "render_video"
-                        | "run_command"
-                );
+                let is_cancellable_process = name == "run_command";
 
                 tokio::pin!(run_fut);
-                let mut progress_open = true;
-                loop {
-                    tokio::select! {
-                        res = &mut run_fut => {
-                            break res.unwrap_or_else(|e| {
-                                crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
-                            });
-                        }
-                        event = progress_rx.recv(), if progress_open => {
-                            if let Some((bytes, stderr)) = event {
-                                if let Some(key) = live_key {
-                                    state.lock().await.append_live_tool_output(key, &bytes, stderr);
-                                }
-                            } else {
-                                progress_open = false;
-                            }
-                        }
-                        _ = cancel_token.cancelled(), if !is_cancellable_process => {
-                            dbg_log!("Tool execution cancelled during spawn_blocking await");
-                            break crate::tools::ToolExecutionOutput::failure_with_kind(
-                                "error: tool execution cancelled by user".to_string(),
-                                crate::tools::ToolErrorKind::Cancelled,
-                                true,
-                            );
-                        }
+                tokio::select! {
+                    res = &mut run_fut => {
+                        res.unwrap_or_else(|e| {
+                            crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
+                        })
+                    }
+                    _ = cancel_token.cancelled(), if !is_cancellable_process => {
+                        dbg_log!("Tool execution cancelled during spawn_blocking await");
+                        crate::tools::ToolExecutionOutput::failure_with_kind(
+                            "error: tool execution cancelled by user".to_string(),
+                            crate::tools::ToolErrorKind::Cancelled,
+                            true,
+                        )
                     }
                 }
             }

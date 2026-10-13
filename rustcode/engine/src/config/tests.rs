@@ -268,6 +268,20 @@ fn legacy_laya_config_is_ignored_without_blocking_config_load() {
 }
 
 #[test]
+fn removed_audio_section_does_not_block_config_load() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(CONFIG_TOML_FILE),
+        "version = 1\ntheme = \"nord\"\n[audio]\nenabled = true\nsfx_backend = \"auto\"\nmusic_backend = \"auto\"\n",
+    )
+    .unwrap();
+
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.is_valid);
+    assert_eq!(config.theme, "nord");
+}
+
+#[test]
 fn legacy_laya_config_survives_full_config_save_while_ignored() {
     let dir = TempDir::new().unwrap();
     let original = r#"version = 1
