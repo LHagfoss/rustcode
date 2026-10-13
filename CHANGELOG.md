@@ -1,3 +1,8 @@
+## [v0.66.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.66.0) - 2026-10-13
+
+### Features
+- Expire a paired device 30 days after pairing: its token is then refused and the device pairs again with a fresh code. Until then it reconnects without one. `rustcode remote devices` shows when each pairing expires, and Bonjour now announces the gateway identifier so the iOS app can find a Mac that moved to another address ([#1997](https://github.com/LHagfoss/rustcode/pull/1997)).
+- Hover and click one tool call instead of its whole block, copy a call and its output with a right-click, and keep the timing line out of a hovered message ([#1999](https://github.com/LHagfoss/rustcode/pull/1999)).
 ## [v0.65.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.65.1) - 2026-10-13
 
 ### Fixes
