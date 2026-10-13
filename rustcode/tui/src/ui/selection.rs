@@ -2755,6 +2755,107 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual tool-session frame benchmark"]
+    fn bench_tool_session_frames() {
+        use rustcode::controller::ToolCallRef;
+        let mut state = RenderState::new();
+        state
+            .history
+            .push(ChatMessage::new("user", "fix the build"));
+        for round in 0..400 {
+            let id = format!("call-{round}");
+            let prose = if round % 3 == 0 {
+                format!(
+                    "Step {round}: I will read the file and check `main`.\n\n```rust\nfn main() {{ println!(\"{round}\"); }}\n```"
+                )
+            } else {
+                String::new()
+            };
+            state
+                .history
+                .push(
+                    ChatMessage::new("assistant", prose).with_tool_calls(vec![ToolCallRef {
+                        id: id.clone(),
+                        name: "view_file".to_owned(),
+                        arguments: format!("{{\"path\":\"src/file_{round}.rs\"}}"),
+                    }]),
+                );
+            let body = (0..40)
+                .map(|l| format!("{l}: let value_{l} = {round};"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            state
+                .history
+                .push(ChatMessage::new("tool", format!("view_file: {body}")).answering(Some(id)));
+        }
+        state.history.push(ChatMessage::new("assistant", "Done."));
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        let start = std::time::Instant::now();
+        let _ = rendered_transcript_size(&state, &mut transcript, 120, 50);
+        eprintln!("first paint: {:?}", start.elapsed());
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            let _ = rendered_transcript_size(&state, &mut transcript, 120, 50);
+        }
+        eprintln!("20 tail frames: {:?}", start.elapsed());
+        transcript.scroll_up(2000);
+        let _ = rendered_transcript_size(&state, &mut transcript, 120, 50);
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            transcript.scroll_down(3);
+            let _ = rendered_transcript_size(&state, &mut transcript, 120, 50);
+        }
+        eprintln!("20 scrolled wheel frames: {:?}", start.elapsed());
+        let snapshot = super::super::render_snapshot::render_snapshot(&state);
+        let start = std::time::Instant::now();
+        let mut silent = 0;
+        for index in 0..state.history.len() {
+            silent += usize::from(super::super::tool_step_is_silent(&snapshot, index));
+        }
+        eprintln!(
+            "tool_step_is_silent x{}: {:?} ({silent} silent)",
+            state.history.len(),
+            start.elapsed()
+        );
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            let _ = super::super::render_snapshot::render_snapshot(&state);
+        }
+        eprintln!("20 snapshots: {:?}", start.elapsed());
+        // P4: one expanded tool output, tail visible.
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        state.expanded_thoughts.insert(2);
+        let _ = rendered_transcript_size(&state, &mut transcript, 120, 50);
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            let _ = rendered_transcript_size(&state, &mut transcript, 120, 50);
+        }
+        eprintln!("20 tail frames with one expansion: {:?}", start.elapsed());
+        state.expanded_thoughts.clear();
+        // P5: a code block streaming in, one line per frame.
+        let mut transcript = super::super::history_cell::TranscriptState::default();
+        state.status = rustcode::controller::AppStatus::Streaming;
+        let mut live = String::from("Here is the file:\n\n```rust\n");
+        let start = std::time::Instant::now();
+        for line in 0..600 {
+            live.push_str(&format!(
+                "    let value_{line} = compute({line}, \"text\");\n"
+            ));
+            state.current_response = std::sync::Arc::new(live.clone());
+            let _ = rendered_transcript_size(&state, &mut transcript, 120, 50);
+        }
+        eprintln!(
+            "600 streaming frames of a growing code block: {:?}",
+            start.elapsed()
+        );
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            let _ = rendered_transcript_size(&state, &mut transcript, 120, 50);
+        }
+        eprintln!("20 unchanged streaming frames: {:?}", start.elapsed());
+    }
+
+    #[test]
     #[ignore = "manual transcript scroll benchmark"]
     fn bench_long_selection_scroll() {
         let mut state = RenderState::new();
