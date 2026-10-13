@@ -49,6 +49,16 @@ pub enum DraftSubmitMode {
     Queue,
 }
 
+/// A footer notice replaced sooner than this is queued to be shown again.
+const MIN_NOTICE_VISIBLE: std::time::Duration = std::time::Duration::from_millis(1500);
+const MAX_QUEUED_NOTICES: usize = 4;
+
+/// How long a footer notice stays: long enough to read, by its length.
+fn transient_notice_duration(text: &str) -> std::time::Duration {
+    let millis = 3000 + 40 * text.chars().count() as u64;
+    std::time::Duration::from_millis(millis.min(8000))
+}
+
 pub struct AppState {
     pub input_buffer: String,
     /// Deadline through which a second Ctrl+C confirms application exit.
@@ -256,6 +266,8 @@ pub struct AppState {
     pub last_copy_text: Option<(String, std::time::Instant)>,
     /// Short-lived UI feedback; never part of the model conversation.
     pub transient_notice: Option<(String, std::time::Instant)>,
+    /// Notices replaced before they had been readable, shown next.
+    pub transient_notice_queue: std::collections::VecDeque<String>,
     pub generation_start_time: Option<std::time::Instant>,
     /// When the turn in progress started: the user's submission, moved back
     /// by the time earlier runs of the same turn took when the harness
@@ -1488,6 +1500,7 @@ impl AppState {
             mcp_edit_state: None,
             last_copy_text: None,
             transient_notice: None,
+            transient_notice_queue: std::collections::VecDeque::new(),
             generation_start_time: None,
             current_turn_started_at: None,
             pending_tool_confirmation: None,
@@ -2526,11 +2539,26 @@ impl AppState {
         self.request_redraw();
     }
 
+    /// Show a short-lived notice in the footer. It replaces the one showing;
+    /// a notice replaced before it had been readable waits its turn instead
+    /// of being lost, so a result that arrives right after a key press does
+    /// not swallow that key's feedback, or the other way round.
     pub fn set_transient_notice(&mut self, text: impl Into<String>) {
-        self.transient_notice = Some((
-            text.into(),
-            std::time::Instant::now() + std::time::Duration::from_secs(4),
-        ));
+        let text = text.into();
+        let now = std::time::Instant::now();
+        self.transient_notice_queue.retain(|queued| *queued != text);
+        if let Some((showing, expires)) = self.transient_notice.take()
+            && showing != text
+            && expires > now
+            && now + transient_notice_duration(&showing) < expires + MIN_NOTICE_VISIBLE
+        {
+            if self.transient_notice_queue.len() == MAX_QUEUED_NOTICES {
+                self.transient_notice_queue.pop_front();
+            }
+            self.transient_notice_queue.push_back(showing);
+        }
+        let expires = now + transient_notice_duration(&text);
+        self.transient_notice = Some((text, expires));
         self.request_redraw();
     }
 
@@ -2547,7 +2575,10 @@ impl AppState {
             .as_ref()
             .is_some_and(|(_, expires)| *expires <= std::time::Instant::now())
         {
-            self.transient_notice = None;
+            self.transient_notice = self.transient_notice_queue.pop_front().map(|text| {
+                let expires = std::time::Instant::now() + transient_notice_duration(&text);
+                (text, expires)
+            });
             self.request_redraw();
             return true;
         }

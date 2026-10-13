@@ -1,4 +1,4 @@
-use crate::app::{AppState, ChatMessage, SessionAction};
+use crate::app::{AppState, SessionAction};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,11 +109,8 @@ impl SessionController {
         state.last_turn_performance = None;
         state.image_analysis_cache = crate::config::load_session_image_cache(&new_session_id);
         state.session_title_cache = None;
-        state.history.push(ChatMessage::new(
-            "system",
-            format!("Forked session from \"{source_session_id}\""),
-        ));
         crate::config::save_session_history(&new_session_id, &state.history);
+        state.set_transient_notice(format!("Forked session from \"{source_session_id}\""));
 
         Ok(SessionTransition::Forked {
             session_id: new_session_id,
@@ -301,6 +298,11 @@ mod tests {
         assert_steering_cleared(&state);
         assert!(
             state
+                .active_transient_notice()
+                .is_some_and(|notice| notice.contains("Forked session"))
+        );
+        assert!(
+            !state
                 .history
                 .iter()
                 .any(|message| message.content.contains("Forked session"))

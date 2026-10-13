@@ -98,3 +98,14 @@ Description-based skill routing requires multiple matching intent terms and
 keeps coding requests from activating live-app workflows incidentally.
 [Selection benchmarks](benchmarks/tui-selection.md) distinguish backend
 frame latency from live terminal input-to-paint latency.
+
+## Notices
+
+Short confirmations are shown for a few seconds in the footer under the
+composer and are not part of the transcript: a new, resumed, forked, cleared,
+archived or deleted session, a Plan/Build switch, a renamed title, `/stop`,
+update and sync progress, and answers such as "nothing to compact". A notice
+replaced before it could be read is shown again after the one that replaced it.
+Errors, compaction boundaries, workspace changes and subagent activity stay in
+the transcript, where they can be scrolled back to. `?` on an empty composer
+opens the help panel.

@@ -419,12 +419,8 @@ mod tests {
         let state = runtime.app_state().await;
         assert_ne!(state.active_session_id, old_session);
         assert!(!state.show_history_picker);
-        assert!(
-            state
-                .history
-                .iter()
-                .any(|message| message.content == "Started a new session")
-        );
+        assert!(state.history.is_empty());
+        assert_eq!(state.active_transient_notice(), Some("New chat started"));
     }
 
     #[tokio::test]

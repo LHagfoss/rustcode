@@ -2318,8 +2318,7 @@ pub(super) async fn handle_app_event(
                             s.delete_word_backspace();
                             s.reset_suggestion_cycle();
                         } else if c == '?' && !ctrl && !alt && !cmd && s.input_buffer.is_empty() {
-                            s.history
-                                .push(ChatMessage::new("system", rustcode::app::build_help_text()));
+                            s.show_command_panel("Help", rustcode::app::build_help_text());
                             s.request_redraw();
                         } else if !ctrl && !alt && !c.is_control() {
                             s.insert_char(c);

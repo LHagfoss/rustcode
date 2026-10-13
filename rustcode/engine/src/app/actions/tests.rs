@@ -777,9 +777,9 @@ fn start_new_session_clears_history_and_starts_fresh() {
     super::start_new_session(&mut state);
 
     assert_ne!(state.active_session_id, initial_session_id);
-    assert_eq!(state.history.len(), 1);
-    assert_eq!(state.history[0].role, "system");
-    assert_eq!(state.history[0].content, "✨ New chat started");
+    // The new chat is announced in the footer, not in its transcript.
+    assert!(state.history.is_empty());
+    assert_eq!(state.active_transient_notice(), Some("New chat started"));
     assert!(state.delegation_sticky);
 }
 
@@ -1223,9 +1223,8 @@ async fn clear_and_new_preserve_history() {
     assert!(!super::handle_enter(&state, &client, &mut cancel_token, &|| Vec::new()).await);
     {
         let s = state.lock().await;
-        assert_eq!(s.history.len(), 1);
-        assert_eq!(s.history[0].role, "system");
-        assert!(s.history[0].content.contains("New chat"));
+        assert!(s.history.is_empty());
+        assert_eq!(s.active_transient_notice(), Some("New chat started"));
         assert_eq!(s.history_display_start, 0);
     }
 }
@@ -1910,11 +1909,8 @@ async fn update_command_initiates_check_and_sets_notice() {
         assert_eq!(s.cursor_position, 0);
         assert_eq!(s.update_check, rustcode_core::update::UpdateState::Checking);
         assert!(
-            s.history
-                .last()
-                .unwrap()
-                .content
-                .contains("Checking for a RustCode update")
+            s.active_transient_notice()
+                .is_some_and(|notice| notice.contains("Checking for a RustCode update"))
         );
     }
 }
@@ -2466,4 +2462,32 @@ async fn enter_runs_a_prefix_match_and_completes_a_fuzzy_argument() {
         assert_eq!(s.input_buffer, "/yolo toggle");
         assert!(!s.auto_confirm);
     }
+}
+
+#[test]
+fn a_footer_notice_replaced_before_it_was_readable_is_shown_next() {
+    let mut state = crate::app::AppState::new();
+    state.set_transient_notice("Switched to model profile 'fast'");
+    state.set_transient_notice("Copied selection to clipboard");
+    assert_eq!(
+        state.active_transient_notice(),
+        Some("Copied selection to clipboard")
+    );
+
+    // When the newer notice expires, the displaced one takes the footer.
+    state.transient_notice.as_mut().expect("notice").1 = std::time::Instant::now();
+    assert!(state.clear_expired_transient_notice());
+    assert_eq!(
+        state.active_transient_notice(),
+        Some("Switched to model profile 'fast'")
+    );
+
+    // A notice that has already been readable is simply replaced.
+    let shown_two_seconds_ago =
+        state.transient_notice.as_ref().expect("notice").1 - std::time::Duration::from_secs(2);
+    state.transient_notice.as_mut().expect("notice").1 = shown_two_seconds_ago;
+    state.set_transient_notice("Theme set to 'dark'");
+    state.transient_notice.as_mut().expect("notice").1 = std::time::Instant::now();
+    assert!(state.clear_expired_transient_notice());
+    assert_eq!(state.active_transient_notice(), None);
 }

@@ -141,10 +141,7 @@ async fn handle_enter_inner(
                 s.input_buffer.clear();
                 s.cursor_position = 0;
                 if s.history.len() < 2 {
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        "Not enough messages to compact.",
-                    ));
+                    s.set_transient_notice("Not enough messages to compact");
                     return false;
                 }
                 let api_base_url = s.api_base_url.clone();
@@ -255,7 +252,7 @@ async fn handle_enter_inner(
                 s.input_buffer.clear();
                 s.cursor_position = 0;
                 s.update_check = rustcode_core::update::UpdateState::Checking;
-                s.set_notice("🔍 Checking for a RustCode update...");
+                s.set_transient_notice("Checking for a RustCode update...");
                 s.request_redraw();
                 drop(s);
                 trigger_update(state, client);
@@ -376,8 +373,7 @@ async fn handle_enter_inner(
             },
             "/stop" => {
                 let text = stop_background_terminals(&s.active_session_id);
-                s.history.push(ChatMessage::new("system", text));
-                s.request_redraw();
+                s.set_transient_notice(text);
             }
             "/yolo" => match tokens.get(1) {
                 None => {
@@ -396,10 +392,9 @@ async fn handle_enter_inner(
                     toggle_auto_confirm(&mut s);
                 }
                 _ => {
-                    s.history.push(ChatMessage::new(
-                        "system",
+                    s.set_transient_notice(
                         "Invalid option. Use 'on', 'off', 'enable', 'disable', or 'toggle'.",
-                    ));
+                    );
                 }
             },
             "/sandbox" => {
@@ -711,15 +706,17 @@ async fn handle_enter_inner(
                 if let Err(error) = crate::app::session_controller::SessionController::default()
                     .resume(&mut s, crate::app::events::SessionAction::Latest)
                 {
-                    let message = if matches!(
+                    // A missing session is an answer to the command; any other
+                    // failure is an error worth keeping in the transcript.
+                    if matches!(
                         &error,
                         crate::app::session_controller::SessionError::NoSessionToResume
                     ) {
-                        "No previous session to resume.".to_owned()
+                        s.set_transient_notice("No previous session to resume");
                     } else {
-                        error.to_string()
-                    };
-                    s.history.push(ChatMessage::new("system", message));
+                        s.history
+                            .push(ChatMessage::new("system", error.to_string()));
+                    }
                 }
             }
             "/continue" => {
@@ -729,7 +726,7 @@ async fn handle_enter_inner(
                 } else {
                     "No pending session work is available to continue."
                 };
-                s.history.push(ChatMessage::new("system", message));
+                s.set_transient_notice(message);
             }
             "/history" => {
                 let (sessions, truncated) = build_session_list_with_truncation(&s);
@@ -1182,10 +1179,7 @@ async fn handle_enter_inner(
                     let new_title = tokens[1..].join(" ");
                     crate::config::save_session_title(&s.active_session_id, &new_title);
                     s.invalidate_session_title_cache();
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        format!("Session title renamed to \"{}\"", new_title),
-                    ));
+                    s.set_transient_notice(format!("Session title renamed to \"{}\"", new_title));
                 }
             }
             _ => {
@@ -1224,7 +1218,7 @@ async fn handle_enter_inner(
         s.cursor_position = 0;
         crate::app::subagent_persistence::save(&s);
         if already_active {
-            s.set_notice(format!("Queued message for agent-{selected_id}"));
+            s.set_transient_notice(format!("Queued message for agent-{selected_id}"));
             return false;
         }
         let owner_session_id = s.active_session_id.clone();
