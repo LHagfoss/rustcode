@@ -1,7 +1,7 @@
 use super::*;
 use crate::ui::keymap::{KeyAction, KeyMap};
 use crossterm::event::KeyEvent;
-use rustcode::app::text_edit::TextEdit;
+use rustcode::controller::text_edit::TextEdit;
 
 pub(super) enum InputFlow {
     ContinueIteration,
@@ -180,7 +180,7 @@ fn edit_picker_search(
     let action = crate::ui::keymap::KeyMap::from_environment().resolve(key);
     match action.text_edit(&mut [0; 4]) {
         Some(edit) => {
-            rustcode::app::text_edit::apply(query, cursor, edit);
+            rustcode::controller::text_edit::apply(query, cursor, edit);
             true
         }
         None => false,
@@ -200,8 +200,8 @@ fn insert_picker_search_text(state: &mut AppState, target: PickerSearchTarget, t
             &mut state.command_picker_index,
         ),
     };
-    let text = rustcode::app::text_edit::single_line(text);
-    rustcode::app::text_edit::apply(query, cursor, TextEdit::Insert(&text));
+    let text = rustcode::controller::text_edit::single_line(text);
+    rustcode::controller::text_edit::apply(query, cursor, TextEdit::Insert(&text));
     *selected = 0;
 }
 
@@ -1787,6 +1787,19 @@ pub(super) async fn handle_app_event(
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
+                    ui::ComposerAction::BackgroundCommand => {
+                        let mut state = app_state.lock().await;
+                        let moved = rustcode::tools::move_foreground_commands_to_background(
+                            &state.active_session_id,
+                        );
+                        state.set_transient_notice(match moved {
+                            0 => "No running command to move to the background",
+                            1 => "Moved the running command to the background",
+                            _ => "Moved the running commands to the background",
+                        });
+                        *needs_redraw = true;
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     action @ (ui::ComposerAction::ToggleExpandAll
                     | ui::ComposerAction::ToggleExpandStep) => {
                         let step = matches!(action, ui::ComposerAction::ToggleExpandStep);
@@ -2100,8 +2113,7 @@ pub(super) async fn handle_app_event(
                             s.delete_word_backspace();
                             s.reset_suggestion_cycle();
                         } else if c == '?' && !ctrl && !alt && !cmd && s.input_buffer.is_empty() {
-                            s.history
-                                .push(ChatMessage::new("system", rustcode::app::build_help_text()));
+                            s.show_command_panel("Help", rustcode::app::build_help_text());
                             s.request_redraw();
                         } else if !ctrl && !alt && !c.is_control() {
                             s.insert_char(c);

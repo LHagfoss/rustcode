@@ -1097,7 +1097,7 @@ pub(in crate::ui) fn tool_confirmation_height(state: &RenderSnapshot, available:
 /// `width`, with the cursor drawn on its own cell so the text does not shift.
 /// Text longer than the field scrolls to keep the cursor in view.
 pub(super) fn single_line_field(text: &str, cursor: usize, width: usize) -> Line<'static> {
-    let cursor = rustcode::app::text_edit::clamp(text, cursor);
+    let cursor = rustcode::controller::text_edit::clamp(text, cursor);
     let cursor_style = Style::default().add_modifier(Modifier::REVERSED);
     if width == 0 {
         return Line::default();
@@ -1105,10 +1105,10 @@ pub(super) fn single_line_field(text: &str, cursor: usize, width: usize) -> Line
     // Drop leading characters until the cursor's own cell fits the field.
     let mut start = 0;
     while text[start..cursor].width() + 1 > width {
-        start = rustcode::app::text_edit::right(text, start);
+        start = rustcode::controller::text_edit::right(text, start);
     }
     let before = text[start..cursor].to_owned();
-    let under_end = rustcode::app::text_edit::right(text, cursor);
+    let under_end = rustcode::controller::text_edit::right(text, cursor);
     let under = if under_end > cursor {
         text[cursor..under_end].to_owned()
     } else {

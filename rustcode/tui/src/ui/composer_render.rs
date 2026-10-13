@@ -33,6 +33,9 @@ fn wrap_input_chars_with_hits(
     type InputLine = (Vec<InputChar>, usize);
 
     let indent = 2.min(inner_width);
+    // The last column is kept free for the cursor: a row that filled it would
+    // leave the cursor after its final character with no cell to sit in.
+    let text_width = inner_width.saturating_sub(1).max(indent + 1);
     let mut wrapped: Vec<InputLine> = Vec::new();
     let mut current: Vec<InputChar> = Vec::new();
     let mut current_start = 0;
@@ -47,7 +50,7 @@ fn wrap_input_chars_with_hits(
         }
 
         let character_width = character.width().unwrap_or(1);
-        if current_width + character_width > inner_width && !current.is_empty() {
+        if current_width + character_width > text_width && !current.is_empty() {
             let split_at = current
                 .iter()
                 .rposition(|(_, character, _)| character.is_whitespace())
@@ -217,7 +220,7 @@ mod mouse_tests {
 
     #[test]
     fn click_places_cursor_on_wrapped_unicode_and_empty_lines() {
-        let area = ratatui::layout::Rect::new(3, 4, 8, 5);
+        let area = ratatui::layout::Rect::new(3, 4, 9, 5);
         let input = "ab界cde\n\nx";
         assert_eq!(
             composer_cursor_from_mouse(input, 0, None, area, 7, 5),

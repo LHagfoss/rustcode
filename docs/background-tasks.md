@@ -21,9 +21,22 @@ The model starts a task through `run_command`:
 }
 ```
 
-RustCode immediately returns a pending result containing a generated task ID.
-When the command exits, RustCode injects exactly one terminal result into the
-originating session and resumes the paused logical turn where supported.
+RustCode immediately returns a result containing a generated task ID, and the
+model is called again right away: it can keep working on anything that does not
+depend on the command, or call `manage_task` `wait` to block on it. When the
+command exits, RustCode injects exactly one terminal result into the
+originating session. A result that arrives while the turn is still running is
+delivered at its end; a turn the model ended while the command was still
+running is paused, and resumed by the result.
+
+## Moving a running command to the background
+
+A foreground command that turns out to be slow does not have to be cancelled.
+`ctrl+b` in the terminal moves every foreground command the session is running
+to the background: the tool call returns a task ID at once, the process is not
+interrupted, and it is from then on an ordinary background task with a
+completion notification. Its foreground timeout no longer applies. Output from
+before and after the move is in the task log (`manage_task` `logs`).
 
 Short discovery commands such as simple file or environment inspection may be
 kept in the foreground even when `background` is requested. Background mode is
@@ -39,9 +52,13 @@ standalone shell `&` and `background: true` is treated the same way; do not add
 ## Waiting and task management
 
 Completion notifications are automatic. Do not repeatedly call `manage_task`
-to poll for completion. Stop issuing tools and allow the harness to wait.
+to poll for completion. Either carry on with other work, or stop issuing tools
+and allow the harness to wait.
 
 `manage_task` supports:
+
+- `wait`: block until a task (or the first of several) finishes.
+- `logs`: read a task's captured output.
 
 - `list`: list live tasks owned by the active session.
 - `status`: inspect one live task owned by the active session.

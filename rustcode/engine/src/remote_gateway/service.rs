@@ -245,7 +245,47 @@ pub async fn uninstall(config: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Restore a previously enabled gateway on normal CLI startup. Never enables sharing of a session.
+/// Whether remote access is switched on for this machine: a gateway has been
+/// set up and was not stopped. While it is on, every interactive session is
+/// shared with paired devices.
+pub fn enabled(config_directory: &Path) -> bool {
+    super::lifecycle::RemoteLifecycle::new(config_directory)
+        .identity_path()
+        .exists()
+        && !config_directory.join("remote/disabled").exists()
+}
+
+/// How many paired devices could still connect.
+pub fn paired_devices(config_directory: &Path) -> usize {
+    let now = chrono::Utc::now();
+    super::lifecycle::RemoteLifecycle::new(config_directory)
+        .devices()
+        .map(|devices| {
+            devices
+                .iter()
+                .filter(|device| !device.is_expired(now))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Switch remote access off for this machine: remember the choice, remove the
+/// login service and stop the gateway. Returns whether a gateway was running.
+pub async fn disable(config_directory: &Path) -> Result<bool> {
+    std::fs::create_dir_all(config_directory.join("remote"))?;
+    std::fs::write(
+        config_directory.join("remote/disabled"),
+        "explicitly stopped",
+    )?;
+    uninstall(config_directory).await?;
+    let stopped = super::lifecycle::RemoteLifecycle::new(config_directory)
+        .stop()
+        .await?;
+    Ok(stopped.is_some())
+}
+
+/// Restore a previously enabled gateway on normal CLI startup. Sessions share
+/// themselves once it runs.
 pub async fn resume_enabled() -> Result<()> {
     let Some(config_directory) = crate::config::get_config_dir() else {
         return Ok(());

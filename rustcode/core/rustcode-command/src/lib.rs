@@ -298,6 +298,70 @@ pub fn run_with_timeout_cancellable_env(
     )
 }
 
+/// Callback polled while a foreground process is running. Returning `true`
+/// hands the still-running process back to the caller instead of waiting.
+pub type HandoffCallback = Arc<dyn Fn() -> bool + Send + Sync + 'static>;
+
+/// How a run that may be handed off ended.
+pub enum RunOutcome {
+    Finished(CommandOutput),
+    /// The handoff callback fired first; the process is still running.
+    HandedOff(RunningCommand),
+}
+
+/// A process handed off mid-run. Its output readers keep draining, so
+/// nothing printed before or after the handoff is lost.
+pub struct RunningCommand {
+    child: std::process::Child,
+    status: Option<std::process::ExitStatus>,
+    stdout: thread::JoinHandle<BoundedOutput>,
+    stderr: thread::JoinHandle<BoundedOutput>,
+    status_command: String,
+}
+
+impl RunningCommand {
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Block until the process exits and its output is drained. No timeout
+    /// applies: the caller stops the process through its process group.
+    pub fn wait(mut self) -> Result<CommandOutput, String> {
+        let status = match self.status {
+            Some(status) => status,
+            None => self
+                .child
+                .wait()
+                .map_err(|e| format!("failed to wait on process: {e}"))?,
+        };
+        Ok(finished_output(
+            status,
+            self.stdout,
+            self.stderr,
+            &self.status_command,
+        ))
+    }
+}
+
+/// Run like [`run_with_timeout_cancellable`], but return the running process
+/// to the caller as soon as `handoff` reports true.
+pub fn run_with_timeout_or_handoff(
+    request: &CommandRequest,
+    progress: Option<ProgressCallback>,
+    cancellation: Option<CancellationCallback>,
+    handoff: HandoffCallback,
+) -> Result<RunOutcome, String> {
+    run_command_outcome(
+        request,
+        Some(request.timeout),
+        progress,
+        None,
+        cancellation,
+        Some(handoff),
+        build_command(request),
+    )
+}
+
 /// Run a resolved command until it exits. This is retained for the root
 /// background adapter, whose existing behavior has no command timeout.
 pub fn run_until_exit(
@@ -331,8 +395,31 @@ fn run_command_internal(
     progress: Option<ProgressCallback>,
     started: Option<StartedCallback>,
     cancellation: Option<CancellationCallback>,
-    mut command: Command,
+    command: Command,
 ) -> Result<CommandOutput, String> {
+    match run_command_outcome(
+        request,
+        timeout,
+        progress,
+        started,
+        cancellation,
+        None,
+        command,
+    )? {
+        RunOutcome::Finished(output) => Ok(output),
+        RunOutcome::HandedOff(running) => running.wait(),
+    }
+}
+
+fn run_command_outcome(
+    request: &CommandRequest,
+    timeout: Option<Duration>,
+    progress: Option<ProgressCallback>,
+    started: Option<StartedCallback>,
+    cancellation: Option<CancellationCallback>,
+    handoff: Option<HandoffCallback>,
+    mut command: Command,
+) -> Result<RunOutcome, String> {
     if request.sandboxed_shell
         && let Some((name, _)) = request
             .env
@@ -359,6 +446,10 @@ fn run_command_internal(
     let child_stdout = child.stdout.take().ok_or("no stdout pipe")?;
     let child_stderr = child.stderr.take().ok_or("no stderr pipe")?;
 
+    let status_command = request
+        .status_command
+        .as_deref()
+        .unwrap_or(&request.command);
     let stdout_progress = progress.clone();
     let out_handle = spawn_output_reader(child_stdout, stdout_progress, false);
     let err_handle = spawn_output_reader(child_stderr, progress, true);
@@ -371,6 +462,15 @@ fn run_command_internal(
                     if cancellation.as_ref().is_some_and(|callback| callback()) {
                         terminate_process_tree(&mut child, request.process_group);
                         return Err("command cancelled by user".to_string());
+                    }
+                    if handoff.as_ref().is_some_and(|callback| callback()) {
+                        return Ok(RunOutcome::HandedOff(RunningCommand {
+                            child,
+                            status: None,
+                            stdout: out_handle,
+                            stderr: err_handle,
+                            status_command: status_command.to_owned(),
+                        }));
                     }
                     if start.elapsed() >= timeout {
                         terminate_process_tree(&mut child, request.process_group);
@@ -397,6 +497,16 @@ fn run_command_internal(
             terminate_process_tree(&mut child, request.process_group);
             return Err("command cancelled by user".to_string());
         }
+        // The shell is gone but a descendant still holds the pipes.
+        if handoff.as_ref().is_some_and(|callback| callback()) {
+            return Ok(RunOutcome::HandedOff(RunningCommand {
+                child,
+                status: Some(status),
+                stdout: out_handle,
+                stderr: err_handle,
+                status_command: status_command.to_owned(),
+            }));
+        }
         if let Some(timeout) = timeout {
             if start.elapsed() >= timeout {
                 terminate_process_tree(&mut child, request.process_group);
@@ -408,22 +518,32 @@ fn run_command_internal(
         }
         thread::sleep(Duration::from_millis(20));
     }
-    let stdout = out_handle.join().unwrap_or_default().finish();
-    let stderr = err_handle.join().unwrap_or_default().finish();
-    let status_command = request
-        .status_command
-        .as_deref()
-        .unwrap_or(&request.command);
+    Ok(RunOutcome::Finished(finished_output(
+        status,
+        out_handle,
+        err_handle,
+        status_command,
+    )))
+}
+
+fn finished_output(
+    status: std::process::ExitStatus,
+    stdout: thread::JoinHandle<BoundedOutput>,
+    stderr: thread::JoinHandle<BoundedOutput>,
+    status_command: &str,
+) -> CommandOutput {
+    let stdout = stdout.join().unwrap_or_default().finish();
+    let stderr = stderr.join().unwrap_or_default().finish();
     let signal = terminating_signal(&status, status_command);
     let downstream_consumer_terminated = is_downstream_consumer_termination(signal, status_command);
-    Ok(CommandOutput {
+    CommandOutput {
         success: status.success() || downstream_consumer_terminated,
         exit_code: status.code(),
         signal,
         downstream_consumer_terminated,
         stdout,
         stderr,
-    })
+    }
 }
 
 fn is_unsafe_pre_sandbox_environment(name: &std::ffi::OsStr) -> bool {
@@ -572,9 +692,10 @@ pub fn format_bounded_output(output: &CapturedOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CancellationCallback, CommandRequest, MAX_OUTPUT_BYTES, ProgressCallback, StartedCallback,
-        format_bounded_output, run_until_exit, run_with_timeout, run_with_timeout_cancellable,
-        run_with_timeout_cancellable_env,
+        CancellationCallback, CommandRequest, HandoffCallback, MAX_OUTPUT_BYTES, ProgressCallback,
+        RunOutcome, StartedCallback, format_bounded_output, run_until_exit, run_with_timeout,
+        run_with_timeout_cancellable, run_with_timeout_cancellable_env,
+        run_with_timeout_or_handoff,
     };
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -628,6 +749,37 @@ mod tests {
             process_group: false,
             inherited_fds: Vec::new(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn handed_off_command_keeps_running_and_keeps_all_of_its_output() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let seen = Arc::new(AtomicBool::new(false));
+        let progress_seen = Arc::clone(&seen);
+        let progress: ProgressCallback = Arc::new(move |_, _| {
+            progress_seen.store(true, Ordering::Relaxed);
+        });
+        // Hand off once the first line has arrived, well before the exit.
+        let handoff: HandoffCallback = Arc::new(move || seen.load(Ordering::Relaxed));
+        let request = CommandRequest {
+            timeout: Duration::from_millis(600),
+            ..request("printf 'before\\n'; sleep 1; printf 'after\\n'; exit 3")
+        };
+
+        let outcome = run_with_timeout_or_handoff(&request, Some(progress), None, handoff).unwrap();
+        let RunOutcome::HandedOff(running) = outcome else {
+            panic!("the command should be handed off while it sleeps");
+        };
+        assert!(running.pid() > 0);
+        // The foreground timeout no longer applies after the hand-off.
+        let output = running.wait().unwrap();
+        assert_eq!(output.exit_code, Some(3));
+        assert_eq!(
+            String::from_utf8_lossy(output.stdout.bytes()),
+            "before\nafter\n"
+        );
     }
 
     #[cfg(unix)]

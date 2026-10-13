@@ -62,11 +62,14 @@ pub(crate) fn successful_side_effect_replay(
             .as_ref()
             .is_some_and(|result| result.success && !result.pending && is_equivalent(result))
     });
-    // An MCP call the model repeats after other work ran is a deliberate
-    // re-check (a status poll after a wait), not an accidental replay; only
-    // an immediate repeat is suppressed (#1851).
+    // An MCP call or shell command the model repeats after other work ran is
+    // a deliberate re-check (a status poll after a wait, a fresh measurement
+    // such as `memory_pressure`), not an accidental replay; only an immediate
+    // repeat is suppressed (#1851).
+    let recheckable = call.name == "run_command"
+        || matches!(crate::tools::tool_safety(&call.name), ToolSafety::Unknown);
     let completed = last_success.is_some_and(|index| {
-        !(matches!(crate::tools::tool_safety(&call.name), ToolSafety::Unknown)
+        !(recheckable
             && turn[index + 1..].iter().any(|message| {
                 message.tool_result.as_ref().is_some_and(|result| {
                     result.success && !result.pending && !result.replayed && !is_equivalent(result)
@@ -164,6 +167,24 @@ mod tests {
             successful_result(&wait),
         ];
         assert!(successful_side_effect_replay(&history, &write).is_some());
+    }
+
+    #[test]
+    fn a_shell_command_can_be_run_again_after_other_work_for_a_fresh_reading() {
+        let sample = call(
+            "run_command",
+            serde_json::json!({"command":"memory_pressure"}),
+        );
+        let other = call("run_command", serde_json::json!({"command":"omlx status"}));
+        let mut history = vec![
+            ChatMessage::new("user", "Load the model and watch memory"),
+            successful_result(&sample),
+        ];
+        // Back to back it is still treated as an accidental replay.
+        assert!(successful_side_effect_replay(&history, &sample).is_some());
+
+        history.push(successful_result(&other));
+        assert!(successful_side_effect_replay(&history, &sample).is_none());
     }
 
     #[test]

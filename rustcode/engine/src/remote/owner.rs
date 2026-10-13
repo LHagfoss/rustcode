@@ -41,11 +41,15 @@ pub const OWNER_COMMAND_CAPACITY: usize = 32;
 /// What `/remote` asks the session owner to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SharingCommand {
-    /// `/remote`: share the session. Repeating it changes nothing.
+    /// `/remote`: switch remote access on for this machine. Every session
+    /// shares itself while it is on; repeating it changes nothing.
     Enable,
+    /// `/remote pair`: switch it on and show a code for another device.
+    Pair,
     /// `/remote status`
     Status,
-    /// `/remote off`: stop sharing; a running turn is left alone.
+    /// `/remote off`: switch it off for this machine; running turns are left
+    /// alone.
     Off,
 }
 
@@ -54,9 +58,10 @@ impl SharingCommand {
     pub fn parse(arguments: &[&str]) -> Result<Self, String> {
         match arguments {
             [] | ["on"] => Ok(Self::Enable),
+            ["pair"] => Ok(Self::Pair),
             ["status"] => Ok(Self::Status),
             ["off"] => Ok(Self::Off),
-            _ => Err("Usage:\n  /remote  Share this session with a paired device\n  /remote on  Share this session with a paired device\n  /remote status  Show whether this session is shared\n  /remote off  Stop sharing this session".to_owned()),
+            _ => Err("Usage:\n  /remote  Turn remote access on: every session is shared with paired devices\n  /remote on  Same as /remote\n  /remote pair  Show a code to pair another device\n  /remote status  Show whether this session is shared\n  /remote off  Turn remote access off for every session".to_owned()),
         }
     }
 }
@@ -363,6 +368,7 @@ mod tests {
             Ok(SharingCommand::Status)
         );
         assert_eq!(SharingCommand::parse(&["off"]), Ok(SharingCommand::Off));
+        assert_eq!(SharingCommand::parse(&["pair"]), Ok(SharingCommand::Pair));
         for unknown in [&["off", "now"][..], &["serve"][..]] {
             let usage = SharingCommand::parse(unknown).expect_err("unknown arguments");
             assert!(usage.contains("/remote off"), "unexpected usage: {usage}");

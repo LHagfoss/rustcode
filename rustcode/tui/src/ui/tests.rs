@@ -9440,15 +9440,58 @@ fn count_input_lines_accounts_for_prompt_indent() {
     assert_eq!(super::count_input_lines("hello\nworld", 80), 2);
     assert_eq!(super::count_input_lines("line1\nline2\nline3", 80), 3);
 
-    // With width 10, indent is 2, available is 8 chars per line
-    // "12345678" takes 8 chars + 2 indent = 10 -> fits on line 1
-    // Next char triggers wrap to line 2
-    assert_eq!(super::count_input_lines("12345678", 10), 1);
-    assert_eq!(super::count_input_lines("123456789", 10), 2);
+    // With width 10, indent is 2 and the last column stays free for the
+    // cursor, so 7 chars fit on a line and the next one wraps.
+    assert_eq!(super::count_input_lines("1234567", 10), 1);
+    assert_eq!(super::count_input_lines("12345678", 10), 2);
     assert_eq!(
         super::count_input_lines("a\nb\nc\nd\ne\nf\ng\nh\ni\nj", 80),
         10
     );
+}
+
+#[test]
+fn cursor_after_a_full_input_row_stays_inside_the_composer() {
+    let width = 12;
+    for text in ["123456789", "123456789\nnext", "12345678 ", "1234567界"] {
+        let styled_chars = text
+            .chars()
+            .map(|character| (character, ratatui::style::Style::default()))
+            .collect::<Vec<_>>();
+        let first_line_end = text
+            .chars()
+            .position(|c| c == '\n')
+            .unwrap_or(styled_chars.len());
+        for cursor in 0..=styled_chars.len() {
+            let (lines, cursor_x, cursor_y) = super::wrap_input_chars(
+                &styled_chars,
+                width,
+                cursor,
+                ratatui::style::Style::default(),
+            );
+            assert!(
+                usize::from(cursor_x) < width,
+                "cursor {cursor} of {text:?} is off the row: x={cursor_x}"
+            );
+            assert!(usize::from(cursor_y) < lines.len());
+            for line in &lines {
+                assert!(line.width() < width, "{text:?} fills the cursor column");
+            }
+        }
+        // The cursor after the last character of the first line follows the
+        // text instead of sitting on top of it.
+        let (lines, cursor_x, cursor_y) = super::wrap_input_chars(
+            &styled_chars,
+            width,
+            first_line_end,
+            ratatui::style::Style::default(),
+        );
+        assert_eq!(
+            usize::from(cursor_x),
+            lines[usize::from(cursor_y)].width().min(width - 1),
+            "{text:?}"
+        );
+    }
 }
 
 #[test]
@@ -9486,7 +9529,7 @@ fn input_wraps_at_word_boundaries_before_splitting_long_words() {
         .collect::<Vec<_>>();
     let (long_lines, _, _) = super::wrap_input_chars(
         &long_word_chars,
-        10,
+        11,
         long_word_chars.len(),
         ratatui::style::Style::default(),
     );

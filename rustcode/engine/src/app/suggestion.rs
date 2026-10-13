@@ -183,7 +183,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/remote",
-        desc: "Share this session with a paired device and show pairing details (status|off)",
+        desc: "Turn remote access on: every session is shared with paired devices (pair|status|off)",
     },
     CommandInfo {
         name: "/skills",

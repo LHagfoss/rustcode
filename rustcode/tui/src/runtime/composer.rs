@@ -3,7 +3,7 @@ use crate::ui::keymap::{KeyAction, KeyMap};
 use crate::ui::render_snapshot::RenderSnapshot;
 use crossterm::event::KeyEvent;
 use ratatui::layout::{Margin, Rect};
-use rustcode::app::{AppState, ChatMessage};
+use rustcode::app::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ComposerAction {
@@ -13,6 +13,7 @@ pub(crate) enum ComposerAction {
     ClearScreen,
     ToggleExpandAll,
     ToggleExpandStep,
+    BackgroundCommand,
     Unhandled,
 }
 
@@ -108,9 +109,7 @@ impl Composer {
         match action {
             KeyAction::Insert(c) => {
                 if c == '?' && state.input_buffer.is_empty() {
-                    state
-                        .history
-                        .push(ChatMessage::new("system", rustcode::app::build_help_text()));
+                    state.show_command_panel("Help", rustcode::app::build_help_text());
                     state.request_redraw();
                 } else {
                     state.insert_char(c);
@@ -131,6 +130,7 @@ impl Composer {
             // whole-transcript toggle, ctrl+shift+O the single-entry step.
             KeyAction::ToggleExpandAll => ComposerAction::ToggleExpandAll,
             KeyAction::ToggleExpandStep => ComposerAction::ToggleExpandStep,
+            KeyAction::BackgroundCommand => ComposerAction::BackgroundCommand,
             KeyAction::MoveLeft => {
                 state.move_cursor_left();
                 ComposerAction::Handled
@@ -329,7 +329,7 @@ impl Composer {
                 "Switched to Plan Mode (Read-only / Design only)"
             }
         };
-        rustcode::app::actions::push_ephemeral_status(state, notice.to_string());
+        state.set_transient_notice(notice);
     }
 }
 

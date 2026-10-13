@@ -49,6 +49,8 @@ pub(crate) fn next_question_id() -> String {
 #[cfg(test)]
 mod tests;
 
+/// Editing operations every frontend text field shares.
+pub use crate::app::text_edit;
 pub use crate::provider_auth::{
     AuthMethod, CredentialRef, ProviderRateLimits, RateLimitWindow, provider_summary,
     provider_usage_summary,

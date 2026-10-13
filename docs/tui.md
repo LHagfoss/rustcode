@@ -22,6 +22,10 @@ question and its answer (`Asked …`) wrap, since they are shown whole. A comman
 row whose command history no longer holds reads `(command not recorded)`, or
 `(task <id>)` for a background launch.
 
+`ctrl+b` moves the command that is running to the background, so the agent
+gets control back without the command being stopped (see
+[background tasks](background-tasks.md)).
+
 A command started in the background keeps its row: it reads `· background`
 while the task runs and takes the finished state (`✓`, `× … · exit 1`,
 `× … · failed`, `− … · cancelled`) once the task has ended. The launch row has
@@ -117,3 +121,14 @@ Up and Down move through the lines of the composer and of a question's answer;
 in a search field they move the list, and in the MCP form they change field.
 A paste into a search field or the MCP form is flattened to one line. A field
 whose text is longer than its box scrolls to keep the cursor in view.
+
+## Notices
+
+Short confirmations are shown for a few seconds in the footer under the
+composer and are not part of the transcript: a new, resumed, forked, cleared,
+archived or deleted session, a Plan/Build switch, a renamed title, `/stop`,
+update and sync progress, and answers such as "nothing to compact". A notice
+replaced before it could be read is shown again after the one that replaced it.
+Errors, compaction boundaries, workspace changes and subagent activity stay in
+the transcript, where they can be scrolled back to. `?` on an empty composer
+opens the help panel.

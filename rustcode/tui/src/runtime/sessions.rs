@@ -31,22 +31,25 @@ pub(super) fn apply_session_event(
         state.pending_delete_session_idx = None;
         state.history_picker_sessions.clear();
     }
-    state.set_notice(format_session_transition(&transition));
+    // Starting, resuming and forking announce themselves where they happen.
+    if let Some(notice) = format_session_transition(&transition) {
+        state.set_transient_notice(notice);
+    }
     state.request_redraw();
     Ok(())
 }
 
 fn format_session_transition(
     transition: &rustcode::app::session_controller::SessionTransition,
-) -> String {
+) -> Option<&'static str> {
     use rustcode::app::session_controller::SessionTransition;
     match transition {
-        SessionTransition::Started { .. } => "Started a new session".to_owned(),
-        SessionTransition::Resumed { .. } => "Resumed session".to_owned(),
-        SessionTransition::Forked { .. } => "Forked session".to_owned(),
-        SessionTransition::Cleared { .. } => "Cleared transcript view".to_owned(),
-        SessionTransition::Archived { .. } => "Archived session".to_owned(),
-        SessionTransition::Deleted { .. } => "Deleted session".to_owned(),
+        SessionTransition::Started { .. }
+        | SessionTransition::Resumed { .. }
+        | SessionTransition::Forked { .. } => None,
+        SessionTransition::Cleared { .. } => Some("Cleared transcript view"),
+        SessionTransition::Archived { .. } => Some("Archived session"),
+        SessionTransition::Deleted { .. } => Some("Deleted session"),
     }
 }
 
