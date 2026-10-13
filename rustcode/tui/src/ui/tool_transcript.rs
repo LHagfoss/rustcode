@@ -1980,6 +1980,18 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
     render_tool_result_group_snapshot(state, message_indices, width, show_picker, true)
 }
 
+/// [`render_committed_tool_result_group_snapshot`] and, for each of its rows,
+/// the history index of the call the row belongs to. The heading and the
+/// spacing belong to no call.
+pub(crate) fn render_committed_tool_result_group_rows(
+    state: &RenderSnapshot,
+    message_indices: &[usize],
+    width: u16,
+    show_picker: bool,
+) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
+    render_tool_result_group_detailed(state, message_indices, width, show_picker, true)
+}
+
 /// Render a later tool-only round as children of an already committed group.
 /// Terminal scrollback cannot revise the first round's heading, so the
 /// transcript cursor uses this form when one-tool rounds arrive incrementally.
@@ -1999,7 +2011,7 @@ fn render_tool_result_group_snapshot(
     show_picker: bool,
     include_header: bool,
 ) -> Vec<Line<'static>> {
-    render_tool_result_group_detailed(state, message_indices, width, show_picker, include_header)
+    render_tool_result_group_detailed(state, message_indices, width, show_picker, include_header).0
 }
 
 fn render_tool_result_group_detailed(
@@ -2008,7 +2020,7 @@ fn render_tool_result_group_detailed(
     width: u16,
     show_picker: bool,
     include_header: bool,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
     let entries = fold_task_completions(
         message_indices
             .iter()
@@ -2016,6 +2028,8 @@ fn render_tool_result_group_detailed(
             .collect(),
     );
     let mut lines = Vec::new();
+    // The call each row belongs to, row for row with `lines`.
+    let mut owners = Vec::new();
     let mut index = 0;
     while index < entries.len() {
         // `message_indices` represents one provider batch (and may include
@@ -2045,6 +2059,7 @@ fn render_tool_result_group_detailed(
                 .collect();
             for (child_index, entry) in visible.iter().enumerate() {
                 {
+                    owners.resize(lines.len(), None);
                     let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
                     // Command, generic Tool, and Edit-with-diff entries collapse
                     // their bodies with the same expand affordance; Explored
@@ -2146,13 +2161,33 @@ fn render_tool_result_group_detailed(
                         width,
                         show_picker,
                     );
+                    owners.resize(lines.len(), Some(entry.message_index));
                 }
             }
         }
 
         index = group_end;
     }
-    lines
+    owners.resize(lines.len(), None);
+    (lines, owners)
+}
+
+/// What a right-click on a call's rows copies: the call as its row names it,
+/// then everything it returned.
+pub(crate) fn tool_call_copy_text(state: &RenderSnapshot, message_index: usize) -> Option<String> {
+    let entry = tool_transcript_entry(state, message_index, u16::MAX, false)?;
+    let title = if entry.kind == ToolTranscriptKind::Command || entry.action.is_empty() {
+        entry.target.clone()
+    } else {
+        format!("{} {}", entry.action, entry.target)
+    };
+    let output = state.history().get(message_index)?.content.trim();
+    let text = [title.trim(), output]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!text.is_empty()).then_some(text)
 }
 
 /// Message indices the expand key can act on, oldest first.

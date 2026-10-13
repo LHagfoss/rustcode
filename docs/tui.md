@@ -36,8 +36,11 @@ Every tool row carries what the tool returned: command output, a file edit's
 diff, the lines a read or search found, an MCP or skill result. Output hangs
 under its row on a `│` spine. Verbosity only sets whether it starts
 open: `high` shows the rows alone, `low` shows a five-row preview. Hovering a
-block lights it and clicking it opens or closes that block's output; `ctrl+o`
-does the same for every block, and `ctrl+shift+o` steps one entry at a time.
+call lights its row and its output, not the rest of the block. Clicking it
+opens or closes that call's output, and a right-click copies the call and
+everything it returned. `ctrl+o` opens or closes every call, and
+`ctrl+shift+o` steps one entry at a time. Hovering a message lights its text
+only, not the timing line under it.
 
 The row under the transcript names the state of the turn (`Generating`,
 `Thinking`, `Working`, `Queued`) with the model and the turn's token total. It

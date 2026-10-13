@@ -83,6 +83,8 @@ pub(crate) struct TranscriptState {
     pub(crate) panel_max_scroll_row: u16,
     pub(crate) task_log_max_scroll_row: usize,
     committed_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Line<'static>>>>>,
+    /// For each cached tool chain, the call every one of its rows belongs to.
+    tool_owner_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Option<usize>>>>>,
     /// `(inputs fingerprint, (expanded, collapsible))` of the last expand
     /// readout. Finding the collapsible rows renders every tool result in the
     /// session, which is far too much to redo on each frame.
@@ -174,6 +176,7 @@ impl Default for TranscriptState {
             panel_max_scroll_row: 0,
             task_log_max_scroll_row: 0,
             committed_cache: None,
+            tool_owner_cache: None,
             expand_progress: None,
             tool_line_flags: None,
             tool_rows: (ratatui::layout::Rect::default(), Vec::new()),
@@ -691,19 +694,49 @@ impl TranscriptState {
         if let Some(lines) = self.committed_cache().get(&key) {
             return Arc::clone(lines);
         }
+        self.render_tool_group(state, first, end, width, key).0
+    }
+
+    /// Render the chain behind `key` and cache its rows and their owners.
+    fn render_tool_group(
+        &mut self,
+        state: &super::RenderSnapshot,
+        first: usize,
+        end: usize,
+        width: u16,
+        key: CommittedKey,
+    ) -> (Arc<Vec<Line<'static>>>, Arc<Vec<Option<usize>>>) {
         let indices = (first..end)
             .filter(|&index| state.history()[index].role == "tool")
             .collect::<Vec<_>>();
-        let mut block =
-            super::render_committed_tool_result_group_snapshot(state, &indices, width, false);
+        let (mut block, mut owners) =
+            super::render_committed_tool_result_group_rows(state, &indices, width, false);
         // Calls still in flight are the next rows of this block, so nothing
         // separates them from it.
         if !block.is_empty() && !Self::block_stays_open(state, end) {
             block.push(Line::from(""));
+            owners.push(None);
         }
-        let lines = Arc::new(block);
+        let (lines, owners) = (Arc::new(block), Arc::new(owners));
         self.committed_cache().insert(key, Arc::clone(&lines));
-        lines
+        self.tool_owner_cache().insert(key, Arc::clone(&owners));
+        (lines, owners)
+    }
+
+    /// For each row of [`Self::committed_tool_group`], the history index of
+    /// the call it belongs to.
+    pub(crate) fn committed_tool_group_owners(
+        &mut self,
+        state: &super::RenderSnapshot,
+        first: usize,
+        end: usize,
+        width: u16,
+    ) -> Arc<Vec<Option<usize>>> {
+        let key = self.committed_key(state, first, end, width);
+        if let Some(owners) = self.tool_owner_cache().get(&key) {
+            return Arc::clone(owners);
+        }
+        self.render_tool_group(state, first, end, width, key).1
     }
 
     /// Whether the tool block ending at `end` is the one live calls continue.
@@ -796,6 +829,13 @@ impl TranscriptState {
         // evicts what the next frame needs and re-renders the whole span per
         // wheel tick, which is what froze fast scrolling in long sessions.
         self.committed_cache
+            .get_or_insert_with(|| super::lru::LruCache::new(COMMITTED_CACHE_BLOCKS))
+    }
+
+    fn tool_owner_cache(
+        &mut self,
+    ) -> &mut super::lru::LruCache<CommittedKey, Arc<Vec<Option<usize>>>> {
+        self.tool_owner_cache
             .get_or_insert_with(|| super::lru::LruCache::new(COMMITTED_CACHE_BLOCKS))
     }
 

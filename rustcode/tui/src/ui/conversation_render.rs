@@ -528,8 +528,8 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let end = rows.saturating_sub(scroll);
     let start = end.saturating_sub(capacity);
     let mut lines = Vec::with_capacity(capacity);
-    // Tool rows are hover and click targets for their block; the spacer rows
-    // of a block are not.
+    // A call's rows are one hover and click target; the heading and the
+    // spacer rows of its block belong to no call.
     let mut tool_lines = Vec::with_capacity(capacity);
     // A message's rows light together under the pointer, and a right-click
     // on any of them copies it.
@@ -541,17 +541,21 @@ pub(crate) fn render_visible_conversation_with_transcript(
         let through = end.saturating_sub(offset).min(block.len());
         if from < through {
             lines.extend_from_slice(&block[from..through]);
-            tool_lines.extend(
-                block[from..through]
-                    .iter()
-                    .map(|line| tool_block.filter(|_| line.width() > 0)),
-            );
+            let owners = tool_block.map(|(first, end)| {
+                transcript.committed_tool_group_owners(state, first, end, width)
+            });
+            tool_lines.extend((from..through).map(|row| {
+                let call = owners.as_ref()?.get(row).copied().flatten()?;
+                Some((call, call + 1))
+            }));
             // A message is one target from its first row to its last: the
             // blank rows between its paragraphs belong to it, the spacing
-            // around it does not.
-            let body = message.and_then(|_| {
-                let first = block.iter().position(|line| line.width() > 0)?;
-                let last = block.iter().rposition(|line| line.width() > 0)?;
+            // around it and the timing line under it do not.
+            let body = message.and_then(|index| {
+                let footer = render_turn_completion(&state.history()[index], width).len();
+                let text = &block[..trailing_content_end(&block).saturating_sub(footer)];
+                let first = text.iter().position(|line| line.width() > 0)?;
+                let last = text.iter().rposition(|line| line.width() > 0)?;
                 Some(first..=last)
             });
             message_lines.extend((from..through).map(|row| {
@@ -573,6 +577,14 @@ pub(crate) fn render_visible_conversation_with_transcript(
         lines.extend_from_slice(&live[from..through]);
     }
     lines
+}
+
+/// Row after the last one of `block` that shows anything.
+fn trailing_content_end(block: &[Line<'static>]) -> usize {
+    block
+        .iter()
+        .rposition(|line| line.width() > 0)
+        .map_or(0, |last| last + 1)
 }
 
 /// Whether the block at `index` is a user or assistant message whose text a
