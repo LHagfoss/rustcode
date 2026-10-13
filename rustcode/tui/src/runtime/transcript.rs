@@ -90,7 +90,27 @@ pub(super) fn commit_transcript(
     // scrolling back cannot leave orphaned rows, and an exit has nothing in
     // scrollback it cannot erase. `preserve_transcript_scrollback` opts back
     // into the write-only copy for copy/paste and shell piping (#1593).
-    let keep_scrollback = transcript_scrollback_enabled(snapshot);
+    if !transcript_scrollback_enabled(snapshot) {
+        // Nothing is copied out, so nothing needs rendering: only the cursor
+        // has to advance. Rendering the pending range here re-ran Markdown and
+        // syntax highlighting for the whole transcript on every resize, then
+        // dropped the rows.
+        let history_range = transcript_cursor.pending_history_range(snapshot.history().len());
+        if crate::run::should_clear_mutable_viewport_before_history(
+            response_just_finished,
+            transcript_cursor.is_at_start(),
+            !history_range.is_empty(),
+        ) {
+            terminal_runtime.terminal().mark_viewport_dirty();
+        }
+        transcript_cursor.commit_history_through(history_range.end);
+        // Scrollback state left over from before the setting was turned off
+        // must not resurface if it is turned back on.
+        transcript_cursor.set_tool_group_kind(None);
+        stream_commits.reset();
+        *replaying_transcript = false;
+        return Ok(());
+    }
     let live_response = snapshot.current_response();
     transcript_cursor.begin_stream(&live_response);
     let stable_source = if *replaying_transcript {
@@ -114,7 +134,7 @@ pub(super) fn commit_transcript(
 
     let history_range = transcript_cursor.pending_history_range(snapshot.history().len());
     let stable_lines = stream_commits.take_ready(!history_range.is_empty() || !response_active);
-    if !stable_lines.is_empty() && keep_scrollback {
+    if !stable_lines.is_empty() {
         crate::run::insert_scrollback_lines(
             terminal_runtime.terminal(),
             stable_lines,
@@ -214,14 +234,8 @@ pub(super) fn commit_transcript(
         }
         index += 1;
     }
-    if keep_scrollback {
-        for lines in blocks {
-            crate::run::insert_scrollback_lines(
-                terminal_runtime.terminal(),
-                lines,
-                terminal_width,
-            )?;
-        }
+    for lines in blocks {
+        crate::run::insert_scrollback_lines(terminal_runtime.terminal(), lines, terminal_width)?;
     }
 
     transcript_cursor.commit_history_through(history_range.end);
@@ -241,7 +255,7 @@ pub(super) fn commit_transcript(
             transcript_cursor.commit_stable_stream(&stable_source);
         }
         let stable_lines = stream_commits.take_ready(true);
-        if !stable_lines.is_empty() && keep_scrollback {
+        if !stable_lines.is_empty() {
             crate::run::insert_scrollback_lines(
                 terminal_runtime.terminal(),
                 stable_lines,
