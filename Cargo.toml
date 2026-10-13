@@ -48,7 +48,6 @@ qrcode = { version = "0.14.1", default-features = false }
 rand = "0.10.2"
 regex = "1"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "form", "stream", "rustls"] }
-reqwest-middleware = "0.4.2"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 schemars = "1.2.2"
 scraper = "0.22.0"
@@ -58,7 +57,6 @@ similar = { version = "3.1.1", features = ["inline"] }
 streaming-iterator = "0.1.9"
 sysinfo = "0.39.6"
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-stream = "0.1.16"
 tokio-util = { version = "0.7.18", features = ["io"] }
 tiktoken-rs = "0.5.9"
 toml = "0.8.19"

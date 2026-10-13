@@ -1,6 +1,6 @@
 //! `rustcode remote …` commands: argument handling and terminal output.
 
-use super::address::{candidate_addresses, plan_listen, plan_listen_with_preference};
+use super::address::{candidate_addresses, plan_listen_with_preference};
 use super::control::{GatewayStatus, OfferDetails};
 use super::devices::DeviceRecord;
 use super::gateway::{Gateway, GatewayConfig, Limits};
@@ -69,7 +69,6 @@ pub async fn serve(
 ) -> Result<()> {
     let plan =
         plan_listen_with_preference(bind, advertise, &candidate_addresses(), prefer_interface)?;
-    let lifecycle = RemoteLifecycle::new(config_directory);
     let lifecycle = RemoteLifecycle::new(config_directory);
     let hub = SessionHub::start(HubLimits::default());
     let gateway = Gateway::bind(
