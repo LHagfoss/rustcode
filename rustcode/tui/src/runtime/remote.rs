@@ -57,6 +57,14 @@ const COMMANDS_PER_TICK: usize = 8;
 #[cfg(unix)]
 const STANDBY_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// How often the bridge re-reads whether remote access is switched on for the
+/// machine. `/remote` in one terminal reaches the others within this time.
+const SHARE_ALL_RECHECK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long the bridge waits before it tries to share the session again after
+/// the gateway could not be reached.
+const SHARE_ALL_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+
 struct Share {
     publisher: SessionPublisher,
     link: OwnerLink,
@@ -100,6 +108,12 @@ pub(crate) struct RemoteBridge {
     /// Nobody is looking at this owner: it never asks for pairing details,
     /// which would replace the challenge a terminal is showing.
     headless: bool,
+    /// Whether remote access is switched on for the machine, as last read,
+    /// and when. While it is on, the session on screen is shared without
+    /// being asked.
+    share_all: Option<(bool, std::time::Instant)>,
+    /// Not before this: the next attempt to share the session by itself.
+    share_all_retry_at: Option<std::time::Instant>,
 }
 
 impl RemoteBridge {
@@ -118,6 +132,50 @@ impl RemoteBridge {
             turn_stream_open: false,
             stopped: None,
             headless: false,
+            share_all: None,
+            share_all_retry_at: None,
+        }
+    }
+
+    /// Whether remote access is switched on for the machine. Read from disk
+    /// at most every [`SHARE_ALL_RECHECK`]: this runs on every loop pass.
+    fn share_all_enabled(&mut self) -> bool {
+        if self.headless {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if let Some((enabled, read_at)) = self.share_all
+            && now.duration_since(read_at) < SHARE_ALL_RECHECK
+        {
+            return enabled;
+        }
+        #[cfg(unix)]
+        let enabled = self
+            .connector
+            .gateway_directory()
+            .is_some_and(|directory| rustcode::remote_gateway::service::enabled(&directory));
+        #[cfg(not(unix))]
+        let enabled = false;
+        self.share_all = Some((enabled, now));
+        enabled
+    }
+
+    /// Share the session on screen because remote access is on, without
+    /// showing anything: this happens at start and after every session
+    /// change. A gateway that cannot be reached is tried again later.
+    async fn share_by_itself(&mut self, app_state: &Arc<Mutex<AppState>>) {
+        let now = std::time::Instant::now();
+        if self.share_all_retry_at.is_some_and(|at| now < at) {
+            return;
+        }
+        self.enable(app_state).await;
+        match self.share.as_mut() {
+            Some(share) => {
+                share.pairing_due = false;
+                self.share_all_retry_at = None;
+                self.stopped = None;
+            }
+            None => self.share_all_retry_at = Some(now + SHARE_ALL_RETRY),
         }
     }
 
@@ -174,6 +232,9 @@ impl RemoteBridge {
             self.run_command(command, pump.app_state).await;
             *pump.needs_redraw = true;
         }
+        if self.share.is_none() && self.share_all_enabled() {
+            self.share_by_itself(pump.app_state).await;
+        }
         if self.share.is_some() {
             self.pump(pump).await;
         } else {
@@ -188,30 +249,69 @@ impl RemoteBridge {
 
     async fn run_command(&mut self, command: SharingCommand, app_state: &Arc<Mutex<AppState>>) {
         let report = match command {
-            SharingCommand::Enable => {
-                let report = self.enable(app_state).await;
+            SharingCommand::Enable | SharingCommand::Pair => {
+                let mut report = self.enable(app_state).await;
+                // A code is only in the way once a device is paired; `/remote
+                // pair` asks for one explicitly.
+                let paired = self.paired_devices();
+                let wants_code = matches!(command, SharingCommand::Pair) || paired == 0;
+                if let Some(share) = self.share.as_mut() {
+                    share.pairing_due = wants_code;
+                }
+                self.share_all = None;
                 if self.show_pairing_details(app_state) {
                     return;
                 }
                 if self.share.is_none() {
                     self.stopped = Some(report.clone());
+                } else if !wants_code {
+                    report.push_str(&format!(
+                        "\n{paired} paired device{}. Run /remote pair to add another.",
+                        if paired == 1 { "" } else { "s" }
+                    ));
                 }
                 report
             }
             SharingCommand::Status => self.status(),
-            SharingCommand::Off => {
-                if self.close(SessionCloseReason::SharingDisabled) {
-                    "Remote sharing is off. This session is private again; a running turn is not affected."
-                        .to_owned()
-                } else {
-                    "This session is not shared.".to_owned()
-                }
-            }
+            SharingCommand::Off => self.switch_off().await,
         };
         app_state
             .lock()
             .await
             .show_command_panel(PANEL_TITLE, report);
+    }
+
+    fn paired_devices(&self) -> usize {
+        #[cfg(unix)]
+        if let Some(directory) = self.connector.gateway_directory() {
+            return rustcode::remote_gateway::service::paired_devices(&directory);
+        }
+        0
+    }
+
+    /// `/remote off`: switch remote access off for the machine. The gateway
+    /// stops, so every terminal's session becomes private and devices are
+    /// disconnected; pairings are kept.
+    async fn switch_off(&mut self) -> String {
+        let was_shared = self.close(SessionCloseReason::SharingDisabled);
+        self.share_all = Some((false, std::time::Instant::now()));
+        #[cfg(unix)]
+        if let Some(directory) = self.connector.gateway_directory() {
+            return match rustcode::remote_gateway::service::disable(&directory).await {
+                Ok(_) => "Remote access is off for every session on this machine. Running turns are not affected.\n\
+                          Paired devices stay paired; /remote turns it back on."
+                    .to_owned(),
+                Err(error) => {
+                    format!("Remote access could not be switched off completely: {error:#}")
+                }
+            };
+        }
+        if was_shared {
+            "Remote sharing is off. This session is private again; a running turn is not affected."
+                .to_owned()
+        } else {
+            "This session is not shared.".to_owned()
+        }
     }
 
     /// Put the pairing details for the last `/remote` on screen, if they are
@@ -442,7 +542,7 @@ impl RemoteBridge {
 
     fn status(&self) -> String {
         let Some(share) = self.share.as_ref() else {
-            return "This session is private. Run /remote to share it with a paired device."
+            return "This session is private. Run /remote to turn remote access on for every session."
                 .to_owned();
         };
         let registration = share.publisher.registration();
@@ -479,7 +579,7 @@ impl RemoteBridge {
              Epoch  {}\n\
              {gateway}\n\
              Published  {} updates{}\n\
-             Run /remote off to stop sharing. Switching to another session stops it too.\n\
+             Run /remote off to turn remote access off for every session.\n\
              `rustcode remote status` shows the gateway's addresses, paired devices, pairing state and logs.",
             registration.session_id,
             registration.registration_epoch,
@@ -521,6 +621,7 @@ impl RemoteBridge {
             terminal_input_idle,
             needs_redraw,
         } = pump;
+        let share_all = self.share_all_enabled();
         let Some(share) = self.share.as_mut() else {
             return;
         };
@@ -581,11 +682,16 @@ impl RemoteBridge {
                     .then(|| share.publisher.publish(&state, room_for_resync))
             };
             match messages {
-                // The terminal moved to another session. That identity was
-                // never shared: nothing of it is published under the old
-                // registration, and it stays private until `/remote` runs.
+                // The terminal moved to another session: nothing of it is
+                // published under the old registration. With remote access
+                // on, the next pass shares it under its own; otherwise it
+                // stays private until `/remote` runs.
                 None => {
                     self.close(SessionCloseReason::SessionChanged);
+                    if share_all {
+                        self.share_all_retry_at = None;
+                        return;
+                    }
                     closed = Some(
                         "Remote sharing stopped: the session changed. Run /remote to share this one."
                             .to_owned(),
@@ -613,6 +719,10 @@ impl RemoteBridge {
 
         if let Some(notice) = closed {
             self.close(SessionCloseReason::OwnerExited);
+            // The gateway may have gone because remote access was switched
+            // off elsewhere: read that again before sharing by itself, or
+            // this terminal would start the gateway right back up.
+            self.share_all = None;
             self.stopped = Some(notice.clone());
             let mut state = app_state.lock().await;
             // The panel may still say that sharing is starting.
@@ -1368,25 +1478,49 @@ mod tests {
         assert!(status.contains("Attached devices  none"), "{status}");
         assert!(!status.contains("code:"), "status shows no pairing secret");
 
-        // `/remote off` removes the session from the gateway.
-        enter(&mut runtime, "/remote off").await;
-        runtime.run_remote_iteration().await;
-        assert!(panel(&runtime).await.contains("Remote sharing is off"));
+        // Remote access is on for the machine now: a session the terminal
+        // switches to shares itself, with nothing typed and no code shown.
+        runtime
+            .handle_event(AppEvent::NewSession)
+            .await
+            .expect("new session");
+        let new_session_id = runtime.app_state().await.active_session_id.clone();
+        assert_ne!(new_session_id, session_id);
         tokio::time::timeout(WAIT, async {
-            while !lifecycle
-                .status()
-                .await
-                .unwrap()
-                .unwrap()
-                .sessions
-                .unwrap()
-                .is_empty()
-            {
+            loop {
+                runtime.run_remote_iteration().await;
+                let sessions = lifecycle.status().await.unwrap().unwrap().sessions.unwrap();
+                if sessions.len() == 1 && sessions[0].session_id == new_session_id {
+                    break;
+                }
                 tokio::time::sleep(EVENT_POLL_INTERVAL).await;
             }
         })
         .await
-        .expect("the registration is removed");
+        .expect("the new session is shared by itself");
+        assert!(!panel(&runtime).await.contains("code:"));
+
+        // `/remote off` switches remote access off for the machine: the
+        // gateway stops, and nothing shares itself afterwards.
+        enter(&mut runtime, "/remote off").await;
+        runtime.run_remote_iteration().await;
+        assert!(
+            panel(&runtime)
+                .await
+                .contains("Remote access is off for every session")
+        );
+        assert!(!rustcode::remote_gateway::service::enabled(&dir));
+        tokio::time::timeout(WAIT, async {
+            while lifecycle.status().await.unwrap().is_some() {
+                tokio::time::sleep(EVENT_POLL_INTERVAL).await;
+            }
+        })
+        .await
+        .expect("the gateway stops");
+        for _ in 0..3 {
+            runtime.run_remote_iteration().await;
+        }
+        assert!(runtime.remote.registration().is_none());
 
         shutdown.cancel();
         serving.await.unwrap().unwrap();
