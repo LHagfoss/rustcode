@@ -105,7 +105,9 @@ pub async fn serve(
     )
     .await?;
     let port = gateway.local_addr().port();
-    let mut discovery = super::discovery::advertise(port, plan.advertise.is_loopback());
+    let gateway_id = gateway.gateway_id().to_owned();
+    let mut discovery =
+        super::discovery::advertise(port, plan.advertise.is_loopback(), &gateway_id);
     // Bonjour is announced only while a phone could reach the address.
     let mut advertised = gateway.advertised_changes();
     let announce = async move {
@@ -114,7 +116,7 @@ pub async fn serve(
             let now = advertised.borrow_and_update().host().is_loopback();
             if now != loopback {
                 loopback = now;
-                discovery = super::discovery::advertise(port, loopback);
+                discovery = super::discovery::advertise(port, loopback, &gateway_id);
             }
         }
         // Keeps the announcement up when the address can no longer change.
@@ -265,12 +267,22 @@ pub fn format_devices(devices: &[DeviceRecord]) -> String {
     if devices.is_empty() {
         return "No paired devices.".to_string();
     }
-    let mut lines = vec![format!("{:<16}  {:<20}  NAME", "DEVICE", "PAIRED (UTC)")];
+    let now = chrono::Utc::now();
+    let mut lines = vec![format!(
+        "{:<16}  {:<20}  {:<20}  NAME",
+        "DEVICE", "PAIRED (UTC)", "EXPIRES (UTC)"
+    )];
     for device in devices {
+        let expires = if device.is_expired(now) {
+            "expired".to_owned()
+        } else {
+            device.expires_at().format("%Y-%m-%d %H:%M:%S").to_string()
+        };
         lines.push(format!(
-            "{:<16}  {:<20}  {}",
+            "{:<16}  {:<20}  {:<20}  {}",
             device.id,
             device.paired_at.format("%Y-%m-%d %H:%M:%S"),
+            expires,
             device.name
         ));
     }
@@ -286,6 +298,7 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
                 "id": device.id,
                 "name": device.name,
                 "paired_at": device.paired_at,
+                "expires_at": device.expires_at(),
             })
         })
         .collect()

@@ -294,6 +294,11 @@ impl Shared {
             device_name: record.name.clone(),
             token,
             host_name: self.host_name.clone(),
+            expires_at: Some(
+                record
+                    .expires_at()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ),
         };
         Ok(self.register(&mut state, &record, welcome))
     }
@@ -304,7 +309,11 @@ impl Shared {
         token: &str,
     ) -> Result<Admitted, HandshakeResponse> {
         let mut state = self.state();
-        let Some(record) = state.devices.verify(device_id, token).cloned() else {
+        let Some(record) = state
+            .devices
+            .verify(device_id, token, chrono::Utc::now())
+            .cloned()
+        else {
             return Err(HandshakeResponse::error(
                 ErrorCode::Unauthorized,
                 "unknown device or token; pair this device again",
@@ -320,6 +329,11 @@ impl Shared {
             device_id: record.id.clone(),
             device_name: record.name.clone(),
             host_name: self.host_name.clone(),
+            expires_at: Some(
+                record
+                    .expires_at()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ),
         };
         Ok(self.register(&mut state, &record, welcome))
     }

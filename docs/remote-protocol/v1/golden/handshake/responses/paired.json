@@ -6,5 +6,6 @@
   "device_id": "0011223344556677",
   "device_name": "Lars's iPhone",
   "token": "ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw",
-  "host_name": "studio"
+  "host_name": "studio",
+  "expires_at": "2026-08-22T09:15:00Z"
 }

@@ -23,6 +23,10 @@ pub const MAX_DEVICES: usize = 32;
 /// Device names are labels typed on a phone; keep them short and printable.
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
 
+/// How long a pairing lasts. After it the token is refused like an unknown
+/// one and the device pairs again, which bounds what a copied token is worth.
+pub const DEVICE_LIFETIME: chrono::Duration = chrono::Duration::days(30);
+
 const STORE_VERSION: u32 = 1;
 const MAX_STORE_BYTES: u64 = 256 * 1024;
 
@@ -35,6 +39,17 @@ pub struct DeviceRecord {
     /// Hex SHA-256 of the device token. The token itself is never stored.
     token_sha256: String,
     pub paired_at: DateTime<Utc>,
+}
+
+impl DeviceRecord {
+    /// When the token stops being accepted: [`DEVICE_LIFETIME`] after pairing.
+    pub fn expires_at(&self) -> DateTime<Utc> {
+        self.paired_at + DEVICE_LIFETIME
+    }
+
+    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        now >= self.expires_at()
+    }
 }
 
 // The digest is not a credential, but it has no business in a log either.
@@ -102,7 +117,10 @@ impl Devices {
     }
 
     /// Add a device and mint its token. The returned token is the only copy.
+    /// Expired devices are forgotten first, so they never hold a place.
     pub fn enroll(&mut self, name: &str) -> Result<(DeviceRecord, Secret), DeviceError> {
+        let now = Utc::now();
+        self.devices.retain(|record| !record.is_expired(now));
         if self.devices.len() >= MAX_DEVICES {
             return Err(DeviceError::Full);
         }
@@ -115,15 +133,21 @@ impl Devices {
             id: hex::encode(id_bytes),
             name: sanitize_name(name),
             token_sha256: hex::encode(digest(token.as_bytes())),
-            paired_at: Utc::now(),
+            paired_at: now,
         };
         self.devices.push(record.clone());
         Ok((record, Secret::new(token)))
     }
 
-    /// The device `token` belongs to, if `device_id` is paired and the token
-    /// is its own. An unknown device costs the same comparison as a known one.
-    pub fn verify(&self, device_id: &str, token: &str) -> Option<&DeviceRecord> {
+    /// The device `token` belongs to, if `device_id` is paired, the token is
+    /// its own and the pairing has not expired at `now`. An unknown device
+    /// costs the same comparison as a known one.
+    pub fn verify(
+        &self,
+        device_id: &str,
+        token: &str,
+        now: DateTime<Utc>,
+    ) -> Option<&DeviceRecord> {
         let presented = digest(token.as_bytes());
         let record = self.devices.iter().find(|record| record.id == device_id);
         let mut expected = [0u8; 32];
@@ -131,7 +155,7 @@ impl Devices {
             hex::decode_to_slice(&record.token_sha256, &mut expected).is_ok()
         });
         let matches = constant_time_eq(&presented, &expected);
-        record.filter(|_| known && matches)
+        record.filter(|record| known && matches && !record.is_expired(now))
     }
 
     /// Resolve what a user typed: a full identifier, a unique identifier
@@ -262,7 +286,9 @@ mod tests {
         let loaded = store.load().unwrap();
         assert_eq!(loaded, devices);
         assert_eq!(
-            loaded.verify(&record.id, token.expose()).map(|r| &r.id),
+            loaded
+                .verify(&record.id, token.expose(), Utc::now())
+                .map(|r| &r.id),
             Some(&record.id)
         );
     }
@@ -272,19 +298,35 @@ mod tests {
         let mut devices = Devices::default();
         let (first, first_token) = devices.enroll("first").unwrap();
         let (second, second_token) = devices.enroll("second").unwrap();
-        assert!(devices.verify(&first.id, "wrong").is_none());
-        assert!(devices.verify(&first.id, "").is_none());
+        assert!(devices.verify(&first.id, "wrong", Utc::now()).is_none());
+        assert!(devices.verify(&first.id, "", Utc::now()).is_none());
         assert!(
             devices
-                .verify("ffffffffffffffff", first_token.expose())
+                .verify("ffffffffffffffff", first_token.expose(), Utc::now())
                 .is_none()
         );
         // A valid token is bound to its own device.
-        assert!(devices.verify(&first.id, second_token.expose()).is_none());
-        assert!(devices.verify(&second.id, first_token.expose()).is_none());
+        assert!(
+            devices
+                .verify(&first.id, second_token.expose(), Utc::now())
+                .is_none()
+        );
+        assert!(
+            devices
+                .verify(&second.id, first_token.expose(), Utc::now())
+                .is_none()
+        );
         // The stored digest is not itself a credential.
-        assert!(devices.verify(&first.id, &first.token_sha256).is_none());
-        assert!(devices.verify(&second.id, second_token.expose()).is_some());
+        assert!(
+            devices
+                .verify(&first.id, &first.token_sha256, Utc::now())
+                .is_none()
+        );
+        assert!(
+            devices
+                .verify(&second.id, second_token.expose(), Utc::now())
+                .is_some()
+        );
     }
 
     #[test]
@@ -292,7 +334,36 @@ mod tests {
         let mut devices = Devices::default();
         let (record, _token) = devices.enroll("phone").unwrap();
         devices.devices[0].token_sha256 = "not-hex".into();
-        assert!(devices.verify(&record.id, "anything").is_none());
+        assert!(devices.verify(&record.id, "anything", Utc::now()).is_none());
+    }
+
+    #[test]
+    fn a_pairing_expires_after_its_lifetime_and_frees_its_place() {
+        let mut devices = Devices::default();
+        let (record, token) = devices.enroll("phone").unwrap();
+        assert_eq!(record.expires_at(), record.paired_at + DEVICE_LIFETIME);
+        let just_before = record.expires_at() - chrono::Duration::seconds(1);
+        assert!(
+            devices
+                .verify(&record.id, token.expose(), just_before)
+                .is_some()
+        );
+        assert!(
+            devices
+                .verify(&record.id, token.expose(), record.expires_at())
+                .is_none()
+        );
+
+        // A store full of expired devices still takes a new one.
+        for _ in 1..MAX_DEVICES {
+            devices.enroll("other").unwrap();
+        }
+        assert_eq!(devices.enroll("late").unwrap_err(), DeviceError::Full);
+        for record in &mut devices.devices {
+            record.paired_at -= DEVICE_LIFETIME;
+        }
+        let (fresh, _) = devices.enroll("late").unwrap();
+        assert_eq!(devices.list(), [fresh]);
     }
 
     #[test]
@@ -305,7 +376,11 @@ mod tests {
         store.save(&devices).unwrap();
         let loaded = store.load().unwrap();
         assert!(loaded.list().is_empty());
-        assert!(loaded.verify(&record.id, token.expose()).is_none());
+        assert!(
+            loaded
+                .verify(&record.id, token.expose(), Utc::now())
+                .is_none()
+        );
         assert!(devices.remove(&record.id).is_none());
     }
 

@@ -555,7 +555,7 @@ mod tests {
             store
                 .load()
                 .unwrap()
-                .verify(&gone.id, token.expose())
+                .verify(&gone.id, token.expose(), chrono::Utc::now())
                 .is_none()
         );
         assert!(lifecycle.revoke("phone").await.is_err());
