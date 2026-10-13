@@ -1,3 +1,13 @@
+## [v0.67.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.0) - 2026-10-13
+
+### Features
+- Keep working after a background command starts: the model is called again at once instead of waiting for the command, and `ctrl+b` moves a running foreground command to the background without stopping it ([#2002](https://github.com/LHagfoss/rustcode/pull/2002)).
+- Make `/remote` a switch for the whole machine: every session open in a terminal is shared with paired devices by itself, a pairing code is shown only while no device is paired (`/remote pair` shows one on request), and `/remote off` turns remote access off for every session ([#2010](https://github.com/LHagfoss/rustcode/pull/2010)).
+- Show short confirmations such as "New chat started", a mode switch or update progress in the footer instead of appending them to the transcript, and open help in a panel on `?` ([#2006](https://github.com/LHagfoss/rustcode/pull/2006)).
+- Edit every text field with the same keys: word and line motions, `ctrl+k`, and a scrolling MCP form field; word-right now stops at the end of a word and Home/End act on the current line ([#2012](https://github.com/LHagfoss/rustcode/pull/2012)).
+- Keep the last composer column free so the cursor follows the text at the right edge ([#2004](https://github.com/LHagfoss/rustcode/pull/2004)).
+- Run a repeated shell command again after other work instead of returning a stale result, stop saving answered turns as failed, accept `*` for all MCP servers and an empty `edits` list beside a single edit ([#2008](https://github.com/LHagfoss/rustcode/pull/2008)).
+- Add a `read_url` tool that returns the readable text of a web page, and let `rustcode -p` finish successfully on a plain answer ([#2014](https://github.com/LHagfoss/rustcode/pull/2014)).
 ## [v0.66.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.66.0) - 2026-10-13
 
 ### Features
