@@ -2757,7 +2757,7 @@ mod tests {
     #[test]
     #[ignore = "manual tool-session frame benchmark"]
     fn bench_tool_session_frames() {
-        use rustcode::app::ToolCallRef;
+        use rustcode::controller::ToolCallRef;
         let mut state = RenderState::new();
         state
             .history
