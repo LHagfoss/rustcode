@@ -9,7 +9,7 @@ pub(in crate::ui) fn render_question_modal(
     let Some(question) = pending else {
         return;
     };
-    let panel = crate::ui::theme::get_palette(&state.config().theme).panel;
+    let panel = crate::ui::theme::palette_for(&state.config().theme).panel;
     let content_area = render_padded_panel_with_color(f, area, panel);
     let header_line = question_modal_header(
         &question,

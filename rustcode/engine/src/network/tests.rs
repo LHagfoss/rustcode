@@ -5245,6 +5245,34 @@ async fn round_budget_notice_reaches_the_provider_request() {
 }
 
 #[tokio::test]
+async fn request_preparation_under_budget_does_not_mark_history_rewritten() {
+    let mut app = AppState::new();
+    app.history
+        .push(ChatMessage::new("user", "Fix the compiler errors"));
+    app.history
+        .push(ChatMessage::new("assistant", "Reading the build output."));
+    let before = app.history.clone();
+    let state = Arc::new(Mutex::new(app));
+
+    prepare_turn_request(
+        &reqwest::Client::new(),
+        &state,
+        1,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("request preparation");
+
+    let app = state.lock().await;
+    assert_eq!(app.history.as_slice(), before.as_slice());
+    assert_eq!(
+        app.history.rewrite_revision(),
+        before.rewrite_revision(),
+        "a round that compacts nothing must not look like a history rewrite"
+    );
+}
+
+#[tokio::test]
 async fn request_assembly_separates_project_instructions_from_runtime_notices() {
     let root = tempfile::tempdir().expect("workspace");
     std::fs::write(root.path().join("AGENTS.md"), "DEVELOPER-PROVENANCE-RULE")

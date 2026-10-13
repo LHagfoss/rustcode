@@ -135,7 +135,7 @@ pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
 ///
 /// This is intentionally request-scoped: a child request must not infer its
 /// capabilities from the parent session's mutable delegation state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ToolSchemaPolicy {
     pub(crate) include_agent_tools: bool,
     pub(crate) include_mcp_tools: bool,
@@ -165,7 +165,7 @@ impl ToolSurface {
 }
 
 /// Deterministic provider-facing tool menu for the read-only inspection mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(crate) enum ToolSchemaProfile {
     #[default]
     Coding,
@@ -883,6 +883,36 @@ fn build_builtin_native_tools_schema(policy: ToolSchemaPolicy) -> (Vec<Value>, V
     (tools, withheld)
 }
 
+/// The built-in half of the native `tools` block for one policy, with the
+/// measurements every request reports about it.
+struct BuiltinNativeSchema {
+    tools: Vec<Value>,
+    withheld: Vec<String>,
+    bytes: usize,
+}
+
+/// [`build_builtin_native_tools_schema`] memoized per policy.
+///
+/// The block is a pure function of the policy and the static `TOOLS` table, and
+/// request preparation asks for it several times per model round. A policy is
+/// four flags and a three-way profile, so the map stays small.
+fn cached_builtin_native_tools_schema(policy: ToolSchemaPolicy) -> Arc<BuiltinNativeSchema> {
+    static CACHE: LazyLock<std::sync::Mutex<HashMap<ToolSchemaPolicy, Arc<BuiltinNativeSchema>>>> =
+        LazyLock::new(Default::default);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::clone(cache.entry(policy).or_insert_with(|| {
+        let (tools, withheld) = build_builtin_native_tools_schema(policy);
+        let bytes = serialized_schema_bytes(&tools);
+        Arc::new(BuiltinNativeSchema {
+            tools,
+            withheld,
+            bytes,
+        })
+    }))
+}
+
 fn serialized_schema_bytes(schemas: &[Value]) -> usize {
     serde_json::to_vec(schemas).map_or(0, |bytes| bytes.len())
 }
@@ -893,16 +923,9 @@ fn mcp_schema_bytes(name: &str, description: &str, schema: &Value) -> usize {
 
 #[cfg(test)]
 fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
-    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> =
-        LazyLock::new(|| build_builtin_native_tools_schema(ToolSchemaPolicy::root(false)).0);
-    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> =
-        LazyLock::new(|| build_builtin_native_tools_schema(ToolSchemaPolicy::root(true)).0);
-
-    if include_agent_tools {
-        WITH_AGENT_TOOLS.clone()
-    } else {
-        WITHOUT_AGENT_TOOLS.clone()
-    }
+    cached_builtin_native_tools_schema(ToolSchemaPolicy::root(include_agent_tools))
+        .tools
+        .clone()
 }
 
 fn build_agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
@@ -1901,8 +1924,10 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
     // The built-in half depends only on the policy, so a fixed policy produces a
     // byte-identical block for the whole session regardless of transcript
     // growth or a Bootstrap/Established flip. (#1589)
-    let (mut tools, withheld_builtin_names) = build_builtin_native_tools_schema(policy);
-    let builtin_schema_bytes = serialized_schema_bytes(&tools);
+    let builtin = cached_builtin_native_tools_schema(policy);
+    let mut tools = builtin.tools.clone();
+    let withheld_builtin_names = builtin.withheld.clone();
+    let builtin_schema_bytes = builtin.bytes;
     let builtin_available = TOOLS
         .iter()
         .filter(|tool| builtin_is_advertised(tool, policy))
@@ -2454,6 +2479,26 @@ mod schema_budget_tests {
         // The budget only means something while it sits under the hard cap
         // that starts withholding tools.
         assert!(BUILTIN_SCHEMA_BYTE_BUDGET < MAX_BUILTIN_NATIVE_SCHEMA_BYTES);
+    }
+
+    #[test]
+    fn cached_builtin_schema_matches_a_fresh_build_for_each_policy() {
+        for policy in [
+            ToolSchemaPolicy::root(false),
+            ToolSchemaPolicy::root(true),
+            ToolSchemaPolicy::root(true).with_session_title_tool(),
+            ToolSchemaPolicy::read_only_inspection(),
+        ] {
+            let (tools, withheld) = build_builtin_native_tools_schema(policy);
+            let cached = cached_builtin_native_tools_schema(policy);
+            assert_eq!(cached.tools, tools, "{policy:?}");
+            assert_eq!(cached.withheld, withheld, "{policy:?}");
+            assert_eq!(cached.bytes, serialized_schema_bytes(&tools), "{policy:?}");
+            assert!(Arc::ptr_eq(
+                &cached,
+                &cached_builtin_native_tools_schema(policy)
+            ));
+        }
     }
 
     /// Trimming must never leave a tool undescribed, and a description pays
