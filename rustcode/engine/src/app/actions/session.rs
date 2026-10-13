@@ -313,9 +313,8 @@ pub fn start_new_session(s: &mut AppState) {
     // Switch to a new active session ID
     s.active_session_id = crate::config::create_new_session(&mut s.config);
     crate::config::set_active_session_id(&s.active_session_id);
-    s.history
-        .push(ChatMessage::new("system", "✨ New chat started"));
     crate::config::save_session_history(&s.active_session_id, &s.history);
+    s.set_transient_notice("New chat started");
 }
 
 /// Drop state owned by the active conversation before another session is
@@ -458,18 +457,14 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
                 .is_some_and(|configured| ctx < configured);
             profile.provider_context_window = Some(ctx);
             crate::config::save_entire_config(&s.config);
-            s.history.push(ChatMessage::new(
-                "system",
-                if mismatch {
-                    format!(
-                        "Detected provider context window for '{}': {} tokens (clamped below the configured model window)",
-                        name, ctx
-                    )
-                } else {
-                    format!("Detected provider context window for '{}': {} tokens", name, ctx)
-                },
-            ));
-            s.request_redraw();
+            s.set_transient_notice(if mismatch {
+                format!(
+                    "Detected provider context window for '{}': {} tokens (clamped below the configured model window)",
+                    name, ctx
+                )
+            } else {
+                format!("Detected provider context window for '{}': {} tokens", name, ctx)
+            });
         }
     });
 }
@@ -588,8 +583,7 @@ pub fn resume_latest_session(s: &mut AppState) {
             load_session_into(s, &meta);
         }
         None => {
-            s.history
-                .push(ChatMessage::new("system", "No previous session to resume."));
+            s.set_transient_notice("No previous session to resume");
         }
     }
 }
@@ -752,11 +746,8 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
             format!("Switched to the session's workspace {}", cwd.display()),
         ));
     }
-    s.history.push(ChatMessage::new(
-        "system",
-        format!("Resumed session \"{}\"", meta.title),
-    ));
     crate::config::save_session_history(&s.active_session_id, &s.history);
+    s.set_transient_notice(format!("Resumed session \"{}\"", meta.title));
     true
 }
 

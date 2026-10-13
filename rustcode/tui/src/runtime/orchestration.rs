@@ -208,8 +208,8 @@ impl AppRuntime {
                             let mut state = app_state.lock().await;
                             state.update_check =
                                 rustcode_core::update::UpdateState::UpToDate(latest);
-                            state.set_notice(format!(
-                                "✨ RustCode v{} is up to date (latest: v{}).",
+                            state.set_transient_notice(format!(
+                                "RustCode v{} is up to date (latest: v{})",
                                 rustcode_core::update::format_version(current),
                                 rustcode_core::update::format_version(latest)
                             ));

@@ -368,8 +368,7 @@ async fn summarize_session_inner(
         let mut s = state_arc.lock().await;
         s.enter_idle();
         s.generation_start_time = None;
-        s.history
-            .push(ChatMessage::new("system", "Nothing to summarize yet."));
+        s.set_transient_notice("Nothing to summarize yet");
         s.finish_summary();
         s.request_redraw();
         return;
@@ -700,7 +699,7 @@ pub fn trigger_sync(state: &Arc<Mutex<AppState>>, subcommand: Option<String>, ar
     tokio::spawn(async move {
         {
             let mut s = state_clone.lock().await;
-            s.set_notice("🔄 Syncing config repository...");
+            s.set_transient_notice("Syncing config repository...");
         }
 
         let result =
@@ -728,20 +727,14 @@ pub fn trigger_sync(state: &Arc<Mutex<AppState>>, subcommand: Option<String>, ar
         let mut s = state_clone.lock().await;
         match result {
             Ok(Ok(msg)) => {
-                s.set_notice(format!("✅ {msg}"));
-                s.history
-                    .push(ChatMessage::new("system", format!("✅ {msg}")));
+                s.set_transient_notice(msg);
             }
             Ok(Err(err)) => {
-                s.set_warning_notice(format!("❌ {err}"));
-                s.history
-                    .push(ChatMessage::new("system", format!("❌ Sync error: {err}")));
+                s.set_warning_notice(format!("❌ Sync error: {err}"));
             }
             Err(join_err) => {
                 let err_msg = format!("Sync task error: {join_err}");
                 s.set_warning_notice(format!("❌ {err_msg}"));
-                s.history
-                    .push(ChatMessage::new("system", format!("❌ {err_msg}")));
             }
         }
     });
@@ -756,15 +749,15 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
         match check {
             Ok(rustcode_core::update::UpdateCheck::UpToDate { current, latest }) => {
                 s.update_check = rustcode_core::update::UpdateState::UpToDate(latest);
-                s.set_notice(format!(
-                    "✨ RustCode v{} is up to date (latest: v{}).",
+                s.set_transient_notice(format!(
+                    "RustCode v{} is up to date (latest: v{})",
                     rustcode_core::update::format_version(current),
                     rustcode_core::update::format_version(latest)
                 ));
             }
             Ok(rustcode_core::update::UpdateCheck::Available { current, latest }) => {
                 s.update_check = rustcode_core::update::UpdateState::Available(latest);
-                s.set_notice(format!(
+                s.set_transient_notice(format!(
                     "Found new release: v{} → v{}, updating...",
                     rustcode_core::update::format_version(current),
                     rustcode_core::update::format_version(latest)
