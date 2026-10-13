@@ -14,7 +14,6 @@ path = "src/main.rs"
 rustcode = { path = "../..", default-features = false }
 rustcode-core = { path = "../core/rustcode-core" }
 rustcode-tool-protocol = { path = "../core/rustcode-tool-protocol" }
-rustcode-command = { path = "../core/rustcode-command" }
 rustcode-tasks = { path = "../core/rustcode-tasks" }
 clap = { version = "4.6.4", features = ["derive"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "std"] }
