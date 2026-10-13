@@ -22,6 +22,7 @@ const MAX_CHUNK_BYTES: usize = 128 * 1024;
 const MAX_SESSION_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ATTACHMENTS: usize = 256;
 const PARTIAL_TTL: Duration = Duration::from_secs(3600);
+const UPLOAD_LOCK_WAIT: Duration = Duration::from_secs(2);
 const MARKER: &str = "![image](file://";
 
 #[derive(Serialize, Deserialize)]
@@ -129,6 +130,31 @@ fn validate_image(bytes: &[u8], mime: &str) -> Result<()> {
     Ok(())
 }
 
+/// Take the upload lock, waiting briefly while it is busy.
+///
+/// The lock is only held for one chunk write, so a busy lock clears within
+/// milliseconds: another device uploading to the same session, or a child
+/// process that inherited the descriptor and has not reached `exec` yet.
+/// Failing at once turned either into an upload error on the phone.
+fn lock_uploads(root: &Path) -> Result<fs::File> {
+    let deadline = std::time::Instant::now() + UPLOAD_LOCK_WAIT;
+    loop {
+        match lock_private_file(root, "upload.lock", "image attachments") {
+            Err(error)
+                if std::time::Instant::now() < deadline
+                    && error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|io| io.kind() == std::io::ErrorKind::WouldBlock)
+                    }) =>
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            result => return result,
+        }
+    }
+}
+
 pub(super) fn upload(
     root: &Path,
     device: &str,
@@ -178,7 +204,7 @@ pub(super) fn upload(
         !root.to_string_lossy().contains(')'),
         "session storage path cannot contain ')' for image attachments"
     );
-    let _lock = lock_private_file(&root, "upload.lock", "image attachments")?;
+    let _lock = lock_uploads(&root)?;
     let (reserved, count) = reserved_bytes(&root)?;
     let directory = device_directory(&root, device);
     ensure_private_directory(&directory, "device image attachments")?;
@@ -418,6 +444,27 @@ mod tests {
                 .to_string()
                 .contains("storage is full")
         );
+    }
+
+    #[test]
+    fn upload_waits_for_a_briefly_held_lock_instead_of_failing() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("images");
+        let bytes = png(1, 1);
+        // The first upload creates the directory the lock lives in.
+        upload(&root, "first", &chunk(&bytes, 0, bytes.len())).unwrap();
+        let held = lock_private_file(
+            &root.canonicalize().unwrap(),
+            "upload.lock",
+            "image attachments",
+        )
+        .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            drop(held);
+        });
+        upload(&root, "second", &chunk(&bytes, 0, bytes.len())).unwrap();
+        release.join().unwrap();
     }
 
     #[test]

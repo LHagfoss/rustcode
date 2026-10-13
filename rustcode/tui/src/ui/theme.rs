@@ -416,6 +416,19 @@ pub fn set_active_theme(name: &str) {
     }
 }
 
+/// Palette for `name`, served from the active theme when that is the one
+/// asked for. Renderers that need a named theme every frame use this instead of
+/// `get_palette`, which reads the themes directory on each call.
+pub fn palette_for(name: &str) -> ThemePalette {
+    if let Ok(guard) = ACTIVE_THEME.read()
+        && let Some(palette) = guard.as_ref()
+        && palette.name.eq_ignore_ascii_case(name)
+    {
+        return palette.clone();
+    }
+    get_palette(name)
+}
+
 pub fn active_palette() -> ThemePalette {
     if let Ok(guard) = ACTIVE_THEME.read() {
         if let Some(p) = guard.as_ref() {

@@ -2381,6 +2381,14 @@ mod tests {
         let parsed_grep = parse_speculative_arguments(grep_partial);
         assert_eq!(parsed_grep["pattern"], "Config");
         assert_eq!(parsed_grep["path"], "src/");
+
+        // Cut mid-key: closing the quote and brace cannot make this valid
+        // JSON, so the values come from the pattern fallback.
+        let mid_key = r#"{"path": "src/main.rs", "command": "cargo \"check\"", "sta"#;
+        let parsed_mid_key = parse_speculative_arguments(mid_key);
+        assert_eq!(parsed_mid_key["path"], "src/main.rs");
+        assert_eq!(parsed_mid_key["command"], "cargo \"check\"");
+        assert!(parsed_mid_key.get("sta").is_none());
     }
 
     #[test]
@@ -3243,6 +3251,16 @@ mod tests {
             with_schema.total_tokens,
             without_schema.total_tokens + schema_tokens
         );
+        assert_eq!(without_schema.completion_tokens, count_tokens("reply"));
+        assert_eq!(
+            without_schema.total_tokens,
+            without_schema.prompt_tokens + without_schema.completion_tokens
+        );
+
+        let prompt_only = estimate_token_usage(&messages, "").await.unwrap();
+        assert_eq!(prompt_only.completion_tokens, 0);
+        assert_eq!(prompt_only.total_tokens, prompt_only.prompt_tokens);
+        assert_eq!(prompt_only.prompt_tokens, without_schema.prompt_tokens);
         assert_eq!(
             with_schema.completion_tokens,
             without_schema.completion_tokens
@@ -4138,36 +4156,48 @@ pub(crate) fn parse_speculative_arguments(raw: &str) -> serde_json::Value {
 
     // 3. Fallback: Extract key arguments via pattern matching from partial stream
     let mut map = serde_json::Map::new();
-    let keys = [
-        "TargetFile",
-        "AbsolutePath",
-        "path",
-        "DirectoryPath",
-        "SearchPath",
-        "CommandLine",
-        "command",
-        "pattern",
-        "Query",
-        "query",
-        "name",
-        "src",
-        "dest",
-    ];
-    for key in keys {
-        let pattern = format!(r#""{}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"#, key);
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            if let Some(caps) = re.captures(trimmed) {
-                if let Some(m) = caps.get(1) {
-                    map.insert(
-                        key.to_string(),
-                        serde_json::Value::String(m.as_str().replace(r#"\""#, "\"")),
-                    );
-                }
+    for (key, re) in SPECULATIVE_ARGUMENT_PATTERNS.iter() {
+        if let Some(caps) = re.captures(trimmed) {
+            if let Some(m) = caps.get(1) {
+                map.insert(
+                    (*key).to_string(),
+                    serde_json::Value::String(m.as_str().replace(r#"\""#, "\"")),
+                );
             }
         }
     }
     serde_json::Value::Object(map)
 }
+
+/// One pattern per argument worth showing while a tool call is still
+/// streaming. Compiled once: `parse_speculative_arguments` runs on every
+/// argument delta, and a delta that ends mid-key or mid-escape always reaches
+/// this fallback.
+static SPECULATIVE_ARGUMENT_PATTERNS: std::sync::LazyLock<Vec<(&'static str, regex::Regex)>> =
+    std::sync::LazyLock::new(|| {
+        [
+            "TargetFile",
+            "AbsolutePath",
+            "path",
+            "DirectoryPath",
+            "SearchPath",
+            "CommandLine",
+            "command",
+            "pattern",
+            "Query",
+            "query",
+            "name",
+            "src",
+            "dest",
+        ]
+        .into_iter()
+        .map(|key| {
+            let pattern = format!(r#""{}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"#, key);
+            let re = regex::Regex::new(&pattern).expect("speculative argument regex");
+            (key, re)
+        })
+        .collect()
+    });
 
 /// Speculatively extract tool name and arguments from an in-flight text-fenced tool call (```tool ...).
 pub(crate) fn parse_speculative_text_tool_call(
@@ -4260,12 +4290,18 @@ pub(crate) async fn estimate_token_usage_with_tool_schemas(
     }
     let schema_tokens = crate::network::compaction::estimate_tool_schema_tokens(tool_schemas);
     let prompt = count_tokens(&prompt_text).saturating_add(schema_tokens as u32);
-    let full = prompt_text + reply + "\n";
-    let total = count_tokens(&full).saturating_add(schema_tokens as u32);
+    // Count the reply on its own. Encoding `prompt + reply` to subtract the
+    // prompt again was a second full-context BPE pass on every round, and the
+    // concatenation never hit the token memo.
+    let completion = if reply.is_empty() {
+        0
+    } else {
+        count_tokens(reply)
+    };
     Some(TokenUsage {
         prompt_tokens: prompt,
-        completion_tokens: total.saturating_sub(prompt),
-        total_tokens: total,
+        completion_tokens: completion,
+        total_tokens: prompt.saturating_add(completion),
         cached_tokens: None,
         ..Default::default()
     })

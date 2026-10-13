@@ -9,8 +9,11 @@ use ratatui::{
 };
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, Style as SyntectStyle, Theme, ThemeSet};
-use syntect::parsing::{SyntaxReference, SyntaxSet};
+use syntect::highlighting::{
+    FontStyle, HighlightIterator, HighlightState, Highlighter, Style as SyntectStyle, Theme,
+    ThemeSet,
+};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[cfg(test)]
@@ -356,7 +359,120 @@ pub(super) fn highlight_code_line_with_syntax<'a>(
 
 /// Highlight a complete fenced block with one parser state, preserving
 /// multiline comments and strings across line boundaries.
+/// A code block highlighted so far: the complete lines already consumed and
+/// the highlighter state after them, so a longer version of the same block
+/// only pays for its new lines.
+struct HighlightedBlock {
+    language: String,
+    theme: String,
+    show_picker: bool,
+    /// The consumed source, always ending on a line break.
+    prefix: String,
+    lines: Vec<Vec<Span<'static>>>,
+    parse: ParseState,
+    highlight: HighlightState,
+}
+
+/// Blocks kept for reuse. A streaming reply re-renders on every frame, and
+/// each of its fences is the previous frame's fence plus a few lines.
+const HIGHLIGHTED_BLOCK_CACHE: usize = 16;
+
+thread_local! {
+    static HIGHLIGHTED_BLOCKS: std::cell::RefCell<std::collections::VecDeque<HighlightedBlock>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+fn highlight_block_line(
+    line: &str,
+    parse: &mut ParseState,
+    highlight: &mut HighlightState,
+    highlighter: &Highlighter<'_>,
+    show_picker: bool,
+) -> Vec<Span<'static>> {
+    match parse.parse_line(line, syntax_set()) {
+        Ok(ops) => HighlightIterator::new(highlight, &ops, line, highlighter)
+            .map(|(style, text)| Span::styled(text.to_string(), syntect_style(style, show_picker)))
+            .collect(),
+        Err(_) => vec![Span::styled(
+            line.to_string(),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+        )],
+    }
+}
+
 pub(super) fn highlight_code_block(
+    code: &str,
+    language: &str,
+    show_picker: bool,
+) -> Vec<Vec<Span<'static>>> {
+    let syntax: &SyntaxReference = syntax_for_language(language);
+    let theme = syntax_theme();
+    let theme_name = super::theme::active_palette().name;
+    let highlighter = Highlighter::new(&theme);
+    HIGHLIGHTED_BLOCKS.with(|blocks| {
+        let mut blocks = blocks.borrow_mut();
+        let reusable = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| {
+                block.show_picker == show_picker
+                    && block.language == language
+                    && block.theme == theme_name
+                    && code.starts_with(&block.prefix)
+            })
+            .max_by_key(|(_, block)| block.prefix.len())
+            .map(|(index, _)| index);
+        let mut block = reusable
+            .and_then(|index| blocks.remove(index))
+            .unwrap_or_else(|| HighlightedBlock {
+                language: language.to_owned(),
+                theme: theme_name,
+                show_picker,
+                prefix: String::new(),
+                lines: Vec::new(),
+                parse: ParseState::new(syntax),
+                highlight: HighlightState::new(&highlighter, ScopeStack::new()),
+            });
+
+        let mut rest = &code[block.prefix.len()..];
+        while let Some(line_break) = rest.find('\n') {
+            let line = &rest[..line_break];
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let spans = highlight_block_line(
+                line,
+                &mut block.parse,
+                &mut block.highlight,
+                &highlighter,
+                show_picker,
+            );
+            block.lines.push(spans);
+            block.prefix.push_str(&rest[..=line_break]);
+            rest = &rest[line_break + 1..];
+        }
+
+        let mut lines = block.lines.clone();
+        if !rest.is_empty() {
+            // The last line has no line break yet, so it may still grow:
+            // highlight it from a copy and keep the saved state before it.
+            lines.push(highlight_block_line(
+                rest,
+                &mut block.parse.clone(),
+                &mut block.highlight.clone(),
+                &highlighter,
+                show_picker,
+            ));
+        }
+        blocks.push_back(block);
+        if blocks.len() > HIGHLIGHTED_BLOCK_CACHE {
+            blocks.pop_front();
+        }
+        lines
+    })
+}
+
+/// The reference the cached highlighter must agree with.
+#[cfg(test)]
+fn highlight_code_block_uncached(
     code: &str,
     language: &str,
     show_picker: bool,
@@ -910,6 +1026,36 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
 mod tests {
     use super::*;
     use crate::ui::tests::THEME_TEST_LOCK;
+
+    #[test]
+    fn cached_block_highlighting_matches_a_fresh_pass_while_the_block_grows() {
+        let _theme_guard = crate::ui::tests::THEME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let code = "/* a block comment\n   that spans lines */\nfn main() {\r\n    let text = \"multi\nline string\";\n    println!(\"{text}\");\n}\n\n// trailing";
+        // Every prefix, including ones that end mid-line and mid-token: the
+        // streaming renderer asks for each of them in turn.
+        for end in (0..=code.len()).filter(|end| code.is_char_boundary(*end)) {
+            let partial = &code[..end];
+            assert_eq!(
+                highlight_code_block(partial, "rust", false),
+                highlight_code_block_uncached(partial, "rust", false),
+                "prefix of {end} bytes"
+            );
+        }
+        // A shorter and an unrelated block after a longer one must not reuse
+        // state that does not belong to them.
+        for other in ["fn main() {", "let x = 1;\nlet y = \"/*\";\n"] {
+            assert_eq!(
+                highlight_code_block(other, "rust", false),
+                highlight_code_block_uncached(other, "rust", false),
+            );
+        }
+        assert_eq!(
+            highlight_code_block(code, "python", false),
+            highlight_code_block_uncached(code, "python", false),
+        );
+    }
 
     fn row_width(line: &Line) -> usize {
         line.spans.iter().map(|s| s.content.width()).sum()
