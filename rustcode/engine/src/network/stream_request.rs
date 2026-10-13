@@ -2381,6 +2381,14 @@ mod tests {
         let parsed_grep = parse_speculative_arguments(grep_partial);
         assert_eq!(parsed_grep["pattern"], "Config");
         assert_eq!(parsed_grep["path"], "src/");
+
+        // Cut mid-key: closing the quote and brace cannot make this valid
+        // JSON, so the values come from the pattern fallback.
+        let mid_key = r#"{"path": "src/main.rs", "command": "cargo \"check\"", "sta"#;
+        let parsed_mid_key = parse_speculative_arguments(mid_key);
+        assert_eq!(parsed_mid_key["path"], "src/main.rs");
+        assert_eq!(parsed_mid_key["command"], "cargo \"check\"");
+        assert!(parsed_mid_key.get("sta").is_none());
     }
 
     #[test]
@@ -4138,36 +4146,48 @@ pub(crate) fn parse_speculative_arguments(raw: &str) -> serde_json::Value {
 
     // 3. Fallback: Extract key arguments via pattern matching from partial stream
     let mut map = serde_json::Map::new();
-    let keys = [
-        "TargetFile",
-        "AbsolutePath",
-        "path",
-        "DirectoryPath",
-        "SearchPath",
-        "CommandLine",
-        "command",
-        "pattern",
-        "Query",
-        "query",
-        "name",
-        "src",
-        "dest",
-    ];
-    for key in keys {
-        let pattern = format!(r#""{}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"#, key);
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            if let Some(caps) = re.captures(trimmed) {
-                if let Some(m) = caps.get(1) {
-                    map.insert(
-                        key.to_string(),
-                        serde_json::Value::String(m.as_str().replace(r#"\""#, "\"")),
-                    );
-                }
+    for (key, re) in SPECULATIVE_ARGUMENT_PATTERNS.iter() {
+        if let Some(caps) = re.captures(trimmed) {
+            if let Some(m) = caps.get(1) {
+                map.insert(
+                    (*key).to_string(),
+                    serde_json::Value::String(m.as_str().replace(r#"\""#, "\"")),
+                );
             }
         }
     }
     serde_json::Value::Object(map)
 }
+
+/// One pattern per argument worth showing while a tool call is still
+/// streaming. Compiled once: `parse_speculative_arguments` runs on every
+/// argument delta, and a delta that ends mid-key or mid-escape always reaches
+/// this fallback.
+static SPECULATIVE_ARGUMENT_PATTERNS: std::sync::LazyLock<Vec<(&'static str, regex::Regex)>> =
+    std::sync::LazyLock::new(|| {
+        [
+            "TargetFile",
+            "AbsolutePath",
+            "path",
+            "DirectoryPath",
+            "SearchPath",
+            "CommandLine",
+            "command",
+            "pattern",
+            "Query",
+            "query",
+            "name",
+            "src",
+            "dest",
+        ]
+        .into_iter()
+        .map(|key| {
+            let pattern = format!(r#""{}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"#, key);
+            let re = regex::Regex::new(&pattern).expect("speculative argument regex");
+            (key, re)
+        })
+        .collect()
+    });
 
 /// Speculatively extract tool name and arguments from an in-flight text-fenced tool call (```tool ...).
 pub(crate) fn parse_speculative_text_tool_call(
