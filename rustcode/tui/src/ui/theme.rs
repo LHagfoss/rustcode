@@ -450,14 +450,8 @@ pub fn color_secondary() -> Color {
 pub fn color_green() -> Color {
     active_palette().green
 }
-pub fn color_selection() -> Color {
-    active_palette().selection
-}
 pub fn color_tip() -> Color {
     active_palette().tip
-}
-pub fn color_status_border() -> Color {
-    active_palette().status_border
 }
 pub fn color_turn_separator() -> Color {
     active_palette().turn_separator
@@ -504,14 +498,6 @@ pub fn color_diff_remove_fg() -> Color {
         Color::Rgb(180, 40, 40)
     } else {
         Color::Rgb(240, 150, 150)
-    }
-}
-
-pub fn color_diff_absent_bg() -> Color {
-    if is_light_mode() {
-        Color::Rgb(235, 240, 245)
-    } else {
-        Color::Rgb(22, 22, 26)
     }
 }
 

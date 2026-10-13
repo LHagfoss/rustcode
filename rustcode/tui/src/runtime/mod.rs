@@ -107,6 +107,7 @@ impl fmt::Display for AppError {
 
 impl Error for AppError {}
 
+#[cfg(test)]
 #[allow(dead_code)]
 pub(crate) enum AppRunControl {
     Continue,
