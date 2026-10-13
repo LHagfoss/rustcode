@@ -1,3 +1,7 @@
+## [v0.65.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.65.1) - 2026-10-13
+
+### Fixes
+- Stream live output for commands that needed approval, in the terminal and on a connected phone: the approved path now uses the same tool runner as unprompted calls ([#1994](https://github.com/LHagfoss/rustcode/pull/1994)).
 ## [v0.65.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.65.0) - 2026-10-13
 
 ### Performance
