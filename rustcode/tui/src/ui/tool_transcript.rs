@@ -329,39 +329,6 @@ pub(super) fn resolve_tool_result_name(
         .map(str::to_string)
 }
 
-/// Memoized conversation render. Building every message's spans and wrapping
-/// them several times per frame is O(history) and dominates scroll latency on
-/// long sessions. The rendered lines only change when the history, viewport
-/// width, expanded-thoughts, modal state, or copy-badge state changes — so we
-/// cache them and reuse across the many frames where nothing but the scroll
-/// offset moved.
-#[allow(dead_code)]
-pub(super) struct ChatCache {
-    key: ChatKey,
-    lines: Vec<Line<'static>>,
-    copy_wrapped_rows: Vec<(u16, String)>,
-    msg_wrapped_rows: Vec<u16>,
-    total_wrapped_lines: u16,
-}
-
-#[allow(dead_code)]
-#[derive(PartialEq, Clone)]
-pub(super) struct ChatKey {
-    hist_len: usize,
-    total_len: usize,
-    last_len: usize,
-    history_display_start: usize,
-    width: u16,
-    show_picker: bool,
-    copied_recently: Option<(String, bool)>,
-    theme: String,
-}
-
-thread_local! {
-    static CHAT_CACHE: std::cell::RefCell<Option<ChatCache>> =
-        const { std::cell::RefCell::new(None) };
-}
-
 /// Deep-copy a borrowed `Line` into an owned `'static` one so it can outlive the
 /// `state.history` borrow it was built from and sit in the frame cache.
 pub(super) fn own_line(line: &Line) -> Line<'static> {
