@@ -83,6 +83,7 @@ pub(crate) use exec::{
     run_command_output_with_progress_cancellable_for_call_and_workspace,
     run_command_output_with_workspace_for_call, task_event_to_tool_output,
 };
+pub use exec::{has_foreground_command, move_foreground_commands_to_background};
 pub use schema::mcp_tool_display_name;
 
 pub(crate) use filesystem::edit_target_and_replacement;

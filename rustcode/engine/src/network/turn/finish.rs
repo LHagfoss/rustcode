@@ -10,8 +10,8 @@ use super::super::lifecycle;
 use super::super::policy;
 use super::super::stream::{FinalAnswerBoundary, ProviderFinalAnswerState, StreamBuffer};
 use super::recovery::{
-    completed_inspection_synthesis_with_pending_work, has_pending_tool_work,
-    inspection_completion_rejection_reasons, outstanding_external_action,
+    completed_inspection_synthesis_with_pending_work, has_pending_background_result,
+    has_pending_tool_work, inspection_completion_rejection_reasons, outstanding_external_action,
     reasoning_loop_final_response,
 };
 use super::{TurnContext, run_single_turn};
@@ -638,10 +638,31 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
 
     let has_pending_completion_work = {
         let state = state.lock().await;
-        outstanding_external_action(&state.history) || has_pending_tool_work(&state.history)
+        outstanding_external_action(&state.history) || has_pending_tool_work(&state)
     };
 
-    if finish_gate_passed
+    let awaiting_background = {
+        let state = state.lock().await;
+        has_pending_background_result(&state)
+    };
+    if awaiting_background && ctx.lifecycle.stop_reason.is_none() && !cancel_token.is_cancelled() {
+        // The model stopped while a command it sent to the background is
+        // still owed. Park here, not at the start result, so it could keep
+        // working meanwhile; the completion resumes this turn.
+        dbg_log!("Final prose with a background result outstanding: parking the turn");
+        let mut s = state.lock().await;
+        if !ctx.response.final_content_persisted && !ctx.response.final_content.trim().is_empty() {
+            let mut msg = ChatMessage::new("assistant", ctx.response.final_content.clone());
+            msg.response_time_ms = Some(turn_response_time_ms);
+            msg.token_usage = turn_token_usage;
+            msg.thought_time_ms = thought_time_ms;
+            msg.thought_tokens = thought_tokens;
+            s.history.push(msg);
+            crate::config::save_session_history(&s.active_session_id, &s.history);
+            ctx.response.final_content_persisted = true;
+        }
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
+    } else if finish_gate_passed
         && !policy.is_headless()
         && can_complete_interactive_plain_response(
             ctx,
@@ -1010,6 +1031,8 @@ mod tests {
                     ..crate::app::ToolResultRecord::default()
                 },
             ));
+        // The command has finished; its result is queued for the model.
+        app.pending_queue.push("__task_wakeup__:task_1".into());
         let state = Arc::new(Mutex::new(app));
         let policy = Arc::new(crate::raw_cli::HeadlessPolicy { quiet: true });
         let mut ctx = TurnContext::new();
@@ -1031,9 +1054,13 @@ mod tests {
         )
         .await;
 
+        // The turn is paused for the result, with the interim prose kept.
         assert!(!ctx.lifecycle.task_completed);
-        assert!(!ctx.response.final_content_persisted);
-        assert!(ctx.lifecycle.stop_reason.is_none());
+        assert!(ctx.response.final_content_persisted);
+        assert!(matches!(
+            ctx.lifecycle.stop_reason,
+            Some(lifecycle::StopReason::BackgroundPending)
+        ));
     }
 
     #[tokio::test]

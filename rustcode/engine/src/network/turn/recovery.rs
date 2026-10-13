@@ -156,7 +156,41 @@ pub(super) fn outstanding_external_action(history: &[ChatMessage]) -> bool {
         && !successful_external_action_after(history, index)
 }
 
-pub(super) fn has_pending_tool_work(history: &[ChatMessage]) -> bool {
+/// Whether a notify-on-complete command of this session is still running, or
+/// has finished with its result not yet handed to the model.
+pub(super) fn awaiting_background_completion(state: &crate::app::AppState) -> bool {
+    !state.pending_background_outputs.is_empty()
+        || state
+            .pending_queue
+            .iter()
+            .any(|prompt| prompt.starts_with("__task_wakeup__:"))
+        || crate::tools::background_task_manager()
+            .list(&state.active_session_id)
+            .iter()
+            .any(|task| task.notify_on_complete)
+}
+
+/// Whether this turn started a background command whose result is still owed.
+/// The `pending` flag on its start result is never cleared, so the flag alone
+/// would keep a turn "pending" long after the command finished.
+pub(super) fn has_pending_background_result(state: &crate::app::AppState) -> bool {
+    let history: &[ChatMessage] = &state.history;
+    let Some(latest_user_index) = history.iter().rposition(|message| message.role == "user") else {
+        return false;
+    };
+    history[latest_user_index + 1..].iter().any(|message| {
+        message
+            .tool_result
+            .as_ref()
+            .is_some_and(|result| result.pending)
+    }) && awaiting_background_completion(state)
+}
+
+pub(super) fn has_pending_tool_work(state: &crate::app::AppState) -> bool {
+    has_pending_background_result(state) || has_unanswered_tool_call(&state.history)
+}
+
+fn has_unanswered_tool_call(history: &[ChatMessage]) -> bool {
     let Some((latest_user_index, _)) = history
         .iter()
         .enumerate()
@@ -166,12 +200,7 @@ pub(super) fn has_pending_tool_work(history: &[ChatMessage]) -> bool {
         return false;
     };
     let turn_history = &history[latest_user_index + 1..];
-    turn_history.iter().any(|message| {
-        message
-            .tool_result
-            .as_ref()
-            .is_some_and(|result| result.pending)
-    }) || turn_history.iter().enumerate().any(|(index, message)| {
+    turn_history.iter().enumerate().any(|(index, message)| {
         message.role == "assistant"
             && message.tool_calls.iter().any(|call| {
                 !turn_history[index + 1..].iter().any(|result| {
@@ -454,7 +483,7 @@ pub(super) async fn handle_response_recovery(
     if is_reasoning_loop && !ctx.recovery.force_final {
         let pending_work = {
             let state = state.lock().await;
-            outstanding_external_action(&state.history) || has_pending_tool_work(&state.history)
+            outstanding_external_action(&state.history) || has_pending_tool_work(&state)
         };
         if let Some(summary) = completed_inspection_synthesis_with_pending_work(
             ctx,
@@ -1392,7 +1421,15 @@ mod tests {
                 ..ToolResultRecord::default()
             }),
         ];
-        assert!(super::has_pending_tool_work(&history));
+        let mut state = crate::app::AppState::new();
+        for message in history {
+            state.history.push(message);
+        }
+        // The start result stays flagged after the command has finished and
+        // been reported, so the flag alone is not pending work.
+        assert!(!super::has_pending_tool_work(&state));
+        state.pending_queue.push("__task_wakeup__:task_1".into());
+        assert!(super::has_pending_tool_work(&state));
     }
 
     #[test]
@@ -1405,6 +1442,10 @@ mod tests {
                 arguments: r#"{"path":"README.md"}"#.into(),
             }]),
         ];
-        assert!(super::has_pending_tool_work(&history));
+        let mut state = crate::app::AppState::new();
+        for message in history {
+            state.history.push(message);
+        }
+        assert!(super::has_pending_tool_work(&state));
     }
 }

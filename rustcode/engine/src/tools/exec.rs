@@ -92,6 +92,85 @@ pub(crate) fn abort_background_starts(session_id: &str) {
     }
 }
 
+/// Foreground commands currently running per session, and how many times the
+/// user has asked to move them to the background.
+#[derive(Default)]
+struct ForegroundCommands {
+    running: usize,
+    handoff_requests: u64,
+}
+
+fn foreground_commands() -> &'static Mutex<HashMap<String, ForegroundCommands>> {
+    static COMMANDS: OnceLock<Mutex<HashMap<String, ForegroundCommands>>> = OnceLock::new();
+    COMMANDS.get_or_init(Default::default)
+}
+
+/// Ask every foreground command the session is running to continue as a
+/// background task. Returns how many commands were running.
+pub fn move_foreground_commands_to_background(session_id: &str) -> usize {
+    let mut commands = foreground_commands()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match commands.get_mut(session_id) {
+        Some(entry) if entry.running > 0 => {
+            entry.handoff_requests += 1;
+            entry.running
+        }
+        _ => 0,
+    }
+}
+
+/// Whether the session has a foreground command that could be moved.
+pub fn has_foreground_command(session_id: &str) -> bool {
+    foreground_commands()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(session_id)
+        .is_some_and(|entry| entry.running > 0)
+}
+
+/// One running foreground command; unregisters itself when dropped.
+struct ForegroundCommand {
+    session_id: String,
+    requests_at_start: u64,
+}
+
+impl ForegroundCommand {
+    fn start(session_id: &str) -> Self {
+        let mut commands = foreground_commands()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = commands.entry(session_id.to_owned()).or_default();
+        entry.running += 1;
+        Self {
+            session_id: session_id.to_owned(),
+            requests_at_start: entry.handoff_requests,
+        }
+    }
+
+    fn handoff_requested(&self) -> bool {
+        foreground_commands()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&self.session_id)
+            .is_some_and(|entry| entry.handoff_requests != self.requests_at_start)
+    }
+}
+
+impl Drop for ForegroundCommand {
+    fn drop(&mut self) {
+        let mut commands = foreground_commands()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = commands.get_mut(&self.session_id) {
+            entry.running = entry.running.saturating_sub(1);
+            if entry.running == 0 {
+                commands.remove(&self.session_id);
+            }
+        }
+    }
+}
+
 pub fn background_task_manager() -> &'static TaskManager {
     BACKGROUND_TASK_MANAGER.get_or_init(|| TaskManager::new(Arc::new(RootProcessTerminator)))
 }
@@ -247,11 +326,11 @@ fn run_command_schema() -> Value {
 
 /// Sent on every request and part of the cached prompt prefix: the POSIX text
 /// must stay byte-for-byte stable.
-const POSIX_RUN_COMMAND_DESCRIPTION: &str = "Run one shell command; returns stdout, stderr and exit code. Pipelines fail if any stage fails; timeout defaults to 120s; interactive sudo is disabled. Prefer view_file over cat/sed/head for file reads. The OS sandbox (none on Windows) fails closed and a denied command reports which permission to request: network_access=true or filesystem_write_path (an existing absolute directory, outside the workspace in restricted modes) grants it for this command only, with confirmation unless YOLO is on. background=true runs a long job (a build, a test suite) and resumes you on completion (notify_on_complete=false: no turn); a quick command needs no background. detached=true starts a long-lived server or watcher, returns a task ID at once and stays silent unless notify_on_complete=true. Use manage_task for logs, wait and kill; never poll. For external jobs run the provider's blocking watch command once with background=true. A command containing '&' is treated as detached unless the script waits on or kills its own jobs; never add '&' with detached=true. Git: branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills. Never `git rebase`, `git reset --hard` or force-push in the active checkout, or discard uncommitted work. Branch there with `git switch -c`; `git worktree add` under /tmp only when it is genuinely required (concurrent or unrelated dirty work), then `git worktree remove`, `git worktree prune`, `git branch -d`. End on the original branch after `git pull --ff-only`.";
+const POSIX_RUN_COMMAND_DESCRIPTION: &str = "Run one shell command; returns stdout, stderr and exit code. Pipelines fail if any stage fails; timeout defaults to 120s; interactive sudo is disabled. Prefer view_file over cat/sed/head for file reads. The OS sandbox (none on Windows) fails closed and a denied command reports which permission to request: network_access=true or filesystem_write_path (an existing absolute directory, outside the workspace in restricted modes) grants it for this command only, with confirmation unless YOLO is on. background=true runs a long job (a build, a test suite) without blocking you: it returns a task ID at once, you keep working, and the result is delivered when it finishes (notify_on_complete=false: silent); a quick command needs no background. detached=true starts a long-lived server or watcher, returns a task ID at once and stays silent unless notify_on_complete=true. Use manage_task for logs, wait and kill; never poll. For external jobs run the provider's blocking watch command once with background=true. A command containing '&' is treated as detached unless the script waits on or kills its own jobs; never add '&' with detached=true. Git: branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills. Never `git rebase`, `git reset --hard` or force-push in the active checkout, or discard uncommitted work. Branch there with `git switch -c`; `git worktree add` under /tmp only when it is genuinely required (concurrent or unrelated dirty work), then `git worktree remove`, `git worktree prune`, `git branch -d`. End on the original branch after `git pull --ff-only`.";
 
 /// Windows runs commands through PowerShell (see `rustcode_command::ShellKind`),
 /// so the model is told to write PowerShell and where it differs from sh.
-const WINDOWS_RUN_COMMAND_DESCRIPTION: &str = "Run one PowerShell command; returns stdout, stderr and the exit code of its last statement. The shell is PowerShell 7 (pwsh) when installed, else Windows PowerShell 5.1; the `Shell` line of the runtime context says which (if it says cmd.exe, write cmd syntax instead). Write PowerShell, not POSIX sh: chain with `;` (`&&` and `||` exist only in PowerShell 7); no heredocs, create files with write_to_file; set variables with `$env:NAME = 'value'`; run a quoted path with `& 'C:\\dir with spaces\\tool.exe'`; `/` and `\\` both separate paths; discard output with `> $null`; in 5.1 `curl` and `wget` are aliases, so call `curl.exe`; when a `.ps1` shim is blocked by execution policy call the `.cmd` one (`npm.cmd`). stderr is already captured, so omit `2>&1`. Timeout defaults to 120s; the session is non-interactive. Prefer view_file, grep, glob and list_directory over Get-Content, Select-String and Get-ChildItem. There is no OS sandbox on Windows. background=true runs a long job (a build, a test suite) and resumes you on completion (notify_on_complete=false: no turn); a quick command needs no background. detached=true starts a long-lived server or watcher, returns a task ID at once and stays silent unless notify_on_complete=true. Use manage_task for logs, wait and kill; never poll. For external jobs run the provider's blocking watch command once with background=true. Git: branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills. Never `git rebase`, `git reset --hard` or force-push in the active checkout, or discard uncommitted work. Branch there with `git switch -c`; `git worktree add` under `$env:TEMP` only when it is genuinely required (concurrent or unrelated dirty work), then `git worktree remove`, `git worktree prune`, `git branch -d`. End on the original branch after `git pull --ff-only`.";
+const WINDOWS_RUN_COMMAND_DESCRIPTION: &str = "Run one PowerShell command; returns stdout, stderr and the exit code of its last statement. The shell is PowerShell 7 (pwsh) when installed, else Windows PowerShell 5.1; the `Shell` line of the runtime context says which (if it says cmd.exe, write cmd syntax instead). Write PowerShell, not POSIX sh: chain with `;` (`&&` and `||` exist only in PowerShell 7); no heredocs, create files with write_to_file; set variables with `$env:NAME = 'value'`; run a quoted path with `& 'C:\\dir with spaces\\tool.exe'`; `/` and `\\` both separate paths; discard output with `> $null`; in 5.1 `curl` and `wget` are aliases, so call `curl.exe`; when a `.ps1` shim is blocked by execution policy call the `.cmd` one (`npm.cmd`). stderr is already captured, so omit `2>&1`. Timeout defaults to 120s; the session is non-interactive. Prefer view_file, grep, glob and list_directory over Get-Content, Select-String and Get-ChildItem. There is no OS sandbox on Windows. background=true runs a long job (a build, a test suite) without blocking you: it returns a task ID at once, you keep working, and the result is delivered when it finishes (notify_on_complete=false: silent); a quick command needs no background. detached=true starts a long-lived server or watcher, returns a task ID at once and stays silent unless notify_on_complete=true. Use manage_task for logs, wait and kill; never poll. For external jobs run the provider's blocking watch command once with background=true. Git: branch and worktree handling follows the repository `AGENTS.md`, which outranks generic workflow skills. Never `git rebase`, `git reset --hard` or force-push in the active checkout, or discard uncommitted work. Branch there with `git switch -c`; `git worktree add` under `$env:TEMP` only when it is genuinely required (concurrent or unrelated dirty work), then `git worktree remove`, `git worktree prune`, `git branch -d`. End on the original branch after `git pull --ff-only`.";
 
 const fn run_command_description(windows: bool) -> &'static str {
     if windows {
@@ -264,7 +343,7 @@ const fn run_command_description(windows: bool) -> &'static str {
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
     description: run_command_description(cfg!(target_os = "windows")),
-    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "notify_on_complete": "optional bool; defaults false for detached and true for background", "network_access": "optional bool requesting one-shot network access; requires confirmation unless YOLO is enabled", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; requires confirmation unless YOLO is enabled"}"#,
+    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool; run without blocking, the result is delivered on completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)", "notify_on_complete": "optional bool; defaults false for detached and true for background", "network_access": "optional bool requesting one-shot network access; requires confirmation unless YOLO is enabled", "filesystem_write_path": "optional existing absolute directory requested for one-command write access; requires confirmation unless YOLO is enabled"}"#,
     handler: run_command,
     requires_confirmation: true,
     schema: run_command_schema,
@@ -287,7 +366,7 @@ fn manage_task_schema() -> Value {
 
 pub const MANAGE_TASK: Tool = Tool {
     name: "manage_task",
-    description: "Manage run_command tasks. 'wait' blocks until a task (or the first of task_ids) finishes; never poll. 'logs' returns captured output. Detached tasks are silent unless waited on or started with notify_on_complete.",
+    description: "Manage run_command tasks. 'wait' blocks until a task (or the first of task_ids) finishes; use it only when nothing else is left to do, and never poll. 'logs' returns captured output. Detached tasks are silent unless waited on or started with notify_on_complete.",
     arguments: r#"{"action": "list, status, logs, kill, or wait", "task_id": "required for status/kill/logs or single-task wait", "task_ids": "optional list of IDs for wait-any", "full": "optional true to retrieve the complete log", "tail_bytes": "optional log tail limit, max 65536", "timeout_ms": "optional wait timeout in ms, default 600000, max 1800000"}"#,
     handler: manage_task_tool,
     requires_confirmation: false,
@@ -739,14 +818,7 @@ fn run_command_output_inner(
     if run_in_bg {
         let session_id = get_active_session_id().unwrap_or_default();
         let cmd_str = command_str.to_string();
-        let task_id = format!(
-            "task_{}_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::from_secs(0))
-                .as_millis(),
-            BACKGROUND_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        );
+        let task_id = next_task_id();
 
         let task_manager = background_task_manager();
         let mut task_spec = TaskSpec::new(SessionId::new(session_id.clone()), command_request);
@@ -837,29 +909,12 @@ fn run_command_output_inner(
             }
         }
 
-        return Ok(super::ToolExecutionOutput {
-            content: format!(
-                "Task started in background. Task ID: {task_id}. Status: Pending. Command: {cmd_str}. Completion notification: {}. Use manage_task action 'wait' to block until it finishes; captured output is available with manage_task action 'logs'.",
-                if notify_on_complete {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            ),
-            success: !notify_on_complete,
-            pending: notify_on_complete,
-            command: Some(cmd_str),
-            exit_code: None,
-            truncated: false,
-            completeness: rustcode_core::ToolResultCompleteness::Complete,
-            replayed: false,
-            error_kind: None,
-            retryable: false,
-            command_status: Some(rustcode_core::CommandResultMetadata {
-                completed: false,
-                ..Default::default()
-            }),
-        });
+        return Ok(background_start_output(
+            &task_id,
+            cmd_str,
+            notify_on_complete,
+            false,
+        ));
     }
 
     // Admission, cwd and sandbox validation above still apply to cache hits.
@@ -900,8 +955,27 @@ fn run_command_output_inner(
     let cancellation = cancel_token.map(|token| {
         std::sync::Arc::new(move || token.is_cancelled()) as rustcode_command::CancellationCallback
     });
-    let output =
-        rustcode_command::run_with_timeout_cancellable(&command_request, progress, cancellation)?;
+    let output = match get_active_session_id() {
+        // Inside a session the user can move a slow command to the background.
+        Some(session_id) => {
+            match run_foreground_or_hand_off(
+                &session_id,
+                command_str,
+                &command_request,
+                progress,
+                cancellation,
+                call_id,
+            )? {
+                ForegroundOutcome::Finished(output) => output,
+                ForegroundOutcome::MovedToBackground(result) => return Ok(result),
+            }
+        }
+        None => rustcode_command::run_with_timeout_cancellable(
+            &command_request,
+            progress,
+            cancellation,
+        )?,
+    };
     let result = foreground_command_output(&output, &sandbox_context);
     if result.success
         && !result.truncated
@@ -914,6 +988,83 @@ fn run_command_output_inner(
         }
     }
     Ok(result)
+}
+
+enum ForegroundOutcome {
+    Finished(rustcode_command::CommandOutput),
+    MovedToBackground(super::ToolExecutionOutput),
+}
+
+/// Run a foreground command, handing the still-running process to the task
+/// manager if the user asks for it. Output is teed into a task log from the
+/// start so `manage_task` `logs` covers the whole run after a hand-off.
+fn run_foreground_or_hand_off(
+    session_id: &str,
+    command_str: &str,
+    request: &rustcode_command::CommandRequest,
+    progress: Option<CommandProgressCallback>,
+    cancellation: Option<rustcode_command::CancellationCallback>,
+    call_id: Option<&str>,
+) -> Result<ForegroundOutcome, String> {
+    let task_id = next_task_id();
+    let log_path = task_output_log_path(session_id, &task_id).ok().flatten();
+    let log_writer = log_path
+        .as_deref()
+        .and_then(|path| rustcode_tasks::create_task_log(path).ok());
+    let log_path = log_path.filter(|_| log_writer.is_some());
+    let moved = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let tee: CommandProgressCallback = {
+        let moved = Arc::clone(&moved);
+        Arc::new(move |bytes: &[u8], stderr: bool| {
+            if let Some(log) = log_writer.as_ref() {
+                log(bytes, stderr);
+            }
+            // The tool call has returned once moved: stop feeding its cell.
+            if !moved.load(Ordering::Relaxed)
+                && let Some(live) = progress.as_ref()
+            {
+                live(bytes, stderr);
+            }
+        })
+    };
+    let foreground = Arc::new(ForegroundCommand::start(session_id));
+    let handoff = {
+        let foreground = Arc::clone(&foreground);
+        Arc::new(move || foreground.handoff_requested()) as rustcode_command::HandoffCallback
+    };
+    let outcome =
+        rustcode_command::run_with_timeout_or_handoff(request, Some(tee), cancellation, handoff);
+    let remove_log = || {
+        if let Some(path) = log_path.as_deref() {
+            let _ = std::fs::remove_file(path);
+        }
+    };
+    match outcome {
+        Ok(rustcode_command::RunOutcome::Finished(output)) => {
+            remove_log();
+            Ok(ForegroundOutcome::Finished(output))
+        }
+        Err(error) => {
+            remove_log();
+            Err(error)
+        }
+        Ok(rustcode_command::RunOutcome::HandedOff(running)) => {
+            moved.store(true, Ordering::Relaxed);
+            let mut spec = TaskSpec::new(SessionId::new(session_id), request.clone());
+            spec.command = command_str.to_owned();
+            spec.notify_on_complete = true;
+            spec.output_log = log_path;
+            if let Some(call_id) = call_id {
+                spec = spec.with_call_id(call_id);
+            }
+            let pid = running.pid();
+            background_task_manager()
+                .adopt_with_id(task_id.clone(), spec, pid, move || running.wait())?;
+            Ok(ForegroundOutcome::MovedToBackground(
+                background_start_output(&task_id, command_str.to_owned(), true, true),
+            ))
+        }
+    }
 }
 
 /// What a failed command's sandbox attribution note needs to know.
@@ -1074,6 +1225,59 @@ fn pr_creation_guard_output(command: &str, base: &str) -> super::ToolExecutionOu
             exit_code: Some(2),
             ..Default::default()
         }),
+    }
+}
+
+fn next_task_id() -> String {
+    format!(
+        "task_{}_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_millis(),
+        BACKGROUND_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// The start result for a command that now runs as a background task.
+fn background_start_output(
+    task_id: &str,
+    cmd_str: String,
+    notify_on_complete: bool,
+    moved_by_user: bool,
+) -> super::ToolExecutionOutput {
+    super::ToolExecutionOutput {
+        content: format!(
+            "Task started in background. Task ID: {task_id}. Status: Running. Command: {cmd_str}. Completion notification: {}{} Captured output is available with manage_task action 'logs'; never poll.",
+            background_follow_up(notify_on_complete),
+            if moved_by_user {
+                " The user moved this running command to the background; it was not interrupted."
+            } else {
+                ""
+            }
+        ),
+        success: !notify_on_complete,
+        pending: notify_on_complete,
+        command: Some(cmd_str),
+        exit_code: None,
+        truncated: false,
+        completeness: rustcode_core::ToolResultCompleteness::Complete,
+        replayed: false,
+        error_kind: None,
+        retryable: false,
+        command_status: Some(rustcode_core::CommandResultMetadata {
+            completed: false,
+            ..Default::default()
+        }),
+    }
+}
+
+/// What the model is told to do after a command went to the background.
+fn background_follow_up(notify_on_complete: bool) -> &'static str {
+    if notify_on_complete {
+        "enabled. It is detached from this call: keep working on whatever does not depend on it, and its result is delivered to you when it finishes. Call manage_task action 'wait' only when nothing else is left to do."
+    } else {
+        "disabled. Call manage_task action 'wait' when you need the result."
     }
 }
 
@@ -2562,7 +2766,7 @@ mod tests {
         assert!(!output.success, "starting is not completed success");
         assert_eq!(output.exit_code, None, "the process has not exited yet");
         assert!(
-            output.content.contains("Status: Pending"),
+            output.content.contains("Status: Running"),
             "{}",
             output.content
         );
@@ -2897,6 +3101,65 @@ mod tests {
         assert_eq!(event.notify_on_complete(), Some(true));
         let (_, _, result) = task_event_to_tool_output(event).expect("finished output");
         assert!(result.content.contains("slow-output"), "{}", result.content);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_foreground_command_can_be_moved_to_the_background() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
+        let session_id = unique_session("foreground-handoff-test");
+        super::super::set_active_session_id(Some(session_id.clone()));
+        let events = super::background_task_manager().subscribe_session(session_id.clone());
+        assert_eq!(
+            super::move_foreground_commands_to_background(&session_id),
+            0
+        );
+        let user = {
+            let session_id = session_id.clone();
+            std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !super::has_foreground_command(&session_id) {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "command never started"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                super::move_foreground_commands_to_background(&session_id)
+            })
+        };
+        let started = std::time::Instant::now();
+        let output = run_command_output(&serde_json::json!({
+            "command": "printf 'early\\n'; sleep 3; printf 'late\\n'",
+        }))
+        .expect("command should start");
+        let returned_after = started.elapsed();
+        assert_eq!(user.join().expect("user thread"), 1);
+        let event = next_terminal_event(&events, std::time::Duration::from_secs(20));
+        super::super::set_active_session_id(None);
+
+        assert!(
+            returned_after < std::time::Duration::from_millis(2500),
+            "the tool call should return at the hand-off: {returned_after:?}"
+        );
+        assert!(output.pending);
+        assert!(
+            output
+                .content
+                .contains("The user moved this running command to the background"),
+            "{}",
+            output.content
+        );
+        assert!(!super::has_foreground_command(&session_id));
+        let event = event.expect("moved task should publish its completion");
+        assert!(output.content.contains(event.task_id().as_str()));
+        assert_eq!(event.notify_on_complete(), Some(true));
+        let (_, _, result) = task_event_to_tool_output(event).expect("finished output");
+        assert!(result.content.contains("early"), "{}", result.content);
+        assert!(result.content.contains("late"), "{}", result.content);
     }
 
     #[cfg(unix)]

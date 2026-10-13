@@ -492,6 +492,45 @@ fn flush_task_log(file: &mut std::fs::File, error: &Arc<Mutex<Option<String>>>) 
     }
 }
 
+fn task_log_writer(
+    file: std::fs::File,
+    error: Arc<Mutex<Option<String>>>,
+) -> rustcode_command::ProgressCallback {
+    let file = Mutex::new((file, None::<bool>));
+    Arc::new(move |bytes: &[u8], stderr: bool| {
+        let mut state = file.lock().expect("task output log mutex poisoned");
+        if state.1 != Some(stderr) {
+            if state.1.is_some() {
+                write_task_log(&mut state.0, &error, b"\n");
+            }
+            let label: &[u8] = if stderr { b"[stderr]\n" } else { b"[stdout]\n" };
+            write_task_log(&mut state.0, &error, label);
+            state.1 = Some(stderr);
+        }
+        write_task_log(&mut state.0, &error, bytes);
+        flush_task_log(&mut state.0, &error);
+    })
+}
+
+/// Create a private task log and return a callback that appends command
+/// output to it in the format `manage_task` `logs` reads. For a caller that
+/// starts a command itself and may hand it to [`TaskManager::adopt_with_id`].
+pub fn create_task_log(
+    path: &std::path::Path,
+) -> Result<rustcode_command::ProgressCallback, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("failed to create task log: {error}"))?;
+    Ok(task_log_writer(file, Arc::new(Mutex::new(None))))
+}
+
 /// Bounded tombstones let a cancellation racing with completion report
 /// `AlreadyFinished` without retaining every task ID forever.
 #[derive(Default)]
@@ -736,23 +775,8 @@ impl TaskManager {
                 started_manager.child_started(&started_id, pid);
             });
             let log_error = Arc::new(Mutex::new(None::<String>));
-            let progress: Option<rustcode_command::ProgressCallback> = output_log.map(|file| {
-                let file = Arc::new(Mutex::new((file, None::<bool>)));
-                let callback_error = Arc::clone(&log_error);
-                Arc::new(move |bytes: &[u8], stderr: bool| {
-                    let mut state = file.lock().expect("task output log mutex poisoned");
-                    if state.1 != Some(stderr) {
-                        if state.1.is_some() {
-                            write_task_log(&mut state.0, &callback_error, b"\n");
-                        }
-                        let label: &[u8] = if stderr { b"[stderr]\n" } else { b"[stdout]\n" };
-                        write_task_log(&mut state.0, &callback_error, label);
-                        state.1 = Some(stderr);
-                    }
-                    write_task_log(&mut state.0, &callback_error, bytes);
-                    flush_task_log(&mut state.0, &callback_error);
-                }) as rustcode_command::ProgressCallback
-            });
+            let progress: Option<rustcode_command::ProgressCallback> =
+                output_log.map(|file| task_log_writer(file, Arc::clone(&log_error)));
             let result = catch_unwind(AssertUnwindSafe(|| {
                 rustcode_command::run_until_exit(&spec.request, progress, Some(started))
             }));
@@ -779,6 +803,43 @@ impl TaskManager {
                 Err(format!("failed to start task thread: {error}")),
             );
             return Err(format!("failed to start task thread: {error}"));
+        }
+        Ok(handle)
+    }
+
+    /// Register a process the caller already started as a running task.
+    /// `wait` blocks until it exits; `spec.output_log`, when set, names a log
+    /// the caller is already writing.
+    pub fn adopt_with_id(
+        &self,
+        id: impl Into<TaskId>,
+        mut spec: TaskSpec,
+        pid: u32,
+        wait: impl FnOnce() -> Result<CommandOutput, String> + Send + 'static,
+    ) -> Result<TaskHandle, String> {
+        let id = id.into();
+        spec.request.process_group = true;
+        let handle = TaskHandle {
+            id: id.clone(),
+            session_id: spec.session_id.clone(),
+        };
+        if !self.insert(id.clone(), &spec, None) {
+            return Err(format!("task ID '{id}' is already in use"));
+        }
+        self.child_started(&id, pid);
+        let manager = self.clone();
+        let thread_id = id.clone();
+        let spawn_result = thread::Builder::new()
+            .name(format!("rustcode-task-{id}"))
+            .spawn(move || {
+                let output = catch_unwind(AssertUnwindSafe(wait))
+                    .unwrap_or_else(|_| Err("background command runner panicked".to_string()));
+                manager.finish(&thread_id, output);
+            });
+        if let Err(error) = spawn_result {
+            let message = format!("failed to start task thread: {error}");
+            self.finish(&id, Err(message.clone()));
+            return Err(message);
         }
         Ok(handle)
     }

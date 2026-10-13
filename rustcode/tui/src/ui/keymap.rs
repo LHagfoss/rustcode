@@ -24,6 +24,7 @@ pub(crate) enum KeyAction {
     Paste,
     ToggleExpandAll,
     ToggleExpandStep,
+    BackgroundCommand,
     MoveLeft,
     MoveRight,
     MoveWordLeft,
@@ -128,6 +129,8 @@ impl KeyMap {
             }
             KeyCode::Char('o') | KeyCode::Char('O') if ctrl => KeyAction::ToggleExpandAll,
             KeyCode::Char('j') | KeyCode::Char('J') if ctrl => KeyAction::InsertNewline,
+            // Moves the running command to the background (#2001).
+            KeyCode::Char('b') | KeyCode::Char('B') if ctrl => KeyAction::BackgroundCommand,
             KeyCode::Char('a') | KeyCode::Char('A') if ctrl => KeyAction::MoveStart,
             KeyCode::Char('e') | KeyCode::Char('E') if ctrl => KeyAction::MoveEnd,
             KeyCode::Char('u') | KeyCode::Char('U') if ctrl || super_key => {
