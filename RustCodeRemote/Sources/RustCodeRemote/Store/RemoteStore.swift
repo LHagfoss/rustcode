@@ -764,12 +764,12 @@ public final class RemoteStore {
 
         guard let selectedSessionID else { return }
         guard let current = list.first(where: { $0.id == selectedSessionID }) else {
-            // No longer shared (`/remote off`, terminal exit or a new session identity).
+            // Gone from the list: its terminal closed or moved to another session.
             attachTask?.cancel()
             attached = nil
         commandResult = nil
             self.selectedSessionID = nil
-            notice = "That session is no longer shared."
+            notice = "That session is no longer open on the Mac."
             return
         }
         if let attached, attached.session != current.ref {

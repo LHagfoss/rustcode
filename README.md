@@ -33,8 +33,8 @@ host. What that means, precisely:
 
 ## Pair with a host
 
-Connect the Mac and iPhone to the same Wi-Fi network. In the RustCode terminal session
-you want to share, run:
+Connect the Mac and iPhone to the same Wi-Fi network. In any RustCode terminal session,
+run:
 
 ```
 /remote
@@ -63,8 +63,10 @@ address/QR payload or the pairing code. The app remembers the last successfully 
 address, never the one-time code.
 The scanner shows a square target and offers a retry if camera startup fails.
 
-The session appears in the app's list as soon as it is shared. `/remote off` stops
-sharing it; closing the terminal ends it. `rustcode remote devices` lists paired devices
+`/remote` turns remote access on for the whole Mac: every session open in a terminal
+appears in the app's list, now and later, with nothing more to type. `/remote off` turns
+it off for all of them; closing a terminal ends its session. Once a device is paired,
+`/remote` no longer shows a code; `/remote pair` shows one for another device. `rustcode remote devices` lists paired devices
 and `rustcode remote revoke <device>` removes one, which sends the app back to the
 pairing screen.
 

@@ -49,7 +49,7 @@ extension DemoRemoteClient {
         .init(name: "/quota", description: "Show model quota percentages · On Mac", insertion: "/quota", action: "terminal"),
         .init(name: "/recap", description: "Generate a brief conversation catch-up and next step · On Mac", insertion: "/recap", action: "terminal"),
         .init(name: "/refresh", description: "Reload the provider account's model catalog · On Mac", insertion: "/refresh", action: "terminal"),
-        .init(name: "/remote", description: "Share this session with a paired device and show pairing details (status|off) · On Mac", insertion: "/remote", action: "terminal"),
+        .init(name: "/remote", description: "Turn remote access on: every session is shared with paired devices (pair|status|off) · On Mac", insertion: "/remote", action: "terminal"),
         .init(name: "/resume", description: "Resume most recent session", insertion: "/resume", action: "session_picker"),
         .init(name: "/sandbox", description: "Show or set OS sandbox mode (read_only|workspace_write|workspace_write_network|trusted) · On Mac", insertion: "/sandbox", action: "terminal"),
         .init(name: "/session", description: "Show current session ID, token budget, and active model", insertion: "/session", action: "execute"),

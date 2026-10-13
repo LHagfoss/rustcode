@@ -62,7 +62,7 @@ struct SettingsView: View {
                 } header: {
                     Text("About")
                 } footer: {
-                    Text("Start sessions from this app or share terminal sessions with /remote. Sessions keep running on your Mac when you close the app. Use /remote off to stop sharing a terminal session.")
+                    Text("Every RustCode session open in a terminal on your Mac appears here while /remote is on, and you can start new ones from this app. Sessions keep running on your Mac when you close the app. Use /remote off on the Mac to turn remote access off.")
                 }
             }
             .navigationTitle("Settings")

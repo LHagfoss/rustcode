@@ -348,7 +348,7 @@ private struct SessionSidebar: View {
             ContentUnavailableView(
                 "No Sessions Yet",
                 systemImage: "terminal",
-                description: Text("Tap New to choose a folder on \(store.host?.name ?? "your Mac"), or share an existing session with /\u{2060}remote.")
+                description: Text("Tap New to choose a folder on \(store.host?.name ?? "your Mac"), or open RustCode in a terminal on it: every open session appears here.")
             )
         case .connecting:
             ProgressView("Connecting…")

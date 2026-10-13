@@ -52,7 +52,7 @@ extension RemoteError: LocalizedError {
         case .outcomeUnknown(let detail): detail.flatMap { $0.isEmpty ? nil : $0 } ?? "The host could not confirm the request."
         case .sessionClosed(let reason): reason
         case .hostIdentityChanged: "The host at this address is not the one this device was paired with. Pair again."
-        case .linkExpired: "The link to this Mac expired. Run /remote on it and enter the new code."
+        case .linkExpired: "The link to this Mac expired. Run /remote pair on it and enter the new code."
         case .transport(let detail): detail
         case .rejected(let rejection): rejection.message
         }
