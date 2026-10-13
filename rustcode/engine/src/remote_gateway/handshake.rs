@@ -121,6 +121,10 @@ pub enum HandshakeResponse {
         /// The host's own name, for display. A label, not an identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_name: Option<String>,
+        /// When this pairing stops being accepted, RFC 3339 in UTC. The device
+        /// pairs again after it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<String>,
     },
     /// The device token was accepted.
     Authenticated {
@@ -131,6 +135,10 @@ pub enum HandshakeResponse {
         device_name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_name: Option<String>,
+        /// When this pairing stops being accepted, RFC 3339 in UTC. The device
+        /// pairs again after it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<String>,
     },
     Error {
         code: ErrorCode,
@@ -226,6 +234,7 @@ mod tests {
             device_name: "phone".into(),
             token: Secret::new("tok"),
             host_name: None,
+            expires_at: None,
         };
         assert_eq!(
             paired.to_text(),
@@ -238,6 +247,7 @@ mod tests {
             device_id: "dev".into(),
             device_name: "phone".into(),
             host_name: None,
+            expires_at: None,
         };
         assert_eq!(
             authenticated.to_text(),
@@ -330,6 +340,7 @@ mod tests {
             device_name: "phone".into(),
             token: Secret::new(needle),
             host_name: Some("studio".into()),
+            expires_at: None,
         };
         assert!(!format!("{pair:?}").contains(needle));
         assert!(!format!("{paired:?}").contains(needle));

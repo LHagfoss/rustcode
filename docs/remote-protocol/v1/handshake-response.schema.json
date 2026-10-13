@@ -80,6 +80,13 @@
         "device_name": {
           "type": "string"
         },
+        "expires_at": {
+          "description": "When this pairing stops being accepted, RFC 3339 in UTC. The device\npairs again after it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "gateway_id": {
           "type": "string"
         },
@@ -125,6 +132,13 @@
         },
         "device_name": {
           "type": "string"
+        },
+        "expires_at": {
+          "description": "When this pairing stops being accepted, RFC 3339 in UTC. The device\npairs again after it.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "gateway_id": {
           "type": "string"

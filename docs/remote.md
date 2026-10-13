@@ -85,15 +85,18 @@ network, Wi-Fi came up after the gateway did) the listener moves to the new
 address on the same port, without a restart: pairing details, the QR code,
 `remote status` and `/remote status` name the new address, shared sessions
 stay registered and devices stay paired. A device that still dials the old address
-needs the new one: the app's nearby list or a fresh QR code gives it. An explicit `--bind <ip>` is never moved.
+needs the new one: on the same network the app finds it by itself from the
+Bonjour announcement, without a code; otherwise a fresh QR code gives it. An explicit `--bind <ip>` is never moved.
 
 For an address that does not change at all, give the gateway a stable name
 instead of an IP: `--advertise mac.netbird.cloud` (or `[remote] advertise`)
 with the NetBird address as `--bind`, or `--bind 0.0.0.0 --advertise <name>`
 on a trusted network. Prefer an IPv4 address or such a name over the Mac's
 `.local` name: `.local` also resolves to IPv6 and to other interfaces (VM
-bridges, VPNs) where the gateway does not listen. Bonjour announces only the
-service name, port and protocol version, never an address or pairing material.
+bridges, VPNs) where the gateway does not listen. Bonjour announces the
+service name, port, protocol version and the gateway's identifier, never
+pairing material. The identifier lets a paired device recognise this host at
+a new address and reconnect there with the token it already holds.
 
 `rustcode remote status` lists the machine's current addresses next to the
 listen and advertised address, and warns when the listener sits on an address
@@ -153,7 +156,7 @@ ask; nothing is shared without the terminal's explicit yes.
 | `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
 | `rustcode remote off` | Stop the running gateway (alias of `stop`). |
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address and code. |
-| `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time. Never a token. |
+| `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time and expiry. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
 | `rustcode remote status` | The running gateway: listen and advertised address, the machine's current addresses, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
@@ -212,7 +215,16 @@ A paired device receives a random token once. The host stores only its
 SHA-256 digest in `remote/devices.json` under the configuration directory
 (directory `0700`, file `0600`, replaced atomically). Device names are
 labels chosen by the device, not identities. Pairing gives a device access to
-every session this host shares, now and later, until it is revoked.
+every session this host shares, now and later, until it is revoked or the
+pairing expires.
+
+A pairing lasts 30 days. Within them the device reconnects on its own, with
+no code. After them its token is refused like an unknown one and the device
+pairs again; a connection that is open at that moment stays open until it
+drops. `rustcode remote devices` shows when each pairing expires. An expired
+device is forgotten when the next one pairs and does not count against the
+device limit. Pairings made before this limit existed are counted from the
+day they were made.
 
 ## Revoking and stopping
 

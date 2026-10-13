@@ -79,8 +79,8 @@ Client → host, the first frame:
 Host → client:
 
 ```json
-{"type": "paired", "protocol_version": 1, "gateway_id": "…", "instance_id": "…", "device_id": "0011223344556677", "device_name": "Lars's iPhone", "token": "<device token>", "host_name": "studio"}
-{"type": "authenticated", "protocol_version": 1, "gateway_id": "…", "instance_id": "…", "device_id": "0011223344556677", "device_name": "Lars's iPhone", "host_name": "studio"}
+{"type": "paired", "protocol_version": 1, "gateway_id": "…", "instance_id": "…", "device_id": "0011223344556677", "device_name": "Lars's iPhone", "token": "<device token>", "host_name": "studio", "expires_at": "2026-08-22T09:15:00Z"}
+{"type": "authenticated", "protocol_version": 1, "gateway_id": "…", "instance_id": "…", "device_id": "0011223344556677", "device_name": "Lars's iPhone", "host_name": "studio", "expires_at": "2026-08-22T09:15:00Z"}
 {"type": "error", "code": "pairing_failed", "message": "…"}
 {"type": "error", "code": "rate_limited", "message": "…", "retry_after_secs": 240}
 ```
@@ -91,6 +91,10 @@ Host → client:
 - `gateway_id` is stable for the host and is what a client keys its stored
   token and host data by. `instance_id` changes every time the gateway
   starts.
+- `expires_at` is optional: when the pairing stops being accepted, RFC 3339 in
+  UTC, 30 days after pairing. From then on `authenticate` answers
+  `unauthorized` and the device pairs again. A gateway that predates it sends
+  none, and its pairings do not expire.
 - `host_name` is optional: the machine's own name, for display. It is a
   label, not an identity.
 - `device_name` in the answer is the name as the host stored it (trimmed and

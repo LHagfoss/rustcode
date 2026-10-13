@@ -141,6 +141,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 device_name: "Lars's iPhone".to_owned(),
                 token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
                 host_name: Some("studio".to_owned()),
+                expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
             },
         ),
         (
@@ -152,6 +153,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 device_id: "0011223344556677".to_owned(),
                 device_name: "Lars's iPhone".to_owned(),
                 host_name: Some("studio".to_owned()),
+                expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
             },
         ),
     ];
