@@ -1768,3 +1768,22 @@ fn unrelated_same_prefix_single_line_is_not_reported_as_already_applied() {
     let content = std::fs::read_to_string(&file).expect("read");
     assert_eq!(content, "let bar = 2;\n", "file must be untouched");
 }
+
+#[test]
+fn an_empty_edits_list_beside_a_target_is_the_single_edit_form() {
+    let chunks = extract_edit_chunks(&serde_json::json!({
+        "path": "config.toml",
+        "target_content": "a = 1",
+        "replacement_content": "a = 2",
+        "edits": [],
+    }))
+    .expect("the top-level target is the edit");
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].target, "a = 1");
+    assert_eq!(chunks[0].replacement, "a = 2");
+
+    assert_eq!(
+        extract_edit_chunks(&serde_json::json!({"path": "config.toml", "edits": []})).err(),
+        Some("edits array cannot be empty".to_string())
+    );
+}

@@ -799,7 +799,9 @@ pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
             return Err(format!("invalid argument '{key}'"));
         }
     }
-    let server = optional_nonempty_string(args, "server")?;
+    // Models ask for every server with a wildcard; that is the default scope.
+    let server = optional_nonempty_string(args, "server")?
+        .filter(|server| !matches!(server.trim(), "*" | "all"));
     let query = optional_nonempty_string(args, "query")?;
     let limit = match args.get("limit") {
         None => DEFAULT_MCP_DISCOVERY_RESULTS,
@@ -1779,6 +1781,19 @@ mod tests {
             result["results"][0]["input_schema"]["properties"]["query"]["type"],
             "string"
         );
+    }
+
+    #[test]
+    fn a_wildcard_server_lists_every_server_instead_of_failing() {
+        for server in ["*", "all"] {
+            let result = list_mcp_tools(&serde_json::json!({"server": server, "query": "mail"}));
+            assert!(
+                !result
+                    .as_ref()
+                    .is_err_and(|error| error.contains("unknown MCP server")),
+                "{result:?}"
+            );
+        }
     }
 
     #[test]

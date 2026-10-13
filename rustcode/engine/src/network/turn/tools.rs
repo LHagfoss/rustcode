@@ -1023,7 +1023,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 dbg_log!("Loop detector: warning at {} repeats", n);
                 let action = loop_offender.as_deref().unwrap_or("the last tool action");
                 pending_loop_warning = Some(format!(
-                    "[Loop warning: '{action}' has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — if an edit failed to match, view a wider line range or use grep to verify exact target content.]"
+                    "[Loop warning: '{action}' has repeated {n} times. If it keeps failing or returning the same thing, stop retrying the same inputs — for an edit that failed to match, view a wider line range or use grep to verify exact target content. If you are deliberately re-checking a value that changes, space the checks out with other work.]"
                 ));
             }
             loop_detect::LoopStatus::Ok => {}
