@@ -700,12 +700,39 @@ impl SuggestionCycle {
     }
 }
 
+/// How long one `@` listing is reused. The popup asks for the same query on
+/// every frame it is open, and each answer is a directory walk; a second is
+/// short enough that a file created meanwhile still shows up promptly.
+const FILE_LISTING_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+
+type FileListing = (std::path::PathBuf, String, std::time::Instant, Vec<String>);
+
 pub fn list_project_file_paths(query: &str) -> Vec<String> {
+    static LAST: std::sync::Mutex<Option<FileListing>> = std::sync::Mutex::new(None);
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((cached_cwd, cached_query, at, files)) = last.as_ref()
+        && *cached_cwd == cwd
+        && cached_query == query
+        && at.elapsed() < FILE_LISTING_TTL
+    {
+        return files.clone();
+    }
+    let files = walk_project_file_paths(&cwd, query);
+    *last = Some((
+        cwd,
+        query.to_owned(),
+        std::time::Instant::now(),
+        files.clone(),
+    ));
+    files
+}
+
+fn walk_project_file_paths(cwd: &std::path::Path, query: &str) -> Vec<String> {
     let mut files = Vec::new();
     let query_lower = query.to_lowercase();
 
-    let walker = ignore::WalkBuilder::new(&cwd)
+    let walker = ignore::WalkBuilder::new(cwd)
         .hidden(true)
         .git_ignore(true)
         .max_depth(Some(6))
@@ -714,7 +741,7 @@ pub fn list_project_file_paths(query: &str) -> Vec<String> {
     for result in walker {
         if let Ok(entry) = result
             && entry.file_type().is_some_and(|ft| ft.is_file())
-            && let Ok(rel) = entry.path().strip_prefix(&cwd)
+            && let Ok(rel) = entry.path().strip_prefix(cwd)
         {
             let rel_str = rel.to_string_lossy().to_string();
             if query_lower.is_empty() || rel_str.to_lowercase().contains(&query_lower) {
@@ -739,6 +766,23 @@ mod tests {
     /// searching for the mode they need. Omitting `trusted` here hid the only
     /// unrestricted mode from the palette while `/sandbox trusted` worked
     /// (#1540).
+    #[test]
+    fn project_file_walk_filters_by_query_case_insensitively() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/Main.rs"), "").unwrap();
+        std::fs::write(root.path().join("README.md"), "").unwrap();
+
+        let mut all = super::walk_project_file_paths(root.path(), "");
+        all.sort();
+        assert_eq!(all, ["@README.md", "@src/Main.rs"]);
+        assert_eq!(
+            super::walk_project_file_paths(root.path(), "main"),
+            ["@src/Main.rs"]
+        );
+        assert!(super::walk_project_file_paths(root.path(), "absent").is_empty());
+    }
+
     #[test]
     fn sandbox_completion_hint_names_every_mode() {
         let command = filtered_commands("/sandbox")

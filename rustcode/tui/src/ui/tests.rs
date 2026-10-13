@@ -2904,6 +2904,17 @@ fn cached_expand_progress_follows_expansion_and_history_changes() {
 }
 
 #[test]
+fn palette_for_matches_get_palette_for_active_and_inactive_themes() {
+    use super::theme;
+
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
+    theme::set_active_theme("sky");
+    assert_eq!(theme::palette_for("sky"), theme::get_palette("sky"));
+    assert_eq!(theme::palette_for("nord"), theme::get_palette("nord"));
+}
+
+#[test]
 fn sky_theme_loads_and_updates_syntax_highlighting() {
     use super::theme;
 
