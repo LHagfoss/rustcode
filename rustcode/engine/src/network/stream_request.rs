@@ -3243,6 +3243,16 @@ mod tests {
             with_schema.total_tokens,
             without_schema.total_tokens + schema_tokens
         );
+        assert_eq!(without_schema.completion_tokens, count_tokens("reply"));
+        assert_eq!(
+            without_schema.total_tokens,
+            without_schema.prompt_tokens + without_schema.completion_tokens
+        );
+
+        let prompt_only = estimate_token_usage(&messages, "").await.unwrap();
+        assert_eq!(prompt_only.completion_tokens, 0);
+        assert_eq!(prompt_only.total_tokens, prompt_only.prompt_tokens);
+        assert_eq!(prompt_only.prompt_tokens, without_schema.prompt_tokens);
         assert_eq!(
             with_schema.completion_tokens,
             without_schema.completion_tokens
@@ -4260,12 +4270,18 @@ pub(crate) async fn estimate_token_usage_with_tool_schemas(
     }
     let schema_tokens = crate::network::compaction::estimate_tool_schema_tokens(tool_schemas);
     let prompt = count_tokens(&prompt_text).saturating_add(schema_tokens as u32);
-    let full = prompt_text + reply + "\n";
-    let total = count_tokens(&full).saturating_add(schema_tokens as u32);
+    // Count the reply on its own. Encoding `prompt + reply` to subtract the
+    // prompt again was a second full-context BPE pass on every round, and the
+    // concatenation never hit the token memo.
+    let completion = if reply.is_empty() {
+        0
+    } else {
+        count_tokens(reply)
+    };
     Some(TokenUsage {
         prompt_tokens: prompt,
-        completion_tokens: total.saturating_sub(prompt),
-        total_tokens: total,
+        completion_tokens: completion,
+        total_tokens: prompt.saturating_add(completion),
         cached_tokens: None,
         ..Default::default()
     })
