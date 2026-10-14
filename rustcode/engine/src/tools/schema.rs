@@ -1016,18 +1016,7 @@ fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
     // Function words say nothing about which tool is wanted, and nearly every
     // tool description contains a few of them: "and", "of" and "can" alone
     // cleared the relevance threshold and filled the menu for any prompt.
-    const STOP_WORDS: &[&str] = &[
-        "about", "after", "again", "all", "alot", "also", "am", "an", "and", "any", "are", "as",
-        "at", "be", "been", "before", "being", "but", "by", "can", "cannot", "could", "did", "do",
-        "does", "doing", "done", "for", "from", "had", "has", "have", "he", "her", "here", "him",
-        "his", "how", "idk", "if", "in", "into", "is", "it", "its", "just", "let", "lets", "like",
-        "lot", "many", "may", "me", "might", "more", "most", "much", "must", "my", "no", "not",
-        "of", "off", "on", "only", "or", "our", "out", "over", "please", "she", "should", "so",
-        "some", "than", "thanks", "that", "the", "their", "them", "then", "there", "these", "they",
-        "this", "through", "to", "too", "under", "up", "us", "using", "very", "want", "was", "we",
-        "were", "what", "when", "where", "which", "who", "why", "will", "with", "would", "you",
-        "your",
-    ];
+    use super::mcp_discovery::STOP_WORDS;
     let mut terms = std::collections::HashSet::new();
     for message in messages {
         let role = message.get("role").and_then(Value::as_str).unwrap_or("");
@@ -1141,148 +1130,37 @@ fn user_mentions_mcp_server(messages: &[Value], server: &str) -> bool {
         || user_message_mentions_name(messages, &format!("{server}_mcp"))
 }
 
-/// Keep schemas returned by a completed MCP discovery search in the next
+/// Keep schemas returned by completed MCP discovery calls in the next
 /// request's tool block. The discovery result itself is tool output, which
 /// relevance scoring intentionally ignores; without this hint, a tool found
 /// by query could be omitted before the model gets a chance to call it.
+///
+/// Every discovery call since the user's latest message counts, newest
+/// first: binding only the latest one let finding tool B evict tool A, and
+/// the model listed the same tools again and again.
 fn mcp_tools_selected_by_discovery_calls(
     tools: &[(String, String, Value)],
     owners: &[String],
     raw_names: &[String],
     messages: &[Value],
 ) -> Vec<String> {
-    let mut selected = Vec::new();
-    // Runtime context and harness notices are projected as `user` messages.
-    // Taking the context tail for the user's turn left nothing after it to
-    // search, and taking a notice (a rejected call, a loop warning) for it
-    // unbound the discovery result on the very next request.
-    let Some(latest_user) = messages
-        .iter()
-        .rposition(crate::network::messages::is_user_turn_boundary)
-    else {
-        return selected;
-    };
-
-    // Discovery hints belong to one logical user turn. Use only the newest
-    // discovery call after that turn began, so earlier searches cannot crowd
-    // out its current result on the next model request.
-    let latest_call = messages[latest_user..]
-        .iter()
-        .flat_map(|message| {
-            message
-                .get("tool_calls")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter_map(|call| call.get("function"))
-        .filter(|function| function.get("name").and_then(Value::as_str) == Some("list_mcp_tools"))
-        .last();
-    let Some(arguments) = latest_call.and_then(|function| function.get("arguments")) else {
-        return selected;
-    };
-    let args = match arguments {
-        Value::Object(args) => Value::Object(args.clone()),
-        Value::String(args) => match serde_json::from_str::<Value>(args) {
-            Ok(Value::Object(args)) => Value::Object(args),
-            _ => return selected,
-        },
-        _ => return selected,
-    };
-    let server = args
-        .get("server")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|server| !server.is_empty());
-    let query = args
-        .get("query")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|query| !query.is_empty())
-        .map(str::to_lowercase);
-    if server.is_none() && query.is_none() {
-        return selected;
-    }
-    let limit = match args.get("limit") {
-        None => 20,
-        Some(value) => match value.as_u64().filter(|value| (1..=50).contains(value)) {
-            Some(value) => value as usize,
-            None => return selected,
-        },
-    };
-    let mut matched = tools
+    let docs = tools
         .iter()
         .zip(owners)
         .zip(raw_names)
-        .filter_map(|(((name, description, _), owner), raw_name)| {
-            if server.is_some_and(|server| server != owner) {
-                return None;
-            }
-            let score = match query.as_ref() {
-                Some(query) => mcp_discovery_score(query, raw_name, description),
-                None => 1,
-            };
-            (score > 0).then_some((score, owner, raw_name, name))
-        })
+        .map(
+            |(((name, description, _), owner), raw_name)| super::mcp_discovery::McpToolDoc {
+                server: owner,
+                raw_name,
+                advertised: name,
+                description,
+            },
+        )
         .collect::<Vec<_>>();
-    // The order the discovery result listed them in, so the tools the model
-    // was shown first are the ones bound first.
-    matched.sort_by(|left, right| {
-        right
-            .0
-            .cmp(&left.0)
-            .then_with(|| left.1.cmp(right.1))
-            .then_with(|| left.2.cmp(right.2))
-            .then_with(|| left.3.cmp(right.3))
-    });
-    let floor = mcp_discovery_floor(matched.first().map_or(0, |best| best.0));
-    selected.extend(
-        matched
-            .into_iter()
-            .filter(|(score, _, _, _)| *score >= floor)
-            .take(limit)
-            .map(|(_, _, _, name)| name.clone()),
-    );
-    selected
-}
-
-/// The lowest score still worth listing next to the best match. A common
-/// word such as `tool` or `get` fits half a catalog; without a floor those
-/// would fill the result and the schemas bound from it.
-pub(super) fn mcp_discovery_floor(best: usize) -> usize {
-    best.div_ceil(2)
-}
-
-/// How well a discovery query fits a tool, zero when it does not fit at all.
-///
-/// A query is words, not one string: `send message chat` has to find
-/// `send_chat_message`. A word in the name counts double a word in the
-/// description, and the query appearing whole outranks any partial match.
-pub(super) fn mcp_discovery_score(query: &str, name: &str, description: &str) -> usize {
-    let query = query.to_lowercase();
-    let name = name.to_lowercase();
-    let description = description.to_lowercase();
-    let mut words = query
-        .split(|ch: char| !ch.is_alphanumeric())
-        .filter(|word| word.chars().count() >= 2)
-        .collect::<Vec<_>>();
-    words.sort_unstable();
-    words.dedup();
-    let by_words = words
-        .iter()
-        .map(|word| {
-            if name.contains(word) {
-                2
-            } else {
-                usize::from(description.contains(word))
-            }
-        })
-        .sum::<usize>();
-    if name.contains(&query) || description.contains(&query) {
-        by_words + words.len() * 2 + 1
-    } else {
-        by_words
-    }
+    super::mcp_discovery::bound_by_discovery_calls(&docs, messages)
+        .into_iter()
+        .map(|index| tools[index].0.clone())
+        .collect()
 }
 
 /// Find MCP schemas named by the user, including every tool from a named MCP
@@ -1366,30 +1244,20 @@ fn mcp_tool_relevance(
     schema: &Value,
     terms: &std::collections::HashSet<String>,
 ) -> usize {
-    fn token_matches(candidate: &str, term: &str) -> bool {
-        candidate == term
-            || (candidate.len() > 3 && candidate.strip_suffix('s') == Some(term))
-            || (term.len() > 3 && term.strip_suffix('s') == Some(candidate))
-    }
+    use super::mcp_discovery::{stem, tokens};
     // `mcp__` is a transport prefix, not evidence that every MCP tool is
-    // relevant whenever a user names an MCP server.
+    // relevant whenever a user names an MCP server. The tokenizer is the one
+    // discovery uses, so `snake_case`, `camelCase` and plurals match alike.
     let name = name.strip_prefix("mcp__").unwrap_or(name);
-    let name_terms: Vec<String> = name
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|term| !term.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect();
-    let description_terms: Vec<String> = description
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|term| !term.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect();
-    let schema_terms: Vec<String> = serde_json::to_string(schema)
-        .unwrap_or_default()
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|term| !term.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect();
+    let name_terms = tokens(name)
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let description_terms = tokens(description)
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let schema_terms = tokens(&serde_json::to_string(schema).unwrap_or_default())
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
     // A verb shared by most tool names says what to do, not what to do it to.
     // On its own it must not clear the threshold: "check ... clear ... read"
     // in an unrelated prompt otherwise filled the whole menu.
@@ -1399,28 +1267,22 @@ fn mcp_tool_relevance(
         "update", "write",
     ];
     let mut score = 0;
+    let mut seen = std::collections::HashSet::new();
     for term in terms {
-        if let Some(candidate) = name_terms
-            .iter()
-            .find(|candidate| token_matches(candidate, term))
-        {
-            // The prompt may carry the verb inflected ("takes" for `take_…`).
-            score += if GENERIC_NAME_TERMS.contains(&term.as_str())
-                || GENERIC_NAME_TERMS.contains(&candidate.as_str())
-            {
+        // The prompt may carry the verb inflected ("takes" for `take_…`).
+        let term = stem(term);
+        if !seen.insert(term.clone()) {
+            continue;
+        }
+        if name_terms.contains(&term) {
+            score += if GENERIC_NAME_TERMS.contains(&term.as_str()) {
                 3
             } else {
                 8
             };
-        } else if description_terms
-            .iter()
-            .any(|candidate| token_matches(candidate, term))
-        {
+        } else if description_terms.contains(&term) {
             score += 3;
-        } else if schema_terms
-            .iter()
-            .any(|candidate| token_matches(candidate, term))
-        {
+        } else if schema_terms.contains(&term) {
             score += 1;
         }
     }
@@ -2035,14 +1897,6 @@ pub(crate) fn withheld_tools_notice(stats: &McpSchemaSelectionStats) -> Option<S
     (!lines.is_empty()).then(|| format!("# Tools Not Listed\n{}\n", lines.join("\n")))
 }
 
-/// Failed-server startup warnings surfaced up front so the model does not burn
-/// rounds retrying tools that can never load (#1633). Kept separate from
-/// `withheld_tools_notice` so schema-selection tests stay deterministic.
-pub(crate) fn mcp_startup_notice() -> Option<String> {
-    let warnings = crate::mcp::mcp_startup_warnings();
-    (!warnings.is_empty()).then(|| format!("# MCP Servers Unavailable\n{}\n", warnings.join("\n")))
-}
-
 /// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
 /// definition. Unknown names fall back to an empty permissive object schema.
 pub(super) fn schema_for_tool(name: &str) -> Value {
@@ -2241,12 +2095,12 @@ For live local app/device state without a matching tool or route hint, check `li
         p.push_str(
             "# Tool Surface\n\
 This request's tool list is filtered, not exhaustive. A listed tool is the only one carrying its argument schema here, and the list stays fixed for the whole turn. \
-Call `list_mcp_tools` for the live MCP server and tool names instead of guessing; any registered tool also works when called by its exact name.\n\n",
+Never guess MCP server names: see MCP Servers, then `list_mcp_tools` `select` for schemas. Any registered tool works by its exact name.\n\n",
         );
         return p;
     }
 
-    p.push_str("For connected services (such as email), prefer their listed tools over guessed shell commands. Use `list_mcp_tools` to discover registered tools when needed.\n\n");
+    p.push_str("For connected services (such as email), prefer their listed tools over guessed shell commands. Use `list_mcp_tools` (`select` exact names, or `query`) to discover registered MCP tools when needed.\n\n");
     p.push_str("Available tools:\n");
     for t in TOOLS {
         if !text_builtin_is_advertised(t, policy, agent_mode) {

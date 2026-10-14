@@ -53,6 +53,9 @@ struct RemoteSnapshot {
 /// burn agent rounds silently (#1633). Populated by
 /// `start_enabled_servers_with_timeout`, read by tool-notice composition.
 static MCP_STARTUP_WARNINGS: OnceLock<StdMutex<Vec<String>>> = OnceLock::new();
+/// Startup failure per server name, so the MCP catalogue can say why a
+/// configured server has no tools.
+static MCP_STARTUP_FAILURES: OnceLock<StdMutex<HashMap<String, String>>> = OnceLock::new();
 /// Count of filtered non-JSON stdout lines per server (noisy servers pollute
 /// stdout without losing the diagnostic via dbg_log).
 static MCP_NON_JSON_COUNTS: OnceLock<StdMutex<HashMap<String, u64>>> = OnceLock::new();
@@ -79,6 +82,23 @@ pub fn mcp_startup_warnings() -> Vec<String> {
         .get()
         .and_then(|slot| slot.lock().ok())
         .map(|guard| guard.iter().take(8).cloned().collect())
+        .unwrap_or_default()
+}
+
+fn record_mcp_startup_failure(name: &str, reason: &str) {
+    let slot = MCP_STARTUP_FAILURES.get_or_init(|| StdMutex::new(HashMap::new()));
+    if let Ok(mut guard) = slot.lock() {
+        guard.insert(name.to_owned(), reason.to_owned());
+    }
+}
+
+/// Startup failures by server name, recorded when a configured server could
+/// not be started at session launch.
+pub fn mcp_startup_failures() -> HashMap<String, String> {
+    MCP_STARTUP_FAILURES
+        .get()
+        .and_then(|slot| slot.lock().ok())
+        .map(|guard| guard.clone())
         .unwrap_or_default()
 }
 
@@ -194,11 +214,16 @@ where
         match tokio::time::timeout(startup_timeout, launcher(name.clone())).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
+                record_mcp_startup_failure(&name, &error);
                 let msg = format!("[mcp] failed to start server {name}: {error}");
                 crate::dbg_log!("{msg}");
                 warnings.push(msg);
             }
             Err(_) => {
+                record_mcp_startup_failure(
+                    &name,
+                    &format!("timed out after {:.1}s", startup_timeout.as_secs_f64()),
+                );
                 let msg = format!(
                     "[mcp] timed out starting server {name} after {:.1}s; continuing",
                     startup_timeout.as_secs_f64()

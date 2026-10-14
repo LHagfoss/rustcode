@@ -836,6 +836,11 @@ impl ProgressLedger {
                         (row["server"].as_str(), row["name"].as_str())
                     {
                         identities.push(format!("tool:{server}:{name}"));
+                        // A `select` that returns the schema of a tool an
+                        // earlier search only named is new evidence.
+                        if row.get("input_schema").is_some() {
+                            identities.push(format!("schema:{server}:{name}"));
+                        }
                     }
                 }
             }

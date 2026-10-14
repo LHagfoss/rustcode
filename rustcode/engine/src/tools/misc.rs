@@ -305,18 +305,17 @@ fn set_session_title(args: &Value) -> Result<String, String> {
     Ok("Session title saved.".to_string())
 }
 
-const MAX_MCP_DISCOVERY_RESULTS: usize = 50;
-const DEFAULT_MCP_DISCOVERY_RESULTS: usize = 20;
 const MAX_MCP_DISCOVERY_DESCRIPTION_CHARS: usize = 120;
-const MAX_MCP_DISCOVERY_CAPABILITIES: usize = 3;
+const MAX_MCP_BOUND_DESCRIPTION_CHARS: usize = 300;
 
 fn list_mcp_tools_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "server": {"type":"string", "minLength":1, "description":"Exact registered server name"},
-            "query": {"type":"string", "minLength":1},
-            "limit": {"type":"integer", "minimum":1, "maximum":50, "default":20}
+            "server": {"type":"string", "minLength":1, "description":"Server name from the MCP Servers list; omit for all"},
+            "query": {"type":"string", "minLength":1, "description":"Words describing the capability"},
+            "select": {"type":"array", "items":{"type":"string", "minLength":1}, "minItems":1, "maxItems":super::mcp_discovery::MAX_SELECT_NAMES, "description":"Exact names: tool, server.tool or mcp__server__tool"},
+            "limit": {"type":"integer", "minimum":1, "maximum":super::mcp_discovery::MAX_DISCOVERY_RESULTS, "default":super::mcp_discovery::DEFAULT_DISCOVERY_RESULTS}
         },
         "additionalProperties": false
     })
@@ -324,8 +323,8 @@ fn list_mcp_tools_schema() -> Value {
 
 pub const LIST_MCP_TOOLS: Tool = Tool {
     name: "list_mcp_tools",
-    description: "Discover MCP tools by server or query. Invoke callable_name with input_schema; matching schemas bind next request. Do not rediscover known tools or read source files or secrets for discovery.",
-    arguments: r#"{"server":"exact server name", "query":"name or description text", "limit":20}"#,
+    description: "MCP tools only, not built-ins, agents or shell. Take server names from the MCP Servers prompt list; never guess them. `select` returns exact schemas; `query` ranks matches. Listed schemas bind next request.",
+    arguments: r#"{"select":["server.tool"], "query":"capability words", "server":"name from the MCP Servers list", "limit":20}"#,
     handler: list_mcp_tools,
     requires_confirmation: false,
     schema: list_mcp_tools_schema,
@@ -811,30 +810,7 @@ pub fn get_time(_args: &Value) -> Result<String, String> {
 }
 
 pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
-    if !args.is_object() {
-        return Err("arguments must be a JSON object".to_string());
-    }
-
-    for (key, _) in args.as_object().expect("object checked") {
-        if !["server", "query", "limit"].contains(&key.as_str()) {
-            return Err(format!("invalid argument '{key}'"));
-        }
-    }
-    // Models ask for every server with a wildcard; that is the default scope.
-    let server = optional_nonempty_string(args, "server")?
-        .filter(|server| !matches!(server.trim(), "*" | "all"));
-    let query = optional_nonempty_string(args, "query")?;
-    let limit = match args.get("limit") {
-        None => DEFAULT_MCP_DISCOVERY_RESULTS,
-        Some(value) => value
-            .as_u64()
-            .filter(|value| (1..=MAX_MCP_DISCOVERY_RESULTS as u64).contains(value))
-            .map(|value| value as usize)
-            .ok_or_else(|| {
-                format!("'limit' must be an integer from 1 to {MAX_MCP_DISCOVERY_RESULTS}")
-            })?,
-    };
-
+    let args = super::mcp_discovery::DiscoveryArgs::parse(args)?;
     let mut clients = {
         let registry_handle = crate::mcp::get_mcp_registry();
         let registry = registry_handle
@@ -843,99 +819,264 @@ pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
         registry.values().cloned().collect::<Vec<_>>()
     };
     clients.sort_by(|a, b| a.name.cmp(&b.name));
-
-    // Configured servers that are not connected have no tools to list, but
-    // the model has to learn they exist or it concludes there is no server.
-    let stopped = crate::config::get_config_dir()
-        .map(|dir| {
-            crate::config::workspace_mcp_servers_in(&dir, &mcp_workspace(None))
-                .into_iter()
-                .filter(|configured| configured.enabled)
-                .filter(|configured| !clients.iter().any(|client| client.name == configured.name))
-                .map(|configured| configured.name)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    if let Some(server) = server
-        && !clients.iter().any(|client| client.name == server)
-    {
-        if stopped.iter().any(|name| name == server) {
-            return Err(format!(
-                "MCP server '{server}' is configured but not running; start it with manage_mcp_servers {{\"operation\":\"start\",\"name\":\"{server}\"}}"
-            ));
-        }
-        return Err(format!("unknown MCP server '{server}'"));
-    }
-
-    let advertised_tools = super::schema::collect_mcp_tools_with_servers();
-    let inventories = clients
-        .iter()
-        .filter(|client| server.is_none_or(|server| client.name == server))
-        .map(|client| {
-            let tools = client
-                .get_tools()
-                .map_err(|error| {
-                    format!(
-                        "MCP server '{}' tool metadata unavailable: {error}",
-                        client.name
-                    )
-                })?
-                .into_iter()
-                .filter_map(|tool| {
-                    let name = tool.get("name")?.as_str()?.trim();
-                    if name.is_empty() {
-                        return None;
-                    }
-                    Some(McpDiscoveryTool {
-                        name: name.to_owned(),
-                        callable_name: advertised_tools
-                            .iter()
-                            .find(|(_, owner, raw, _, _)| owner == &client.name && raw == name)
-                            .map(|(advertised, _, _, _, _)| advertised.clone())
-                            .unwrap_or_else(|| {
-                                super::schema::mcp_canonical_name_for_clients(
-                                    &client.name,
-                                    name,
-                                    &clients,
-                                )
-                            }),
-                        input_schema: tool.get("inputSchema").cloned().unwrap_or_else(
-                            || serde_json::json!({"type":"object","properties":{}}),
-                        ),
-                        description: tool
-                            .get("description")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned(),
-                    })
-                })
-                .collect::<Vec<_>>();
-            Ok((client.name.clone(), tools))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-
-    let listed = format_mcp_discovery(&inventories, server, query, limit)?;
-    Ok(with_stopped_mcp_servers(listed, &stopped))
+    // The same collection the next request's schema selection reads, so the
+    // tools this call binds are the ones that request carries.
+    let tools = super::schema::collect_mcp_tools_with_servers()
+        .into_iter()
+        .map(
+            |(advertised, server, name, description, input_schema)| McpDiscoveryTool {
+                callable_name: super::schema::mcp_canonical_name_for_clients(
+                    &server, &name, &clients,
+                ),
+                server,
+                name,
+                advertised,
+                description,
+                input_schema,
+            },
+        )
+        .collect::<Vec<_>>();
+    let statuses = super::mcp_discovery::current_server_statuses();
+    format_mcp_discovery(&tools, &statuses, &args)
 }
 
-/// Name the configured servers that are not running, so an empty result is
-/// not read as "no such server".
-fn with_stopped_mcp_servers(listed: String, stopped: &[String]) -> String {
-    if stopped.is_empty() {
-        return listed;
-    }
-    let Ok(Value::Object(mut object)) = serde_json::from_str::<Value>(&listed) else {
-        return listed;
+#[derive(Clone)]
+struct McpDiscoveryTool {
+    server: String,
+    /// The server's own tool name.
+    name: String,
+    /// The name the provider request advertises (bare when unique).
+    advertised: String,
+    /// Always the `mcp__server__tool` form; dispatch also accepts the bare name.
+    callable_name: String,
+    input_schema: Value,
+    description: String,
+}
+
+fn format_mcp_discovery(
+    tools: &[McpDiscoveryTool],
+    statuses: &[super::mcp_discovery::McpServerStatus],
+    args: &super::mcp_discovery::DiscoveryArgs,
+) -> Result<String, String> {
+    use super::mcp_discovery::{
+        DISCOVERY_OUTPUT_BYTES, MAX_LISTED_SCHEMA_BYTES, McpServerState, McpToolDoc,
     };
-    object.insert("not_running".to_owned(), serde_json::json!(stopped));
-    object.insert(
-        "hint".to_owned(),
-        Value::String(
-            "Servers in not_running are configured but not started, so their tools are not listed. Start a relevant one with manage_mcp_servers {\"operation\":\"start\",\"name\":\"<server>\"}, then list its tools.".to_owned(),
-        ),
-    );
-    Value::Object(object).to_string()
+    let docs = tools
+        .iter()
+        .map(|tool| McpToolDoc {
+            server: &tool.server,
+            raw_name: &tool.name,
+            advertised: &tool.advertised,
+            description: &tool.description,
+        })
+        .collect::<Vec<_>>();
+    let running = statuses
+        .iter()
+        .filter(|status| matches!(status.state, McpServerState::Running { .. }))
+        .map(|status| status.name.as_str())
+        .collect::<Vec<_>>();
+    let outcome = super::mcp_discovery::discover(&docs, &running, args);
+    let serialize = |value: Value| {
+        serde_json::to_string(&value)
+            .map_err(|error| format!("failed to serialize MCP discovery: {error}"))
+    };
+    if outcome.summary {
+        return serialize(mcp_server_summaries(statuses));
+    }
+
+    let bound = outcome.bound(args.limit);
+    let mut rows = Vec::new();
+    let mut used = 0usize;
+    let mut unbound_listed = false;
+    let mut truncated = false;
+    for index in outcome
+        .selected
+        .iter()
+        .chain(outcome.listed(args.limit))
+        .copied()
+    {
+        let tool = &tools[index];
+        let is_bound = bound.contains(&index);
+        let mut row = serde_json::json!({
+            "server": tool.server,
+            "name": tool.name,
+            "callable_name": tool.callable_name,
+            "description": truncate_mcp_description(
+                &tool.description,
+                if is_bound {
+                    MAX_MCP_BOUND_DESCRIPTION_CHARS
+                } else {
+                    MAX_MCP_DISCOVERY_DESCRIPTION_CHARS
+                },
+            ),
+        });
+        let row_bytes = row.to_string().len();
+        let selected = outcome.selected.contains(&index);
+        if !selected && used.saturating_add(row_bytes) > DISCOVERY_OUTPUT_BYTES {
+            truncated = true;
+            break;
+        }
+        used = used.saturating_add(row_bytes);
+        if is_bound {
+            let schema_bytes = tool.input_schema.to_string().len();
+            if schema_bytes <= MAX_LISTED_SCHEMA_BYTES
+                && (selected || used.saturating_add(schema_bytes) <= DISCOVERY_OUTPUT_BYTES)
+            {
+                row["input_schema"] = tool.input_schema.clone();
+                used = used.saturating_add(schema_bytes);
+            } else {
+                row["input_schema_omitted"] =
+                    Value::String("too large to list; bound in your next tool list".to_owned());
+            }
+        } else {
+            unbound_listed = true;
+        }
+        rows.push(row);
+    }
+    let total = outcome.selected.len() + outcome.matches.len();
+    truncated |= rows.len() < total;
+    let mut result = serde_json::json!({
+        "results": rows,
+        "total": total,
+        "truncated": truncated,
+    });
+
+    if !outcome.unresolved.is_empty() {
+        result["not_found"] = Value::Array(
+            outcome
+                .unresolved
+                .iter()
+                .map(|(name, suggestions)| {
+                    serde_json::json!({
+                        "name": name,
+                        "suggestions": suggestions
+                            .iter()
+                            .map(|index| tools[*index].callable_name.clone())
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect(),
+        );
+    }
+
+    let mut notes = Vec::new();
+    if let Some(server) = outcome.unknown_server.as_deref() {
+        notes.push(unknown_mcp_server_note(server, statuses, args));
+        result["valid_servers"] = Value::Array(
+            statuses
+                .iter()
+                .map(|status| Value::String(format!("{}: {}", status.name, status.label())))
+                .collect(),
+        );
+    }
+    let stopped = statuses
+        .iter()
+        .filter(|status| {
+            matches!(
+                status.state,
+                McpServerState::NotRunning | McpServerState::Failed(_)
+            )
+        })
+        .map(|status| status.name.clone())
+        .collect::<Vec<_>>();
+    if !stopped.is_empty() && outcome.unknown_server.is_none() {
+        result["not_running"] = serde_json::json!(stopped);
+        notes.push("Servers in not_running are configured but not started, so their tools are not listed. Start a relevant one with manage_mcp_servers {\"operation\":\"start\",\"name\":\"<server>\"}, then list its tools.".to_owned());
+    }
+    if unbound_listed {
+        notes.push("Results without input_schema are not bound; call list_mcp_tools with select:[callable_name] for the ones you need.".to_owned());
+    }
+    if total == 0 && outcome.unresolved.is_empty() {
+        notes.push("No MCP tool matched. Use fewer, more specific words, or select a tool by name from the MCP Servers list.".to_owned());
+    }
+    if !notes.is_empty() {
+        result["hint"] = Value::String(notes.join(" "));
+    }
+    serialize(result)
+}
+
+/// Explain a `server` that is not a running server, and that every server
+/// was searched instead.
+fn unknown_mcp_server_note(
+    server: &str,
+    statuses: &[super::mcp_discovery::McpServerStatus],
+    args: &super::mcp_discovery::DiscoveryArgs,
+) -> String {
+    use super::mcp_discovery::McpServerState;
+    let mut note = match statuses.iter().find(|status| status.name == server) {
+        Some(status) => match &status.state {
+            McpServerState::Disabled => format!(
+                "MCP server '{server}' is disabled in the config; the user can enable it in /mcp."
+            ),
+            McpServerState::Failed(reason) => {
+                format!("MCP server '{server}' failed to start: {reason}.")
+            }
+            _ => format!(
+                "MCP server '{server}' is configured but not running; start it with manage_mcp_servers {{\"operation\":\"start\",\"name\":\"{server}\"}}."
+            ),
+        },
+        None => {
+            let names = statuses
+                .iter()
+                .map(|status| status.name.as_str())
+                .collect::<Vec<_>>();
+            match super::mcp_discovery::closest_server(server, &names) {
+                Some(closest) => {
+                    format!("Unknown MCP server '{server}'; the closest is '{closest}'.")
+                }
+                None => format!("Unknown MCP server '{server}'."),
+            }
+        }
+    };
+    if args.select.is_empty() {
+        let searched = args.query.as_deref().unwrap_or(server);
+        note.push_str(&format!(
+            " Searched every running server for '{searched}' instead; valid_servers lists the server names."
+        ));
+    } else {
+        note.push_str(" valid_servers lists the server names.");
+    }
+    note
+}
+
+/// The no-argument listing: every configured server with its state and tool
+/// names, bounded so a large catalogue still fits one result.
+fn mcp_server_summaries(statuses: &[super::mcp_discovery::McpServerStatus]) -> Value {
+    use super::mcp_discovery::{DISCOVERY_OUTPUT_BYTES, McpServerState};
+    let running = statuses
+        .iter()
+        .filter(|status| matches!(status.state, McpServerState::Running { .. }))
+        .count()
+        .max(1);
+    let per_server = DISCOVERY_OUTPUT_BYTES / running;
+    let servers = statuses
+        .iter()
+        .map(|status| {
+            let mut summary = serde_json::json!({
+                "name": status.name,
+                "status": status.label(),
+            });
+            if let McpServerState::Running { tools } = &status.state {
+                summary["tool_count"] = serde_json::json!(tools.len());
+                let mut names = Vec::new();
+                let mut bytes = 0usize;
+                for name in tools {
+                    if bytes.saturating_add(name.len() + 3) > per_server {
+                        names.push(format!("+{} more", tools.len() - names.len()));
+                        break;
+                    }
+                    bytes = bytes.saturating_add(name.len() + 3);
+                    names.push(name.clone());
+                }
+                summary["tools"] = serde_json::json!(names);
+            }
+            summary
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "servers": servers,
+        "hint": "Call list_mcp_tools with select:[\"server.tool\"] for exact schemas, or query:\"capability words\" to search.",
+    })
 }
 
 fn optional_nonempty_string<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
@@ -950,121 +1091,10 @@ fn optional_nonempty_string<'a>(args: &'a Value, key: &str) -> Result<Option<&'a
         .transpose()
 }
 
-#[derive(Clone)]
-struct McpDiscoveryTool {
-    name: String,
-    callable_name: String,
-    input_schema: Value,
-    description: String,
-}
-
-fn format_mcp_discovery(
-    inventories: &[(String, Vec<McpDiscoveryTool>)],
-    server: Option<&str>,
-    query: Option<&str>,
-    limit: usize,
-) -> Result<String, String> {
-    if server.is_none() && query.is_none() {
-        let summaries = inventories
-            .iter()
-            .map(|(name, tools)| {
-                let mut tools = tools.clone();
-                tools.sort_by(|a, b| a.name.cmp(&b.name));
-                let capabilities = tools
-                    .iter()
-                    .filter_map(|tool| {
-                        let cue = if tool.description.trim().is_empty() {
-                            tool.name.as_str()
-                        } else {
-                            tool.description.as_str()
-                        };
-                        Some(truncate_mcp_description(cue))
-                    })
-                    .filter(|cue| !cue.is_empty())
-                    .take(MAX_MCP_DISCOVERY_CAPABILITIES)
-                    .collect::<Vec<_>>();
-                serde_json::json!({
-                    "name": name,
-                    "tool_count": tools.len(),
-                    "capabilities": capabilities
-                })
-            })
-            .collect::<Vec<_>>();
-        return serde_json::to_string(&serde_json::json!({ "servers": summaries }))
-            .map_err(|error| format!("failed to serialize MCP inventory: {error}"));
-    }
-
-    if let Some(server) = server
-        && !inventories.iter().any(|(name, _)| name == server)
-    {
-        return Err(format!("unknown MCP server '{server}'"));
-    }
-    let query = query.map(str::to_lowercase);
-    let mut results = Vec::new();
-    for (server_name, tools) in inventories {
-        if server.is_some_and(|server| server_name != server) {
-            continue;
-        }
-        for tool in tools {
-            // The same score decides which schemas the next request binds,
-            // so what is listed here is what becomes callable.
-            let score = match query.as_ref() {
-                Some(query) => {
-                    super::schema::mcp_discovery_score(query, &tool.name, &tool.description)
-                }
-                None => 1,
-            };
-            if score > 0 {
-                results.push((
-                    score,
-                    serde_json::json!({
-                        "server": server_name,
-                        "name": tool.name,
-                        "callable_name": tool.callable_name,
-                        "input_schema": tool.input_schema,
-                        "description": truncate_mcp_description(&tool.description)
-                    }),
-                ));
-            }
-        }
-    }
-    results.sort_by(|(a_score, a), (b_score, b)| {
-        b_score
-            .cmp(a_score)
-            .then_with(|| {
-                a.get("server")
-                    .and_then(Value::as_str)
-                    .cmp(&b.get("server").and_then(Value::as_str))
-            })
-            .then_with(|| {
-                a.get("name")
-                    .and_then(Value::as_str)
-                    .cmp(&b.get("name").and_then(Value::as_str))
-            })
-    });
-    let floor = super::schema::mcp_discovery_floor(results.first().map_or(0, |best| best.0));
-    results.retain(|(score, _)| *score >= floor);
-    let total = results.len();
-    let results = results
-        .into_iter()
-        .take(limit)
-        .map(|(_, result)| result)
-        .collect::<Vec<_>>();
-    serde_json::to_string(&serde_json::json!({
-        "results": results,
-        "total": total,
-        "truncated": total > limit
-    }))
-    .map_err(|error| format!("failed to serialize MCP search results: {error}"))
-}
-
-fn truncate_mcp_description(description: &str) -> String {
+fn truncate_mcp_description(description: &str, max_chars: usize) -> String {
     let description = description.trim();
     let mut chars = description.chars();
-    let short = chars
-        .by_ref()
-        .take(MAX_MCP_DISCOVERY_DESCRIPTION_CHARS)
-        .collect::<String>();
+    let short = chars.by_ref().take(max_chars).collect::<String>();
     if chars.next().is_some() {
         format!("{short}…")
     } else {
@@ -1084,7 +1114,7 @@ fn manage_mcp_servers(args: &Value) -> Result<String, String> {
     manage_mcp_servers_in(args, &dir, &mcp_workspace(None))
 }
 
-fn mcp_workspace(workspace: Option<&std::path::Path>) -> std::path::PathBuf {
+pub(super) fn mcp_workspace(workspace: Option<&std::path::Path>) -> std::path::PathBuf {
     workspace
         .map(std::path::Path::to_path_buf)
         .or_else(super::active_workspace_root)
@@ -1880,144 +1910,419 @@ pub fn forget_memory(args: &Value) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::mcp_discovery::{DiscoveryArgs, McpServerState, McpServerStatus};
     use super::{
         LIST_MCP_TOOLS, McpDiscoveryTool, format_mcp_discovery, list_mcp_tools, search_web_async,
-        with_stopped_mcp_servers,
     };
+    use serde_json::{Value, json};
 
-    #[test]
-    fn an_empty_discovery_names_configured_servers_that_are_not_running() {
-        let listed = format_mcp_discovery(&[], None, Some("daily dev feed"), 20).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&with_stopped_mcp_servers(
-            listed.clone(),
-            &["daily-dev".to_owned()],
-        ))
-        .unwrap();
-        assert_eq!(value["total"], 0);
-        assert_eq!(value["not_running"], serde_json::json!(["daily-dev"]));
-        assert!(
-            value["hint"]
-                .as_str()
-                .unwrap()
-                .contains("manage_mcp_servers")
-        );
-        assert_eq!(with_stopped_mcp_servers(listed.clone(), &[]), listed);
+    fn tool(server: &str, name: &str, description: &str, schema: Value) -> McpDiscoveryTool {
+        McpDiscoveryTool {
+            server: server.to_owned(),
+            name: name.to_owned(),
+            advertised: name.to_owned(),
+            callable_name: format!("mcp__{server}__{name}"),
+            input_schema: schema,
+            description: description.to_owned(),
+        }
     }
 
-    fn discovery_fixture() -> Vec<(String, Vec<McpDiscoveryTool>)> {
-        vec![
-            (
-                "calendar".to_string(),
-                (0..12)
-                    .map(|index| McpDiscoveryTool {
-                        name: format!("event_{index:02}"),
-                        callable_name: format!("event_{index:02}"),
-                        input_schema: serde_json::json!({"type":"object"}),
-                        description: format!(
-                            "Create and update calendar events with attendee metadata and long description {index}"
-                        ),
-                    })
-                    .collect(),
+    fn discovery_fixture() -> Vec<McpDiscoveryTool> {
+        let object = json!({"type":"object"});
+        let mut tools = (0..12)
+            .map(|index| {
+                tool(
+                    "calendar",
+                    &format!("event_{index:02}"),
+                    &format!(
+                        "Create and update calendar events with attendee metadata and long description {index}"
+                    ),
+                    object.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        tools.extend([
+            tool(
+                "mail",
+                "search_messages",
+                "Search email messages by sender or subject",
+                json!({"type":"object","properties":{"query":{"type":"string"}}}),
             ),
-            (
-                "mail".to_string(),
-                vec![
-                    McpDiscoveryTool {
-                        name: "search_messages".to_string(),
-                        callable_name: "search_messages".to_string(),
-                        input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}}}),
-                        description: "Search email messages by sender or subject".to_string(),
-                    },
-                    McpDiscoveryTool {
-                        name: "send_message".to_string(),
-                        callable_name: "send_message".to_string(),
-                        input_schema: serde_json::json!({"type":"object"}),
-                        description: "Send an email message".to_string(),
-                    },
-                ],
+            tool(
+                "mail",
+                "send_message",
+                "Send an email message",
+                object.clone(),
             ),
-        ]
+            tool(
+                "snapchat",
+                "getFriends",
+                "List the people on your Snapchat account",
+                object.clone(),
+            ),
+            tool(
+                "snapchat",
+                "send_snap",
+                "Send a snap to a friend",
+                object.clone(),
+            ),
+            tool("snapchat", "get_stories", "Read stories", object.clone()),
+            tool(
+                "discord",
+                "list_channels",
+                "List channels in a guild",
+                object.clone(),
+            ),
+            tool(
+                "discord",
+                "send_message",
+                "Send a message to a Discord channel",
+                object,
+            ),
+        ]);
+        tools
+    }
+
+    fn statuses(tools: &[McpDiscoveryTool]) -> Vec<McpServerStatus> {
+        let mut running = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for tool in tools {
+            running
+                .entry(tool.server.clone())
+                .or_default()
+                .push(tool.name.clone());
+        }
+        let mut statuses = running
+            .into_iter()
+            .map(|(name, tools)| McpServerStatus {
+                name,
+                state: McpServerState::Running { tools },
+            })
+            .collect::<Vec<_>>();
+        statuses.extend([
+            McpServerStatus {
+                name: "daily-dev".to_owned(),
+                state: McpServerState::NotRunning,
+            },
+            McpServerStatus {
+                name: "github-old".to_owned(),
+                state: McpServerState::Disabled,
+            },
+            McpServerStatus {
+                name: "broken".to_owned(),
+                state: McpServerState::Failed("spawn npx ENOENT".to_owned()),
+            },
+        ]);
+        statuses.sort_by(|a, b| a.name.cmp(&b.name));
+        statuses
+    }
+
+    fn discover_raw(args: Value) -> String {
+        let tools = discovery_fixture();
+        format_mcp_discovery(
+            &tools,
+            &statuses(&tools),
+            &DiscoveryArgs::parse(&args).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn discover(args: Value) -> Value {
+        serde_json::from_str(&discover_raw(args)).unwrap()
+    }
+
+    fn names(result: &Value) -> Vec<String> {
+        result["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                format!(
+                    "{}.{}",
+                    row["server"].as_str().unwrap(),
+                    row["name"].as_str().unwrap()
+                )
+            })
+            .collect()
     }
 
     #[test]
     fn mcp_inventory_has_a_strict_discovery_argument_schema() {
         let schema = (LIST_MCP_TOOLS.schema)();
-        assert_eq!(
-            schema.get("type").and_then(|value| value.as_str()),
-            Some("object")
-        );
+        assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
         let properties = schema
             .get("properties")
-            .and_then(|value| value.as_object())
+            .and_then(Value::as_object)
             .expect("discovery options should be declared");
         assert_eq!(
             properties.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["server", "query", "limit"]
+            ["server", "query", "select", "limit"]
         );
         assert_eq!(properties["server"]["type"], "string");
         assert_eq!(properties["query"]["type"], "string");
+        assert_eq!(properties["select"]["type"], "array");
         assert_eq!(properties["limit"]["maximum"], 50);
-        assert_eq!(
-            schema.get("additionalProperties"),
-            Some(&serde_json::json!(false))
-        );
+        assert_eq!(schema.get("additionalProperties"), Some(&json!(false)));
         assert_eq!(LIST_MCP_TOOLS.safety, super::ToolSafety::ReadOnly);
         assert!(!LIST_MCP_TOOLS.requires_confirmation);
+        // The description keeps the model from using it for anything but MCP.
+        assert!(LIST_MCP_TOOLS.description.starts_with("MCP tools only"));
+        assert!(LIST_MCP_TOOLS.description.contains("never guess"));
+        assert!(LIST_MCP_TOOLS.arguments.contains("select"));
     }
 
     #[test]
-    fn mcp_default_inventory_is_compact_and_summarizes_registered_tools() {
-        let inventories = discovery_fixture();
-        let result =
-            format_mcp_discovery(&inventories, None, None, 20).expect("summary should succeed");
-        let inventory: serde_json::Value =
-            serde_json::from_str(&result).expect("inventory should be JSON");
-        let servers = inventory
-            .get("servers")
-            .and_then(serde_json::Value::as_array)
-            .expect("inventory should contain a server array");
-        assert_eq!(servers.len(), 2);
-        assert_eq!(servers[0]["name"], "calendar");
-        assert_eq!(servers[0]["tool_count"], 12);
-        assert!(servers[0]["capabilities"].as_array().unwrap().len() <= 3);
-        assert!(servers[0].get("tools").is_none());
-
-        let legacy = serde_json::to_string_pretty(&serde_json::json!({
-            "servers": inventories.iter().map(|(name, tools)| serde_json::json!({
-                "name": name,
-                "tools": tools.iter().map(|tool| serde_json::json!({
-                    "name": tool.name,
-                    "description": tool.description
-                })).collect::<Vec<_>>()
-            })).collect::<Vec<_>>()
-        }))
-        .unwrap();
+    fn mcp_default_inventory_names_every_server_with_its_state_and_tools() {
+        let tools = discovery_fixture();
+        let result = discover(json!({}));
+        let servers = result["servers"].as_array().unwrap();
+        let by_name = |name: &str| {
+            servers
+                .iter()
+                .find(|server| server["name"] == name)
+                .unwrap_or_else(|| panic!("{name} missing from {servers:?}"))
+        };
+        assert_eq!(by_name("calendar")["tool_count"], 12);
+        assert_eq!(by_name("calendar")["status"], "running (12 tools)");
         assert!(
-            result.len() < legacy.len() / 2,
-            "{} vs {} bytes",
-            result.len(),
+            by_name("snapchat")["tools"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("getFriends"))
+        );
+        assert_eq!(by_name("github-old")["status"], "disabled");
+        assert_eq!(by_name("daily-dev")["status"], "not running");
+        assert_eq!(by_name("broken")["status"], "failed: spawn npx ENOENT");
+        assert!(by_name("broken").get("tools").is_none());
+
+        // Names only: far smaller than every description and schema.
+        let legacy = serde_json::to_string(&tools.iter().map(|tool| json!({
+            "name": tool.name, "description": tool.description, "input_schema": tool.input_schema
+        })).collect::<Vec<_>>())
+        .unwrap();
+        let raw = discover_raw(json!({}));
+        assert!(
+            raw.len() < legacy.len(),
+            "{} vs {}",
+            raw.len(),
             legacy.len()
         );
     }
 
     #[test]
     fn mcp_discovery_searches_metadata_and_bounds_results() {
-        let inventories = discovery_fixture();
-        let result = format_mcp_discovery(&inventories, None, Some("calendar"), 4)
-            .expect("search should succeed");
-        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let result = discover(json!({"query": "calendar", "limit": 4}));
         assert_eq!(result["total"], 12);
         assert_eq!(result["results"].as_array().unwrap().len(), 4);
         assert_eq!(result["truncated"], true);
 
-        let result = format_mcp_discovery(&inventories, None, Some("sender"), 20)
-            .expect("description search should succeed");
-        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let result = discover(json!({"query": "sender"}));
         assert_eq!(result["results"][0]["name"], "search_messages");
-        assert_eq!(result["results"][0]["callable_name"], "search_messages");
+        assert_eq!(
+            result["results"][0]["callable_name"],
+            "mcp__mail__search_messages"
+        );
         assert_eq!(
             result["results"][0]["input_schema"]["properties"]["query"]["type"],
             "string"
+        );
+    }
+
+    #[test]
+    fn the_server_name_and_camel_case_words_count_as_query_terms() {
+        // Both used to find nothing: the server name was not a term and
+        // `getFriends` was one word.
+        let result = discover(json!({"query": "snapchat friend"}));
+        let found = names(&result);
+        assert_eq!(
+            found.first().map(String::as_str),
+            Some("snapchat.getFriends")
+        );
+        assert!(
+            found.iter().all(|name| name.starts_with("snapchat.")),
+            "{found:?}"
+        );
+        assert!(
+            !found.contains(&"snapchat.get_stories".to_owned()),
+            "{found:?}"
+        );
+
+        let result = discover(json!({"query": "discord channels"}));
+        assert_eq!(
+            names(&result).first().map(String::as_str),
+            Some("discord.list_channels")
+        );
+    }
+
+    #[test]
+    fn a_long_noisy_query_returns_few_results_under_the_byte_cap() {
+        let raw = discover_raw(json!({
+            "query": "please find the mcp tool to send a message to a friend on snapchat with short text",
+            "limit": 50
+        }));
+        let result: Value = serde_json::from_str(&raw).unwrap();
+        let found = names(&result);
+        assert_eq!(
+            found.first().map(String::as_str),
+            Some("snapchat.send_snap"),
+            "{found:?}"
+        );
+        assert!(found.len() <= 3, "{found:?}");
+        assert!(raw.len() < super::super::mcp_discovery::DISCOVERY_OUTPUT_BYTES);
+    }
+
+    #[test]
+    fn a_large_catalogue_is_listed_within_the_byte_cap() {
+        let huge = json!({"type":"object","properties": (0..200)
+            .map(|index| (format!("field_{index}"), json!({"type":"string","description":"x".repeat(40)})))
+            .collect::<serde_json::Map<_, _>>()});
+        let tools = (0..50)
+            .map(|index| {
+                tool(
+                    "big",
+                    &format!("record_{index:02}"),
+                    &format!("Record keeping operation {index} {}", "detail ".repeat(40)),
+                    huge.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let raw = format_mcp_discovery(
+            &tools,
+            &statuses(&tools),
+            &DiscoveryArgs::parse(&json!({"query": "record", "limit": 50})).unwrap(),
+        )
+        .unwrap();
+        let result: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(result["total"], 50);
+        assert_eq!(result["truncated"], true);
+        assert!(
+            raw.len() < super::super::mcp_discovery::DISCOVERY_OUTPUT_BYTES + 1024,
+            "{} bytes",
+            raw.len()
+        );
+        // The top results are still bound, with their oversized schemas
+        // carried by the next request's tool list instead of this result.
+        assert!(result["results"][0].get("input_schema_omitted").is_some());
+        assert!(result["results"][0].get("input_schema").is_none());
+    }
+
+    #[test]
+    fn a_guessed_server_lists_the_valid_servers_instead_of_failing() {
+        let result = discover(json!({"server": "github"}));
+        let hint = result["hint"].as_str().unwrap();
+        assert!(hint.contains("Unknown MCP server 'github'"), "{hint}");
+        let valid = result["valid_servers"].as_array().unwrap();
+        assert!(
+            valid.contains(&json!("snapchat: running (3 tools)")),
+            "{valid:?}"
+        );
+        assert!(valid.contains(&json!("github-old: disabled")), "{valid:?}");
+
+        let result = discover(json!({"server": "snapchat-mcp", "query": "friends"}));
+        let hint = result["hint"].as_str().unwrap();
+        assert!(hint.contains("the closest is 'snapchat'"), "{hint}");
+        assert_eq!(
+            names(&result).first().map(String::as_str),
+            Some("snapchat.getFriends")
+        );
+
+        for server in ["*", "any", "all", " "] {
+            let result = discover(json!({"server": server, "query": "mail"}));
+            assert!(result.get("valid_servers").is_none(), "{server}: {result}");
+            assert!(!names(&result).is_empty(), "{server}");
+        }
+    }
+
+    #[test]
+    fn disabled_failed_and_stopped_servers_are_reported_by_state() {
+        let hint = discover(json!({"server": "github-old"}))["hint"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(hint.contains("'github-old' is disabled"), "{hint}");
+        let hint = discover(json!({"server": "broken"}))["hint"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(hint.contains("failed to start: spawn npx ENOENT"), "{hint}");
+        let hint = discover(json!({"server": "daily-dev"}))["hint"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(hint.contains("manage_mcp_servers"), "{hint}");
+
+        let result = discover(json!({"query": "daily dev feed"}));
+        assert_eq!(result["total"], 0);
+        assert_eq!(result["not_running"], json!(["broken", "daily-dev"]));
+    }
+
+    #[test]
+    fn select_resolves_bare_dotted_and_canonical_names_with_full_schemas() {
+        let result = discover(json!({"select": [
+            "getFriends",
+            "discord.list_channels",
+            "mcp__mail__search_messages",
+            "send_mesage"
+        ]}));
+        assert_eq!(
+            names(&result),
+            [
+                "snapchat.getFriends",
+                "discord.list_channels",
+                "mail.search_messages"
+            ]
+        );
+        for row in result["results"].as_array().unwrap() {
+            assert!(row.get("input_schema").is_some(), "{row}");
+            assert!(
+                row["callable_name"].as_str().unwrap().starts_with("mcp__"),
+                "{row}"
+            );
+        }
+        let missing = &result["not_found"][0];
+        assert_eq!(missing["name"], "send_mesage");
+        let suggestions = missing["suggestions"].as_array().unwrap();
+        assert!(
+            suggestions.contains(&json!("mcp__discord__send_message")),
+            "{suggestions:?}"
+        );
+    }
+
+    #[test]
+    fn a_server_listing_names_large_toolsets_without_schemas() {
+        let result = discover(json!({"server": "calendar"}));
+        let rows = result["results"].as_array().unwrap();
+        assert_eq!(rows.len(), 12);
+        assert!(rows.iter().all(|row| row["server"] == "calendar"));
+        assert!(rows.iter().all(|row| row.get("input_schema").is_none()));
+        assert!(result["hint"].as_str().unwrap().contains("select"));
+
+        let result = discover(json!({"server": "snapchat"}));
+        let rows = result["results"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| row.get("input_schema").is_some()));
+    }
+
+    #[test]
+    fn mcp_discovery_rejects_invalid_arguments_explicitly() {
+        assert!(
+            list_mcp_tools(&json!({"unexpected": true}))
+                .unwrap_err()
+                .contains("invalid argument 'unexpected'")
+        );
+        assert!(
+            list_mcp_tools(&json!({"limit": 0}))
+                .unwrap_err()
+                .contains("'limit' must be an integer")
+        );
+        assert!(
+            list_mcp_tools(&json!({"query": "  "}))
+                .unwrap_err()
+                .contains("'query' must be a non-empty string")
+        );
+        assert!(
+            list_mcp_tools(&json!({"select": [1]}))
+                .unwrap_err()
+                .contains("'select' must be an array")
         );
     }
 
@@ -2043,60 +2348,12 @@ mod tests {
         assert!(first.contains("offset=4"), "{first}");
         let last = super::page_slice("https://example.test", "abcdefghij", 8, 4);
         assert!(last.ends_with("\nij"), "{last}");
-        assert!(super::read_url(&serde_json::json!({"url": "file:///etc/passwd"})).is_err());
-    }
-
-    #[test]
-    fn a_wildcard_server_lists_every_server_instead_of_failing() {
-        for server in ["*", "all"] {
-            let result = list_mcp_tools(&serde_json::json!({"server": server, "query": "mail"}));
-            assert!(
-                !result
-                    .as_ref()
-                    .is_err_and(|error| error.contains("unknown MCP server")),
-                "{result:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn mcp_discovery_scopes_to_exact_server_and_reports_unknown_servers() {
-        let inventories = discovery_fixture();
-        let result = format_mcp_discovery(&inventories, Some("mail"), None, 20)
-            .expect("server inventory should succeed");
-        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-        let rows = result["results"].as_array().unwrap();
-        assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|row| row["server"] == "mail"));
-        assert!(
-            format_mcp_discovery(&inventories, Some("Mail"), None, 20)
-                .unwrap_err()
-                .contains("unknown MCP server 'Mail'")
-        );
-    }
-
-    #[test]
-    fn mcp_discovery_rejects_invalid_arguments_explicitly() {
-        assert!(
-            list_mcp_tools(&serde_json::json!({"unexpected": true}))
-                .unwrap_err()
-                .contains("invalid argument 'unexpected'")
-        );
-        assert!(
-            list_mcp_tools(&serde_json::json!({"limit": 0}))
-                .unwrap_err()
-                .contains("'limit' must be an integer")
-        );
-        assert!(
-            list_mcp_tools(&serde_json::json!({"query": "  "}))
-                .unwrap_err()
-                .contains("'query' must be a non-empty string")
-        );
+        assert!(super::read_url(&json!({"url": "file:///etc/passwd"})).is_err());
     }
 
     #[tokio::test]
     async fn async_search_web_requires_query() {
-        let error = search_web_async(&serde_json::json!({}), &reqwest::Client::new())
+        let error = search_web_async(&json!({}), &reqwest::Client::new())
             .await
             .expect_err("missing query should fail before any request");
 
