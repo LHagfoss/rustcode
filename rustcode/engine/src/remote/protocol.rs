@@ -621,6 +621,10 @@ pub struct RemoteSessionInfo {
     /// Absent when an archived prefix prevents an exact total.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_count: Option<u64>,
+    /// RFC 3339 time of the newest transcript message. Absent for a session
+    /// without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active_at: Option<String>,
     pub activity: SessionActivity,
     pub attention: RemoteAttention,
     pub health: OwnerHealth,

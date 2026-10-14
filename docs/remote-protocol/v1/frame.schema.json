@@ -1485,6 +1485,13 @@
         "health": {
           "$ref": "#/$defs/OwnerHealth"
         },
+        "last_active_at": {
+          "description": "RFC 3339 time of the newest transcript message. Absent for a session\nwithout one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "model": {
           "type": "string"
         },

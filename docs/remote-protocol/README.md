@@ -526,6 +526,10 @@ pagination do not increase it. The field is absent when a compaction boundary
 means the archived prefix prevents an exact total; clients must not substitute
 the count of loaded transcript rows.
 
+Session rows may include `last_active_at`, the RFC 3339 timestamp of the
+newest transcript message. Clients show it as the session's last activity and
+must tolerate its absence.
+
 Assistant history messages, live turns, and `text_delta` updates may include
 `thought_tokens` and `thought_tokens_estimated`. These are the engine's existing
 estimates from observed reasoning text, scoped to one assistant segment,

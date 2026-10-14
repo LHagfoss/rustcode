@@ -33,6 +33,7 @@
         "workspace": "/Users/dev/code/parser",
         "model": "gpt-5.5",
         "turn_count": 2,
+        "last_active_at": "2026-10-09T18:42:00+02:00",
         "activity": "awaiting_approval",
         "attention": {
           "approval": true,

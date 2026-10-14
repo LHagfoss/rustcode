@@ -224,6 +224,13 @@ pub fn project_session_info(state: &AppState, context: &ProjectionContext) -> Re
             .map(|path| path.display().to_string()),
         model: state.model_name.clone(),
         turn_count: session_turn_count(state),
+        last_active_at: state
+            .history
+            .iter()
+            .rev()
+            .map(|message| message.timestamp.as_str())
+            .find(|timestamp| !timestamp.is_empty())
+            .map(str::to_owned),
         activity: activity(state),
         attention: RemoteAttention {
             approval: state.pending_tool_confirmation.is_some(),
@@ -897,6 +904,9 @@ mod tests {
         };
         let json = serde_json::to_value(project_snapshot(&state, &context(), &limits)).unwrap();
         assert_eq!(json["session"]["turn_count"], 5);
+        let newest = &state.history.last().unwrap().timestamp;
+        assert!(!newest.is_empty());
+        assert_eq!(json["session"]["last_active_at"], newest.as_str());
         assert_eq!(json["transcript"][0]["thought_tokens"], 42);
         assert_eq!(json["transcript"][0]["thought_tokens_estimated"], true);
         assert!(json["settings"]["models"].is_array());

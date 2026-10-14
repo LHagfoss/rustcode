@@ -475,6 +475,7 @@ fn golden_session_info() -> RemoteSessionInfo {
         workspace: Some("/Users/dev/code/parser".to_owned()),
         model: "gpt-5.5".to_owned(),
         turn_count: Some(2),
+        last_active_at: Some("2026-10-09T18:42:00+02:00".to_owned()),
         activity: SessionActivity::AwaitingApproval,
         attention: RemoteAttention {
             approval: true,
@@ -1163,6 +1164,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         workspace: None,
                         model: "gpt-5.5".to_owned(),
                         turn_count: Some(0),
+                        last_active_at: None,
                         activity: SessionActivity::Idle,
                         attention: RemoteAttention {
                             approval: false,
