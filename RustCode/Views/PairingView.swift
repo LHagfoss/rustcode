@@ -136,7 +136,8 @@ struct PairingView: View {
 
     private var nearbySection: some View {
         Section {
-            if let error = discovery.error {
+            // A Mac already found matters more than a later browsing failure.
+            if let error = discovery.error, discovery.hosts.isEmpty {
                 Text(error).font(.subheadline).foregroundStyle(.secondary)
             } else if discovery.hosts.isEmpty {
                 HStack(spacing: 12) {
@@ -204,11 +205,12 @@ struct PairingView: View {
                 .accessibilityLabel("Paste pairing code")
             }
             Button(action: pairManually) {
-                HStack(spacing: 8) {
-                    if isPairing { ProgressView() }
-                    Text(isPairing ? "Connecting…" : "Connect")
-                }
-                .frame(maxWidth: .infinity)
+                Text(isPairing ? "Connecting…" : "Connect")
+                    // An overlay keeps the spinner from growing the large button.
+                    .overlay(alignment: .leading) {
+                        if isPairing { ProgressView().controlSize(.small).offset(x: -28) }
+                    }
+                    .frame(maxWidth: .infinity)
             }
             .brandProminentButtonStyle()
             .controlSize(.large)
