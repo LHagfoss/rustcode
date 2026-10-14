@@ -844,9 +844,27 @@ pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
     };
     clients.sort_by(|a, b| a.name.cmp(&b.name));
 
+    // Configured servers that are not connected have no tools to list, but
+    // the model has to learn they exist or it concludes there is no server.
+    let stopped = crate::config::get_config_dir()
+        .map(|dir| {
+            crate::config::workspace_mcp_servers_in(&dir, &mcp_workspace(None))
+                .into_iter()
+                .filter(|configured| configured.enabled)
+                .filter(|configured| !clients.iter().any(|client| client.name == configured.name))
+                .map(|configured| configured.name)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
     if let Some(server) = server
         && !clients.iter().any(|client| client.name == server)
     {
+        if stopped.iter().any(|name| name == server) {
+            return Err(format!(
+                "MCP server '{server}' is configured but not running; start it with manage_mcp_servers {{\"operation\":\"start\",\"name\":\"{server}\"}}"
+            ));
+        }
         return Err(format!("unknown MCP server '{server}'"));
     }
 
@@ -897,7 +915,27 @@ pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    format_mcp_discovery(&inventories, server, query, limit)
+    let listed = format_mcp_discovery(&inventories, server, query, limit)?;
+    Ok(with_stopped_mcp_servers(listed, &stopped))
+}
+
+/// Name the configured servers that are not running, so an empty result is
+/// not read as "no such server".
+fn with_stopped_mcp_servers(listed: String, stopped: &[String]) -> String {
+    if stopped.is_empty() {
+        return listed;
+    }
+    let Ok(Value::Object(mut object)) = serde_json::from_str::<Value>(&listed) else {
+        return listed;
+    };
+    object.insert("not_running".to_owned(), serde_json::json!(stopped));
+    object.insert(
+        "hint".to_owned(),
+        Value::String(
+            "Servers in not_running are configured but not started, so their tools are not listed. Start a relevant one with manage_mcp_servers {\"operation\":\"start\",\"name\":\"<server>\"}, then list its tools.".to_owned(),
+        ),
+    );
+    Value::Object(object).to_string()
 }
 
 fn optional_nonempty_string<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
@@ -1844,7 +1882,27 @@ pub fn forget_memory(args: &Value) -> Result<String, String> {
 mod tests {
     use super::{
         LIST_MCP_TOOLS, McpDiscoveryTool, format_mcp_discovery, list_mcp_tools, search_web_async,
+        with_stopped_mcp_servers,
     };
+
+    #[test]
+    fn an_empty_discovery_names_configured_servers_that_are_not_running() {
+        let listed = format_mcp_discovery(&[], None, Some("daily dev feed"), 20).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&with_stopped_mcp_servers(
+            listed.clone(),
+            &["daily-dev".to_owned()],
+        ))
+        .unwrap();
+        assert_eq!(value["total"], 0);
+        assert_eq!(value["not_running"], serde_json::json!(["daily-dev"]));
+        assert!(
+            value["hint"]
+                .as_str()
+                .unwrap()
+                .contains("manage_mcp_servers")
+        );
+        assert_eq!(with_stopped_mcp_servers(listed.clone(), &[]), listed);
+    }
 
     fn discovery_fixture() -> Vec<(String, Vec<McpDiscoveryTool>)> {
         vec![
