@@ -291,7 +291,7 @@ pub(crate) fn toggle_expanded_bodies(
 }
 
 pub fn toggle_auto_confirm(s: &mut AppState) {
-    s.auto_confirm = !s.auto_confirm;
+    s.set_auto_confirm(!s.auto_confirm);
     let status = if s.auto_confirm {
         "enabled"
     } else {
@@ -314,6 +314,9 @@ pub fn start_new_session(s: &mut AppState) {
     s.active_session_id = crate::config::create_new_session(&mut s.config);
     crate::config::set_active_session_id(&s.active_session_id);
     crate::config::save_session_history(&s.active_session_id, &s.history);
+    // The new chat keeps this frontend's YOLO setting; record it so the
+    // session starts the same way when another owner picks it up.
+    s.record_auto_confirm();
     s.set_transient_notice("New chat started");
 }
 

@@ -1348,6 +1348,26 @@ impl AppState {
         Self::new_with_workspace_session(&workspace, None)
     }
 
+    /// Turn YOLO on or off for the active session and record it with the
+    /// session, so an owner that later takes the session over (a remote
+    /// gateway restart, an app opening it) starts the same way.
+    pub fn set_auto_confirm(&mut self, enabled: bool) {
+        self.auto_confirm = enabled;
+        self.record_auto_confirm();
+    }
+
+    /// Record the current YOLO setting with the active session.
+    pub fn record_auto_confirm(&self) {
+        crate::config::save_session_yolo(&self.active_session_id, self.auto_confirm);
+    }
+
+    /// Start YOLO as recorded for the active session, or as the user's
+    /// `yolo` config default when the session never set it.
+    pub fn restore_auto_confirm(&mut self) {
+        self.auto_confirm =
+            crate::config::load_session_yolo(&self.active_session_id).unwrap_or(self.config.yolo);
+    }
+
     /// YOLO is a session-only override; keep the user's saved restricted mode intact.
     pub fn effective_sandbox_mode(&self) -> crate::config::SandboxMode {
         self.config.sandbox_mode.effective(self.auto_confirm)

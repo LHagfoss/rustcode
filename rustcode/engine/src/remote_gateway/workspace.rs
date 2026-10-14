@@ -761,6 +761,9 @@ pub fn owner_state(
     state.workspace_root = Some(workspace.clone());
     state.task_working_directory = Some(workspace.clone());
     state.history = crate::config::load_session_history_direct(session_id).into();
+    // A detached owner has no `--yolo` flag: start as the session last was,
+    // or as the user's `yolo` default for a session that never set it.
+    state.restore_auto_confirm();
     crate::config::set_active_session_id(session_id);
     crate::config::record_session_settings(session_id, &state.config);
     let _ = crate::config::save_session_workspace(

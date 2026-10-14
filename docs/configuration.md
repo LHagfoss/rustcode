@@ -193,6 +193,25 @@ searched, and `rustcode doctor` to see which ones exist. `rustcode doctor
 --fix` creates only the RustCode-owned root, never the universal or workspace
 roots.
 
+## YOLO by default
+
+YOLO auto-approves tool calls that would otherwise ask for confirmation. It is
+normally per session, turned on with `--yolo`, `/yolo on` or the approval
+prompt's toggle. Set `yolo = true` in the user `config.toml` to start every new
+session that way, including sessions an app opens or creates through the
+[remote gateway](remote.md):
+
+```toml
+yolo = true
+```
+
+The default is off. A session's own setting is recorded with the session
+whenever it changes and wins over this default when the session is reopened by
+a remote session owner, so `/yolo off` sticks for that session. Plan mode still
+blocks mutating tools, and `sandbox_mode` is unchanged (YOLO runs commands as
+`trusted` only while it is on). This is a user trust decision, so a project
+`.rustcode/config.toml` cannot set it.
+
 ## Reduced motion
 
 The activity line above the composer animates a highlight sweep while RustCode

@@ -139,8 +139,12 @@ attachments are never touched.
 Every tool batch that needs confirmation waits for a tap on the device, which
 is slow over intermittent links. `/yolo on` (also from the device) enables
 full auto-approve for the session: batches run without asking. `/yolo off`
-restores per-batch approval. The mode is per session and never persists to
-config; a fresh session always starts asking. Prefer `/yolo on` only on
+restores per-batch approval. The mode is per session: it is recorded with the
+session (also when `--yolo` or a terminal toggle sets it), so the session owner
+that serves it after a gateway restart or upgrade starts the same way. It never
+changes your config. A fresh session starts asking unless `yolo = true` is set
+in the user `config.toml` (see [configuration](configuration.md#yolo-by-default)).
+Plan mode still blocks mutating tools either way. Prefer `/yolo on` only on
 sessions whose workspace you trust, and turn it back off when leaving the
 device unattended.
 

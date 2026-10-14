@@ -381,11 +381,11 @@ async fn handle_enter_inner(
                     s.settings_picker = Some(crate::app::SettingsPicker::Yolo);
                 }
                 Some(&"on") | Some(&"enable") | Some(&"enabled") | Some(&"true") => {
-                    s.auto_confirm = true;
+                    s.set_auto_confirm(true);
                     s.set_transient_notice("YOLO mode enabled");
                 }
                 Some(&"off") | Some(&"disable") | Some(&"disabled") | Some(&"false") => {
-                    s.auto_confirm = false;
+                    s.set_auto_confirm(false);
                     s.set_transient_notice("YOLO mode disabled");
                 }
                 Some(&"toggle") => {

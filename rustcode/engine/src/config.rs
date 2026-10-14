@@ -1270,6 +1270,12 @@ pub struct AppConfig {
     /// running it. Off by default; `/pi` toggles it.
     #[serde(default)]
     pub prompt_improver: bool,
+    /// Start every new session in YOLO mode (auto-approve tool calls), as if
+    /// `--yolo` were passed — including sessions an app opens through the
+    /// remote gateway. A session's own `/yolo` setting, once recorded, takes
+    /// precedence. Plan mode still blocks mutating tools. User config only.
+    #[serde(default)]
+    pub yolo: bool,
     /// Opaque legacy values retained through config rewrites, but never read
     /// by runtime behavior or written to the JSON compatibility config.
     #[doc(hidden)]
@@ -1457,6 +1463,8 @@ struct TomlConfig {
     auto_recap: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prompt_improver: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    yolo: Option<bool>,
     /// Raw, ignored legacy configuration retained so routine rewrites do not
     /// delete user data left by the removed Laya sidecar.
     #[serde(default, rename = "laya", skip_serializing_if = "Option::is_none")]
@@ -1497,12 +1505,6 @@ fn default_subagent_concurrency_limit() -> usize {
 
 fn default_theme() -> String {
     "catppuccin-mocha".to_string()
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct UserSettings {
-    #[serde(default)]
-    pub auto_confirm: bool,
 }
 
 impl Default for AppConfig {
@@ -1616,6 +1618,7 @@ impl Default for AppConfig {
             reduced_motion: false,
             auto_recap: true,
             prompt_improver: false,
+            yolo: false,
             legacy_laya: None,
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -2004,6 +2007,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         reduced_motion: Some(config.reduced_motion),
         auto_recap: Some(config.auto_recap),
         prompt_improver: Some(config.prompt_improver),
+        yolo: config.yolo.then_some(true),
         legacy_laya: config.legacy_laya.clone(),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
@@ -2127,6 +2131,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(prompt_improver) = file.prompt_improver {
         config.prompt_improver = prompt_improver;
     }
+    if let Some(yolo) = file.yolo {
+        config.yolo = yolo;
+    }
     if file.legacy_laya.is_some() {
         config.legacy_laya = file.legacy_laya;
     }
@@ -2175,6 +2182,8 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     file.denied_command_prefixes = None;
     // A checked-out project must not widen the user's OS command permissions.
     file.sandbox_mode = None;
+    // Auto-approval is a user trust decision for the same reason.
+    file.yolo = None;
     // Loop-guard budgets are user safety decisions, mirroring command
     // permissions: a project file must not disable recovery guards.
     file.loop_guard = None;
@@ -2306,6 +2315,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         reduced_motion: None,
         auto_recap: None,
         prompt_improver: None,
+        yolo: None,
         legacy_laya: None,
         agent_mode: None,
         verbosity: None,

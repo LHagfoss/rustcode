@@ -1973,6 +1973,25 @@ evidence_recovery_enabled = false
 }
 
 #[test]
+fn yolo_default_is_user_config_only_and_round_trips() {
+    let file: TomlConfig = toml::from_str("yolo = true").unwrap();
+    let mut config = AppConfig::default();
+    assert!(!config.yolo);
+    apply_toml_config(&mut config, file.clone());
+    assert!(config.yolo);
+
+    // A checked-out project must not turn on auto-approval.
+    let mut project = AppConfig::default();
+    apply_project_toml_config(&mut project, file);
+    assert!(!project.yolo);
+
+    let dir = temp_dir("yolo-default");
+    save_config_to_result(&dir, &config).unwrap();
+    let (_, _, reloaded) = load_config_from(&dir);
+    assert!(reloaded.yolo);
+}
+
+#[test]
 fn thinking_router_round_trips_through_user_config() {
     let dir = temp_dir("thinking-router");
     let mut config = AppConfig::default();

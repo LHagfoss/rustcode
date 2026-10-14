@@ -529,7 +529,7 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
                 switch_value(arguments, current)?
             };
             if command == "/yolo" {
-                state.auto_confirm = enabled;
+                state.set_auto_confirm(enabled);
             } else {
                 state.config.prompt_improver = enabled;
             }
@@ -1011,6 +1011,38 @@ mod tests {
         assert_eq!(state.input_buffer, "unfinished terminal draft");
         assert_eq!(state.history.len(), history.len());
         assert!(!state.auto_confirm);
+    }
+
+    #[test]
+    fn remote_yolo_is_recorded_with_the_session_and_restored_by_a_new_owner() {
+        let session_id = rustcode_session::next_session_id();
+        let mut state = AppState::new();
+        state.active_session_id = session_id.clone();
+        execute_command(&mut state, "/yolo on").unwrap();
+        assert!(state.auto_confirm);
+
+        // A restarted owner starts from the recorded setting, not `false`.
+        let mut restarted = AppState::new();
+        restarted.active_session_id = session_id.clone();
+        restarted.restore_auto_confirm();
+        assert!(restarted.auto_confirm);
+
+        execute_command(&mut restarted, "/yolo off").unwrap();
+        let mut again = AppState::new();
+        again.active_session_id = session_id.clone();
+        again.config.yolo = true;
+        again.restore_auto_confirm();
+        assert!(!again.auto_confirm, "a recorded off wins over the default");
+
+        // A session that never set YOLO follows the user's `yolo` default.
+        let mut fresh = AppState::new();
+        fresh.active_session_id = rustcode_session::next_session_id();
+        fresh.config.yolo = true;
+        fresh.restore_auto_confirm();
+        assert!(fresh.auto_confirm);
+        fresh.config.yolo = false;
+        fresh.restore_auto_confirm();
+        assert!(!fresh.auto_confirm);
     }
 
     fn registration() -> SessionRegistration {
