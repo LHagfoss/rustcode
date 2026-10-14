@@ -100,6 +100,23 @@ pub struct GatewayConfig {
 /// This machine's name as its user knows it, for a device to show next to
 /// the address. Printable characters only, and short.
 pub(super) fn host_name() -> Option<String> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(read_host_name).clone()
+}
+
+fn read_host_name() -> Option<String> {
+    // macOS often takes its BSD host name from reverse DNS, which names the
+    // ISP connection rather than the Mac; the computer name is the user's.
+    #[cfg(target_os = "macos")]
+    if let Some(name) = std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| clean_host_name(&String::from_utf8_lossy(&output.stdout)))
+    {
+        return Some(name);
+    }
     let mut buffer = [0u8; 256];
     // SAFETY: the buffer is valid for its length; the last byte stays zero.
     let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len() - 1) };
@@ -107,7 +124,10 @@ pub(super) fn host_name() -> Option<String> {
         return None;
     }
     let length = buffer.iter().position(|byte| *byte == 0)?;
-    let name = String::from_utf8_lossy(&buffer[..length]);
+    clean_host_name(&String::from_utf8_lossy(&buffer[..length]))
+}
+
+fn clean_host_name(name: &str) -> Option<String> {
     let name: String = name
         .trim()
         .trim_end_matches(".local")
