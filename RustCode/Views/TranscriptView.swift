@@ -1,15 +1,7 @@
 import RustCodeRemote
 import SwiftUI
 
-private struct NoticeToast: Identifiable, Equatable {
-    let id: String
-    let text: String
-
-    init(id: String, text: String) {
-        self.id = id
-        self.text = text
-    }
-}
+private typealias NoticeToast = NoticePresentation.Notice
 
 private struct LatestTranscriptButton: View {
     let action: () -> Void
@@ -18,11 +10,14 @@ private struct LatestTranscriptButton: View {
         Button(action: action) {
             Label("Latest", systemImage: "arrow.down")
                 .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 16)
+                .frame(minHeight: 44)
                 .glassSurface(in: .capsule, interactive: true)
+                // The whole pill, not just its glyphs, takes the tap.
+                .contentShape(.capsule)
         }
         .buttonStyle(.plain)
+        .contentShape(.capsule)
         .accessibilityHint("Scroll to the newest message")
     }
 }
@@ -163,7 +158,11 @@ struct TranscriptView: View {
             noticeToasts = []
         }
         .onChange(of: noticeFingerprint) { _, notices in
-            let fresh = notices.filter { !seenNoticeIDs.contains($0.id) }
+            // A notice whose text is already on screen is the same event seen twice
+            // (for example a live row replaced by its transcript record).
+            let fresh = notices.filter { notice in
+                !seenNoticeIDs.contains(notice.id) && !noticeToasts.contains { $0.text == notice.text }
+            }
             seenNoticeIDs.formUnion(notices.map(\.id))
             guard hasSeededNotices else {
                 // The first fingerprint after attaching is history: seed the
@@ -192,9 +191,7 @@ struct TranscriptView: View {
 
     /// Notices in the attached transcript as `(id, text)`, watched for arrivals.
     private var noticeFingerprint: [NoticeToast] {
-        (store.attached?.items ?? []).compactMap { item in
-            if case .notice(let text) = item.content { NoticeToast(id: item.id, text: text) } else { nil }
-        }
+        NoticePresentation.notices(in: store.attached?.items ?? [])
     }
 
     private func dismissToast(_ id: String) {

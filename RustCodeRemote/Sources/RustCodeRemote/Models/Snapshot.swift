@@ -290,6 +290,14 @@ public struct SessionSnapshot: Sendable, Equatable {
         if case .tool(let tool) = item.content, !tool.isTranscriptRecord,
            let callID = tool.callID, hasRecordedTool(callID) { return }
         if let index = items.lastIndex(where: { $0.id == item.id }) {
+            var item = item
+            // The host repeats a tool's start with its result, often without the detail
+            // the first start carried. A missing detail is unknown, not cleared.
+            if case .tool(var tool) = item.content, case .tool(let existing) = items[index].content,
+               tool.summary.isEmpty, !existing.summary.isEmpty {
+                tool.summary = existing.summary
+                item.content = .tool(tool)
+            }
             items[index] = item
         } else {
             finishStreaming { _ in true }

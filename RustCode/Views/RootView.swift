@@ -53,3 +53,25 @@ extension TransportProtection {
         }
     }
 }
+
+/// A quiet tag for an address on the NetBird mesh.
+struct NetBirdBadge: View {
+    var body: some View {
+        Label("NetBird", systemImage: "point.3.connected.trianglepath.dotted")
+            .labelStyle(.titleAndIcon)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.fill.tertiary, in: .capsule)
+            .fixedSize()
+            .accessibilityLabel("On NetBird")
+    }
+}
+
+extension HostAddress {
+    /// Whether a typed or discovered `host:port` string reaches a NetBird peer.
+    static func isNetBird(_ address: String) -> Bool {
+        (try? parse(address))?.isNetBird ?? false
+    }
+}

@@ -150,18 +150,13 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     private var messageField: some View {
         TextField(isRunning ? "Queue a message" : "Work with ChatGPT", text: Binding(get: { text }, set: { text = $0 }), axis: .vertical)
             .lineLimit(1...6)
-            .font(trimmed.hasPrefix("/") ? .body.monospaced() : .body)
+            .font(.body)
             .overlay(alignment: .leading) {
-                if let completion {
-                    // Render the suggested command as one shaped string, then hide
-                    // the part already typed. Concatenating two Text values can
-                    // introduce a visible gap where the two runs meet.
-                    Text(completion)
-                        .foregroundColor(.secondary.opacity(0.55))
-                        .overlay(alignment: .leading) {
-                            Text(text).foregroundColor(.clear)
-                        }
-                        .font(.body.monospaced()).lineLimit(1)
+                if let completionSuffix {
+                    // One shaped string in the field's own font: the typed text, drawn
+                    // clear, places the remaining suffix exactly after the caret.
+                    Text(ghostCompletion(suffix: completionSuffix))
+                        .font(.body).lineLimit(1)
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
@@ -173,19 +168,28 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     }
 
     private var matchingCommands: [SessionCommandChoice] {
-        guard !trimmed.contains(where: \.isWhitespace) else { return [] }
-        return commands.filter { commandText($0).hasPrefix(trimmed.lowercased()) }
+        CommandSuggestions.matches(trimmed, in: commands)
     }
 
-    private var completion: String? {
-        guard isFocused, trimmed.hasPrefix("/"), text == trimmed, trimmed.count > 1,
-              let first = matchingCommands.first else { return nil }
-        let value = commandText(first)
-        return value.count > trimmed.count ? value : nil
+    private var completionSuffix: String? {
+        guard isFocused, text == trimmed else { return nil }
+        return CommandSuggestions.completionSuffix(for: text, in: commands)
+    }
+
+    private func ghostCompletion(suffix: String) -> AttributedString {
+        var typed = AttributedString(text)
+        typed.foregroundColor = .clear
+        var rest = AttributedString(suffix)
+        rest.foregroundColor = Color.secondary.opacity(0.6)
+        return typed + rest
     }
 
     private func commandText(_ choice: SessionCommandChoice) -> String {
-        choice.name.hasPrefix("/") ? choice.name : "/" + choice.name
+        CommandSuggestions.commandText(choice)
+    }
+
+    private func applyCommand(_ choice: SessionCommandChoice) {
+        text = choice.insertion.isEmpty ? commandText(choice) : choice.insertion
     }
 
     private var commandSuggestions: some View {
@@ -193,33 +197,49 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             if !matchingCommands.isEmpty {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(matchingCommands) { choice in
-                            Button {
-                                text = choice.insertion.isEmpty ? commandText(choice) : choice.insertion
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Text(commandText(choice)).font(.subheadline.monospaced())
-                                    Text(choice.description).font(.caption).foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                    Spacer(minLength: 0)
-                                    Image(systemName: choice.action == "terminal" ? "desktopcomputer" : "arrow.up.left")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 14).frame(minHeight: 44)
-                                .contentShape(.rect)
+                        ForEach(Array(matchingCommands.enumerated()), id: \.element.id) { index, choice in
+                            if index > 0 { Divider().padding(.leading, 16) }
+                            Button { applyCommand(choice) } label: {
+                                commandRow(choice)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(CommandRowStyle())
                             .accessibilityLabel(commandText(choice))
                             .accessibilityHint(choice.description)
                         }
                     }
+                    .padding(.vertical, 4)
                 }
-                .frame(height: min(CGFloat(matchingCommands.count) * 44, 176))
+                .frame(height: min(CGFloat(matchingCommands.count) * 50 + 8, 176))
+                .scrollBounceBehavior(.basedOnSize)
                 .scrollDismissesKeyboard(.never)
                 .accessibilityIdentifier("commandSuggestions")
                 Divider().padding(.horizontal, 14)
             }
         }
+    }
+
+    private func commandRow(_ choice: SessionCommandChoice) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(commandText(choice))
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                if !choice.description.isEmpty {
+                    Text(choice.description)
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if choice.action == "terminal" {
+                Image(systemName: "desktopcomputer")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityLabel("Runs in the Mac terminal")
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+        .contentShape(.rect)
     }
 
     private var commands: [SessionCommandChoice] {
@@ -476,6 +496,14 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                 drafts.clearIfMatching(text: message, images: outgoingImages, sessionID: sessionID)
             }
         }
+    }
+}
+
+/// A full-width suggestion row that highlights while pressed.
+private struct CommandRowStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear))
     }
 }
 

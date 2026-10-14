@@ -61,7 +61,8 @@ public struct HostAddress: Hashable, Sendable, Codable, CustomStringConvertible 
         /// RFC 1918 or IPv6 unique-local.
         case privateLAN
         case linkLocal
-        /// 100.64.0.0/10, the range NetBird assigns to peers.
+        /// 100.64.0.0/10, the range NetBird assigns to peers, or a NetBird peer DNS name
+        /// (`*.netbird.cloud`, `*.netbird.selfhosted`), which only resolves inside the mesh.
         case overlay
         /// `.local` or an unqualified name.
         case localName
@@ -88,9 +89,16 @@ public struct HostAddress: Hashable, Sendable, Codable, CustomStringConvertible 
             if lower.hasPrefix("fc") || lower.hasPrefix("fd") { return .privateLAN }
             return .other
         }
+        if Self.netBirdDomains.contains(where: { lower.hasSuffix("." + $0) }) { return .overlay }
         if lower.hasSuffix(".local") || !lower.contains(".") { return .localName }
         return .other
     }
+
+    /// DNS zones NetBird serves for peers: the cloud default and the self-hosted default.
+    static let netBirdDomains = ["netbird.cloud", "netbird.selfhosted"]
+
+    /// Whether the address reaches the Mac over the NetBird mesh.
+    public var isNetBird: Bool { network == .overlay }
 
     /// What protects the traffic on the way to this address. Authentication is not encryption:
     /// only the overlay tunnel encrypts a plain WebSocket.

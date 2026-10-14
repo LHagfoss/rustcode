@@ -21,7 +21,12 @@ struct SettingsView: View {
                     Section {
                         LabeledContent("Name", value: host.name)
                         if !store.isDemo {
-                            LabeledContent("Address", value: host.address.description)
+                            LabeledContent("Address") {
+                                HStack(spacing: 6) {
+                                    if host.address.isNetBird { NetBirdBadge() }
+                                    Text(host.address.description)
+                                }
+                            }
                             LabeledContent("Paired", value: host.pairedAt.formatted(date: .abbreviated, time: .shortened))
                             if let expiresAt = host.expiresAt {
                                 LabeledContent("Linked Until", value: expiresAt.formatted(date: .abbreviated, time: .shortened))

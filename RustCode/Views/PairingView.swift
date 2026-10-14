@@ -157,7 +157,10 @@ struct PairingView: View {
                     HStack(spacing: 12) {
                         Image(systemName: "desktopcomputer").foregroundStyle(.tint)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(host.name).foregroundStyle(.primary)
+                            HStack(spacing: 6) {
+                                Text(host.name).foregroundStyle(.primary)
+                                if HostAddress.isNetBird(host.address) { NetBirdBadge() }
+                            }
                             Text(host.address).font(.caption).foregroundStyle(.secondary)
                                 .lineLimit(1).truncationMode(.middle)
                         }
@@ -218,7 +221,10 @@ struct PairingView: View {
             .id(Self.connectID)
             .disabled(isPairing || address.isEmpty || (!PairingCodeInput.isComplete(code) && !address.hasPrefix("{")))
         } header: {
-            Text(discovery.hosts.first { $0.address == address }.map { "Connect to \($0.name)" } ?? "Address and pairing code")
+            HStack(spacing: 6) {
+                Text(discovery.hosts.first { $0.address == address }.map { "Connect to \($0.name)" } ?? "Address and pairing code")
+                if parsedAddress?.isNetBird == true { NetBirdBadge().textCase(nil) }
+            }
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Enter the eight-digit /remote code, not your Mac password. Codes expire after 2 minutes; run /remote again for a new one.")

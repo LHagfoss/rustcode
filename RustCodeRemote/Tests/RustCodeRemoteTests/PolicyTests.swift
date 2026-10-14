@@ -92,6 +92,20 @@ import Testing
         #expect(network("studio") == .localName)
         #expect(network("example.com") == .other)
         #expect(network("fe80::1") == .linkLocal)
+        #expect(network("studio.netbird.cloud") == .overlay)
+        #expect(network("Studio.NetBird.Cloud") == .overlay)
+        #expect(network("studio.netbird.selfhosted") == .overlay)
+        #expect(network("netbird.cloud.example.com") == .other)
+        #expect(network("notnetbird.cloud") == .other)
+    }
+
+    @Test func identifiesNetBirdAddresses() {
+        #expect(HostAddress(host: "100.90.1.2", port: 7878).isNetBird)
+        #expect(HostAddress(host: "mac.netbird.cloud", port: 7878).isNetBird)
+        #expect(HostAddress(host: "mac.netbird.selfhosted", port: 7878).isNetBird)
+        #expect(!HostAddress(host: "192.168.1.2", port: 7878).isNetBird)
+        #expect(!HostAddress(host: "studio.local", port: 7878).isNetBird)
+        #expect(!HostAddress(host: "100.128.0.1", port: 7878).isNetBird)
     }
 
     @Test func onlyTheOverlayAndLoopbackCountAsProtected() {

@@ -92,6 +92,34 @@ import Testing
         #expect(tool.isTranscriptRecord)
     }
 
+    @Test func repeatedStartWithoutDetailKeepsTheLiveToolTitle() throws {
+        let sessionID = "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44"
+        let session = SessionRef(sessionID: sessionID, registrationEpoch: 1)
+        var snapshot = SessionSnapshot(session: session)
+        let codec = WireCodec()
+        func event(_ sequence: Int, _ body: String) throws -> SessionUpdate? {
+            let frame = #"{"kind":"event","protocol_version":1,"session_id":"\#(sessionID)","registration_epoch":1,"sequence":\#(sequence),"generation":1,"event":\#(body)}"#
+            guard case .sessionUpdate(let update) = try codec.decode(frame) else { return nil }
+            return update
+        }
+        // What the host sends for a view_file call during a live turn: the start with its
+        // detail, then the result preceded by a repeated start that carries no detail.
+        let frames = [
+            #"{"type":"tool_started","tool":{"id":"call-1","name":"view_file","detail":"src/main.rs","state":"running"}}"#,
+            #"{"type":"tool_started","tool":{"id":"call-1","name":"view_file","state":"running"}}"#,
+            #"{"type":"tool_finished","id":"call-1","success":true,"pending":false,"content":{"text":"fn main() {}","truncated":false,"offset":0,"total_bytes":12}}"#,
+        ]
+        for (offset, body) in frames.enumerated() {
+            let update = try #require(try event(offset + 1, body))
+            #expect(snapshot.apply(update) == .applied)
+        }
+        #expect(snapshot.items.count == 1)
+        guard case .tool(let tool) = snapshot.items.first?.content else { Issue.record("Missing tool"); return }
+        #expect(tool.summary == "src/main.rs")
+        #expect(tool.status == .succeeded)
+        #expect(tool.output == "fn main() {}")
+    }
+
     @Test func lateToolStartAndResultUpsertOneNamedRowAndRetainDistinctCalls() {
         let session = SessionRef(sessionID: "tools", registrationEpoch: 1)
         var snapshot = SessionSnapshot(session: session)
