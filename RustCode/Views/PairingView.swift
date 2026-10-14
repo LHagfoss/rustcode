@@ -32,7 +32,7 @@ struct PairingView: View {
                     Section {
                         scanSection
                     } footer: {
-                        Text("Run /remote on your Mac, then scan its QR code. Use the same Wi-Fi.")
+                        Text("Run /remote on your Mac, then scan its QR code. Use the same Wi-Fi or NetBird network.")
                     }
                     nearbySection
                     manualSection
@@ -141,7 +141,7 @@ struct PairingView: View {
             } else if discovery.hosts.isEmpty {
                 HStack(spacing: 12) {
                     if discovery.isSearching { ProgressView() }
-                    Text("Looking for Macs on your Wi-Fi…")
+                    Text("Looking for Macs on your Wi-Fi and NetBird…")
                         .foregroundStyle(.secondary)
                 }
             }

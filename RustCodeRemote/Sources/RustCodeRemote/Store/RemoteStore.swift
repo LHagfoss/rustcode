@@ -759,6 +759,9 @@ public final class RemoteStore {
     }
 
     private func applySessionList(_ list: [SessionSummary]) {
+        // The host lists sessions oldest first. Show the newest at the top, where a session
+        // created here is inserted too.
+        let list = Array(list.reversed())
         badges.observe(previous: sessions, current: list, selected: selectedSessionID)
         sessions = list
 

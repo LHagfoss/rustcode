@@ -2,8 +2,9 @@ import Foundation
 import Observation
 import RustCodeRemote
 
-/// Bonjour discovery is local-network only. A discovered address still needs a pairing
-/// code, unless it is the host this device is already paired with: see `locate`.
+/// Bonjour discovery is local-network only; a NetBird mesh is scanned instead, see
+/// `OverlayPeerScanner`. A discovered address still needs a pairing code, unless it is the
+/// host this device is already paired with: see `locate`.
 @MainActor
 @Observable
 final class NearbyHostDiscovery: NSObject {
@@ -22,7 +23,8 @@ final class NearbyHostDiscovery: NSObject {
     /// the local network within a few seconds.
     static func locate(gatewayID: String) async -> HostAddress? {
         let discovery = NearbyHostDiscovery()
-        discovery.start()
+        // A scanned mesh peer carries no gateway identity, so it cannot match.
+        discovery.start(includeOverlay: false)
         defer { discovery.stop() }
         let deadline = ContinuousClock.now + locateTimeout
         while ContinuousClock.now < deadline, discovery.error == nil, !Task.isCancelled {
@@ -45,8 +47,9 @@ final class NearbyHostDiscovery: NSObject {
     private(set) var error: String?
     private var browser: NetServiceBrowser?
     private var services: [String: NetService] = [:]
+    private var overlayScan: Task<Void, Never>?
 
-    func start() {
+    func start(includeOverlay: Bool = true) {
         guard browser == nil else { return }
         hosts = []
         error = nil
@@ -62,12 +65,34 @@ final class NearbyHostDiscovery: NSObject {
         browser.delegate = self
         self.browser = browser
         browser.searchForServices(ofType: "_rustcode._tcp.", inDomain: "local.")
+        if includeOverlay { startOverlayScan() }
+    }
+
+    private func startOverlayScan() {
+        guard let local = OverlayPeerScanner.localOverlayAddress() else { return }
+        overlayScan = Task { [weak self] in
+            for await peer in OverlayPeerScanner.peers(around: local, port: WireCodec.defaultPort) {
+                self?.insert(Host(
+                    id: "netbird:\(peer.address)",
+                    name: peer.name ?? "NetBird peer",
+                    address: "\(peer.address):\(WireCodec.defaultPort)"
+                ))
+            }
+        }
+    }
+
+    private func insert(_ host: Host) {
+        hosts.removeAll { $0.id == host.id }
+        hosts.append(host)
+        hosts.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     func stop() {
         browser?.stop()
         browser?.delegate = nil
         browser = nil
+        overlayScan?.cancel()
+        overlayScan = nil
         for service in services.values {
             service.stop()
             service.delegate = nil
@@ -110,15 +135,12 @@ extension NearbyHostDiscovery: @preconcurrency NetServiceDelegate {
         // The host listens on one IPv4 address, while its .local name also resolves to
         // IPv6 and other interfaces that refuse the connection.
         let target = Self.ipv4Address(in: sender.addresses ?? []) ?? addressName
-        let host = Host(
+        insert(Host(
             id: key(sender),
             name: sender.name,
             address: "\(target):\(sender.port)",
             gatewayID: Self.gatewayID(inTXTRecord: sender.txtRecordData())
-        )
-        hosts.removeAll { $0.id == host.id }
-        hosts.append(host)
-        hosts.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        ))
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {

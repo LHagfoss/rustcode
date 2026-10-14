@@ -714,6 +714,17 @@ private final class DelayLog: Sendable {
         #expect(store.connection == .connected)
     }
 
+    @Test func theNewestSessionIsListedFirst() async {
+        let client = StubClient()
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+
+        // The host lists sessions oldest first.
+        await client.publish([makeSession("s1"), makeSession("s2"), makeSession("s3")])
+        #expect(await waitUntil { store.sessions.map(\.id) == ["s3", "s2", "s1"] })
+    }
+
     @Test func detachingStopsFollowingTheSession() async {
         let client = StubClient()
         let store = makeStore(client)
