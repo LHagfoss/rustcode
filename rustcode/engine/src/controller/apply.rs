@@ -206,7 +206,7 @@ pub async fn apply_approval_decision(
     let (approved, remember_prefix) = match decision {
         ApprovalDecision::Approve => (true, None),
         ApprovalDecision::ApproveAll => {
-            state.lock().await.auto_confirm = true;
+            state.lock().await.set_auto_confirm(true);
             (true, None)
         }
         ApprovalDecision::ApproveAndRemember(prefix) => (true, Some((prefix, false))),

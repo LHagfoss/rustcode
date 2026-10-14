@@ -664,6 +664,23 @@ pub fn load_session_workspace(session_id: &str) -> Option<SessionWorkspace> {
     store()?.load_session_workspace(session_id)
 }
 
+/// Record a session's YOLO setting. Sessions without a valid ID (tests,
+/// transient states) are skipped.
+pub fn save_session_yolo(session_id: &str, enabled: bool) {
+    if !rustcode_session::valid_session_id(session_id) {
+        return;
+    }
+    if let Some(session_store) = store()
+        && let Err(error) = session_store.save_session_yolo(session_id, enabled)
+    {
+        crate::dbg_log!("failed to record YOLO for session {session_id}: {error}");
+    }
+}
+
+pub fn load_session_yolo(session_id: &str) -> Option<bool> {
+    store()?.load_session_yolo(session_id)
+}
+
 pub fn load_session_metadata(session_id: &str) -> Option<rustcode_session::SessionMetadata> {
     store()?.load_session_metadata(session_id)
 }

@@ -563,6 +563,10 @@ pub struct SessionMetadata {
     pub created_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migrated_from: Option<String>,
+    /// YOLO (auto-approve) as last set for this session; absent until it is
+    /// set, so the user's configured default applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yolo: Option<bool>,
 }
 
 impl SessionMetadata {
@@ -572,6 +576,7 @@ impl SessionMetadata {
             id: id.to_string(),
             created_at_ms,
             migrated_from,
+            yolo: None,
         }
     }
 }
@@ -1156,6 +1161,39 @@ impl SessionStore {
                 .ok()?,
         )
         .ok()
+    }
+
+    /// Record the session's YOLO setting in its metadata, so a process that
+    /// later owns the session starts with the same approval behavior.
+    pub fn save_session_yolo(&self, session_id: &str, enabled: bool) -> std::io::Result<()> {
+        if !valid_session_id(session_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid session id",
+            ));
+        }
+        let directory = self.ensure_session(session_id);
+        let mut metadata = self.load_session_metadata(session_id).unwrap_or_else(|| {
+            SessionMetadata::new(
+                session_id,
+                session_timestamp_ms(session_id).unwrap_or_else(current_time_ms),
+                None,
+            )
+        });
+        if metadata.yolo == Some(enabled) {
+            return Ok(());
+        }
+        metadata.yolo = Some(enabled);
+        let path = directory.join(SESSION_METADATA_FILE);
+        let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
+        let contents = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
+        std::fs::write(&temporary, contents)?;
+        std::fs::rename(temporary, path)
+    }
+
+    /// The session's recorded YOLO setting, if it was ever set.
+    pub fn load_session_yolo(&self, session_id: &str) -> Option<bool> {
+        self.load_session_metadata(session_id)?.yolo
     }
 
     pub fn load_session_metadata(&self, session_id: &str) -> Option<SessionMetadata> {
@@ -2090,6 +2128,29 @@ mod tests {
         let history = serde_json::to_string(&saved_history()).expect("serialize history");
         std::fs::create_dir_all(path.parent().expect("history parent")).expect("parent");
         std::fs::write(path, history).expect("history");
+    }
+
+    #[test]
+    fn yolo_is_recorded_in_session_metadata() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "018d6b28-0000-7000-8000-000000000002";
+
+        store.ensure_session(id);
+        assert_eq!(store.load_session_yolo(id), None);
+        store.save_session_yolo(id, true).expect("record yolo");
+        assert_eq!(store.load_session_yolo(id), Some(true));
+        store.save_session_yolo(id, false).expect("record yolo off");
+        assert_eq!(store.load_session_yolo(id), Some(false));
+        let metadata = store.load_session_metadata(id).expect("metadata");
+        assert_eq!(metadata.id, id);
+        assert_eq!(metadata.schema_version, SESSION_METADATA_SCHEMA_VERSION);
+
+        // A session directory without metadata gains it on the first save.
+        let fresh = "018d6b28-0000-7000-8000-000000000003";
+        store.save_session_yolo(fresh, true).expect("record yolo");
+        assert_eq!(store.load_session_yolo(fresh), Some(true));
+        assert!(store.save_session_yolo("../escape", true).is_err());
     }
 
     #[test]

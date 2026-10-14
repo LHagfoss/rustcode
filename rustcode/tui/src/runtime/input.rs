@@ -774,11 +774,13 @@ pub(super) async fn handle_app_event(
                             if is_shift_tab(key) {
                                 let mut s = app_state.lock().await;
                                 s.overlays().toggle_auto_confirm();
+                                s.record_auto_confirm();
                             } else {
                                 match key.code {
                                     KeyCode::Tab => {
                                         let mut s = app_state.lock().await;
                                         s.overlays().toggle_auto_confirm();
+                                        s.record_auto_confirm();
                                     }
                                     KeyCode::Up => {
                                         let mut s = app_state.lock().await;
@@ -1155,7 +1157,7 @@ pub(super) async fn handle_app_event(
                             KeyCode::Enter => {
                                 let mut s = app_state.lock().await;
                                 let enable = s.modal_picker_index == 0;
-                                s.auto_confirm = enable;
+                                s.set_auto_confirm(enable);
                                 let status = if enable { "enabled" } else { "disabled" };
                                 s.set_transient_notice(format!("YOLO mode {status}"));
                                 s.close_modal_status();

@@ -895,9 +895,6 @@ async fn run_interactive(
     let fullscreen_requested = cli_args.fullscreen || app_state_struct.config.fullscreen;
     let local_terminal = crate::terminal_probe::probe().supports_alternate_screen();
     let fullscreen = fullscreen_requested && local_terminal;
-    if cli_args.yolo {
-        app_state_struct.auto_confirm = true;
-    }
     // Resolve `--resume`/`--continue` before the terminal is taken over. A
     // named session that cannot be restored then fails on stderr with a
     // non-zero exit, instead of leaving the shell in raw mode and a
@@ -910,6 +907,14 @@ async fn run_interactive(
     ) {
         eprintln!("rustcode: cannot resume session '{id}': {error}");
         std::process::exit(1);
+    }
+    // `--yolo` and the `yolo` config default start the terminal in YOLO. The
+    // flag is recorded with the session so an owner that later serves it to
+    // the app (or after a gateway restart) does not fall back to approvals.
+    if cli_args.yolo {
+        app_state_struct.set_auto_confirm(true);
+    } else if app_state_struct.config.yolo {
+        app_state_struct.auto_confirm = true;
     }
     rustcode::clipboard::warm_image_paste();
     let terminal_runtime = TerminalRuntime::start(fullscreen, local_terminal)?;
