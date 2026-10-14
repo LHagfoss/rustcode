@@ -1,3 +1,7 @@
+## [v0.67.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.2) - 2026-10-14
+
+### Features
+- Remote session rows include when each session was last active, shown in the iOS app.
 ## [v0.67.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.1) - 2026-10-14
 
 ### Fixes
