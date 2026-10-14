@@ -1361,6 +1361,16 @@ fn estimated_reasoning_tokens(text: &str) -> u32 {
     }
 }
 
+/// Client-side cap on streamed reasoning for `profile`. A derived budget of
+/// zero means the profile did not request thinking, not that the provider may
+/// not think: a provider that reasons by default would otherwise be cut at its
+/// first reasoning delta, every round, before it produced any answer.
+fn client_thinking_budget(profile: &crate::config::ModelProfile) -> Option<u32> {
+    profile
+        .client_reasoning_budget
+        .or_else(|| Some(profile.context_budget().thinking_budget).filter(|budget| *budget > 0))
+}
+
 fn bound_reasoning_chunk(
     text: &str,
     used_tokens: u32,
@@ -3773,6 +3783,33 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_without_thinking_does_not_cut_provider_reasoning() {
+        // deepseek-flash reasons by default; a profile that sets no effort
+        // derives a zero thinking budget, which used to end every round at
+        // its first reasoning delta with an empty thought.
+        let profile = crate::config::ModelProfile {
+            name: "deepseek".into(),
+            model: "deepseek-flash".into(),
+            thinking_budget: Some(8192),
+            ..Default::default()
+        };
+        assert_eq!(profile.context_budget().thinking_budget, 0);
+        assert_eq!(client_thinking_budget(&profile), None);
+
+        let explicit = crate::config::ModelProfile {
+            client_reasoning_budget: Some(64),
+            ..profile.clone()
+        };
+        assert_eq!(client_thinking_budget(&explicit), Some(64));
+
+        let thinking = crate::config::ModelProfile {
+            enable_thinking: Some(true),
+            ..profile
+        };
+        assert!(client_thinking_budget(&thinking).is_some_and(|budget| budget > 0));
+    }
+
+    #[test]
     fn absent_reasoning_budget_preserves_the_whole_chunk() {
         let chunk = bound_reasoning_chunk("reasoning", 0, None);
         assert_eq!(chunk.text, "reasoning");
@@ -4562,10 +4599,7 @@ async fn stream_request_with_timeouts(
         ) {
         None
     } else {
-        profile
-            .as_ref()
-            .and_then(|p| p.client_reasoning_budget)
-            .or_else(|| profile.as_ref().map(|p| p.context_budget().thinking_budget))
+        profile.as_ref().and_then(client_thinking_budget)
     };
 
     let text_surface = if !allow_tools {

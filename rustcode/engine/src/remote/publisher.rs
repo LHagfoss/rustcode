@@ -24,7 +24,7 @@ use super::owner::OwnerMessage;
 use super::projection::{
     ProjectionContext, ProjectionLimits, bound_text, project_active_timing, project_ended_timing,
     project_event, project_live_thought_time, project_pending_approval, project_pending_question,
-    project_session_info, project_snapshot, project_turn_timing,
+    project_session_info, project_snapshot, project_turn_timing, visible_text,
 };
 use super::protocol::{
     OwnerHealth, REMOTE_PROTOCOL_VERSION, RemoteEvent, RemoteEventFrame, RemoteSessionInfo,
@@ -49,12 +49,13 @@ struct ResponseCursor {
 impl ResponseCursor {
     /// A cursor that has published everything `state` currently holds.
     fn at(state: &AppState) -> Self {
+        let response = visible_text(&state.current_response);
         let mut emitted_hash = DefaultHasher::new();
-        emitted_hash.write(state.current_response.as_bytes());
+        emitted_hash.write(response.as_bytes());
         Self {
             revision: state.current_response_revision,
-            len: state.current_response.len(),
-            emitted_len: state.current_response.len(),
+            len: response.len(),
+            emitted_len: response.len(),
             emitted_hash,
             emptied: false,
         }
@@ -63,7 +64,10 @@ impl ResponseCursor {
     /// Text added since the cursor, or the whole response when it was
     /// rewritten rather than extended.
     fn advance(&mut self, state: &AppState) -> Option<String> {
-        let response = state.current_response.as_str();
+        // Deltas are cut from the text a client renders, which only grows at
+        // its end: an empty reasoning block is held back, then dropped.
+        let response = visible_text(&state.current_response);
+        let response = response.as_ref();
         let revision = state.current_response_revision;
         if revision == self.revision && response.len() == self.len {
             return None;
@@ -387,6 +391,7 @@ impl SessionPublisher {
                         continue;
                     }
                     if let Some(turn_id) = self.end_of_announced_turn_with_timing(timing.as_ref()) {
+                        let content = visible_text(&content);
                         let rest = self.response.finish(&content);
                         if rest.len() > self.limits.live_response_bytes {
                             self.request_snapshot();
@@ -923,6 +928,32 @@ mod tests {
             )]
         );
         assert!(events(&publisher.publish(&state, true)).is_empty());
+    }
+
+    #[test]
+    fn an_empty_reasoning_block_is_never_published() {
+        let mut state = shared_state();
+        let (mut publisher, _) = register(&state);
+        start_turn(&mut state, &mut publisher);
+        let texts = |messages: Vec<OwnerMessage>| -> Vec<String> {
+            events(&messages)
+                .into_iter()
+                .filter_map(|(_, event)| match event {
+                    RemoteEvent::TextDelta { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        };
+        state.append_current_response("<think>\n");
+        assert!(texts(publisher.publish(&state, true)).is_empty());
+        state.append_current_response("\n</think>");
+        assert!(texts(publisher.publish(&state, true)).is_empty());
+        state.append_current_response("<think>\n");
+        assert!(texts(publisher.publish(&state, true)).is_empty());
+        state.append_current_response("plan");
+        assert_eq!(texts(publisher.publish(&state, true)), ["<think>\nplan"]);
+        state.append_current_response("\n</think>Done");
+        assert_eq!(texts(publisher.publish(&state, true)), ["\n</think>Done"]);
     }
 
     #[test]
