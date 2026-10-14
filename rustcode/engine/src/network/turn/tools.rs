@@ -239,7 +239,7 @@ fn targeted_no_progress_guidance(
         .nth(160)
         .map_or(action, |(end, _)| &action[..end]);
     if action == "list_mcp_tools" {
-        return "MCP discovery is repeating already-known tools. Stop listing the inventory. Invoke the discovered callable_name using its bound argument schema; if invocation is unavailable, explain the concrete blocker or ask a useful task question. Do not claim a tool ran without its result.".to_string();
+        return "MCP discovery is repeating already-known tools. Stop listing the inventory. Invoke the discovered callable_name using its bound argument schema (a listed tool without input_schema needs one list_mcp_tools call with select:[callable_name]); if invocation is unavailable, explain the concrete blocker or ask a useful task question. Do not claim a tool ran without its result.".to_string();
     }
     let repeated_verification = action.starts_with("verification:");
     if repeated_verification {

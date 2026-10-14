@@ -1820,6 +1820,32 @@ fn mcp_discovery_variants_recover_without_hiding_new_tools() {
 }
 
 #[test]
+fn selecting_a_schema_for_a_listed_tool_is_new_evidence_once() {
+    let mut ledger = ProgressLedger::default();
+    let read = observation("inventory", None, None);
+    let listed = serde_json::json!({"results":[{"server":"snapchat","name":"get_friends"}]});
+    assert!(
+        ledger
+            .observe_mcp_discovery(&read, Some(&listed))
+            .meaningful
+    );
+    let selected = serde_json::json!({"results":[
+        {"server":"snapchat","name":"get_friends","input_schema":{"type":"object"}}
+    ]});
+    assert!(
+        ledger
+            .observe_mcp_discovery(&read, Some(&selected))
+            .meaningful
+    );
+    assert!(
+        !ledger
+            .observe_mcp_discovery(&read, Some(&selected))
+            .meaningful,
+        "selecting the same schema again is a repeat"
+    );
+}
+
+#[test]
 fn discovery_server_growth_and_cross_server_tools_are_new_evidence() {
     let mut ledger = ProgressLedger::default();
     let read = observation("inventory", None, None);
