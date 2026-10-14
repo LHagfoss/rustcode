@@ -88,6 +88,70 @@ fn bound_text_tail(text: &str, max_bytes: usize, content_id: Option<String>) -> 
     }
 }
 
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+/// `text` as a client should render it: a reasoning block with nothing but
+/// whitespace in it is dropped, and so is a trailing open one that has
+/// nothing in it yet. A provider that is cut off before its first thought, or
+/// that reports reasoning without content, would otherwise show an empty
+/// thinking block. Text only ever grows at the end of what this returns, so
+/// a live response can still be published as deltas of it.
+pub(super) fn visible_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(THINK_OPEN) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut visible = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find(THINK_OPEN) {
+        let body_start = open + THINK_OPEN.len();
+        let (body, after) = match rest[body_start..].find(THINK_CLOSE) {
+            Some(close) => (
+                &rest[body_start..body_start + close],
+                Some(body_start + close + THINK_CLOSE.len()),
+            ),
+            None => (&rest[body_start..], None),
+        };
+        let keep = !body.trim().is_empty();
+        let end = after.unwrap_or(rest.len());
+        visible.push_str(&rest[..open]);
+        if keep {
+            visible.push_str(&rest[open..end]);
+        }
+        rest = &rest[end..];
+    }
+    visible.push_str(rest);
+    std::borrow::Cow::Owned(visible)
+}
+
+/// The detail of a tool call already recorded in assistant history, for a
+/// result whose live call is gone.
+fn recorded_tool_detail(state: &AppState, id: &str) -> Option<String> {
+    state
+        .history
+        .iter()
+        .rev()
+        .filter(|message| message.role == "assistant")
+        .find_map(|message| {
+            rustcode_tool_protocol::resolve_tool_calls(message, state.active_tool_protocol())
+                .into_iter()
+                .find(|call| match call.call_id.as_deref() {
+                    Some(call_id) => call_id == id,
+                    None => {
+                        id.strip_prefix("local_")
+                            == Some(
+                                crate::network::tool_exec::stable_arguments_hash(&call.arguments)
+                                    .as_str(),
+                            )
+                    }
+                })
+                .map(|call| {
+                    crate::network::ui_adapter::tool_display_detail(&call.name, &call.arguments)
+                })
+        })
+        .flatten()
+}
+
 fn label(text: &str, limits: &ProjectionLimits) -> String {
     bound_text(text, limits.label_bytes, None).text
 }
@@ -367,9 +431,8 @@ fn project_tools(state: &AppState, limits: &ProjectionLimits) -> Vec<RemoteTool>
             Some(RemoteTool {
                 id: id.clone(),
                 name: call.tool_name.clone(),
-                detail: Some(call.target.as_str())
-                    .filter(|target| !target.is_empty())
-                    .map(|target| label(target, limits)),
+                detail: crate::network::ui_adapter::live_tool_display_detail(call)
+                    .map(|detail| label(&detail, limits)),
                 state: match (&call.finished, call.execution_started) {
                     (Some(finish), _) if finish.success => RemoteToolState::Succeeded,
                     (Some(_), _) => RemoteToolState::Failed,
@@ -395,7 +458,7 @@ fn project_messages(
             message_id: format!("m{index}"),
             role: message.role.clone(),
             content: bound_text(
-                &message.content,
+                &visible_text(&message.content),
                 limits.text_bytes,
                 Some(message_content_id(revision, index)),
             ),
@@ -514,7 +577,7 @@ pub fn project_snapshot(
     let turn = state.active_turn_id.as_ref().map(|turn_id| RemoteTurn {
         turn_id: turn_id.clone(),
         live_response: bound_text_tail(
-            &state.current_response,
+            &visible_text(&state.current_response),
             limits.live_response_bytes,
             Some(format!("response:{turn_id}")),
         ),
@@ -692,7 +755,7 @@ pub fn resolve_content(state: &AppState, content_id: &str) -> Option<String> {
             (revision == history_revision(state))
                 .then(|| state.history.get(index.parse::<usize>().ok()?))
                 .flatten()
-                .map(|message| message.content.clone())
+                .map(|message| visible_text(&message.content).into_owned())
         }
         "approval" => {
             let (batch_id, index) = rest.rsplit_once(':')?;
@@ -703,7 +766,7 @@ pub fn resolve_content(state: &AppState, content_id: &str) -> Option<String> {
                 .map(|action| action.full_details)
         }
         "response" => (state.active_turn_id.as_deref() == Some(rest))
-            .then(|| state.current_response.as_ref().clone()),
+            .then(|| visible_text(&state.current_response).into_owned()),
         _ => None,
     }
 }
@@ -780,16 +843,18 @@ pub fn project_event(
                 tool: RemoteTool {
                     id: id.clone(),
                     name: result.tool_name.clone(),
-                    // The live call still holds the detail the first start
-                    // carried; without it a client blanks the row's title.
+                    // Repeat the detail the first start carried; without it a
+                    // client blanks the row's title. The live call holds it
+                    // until the result is recorded, the assistant history
+                    // after.
                     detail: state
                         .live_tool_calls
                         .iter()
                         .find(|call| call.provider_call_id.as_ref() == Some(id))
-                        .map(|call| call.target.as_str())
-                        .filter(|target| !target.is_empty())
-                        .or(result.metadata.command.as_deref())
-                        .map(|detail| label(detail, limits)),
+                        .and_then(crate::network::ui_adapter::live_tool_display_detail)
+                        .or_else(|| recorded_tool_detail(state, id))
+                        .or_else(|| result.metadata.command.clone())
+                        .map(|detail| label(&detail, limits)),
                     state: RemoteToolState::Running,
                 },
             },
@@ -1030,6 +1095,77 @@ mod tests {
         let events = project_event(&state, &event, &ProjectionLimits::default());
         assert!(
             matches!(&events[0], RemoteEvent::ToolStarted { tool } if tool.detail.as_deref().is_some_and(|detail| detail.contains("main.rs"))),
+            "{:?}",
+            events[0]
+        );
+    }
+
+    #[test]
+    fn empty_reasoning_blocks_are_not_shown() {
+        assert_eq!(visible_text("plain"), "plain");
+        assert_eq!(visible_text("<think>\n\n</think>"), "");
+        assert_eq!(visible_text("<think>\n\n</think>\n\nAnswer"), "\n\nAnswer");
+        assert_eq!(
+            visible_text("<think>plan</think>A<think> </think>B"),
+            "<think>plan</think>AB"
+        );
+        // An open block is held back until it has a thought in it.
+        assert_eq!(visible_text("A<think>\n"), "A");
+        assert_eq!(visible_text("A<think>\nplan"), "A<think>\nplan");
+    }
+
+    #[test]
+    fn a_turn_cut_before_its_first_thought_projects_no_thinking_block() {
+        let mut state = state_with_history(0, 0);
+        state
+            .history
+            .push(ChatMessage::new("assistant", "<think>\n\n</think>"));
+        let revision = history_revision(&state);
+        let snapshot = project_snapshot(&state, &context(), &ProjectionLimits::default());
+        assert_eq!(snapshot.transcript[0].content.text, "");
+        assert_eq!(snapshot.transcript[0].content.total_bytes, 0);
+        assert_eq!(
+            resolve_content(&state, &message_content_id(&revision, 0)).as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn tool_rows_without_a_target_carry_their_action() {
+        let mut state = state_with_history(0, 0);
+        state.begin_live_tool_call(Some("call-time"), "get_time", &serde_json::json!({}));
+        let live = project_tools(&state, &ProjectionLimits::default());
+        let detail = live[0].detail.clone();
+        assert!(
+            detail.as_deref().is_some_and(|detail| detail != "get_time"),
+            "{live:?}"
+        );
+
+        // Once the live call is gone, the finish restates the start's detail
+        // from the recorded call instead of blanking the row.
+        state.clear_live_tool_calls();
+        let message: ChatMessage = serde_json::from_value(serde_json::json!({
+            "role": "assistant", "content": "",
+            "tool_calls": [{"id": "call-time", "name": "get_time", "arguments": "{}"}]
+        }))
+        .unwrap();
+        state.history.push(message);
+        let event = AgentUiEvent::ToolFinished {
+            id: "call-time".into(),
+            result: crate::network::events::ToolResult {
+                tool_name: "get_time".into(),
+                content: "Wednesday".into(),
+                diff: None,
+                file_preview: None,
+                metadata: crate::network::events::ToolResultMetadata {
+                    success: true,
+                    ..Default::default()
+                },
+            },
+        };
+        let events = project_event(&state, &event, &ProjectionLimits::default());
+        assert!(
+            matches!(&events[0], RemoteEvent::ToolStarted { tool } if tool.detail == detail),
             "{:?}",
             events[0]
         );

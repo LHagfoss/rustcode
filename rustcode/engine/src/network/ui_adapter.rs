@@ -94,8 +94,19 @@ impl AgentUiEventSender {
 
 pub(crate) fn tool_display_detail(name: &str, arguments: &serde_json::Value) -> Option<String> {
     let (action, target) = crate::app::activity::summarize_tool_call(name, arguments);
+    display_detail(name, &action, &target)
+}
+
+/// The detail of a live call, chosen exactly as [`tool_display_detail`]
+/// chooses it for a recorded one, so a row keeps the same title from start
+/// to finish.
+pub(crate) fn live_tool_display_detail(call: &crate::app::LiveToolCall) -> Option<String> {
+    display_detail(&call.tool_name, &call.action, &call.target)
+}
+
+fn display_detail(name: &str, action: &str, target: &str) -> Option<String> {
     if !target.is_empty() && target != "?" && target != name {
-        return Some(target);
+        return Some(target.to_owned());
     }
     // No target to show (MCP tools, argument-less calls): fall back to the
     // semantic action label so a tool row is never a bare name (#1961).
@@ -362,8 +373,7 @@ async fn publish_snapshot_with_mode(
             sender.send(AgentUiEvent::ToolStarted {
                 id: id.clone(),
                 name: call.tool_name.clone(),
-                detail: (!call.target.is_empty() && call.target != "?")
-                    .then(|| call.target.clone()),
+                detail: live_tool_display_detail(call),
             });
         }
     }
