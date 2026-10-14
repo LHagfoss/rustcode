@@ -1,3 +1,9 @@
+## [v0.67.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.1) - 2026-10-14
+
+### Fixes
+- Sessions opened from the iOS app now start your configured MCP servers, and `list_mcp_tools` names configured servers that are not running.
+- Tool rows keep their title while a turn runs in remote clients.
+- macOS: provider credentials live in `~/.config/rustcode/credentials.json` (owner-only) instead of Keychain, so updates no longer ask for your password once per secret. Set `RUSTCODE_CREDENTIAL_STORE=keychain` to keep Keychain.
 ## [v0.67.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.0) - 2026-10-13
 
 ### Features
