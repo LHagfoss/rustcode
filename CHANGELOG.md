@@ -1,3 +1,9 @@
+## [v0.67.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.3) - 2026-10-14
+
+### Fixes
+- Sessions opened from the iOS app keep their YOLO setting across owner restarts; new `yolo` config key starts every new session in YOLO (#2024)
+- Remote clients no longer receive empty thinking blocks, and tool rows always carry a description (#2023)
+- A derived reasoning budget of 0 no longer cuts every round at its first reasoning token (#2023)
 ## [v0.67.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.2) - 2026-10-14
 
 ### Features
