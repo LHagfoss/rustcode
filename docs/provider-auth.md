@@ -96,14 +96,12 @@ base_url = "https://api.example.com/v1"
 
 Then export the key and run `/login my-provider api-key MY_PROVIDER_API_KEY`. Provider IDs are stable configuration identifiers; display names are for menus. A custom provider entry advertises only the auth methods configured for it. Adding a provider does not automatically enable OAuth or subscription-based login: those flows require an explicit provider integration and its supported request protocol.
 
-Credentials are stored in the platform's native credential manager (for example, macOS Keychain or a Linux Secret Service keyring). On headless Linux, ensure a Secret Service provider is installed, available to the user session, and unlocked. If the native store cannot be opened, `/login` fails and leaves the key out of RustCode's config; there is no plaintext fallback.
+On macOS, credentials are stored in `~/.config/rustcode/credentials.json`, readable only by your user (mode `0600`). On other platforms they are stored in the native credential manager (for example, a Linux Secret Service keyring). On headless Linux, ensure a Secret Service provider is installed, available to the user session, and unlocked; if it cannot be opened, `/login` fails and leaves the key out of RustCode's config. Set `RUSTCODE_CREDENTIAL_STORE=file` to use the file on any platform, or `RUSTCODE_CREDENTIAL_STORE=keychain` to keep using the native store.
 
-### macOS asks for the login password after every update
+### Why macOS does not use Keychain
 
-Keychain grants access to one signed identity. A release binary, and one built with `cargo install`, is ad-hoc signed: its identity is the hash of that exact build, so each update is a new program to Keychain and it asks again for every stored credential, even after "Always Allow".
+Keychain grants access to one signed identity. RustCode is not signed with an Apple team ID, so after each update macOS treats it as a new program and asks for the login password again for every stored credential, even after "Always Allow". The file never asks.
 
-Run `scripts/macos-stable-signature.sh` once. It creates a self-signed certificate named "RustCode Local Signing" in your login keychain and signs the installed binary with it. `rustcode update` and `scripts/install.sh` sign with the same certificate afterwards, so the identity no longer changes. The first run after signing asks one last time per credential; choose "Always Allow". After `cargo install`, run the script again, because Cargo replaces the signature.
-
-RustCode also reads each stored credential once per process rather than on every request.
+Credentials saved in Keychain by an earlier version move to the file the first time each one is read; that read can ask one last time. The Keychain items are left in place; delete entries for `org.rustcode.provider-auth` in Keychain Access once you no longer need them.
 
 When a credential is attached to a profile, keep that profile's provider endpoint. Do not copy an account credential onto a profile pointing at an unrelated host. Legacy profiles without a credential reference continue using their existing API-key or environment-variable settings.
