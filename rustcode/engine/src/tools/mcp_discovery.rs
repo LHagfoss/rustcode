@@ -697,7 +697,8 @@ pub(super) fn render_catalogue(statuses: &[McpServerStatus]) -> Option<String> {
     }
     let header = "# MCP Servers\n\
 MCP tools exist only on these servers; never guess a server name. \
-`list_mcp_tools` with `select` returns exact schemas, `query` searches; `manage_mcp_servers` starts a stopped server.\n";
+Call `list_mcp_tools` only for a listed server matching the task; with no match use built-ins/shell. \
+`select` returns schemas, `query` searches; `manage_mcp_servers` starts a stopped server.\n";
     let line = |status: &McpServerStatus, with_names: bool| {
         let mut line = format!("- {}: {}", status.name, status.label());
         if let McpServerState::Running { tools } = &status.state

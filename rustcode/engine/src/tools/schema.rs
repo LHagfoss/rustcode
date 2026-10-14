@@ -1995,8 +1995,8 @@ pub(crate) fn tool_system_prompt_for_policy(
 
     p.push_str(
         "\n# Skills\n\
-Skills stay on demand. If the request names a skill, load it first; for specialized workflows, call `list_skills` once, then `use_skill` for a match. \
-For live local app/device state without a matching tool or route hint, check `list_skills` before shell guesses or claiming unsupported. \
+Skills stay on demand; never probe speculatively. Call `list_skills` only when the request names a skill, the Relevant-skills hint names a match, or built-ins/shell are stuck. \
+For local machine state check the shell first, never `list_skills` first. \
 `list_skills` returns metadata only; `use_skill` loads the selected SKILL.md.\n\n",
     );
 
@@ -2100,7 +2100,7 @@ Never guess MCP server names: see MCP Servers, then `list_mcp_tools` `select` fo
         return p;
     }
 
-    p.push_str("For connected services (such as email), prefer their listed tools over guessed shell commands. Use `list_mcp_tools` (`select` exact names, or `query`) to discover registered MCP tools when needed.\n\n");
+    p.push_str("For connected services with a matching MCP server listed, prefer their tools over shell. With no matching server, check the shell first; never probe `list_mcp_tools` speculatively.\n\n");
     p.push_str("Available tools:\n");
     for t in TOOLS {
         if !text_builtin_is_advertised(t, policy, agent_mode) {

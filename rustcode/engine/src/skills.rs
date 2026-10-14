@@ -394,7 +394,7 @@ pub fn relevant_skills_hint(
         return None;
     }
     let mut out = String::from(
-        "# Relevant skills\nThe prompt matches these skills by metadata or description intent. Consider `list_skills`, then `use_skill` for the best match before exploring:",
+        "# Relevant skills\nOnly these skills matched the prompt; if one clearly fits, call `list_skills`, then `use_skill` for it, otherwise skip skills and use built-ins/shell:",
     );
     for (skill, score) in ranked {
         out.push_str(&format!(
