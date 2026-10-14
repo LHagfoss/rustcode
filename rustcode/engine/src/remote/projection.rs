@@ -773,11 +773,16 @@ pub fn project_event(
                 tool: RemoteTool {
                     id: id.clone(),
                     name: result.tool_name.clone(),
-                    detail: result
-                        .metadata
-                        .command
-                        .as_deref()
-                        .map(|command| label(command, limits)),
+                    // The live call still holds the detail the first start
+                    // carried; without it a client blanks the row's title.
+                    detail: state
+                        .live_tool_calls
+                        .iter()
+                        .find(|call| call.provider_call_id.as_ref() == Some(id))
+                        .map(|call| call.target.as_str())
+                        .filter(|target| !target.is_empty())
+                        .or(result.metadata.command.as_deref())
+                        .map(|detail| label(detail, limits)),
                     state: RemoteToolState::Running,
                 },
             },
@@ -988,6 +993,35 @@ mod tests {
         );
         assert!(
             matches!(&events[1], RemoteEvent::ToolFinished { id, content, .. } if id == "local_arguments" && content.text == "actual output")
+        );
+    }
+
+    #[test]
+    fn tool_result_repeats_the_live_detail_of_its_start() {
+        let mut state = state_with_history(0, 0);
+        state.begin_live_tool_call(
+            Some("call-1"),
+            "view_file",
+            &serde_json::json!({"path":"src/main.rs"}),
+        );
+        let event = AgentUiEvent::ToolFinished {
+            id: "call-1".into(),
+            result: crate::network::events::ToolResult {
+                tool_name: "view_file".into(),
+                content: "fn main() {}".into(),
+                diff: None,
+                file_preview: None,
+                metadata: crate::network::events::ToolResultMetadata {
+                    success: true,
+                    ..Default::default()
+                },
+            },
+        };
+        let events = project_event(&state, &event, &ProjectionLimits::default());
+        assert!(
+            matches!(&events[0], RemoteEvent::ToolStarted { tool } if tool.detail.as_deref().is_some_and(|detail| detail.contains("main.rs"))),
+            "{:?}",
+            events[0]
         );
     }
 

@@ -25,6 +25,18 @@ impl AppRuntime {
             rustcode::remote_gateway::workspace::owner_state(config, session_id)
                 .inspect_err(|error| eprintln!("session owner {session_id}: {error:#}"))?;
         state.remote_command = Some(rustcode::remote::owner::SharingCommand::Enable);
+        // Same MCP startup as the TUI: without it a remote session sees no
+        // MCP tools at all, and the model falls back to guessing.
+        let mcp_servers = state.config.mcp_servers.clone();
+        tokio::spawn(async move {
+            let warnings = rustcode::mcp::start_enabled_servers(&mcp_servers, |name| async move {
+                rustcode::mcp::start_server_by_name(&name).await
+            })
+            .await;
+            for warning in warnings {
+                eprintln!("{warning}");
+            }
+        });
         let mut runtime = Self::detached(state);
         // The gateway started this process. It only ever looks for that
         // gateway: it must never start one, or replace the one it came from.

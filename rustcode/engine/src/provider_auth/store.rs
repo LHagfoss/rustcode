@@ -139,45 +139,195 @@ fn generation_file() -> Option<PathBuf> {
 impl CredentialStore for NativeCredentialStore {
     fn get_secret(&self, provider: &str, account: &str, kind: &str) -> Result<String> {
         let key = key(provider, account, kind);
-        cached_secret(
-            SecretCache::global(),
-            generation_file().as_deref(),
-            &key,
-            || {
-                let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-                    .map_err(|_| anyhow!("could not open the operating system credential store"))?;
-                entry.get_password().map_err(|_| {
-                    anyhow!(
-                        "credential is missing or the operating system credential store is unavailable"
-                    )
-                })
-            },
-        )
+        match credential_file() {
+            Some(path) => file_secret(&path, &key, || keychain_get(&key)),
+            None => keychain_get(&key),
+        }
     }
 
     fn set_secret(&self, provider: &str, account: &str, kind: &str, value: &str) -> Result<()> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, &key(provider, account, kind))
-            .map_err(|_| anyhow!("could not open the operating system credential store"))?;
-        let stored = entry.set_password(value).map_err(|_| anyhow!("could not store credential in the operating system credential store; check that its keychain or Secret Service is unlocked"));
-        if let Some(generation_file) = generation_file() {
-            advance_generation(SecretCache::global(), &generation_file);
+        let key = key(provider, account, kind);
+        match credential_file() {
+            Some(path) => edit_credential_file(&path, |secrets| {
+                secrets.insert(key, Some(value.to_owned()));
+            }),
+            None => keychain_set(&key, value),
         }
-        stored
     }
 
     fn delete_secret(&self, provider: &str, account: &str, kind: &str) -> Result<()> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, &key(provider, account, kind))
-            .map_err(|_| anyhow!("could not open the operating system credential store"))?;
-        let deleted = entry.delete_credential();
-        if let Some(generation_file) = generation_file() {
-            advance_generation(SecretCache::global(), &generation_file);
+        let key = key(provider, account, kind);
+        match credential_file() {
+            // A tombstone keeps a deleted secret from being migrated back in
+            // from the keychain; the keychain item itself is left alone, as
+            // removing it can raise the very prompt this store avoids.
+            Some(path) => edit_credential_file(&path, |secrets| {
+                secrets.insert(key, None);
+            }),
+            None => keychain_delete(&key),
         }
-        match deleted {
-            Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err(anyhow!(
-                "could not remove credential from the operating system credential store"
-            )),
+    }
+}
+
+fn keychain_get(key: &str) -> Result<String> {
+    cached_secret(
+        SecretCache::global(),
+        generation_file().as_deref(),
+        key,
+        || {
+            let entry = keyring::Entry::new(KEYRING_SERVICE, key)
+                .map_err(|_| anyhow!("could not open the operating system credential store"))?;
+            entry.get_password().map_err(|_| {
+                anyhow!(
+                    "credential is missing or the operating system credential store is unavailable"
+                )
+            })
+        },
+    )
+}
+
+fn keychain_set(key: &str, value: &str) -> Result<()> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, key)
+        .map_err(|_| anyhow!("could not open the operating system credential store"))?;
+    let stored = entry.set_password(value).map_err(|_| anyhow!("could not store credential in the operating system credential store; check that its keychain or Secret Service is unlocked"));
+    if let Some(generation_file) = generation_file() {
+        advance_generation(SecretCache::global(), &generation_file);
+    }
+    stored
+}
+
+fn keychain_delete(key: &str) -> Result<()> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, key)
+        .map_err(|_| anyhow!("could not open the operating system credential store"))?;
+    let deleted = entry.delete_credential();
+    if let Some(generation_file) = generation_file() {
+        advance_generation(SecretCache::global(), &generation_file);
+    }
+    match deleted {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err(anyhow!(
+            "could not remove credential from the operating system credential store"
+        )),
+    }
+}
+
+/// Owner-only file holding provider secrets.
+///
+/// On macOS a keychain item trusts the exact build that stored it: a binary
+/// signed without an Apple team ID is a new application after every update,
+/// and each secret then asks for the login password again. The file never
+/// asks. `RUSTCODE_CREDENTIAL_STORE=keychain` keeps the keychain instead, and
+/// `=file` uses the file on other platforms too.
+const CREDENTIAL_FILE: &str = "credentials.json";
+
+fn credential_file() -> Option<PathBuf> {
+    let use_file = match std::env::var("RUSTCODE_CREDENTIAL_STORE").as_deref() {
+        Ok("keychain") => false,
+        Ok("file") => true,
+        _ => cfg!(target_os = "macos"),
+    };
+    use_file
+        .then(|| config_dir().ok())
+        .flatten()
+        .map(|directory| directory.join(CREDENTIAL_FILE))
+}
+
+/// `None` marks a deleted secret.
+type CredentialMap = std::collections::BTreeMap<String, Option<String>>;
+
+fn read_credential_file(path: &std::path::Path) -> Result<CredentialMap> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .with_context(|| format!("could not parse {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(CredentialMap::new()),
+        Err(error) => Err(error).with_context(|| format!("could not read {}", path.display())),
+    }
+}
+
+/// Read `key` from the file, moving it over from the keychain the first time
+/// it is asked for there.
+fn file_secret(
+    path: &std::path::Path,
+    key: &str,
+    legacy: impl FnOnce() -> Result<String>,
+) -> Result<String> {
+    match read_credential_file(path)?.get(key) {
+        Some(Some(secret)) => return Ok(secret.clone()),
+        Some(None) => return Err(anyhow!("credential is missing")),
+        None => {}
+    }
+    let secret = legacy()?;
+    edit_credential_file(path, |secrets| {
+        secrets
+            .entry(key.to_owned())
+            .or_insert_with(|| Some(secret.clone()));
+    })?;
+    Ok(secret)
+}
+
+fn edit_credential_file(
+    path: &std::path::Path,
+    edit: impl FnOnce(&mut CredentialMap),
+) -> Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| anyhow!("credential file path has no directory"))?;
+    fs::create_dir_all(directory)
+        .with_context(|| format!("could not create {}", directory.display()))?;
+    let _lock = file_lock(&directory.join("credentials.lock"))?;
+    let mut secrets = read_credential_file(path)?;
+    edit(&mut secrets);
+    write_private_file(
+        path,
+        &serde_json::to_vec_pretty(&secrets).context("could not encode credentials")?,
+    )
+}
+
+#[cfg(test)]
+mod credential_file_tests {
+    use super::*;
+
+    #[test]
+    fn secrets_move_from_the_keychain_once_and_deletes_stay_deleted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(CREDENTIAL_FILE);
+        let legacy_reads = std::cell::Cell::new(0);
+        let legacy = || {
+            legacy_reads.set(legacy_reads.get() + 1);
+            Ok("from-keychain".to_owned())
+        };
+
+        assert_eq!(
+            file_secret(&path, "token", legacy).unwrap(),
+            "from-keychain"
+        );
+        assert_eq!(
+            file_secret(&path, "token", legacy).unwrap(),
+            "from-keychain"
+        );
+        assert_eq!(legacy_reads.get(), 1);
+
+        edit_credential_file(&path, |secrets| {
+            secrets.insert("token".into(), Some("rotated".into()));
+        })
+        .unwrap();
+        assert_eq!(file_secret(&path, "token", legacy).unwrap(), "rotated");
+
+        edit_credential_file(&path, |secrets| {
+            secrets.insert("token".into(), None);
+        })
+        .unwrap();
+        assert!(file_secret(&path, "token", legacy).is_err());
+        assert_eq!(legacy_reads.get(), 1);
+
+        assert!(file_secret(&path, "missing", || Err(anyhow!("no item"))).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
         }
     }
 }
@@ -272,23 +422,31 @@ fn write_accounts(rows: &[AccountStatus]) -> Result<()> {
     fs::create_dir_all(directory)
         .with_context(|| format!("could not create {}", directory.display()))?;
     let bytes = serde_json::to_vec_pretty(rows).context("could not encode credential metadata")?;
+    write_private_file(&path, &bytes)
+}
+
+/// Atomically replace `path` with an owner-only file holding `bytes`.
+fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no directory", path.display()))?;
     let mut file = tempfile::NamedTempFile::new_in(directory)
-        .context("could not create temporary credential metadata file")?;
+        .context("could not create temporary credential file")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         file.as_file()
             .set_permissions(fs::Permissions::from_mode(0o600))
-            .context("could not protect credential metadata file")?;
+            .context("could not protect credential file")?;
     }
-    file.write_all(&bytes)
-        .context("could not write credential metadata")?;
+    file.write_all(bytes)
+        .context("could not write credential file")?;
     file.as_file()
         .sync_all()
-        .context("could not sync credential metadata")?;
+        .context("could not sync credential file")?;
     let temp_path = file.into_temp_path();
-    crate::atomic_file::replace_file(&temp_path, &path)
-        .context("could not atomically replace credential metadata")?;
+    crate::atomic_file::replace_file(&temp_path, path)
+        .context("could not atomically replace credential file")?;
     Ok(())
 }
 
@@ -342,5 +500,33 @@ struct FileLock {
 impl Drop for FileLock {
     fn drop(&mut self) {
         let _ = fs2::FileExt::unlock(&self.file);
+    }
+}
+
+/// Exclusive lock on `path` for one read-modify-write of the credential file.
+/// `flock` excludes other descriptors in this process as well as other
+/// processes.
+fn file_lock(path: &std::path::Path) -> Result<CredentialFileLock> {
+    use fs2::FileExt as _;
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .context("could not open credential lock")?;
+    file.lock_exclusive()
+        .context("could not lock credential file")?;
+    Ok(CredentialFileLock(file))
+}
+
+struct CredentialFileLock(std::fs::File);
+
+impl Drop for CredentialFileLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
     }
 }
