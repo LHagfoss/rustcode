@@ -30,6 +30,9 @@ public enum RemoteCommand: Sendable, Equatable {
     case answerQuestion(SessionRef, questionID: String, answer: QuestionAnswer)
     case resolveApproval(SessionRef, batchID: String, decision: ApprovalDecision)
     case getRequestStatus(SessionRef, target: RequestID)
+    /// Asks the live terminal of an unshared session to share it. Answered by
+    /// `.shareRequestSent`; the outcome comes from `getRequestStatus` on the same request.
+    case requestShare(sessionID: String)
 
     public var isHandshake: Bool {
         switch self {
@@ -124,6 +127,12 @@ public enum RemoteReply: Sendable, Equatable {
     /// A mutation's receipt, or the answer to `getRequestStatus`. A `received` receipt may be
     /// followed by a final one for the same request.
     case commandExecuted(SessionCommandResult)
+    /// A share request reached the session's terminal and awaits its answer.
+    case shareRequestSent(pendingID: String)
+    /// The terminal shared the session; it can be attached.
+    case shareAccepted(SessionSummary)
+    /// The terminal declined, the request expired, or the terminal went away.
+    case shareDenied(reason: String)
     case receipt(ReceiptState)
     case failure(RemoteError)
     /// A result this version of the app does not know.

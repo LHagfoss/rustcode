@@ -153,6 +153,9 @@ public struct WireCodec: RemoteCodec {
             // Resolved by device and request ID; naming the session asks exactly the
             // terminal that would hold the receipt.
             return scoped(session, .getRequestStatus(.init(targetRequestID: target.rawValue)))
+        case .requestShare(let sessionID):
+            // The session is not shared yet, so it has no registration to scope to.
+            return WireRequest(requestID: requestID.rawValue, operation: .requestShare(.init(sessionID: sessionID)))
         }
     }
 
@@ -319,8 +322,16 @@ public struct WireCodec: RemoteCodec {
             return receipt == .applied ? .commandExecuted(result) : .receipt(receipt == .received ? .received : .unknown)
         case .questionCancelled, .sessionSettingsUpdated, .promptAccepted, .turnCancelled, .questionAnswered, .approvalResolved:
             return .receipt(receipt == .unknown ? .unknown : receipt == .received ? .received : .applied)
+        case .shareRequestSent(let sent):
+            return .shareRequestSent(pendingID: sent.pendingID)
+        case .shareAccepted(let accepted):
+            return .shareAccepted(summary(accepted.session))
+        case .shareDenied(let denied):
+            return .shareDenied(reason: denied.reason)
         case .requestStatus(let status):
             if status.receipt.known == .applied, case .commandExecuted(let result) = status.result { return .commandExecuted(result) }
+            if case .shareAccepted(let accepted) = status.result { return .shareAccepted(summary(accepted.session)) }
+            if case .shareDenied(let denied) = status.result { return .shareDenied(reason: denied.reason) }
             return .receipt(receiptState(status))
         case .unknown(let type, _):
             return .unknown(type)
@@ -469,7 +480,8 @@ public struct WireCodec: RemoteCodec {
                 pendingApprovals: info.attention.approval ? 1 : 0
             ),
             health: info.health.known == .live ? .healthy : .degraded,
-            turnCount: info.turnCount
+            turnCount: info.turnCount,
+            lastActiveAt: info.lastActiveAt.flatMap(TimingPresentation.date)
         )
     }
 

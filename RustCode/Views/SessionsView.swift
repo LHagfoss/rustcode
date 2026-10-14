@@ -377,10 +377,22 @@ private struct SessionRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let turns = session.turnCount {
-                    Text("\(turns) \(turns == 1 ? "turn" : "turns")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if session.turnCount != nil || session.lastActiveAt != nil {
+                    HStack(spacing: 8) {
+                        if let turns = session.turnCount {
+                            Text("\(turns) \(turns == 1 ? "turn" : "turns")")
+                        }
+                        Spacer(minLength: 8)
+                        if let lastActiveAt = session.lastActiveAt {
+                            // Re-rendered each minute so "Now" and today's times stay current.
+                            TimelineView(.everyMinute) { context in
+                                Text(LastActivePresentation.label(for: lastActiveAt, now: context.date))
+                                    .monospacedDigit()
+                            }
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 8)
@@ -388,7 +400,7 @@ private struct SessionRow: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(session.displayTitle), \(statusDescription)\(session.turnCount.map { ", \($0) turns" } ?? "")")
+        .accessibilityLabel("\(session.displayTitle), \(statusDescription)\(session.turnCount.map { ", \($0) turns" } ?? "")\(session.lastActiveAt.map { ", last active \(LastActivePresentation.label(for: $0))" } ?? "")")
     }
 
     @ViewBuilder

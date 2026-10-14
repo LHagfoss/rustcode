@@ -46,6 +46,8 @@ public struct SessionSummary: Identifiable, Hashable, Sendable {
     public var attention: SessionAttention
     /// The host's total logical turns, independent of the bounded transcript window.
     public var turnCount: UInt64?
+    /// When the newest transcript message was written, if the host says.
+    public var lastActiveAt: Date?
     public var displayTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Session \(id.prefix(8))" : title
     }
@@ -61,7 +63,8 @@ public struct SessionSummary: Identifiable, Hashable, Sendable {
         activity: SessionActivity = .idle,
         attention: SessionAttention = SessionAttention(),
         health: SessionHealth = .healthy,
-        turnCount: UInt64? = nil
+        turnCount: UInt64? = nil,
+        lastActiveAt: Date? = nil
     ) {
         self.ref = ref
         self.title = title
@@ -71,6 +74,7 @@ public struct SessionSummary: Identifiable, Hashable, Sendable {
         self.attention = attention
         self.health = health
         self.turnCount = turnCount
+        self.lastActiveAt = lastActiveAt
     }
 }
 

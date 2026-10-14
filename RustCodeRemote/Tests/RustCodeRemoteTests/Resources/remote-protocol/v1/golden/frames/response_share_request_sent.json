@@ -1,0 +1,10 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-0020",
+  "receipt": "applied",
+  "result": {
+    "type": "share_request_sent",
+    "pending_id": "7"
+  }
+}

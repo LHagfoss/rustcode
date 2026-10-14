@@ -84,6 +84,7 @@ struct LineCodec: RemoteCodec {
         case .answerQuestion: "answer"
         case .resolveApproval: "approve"
         case .getRequestStatus(_, let target): "status:\(target)"
+        case .requestShare: "share"
         }
         return "\(requestID)|\(operation)"
     }

@@ -50,8 +50,13 @@ import Testing
             #"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone"}"#
         ) == .handshake(.authenticated(identity)))
 
-        // The golden frames carry the host's name.
-        identity = ConnectionIdentity(gatewayID: "gw-8e1f4b7a", instanceID: "inst-41c07d92", hostName: "studio")
+        // The golden frames carry the host's name and the link expiry.
+        identity = ConnectionIdentity(
+            gatewayID: "gw-8e1f4b7a",
+            instanceID: "inst-41c07d92",
+            hostName: "studio",
+            linkExpiresAt: Date(timeIntervalSince1970: 1_787_390_100)
+        )
         #expect(try codec.decode(try golden("handshake/responses/authenticated")) == .handshake(.authenticated(identity)))
         guard case .handshake(.paired(let grant)) = try codec.decode(try golden("handshake/responses/paired")) else {
             Issue.record("expected a pairing grant")
@@ -171,6 +176,7 @@ import Testing
             ("answer_question_selected", "req-0012", .answerQuestion(session, questionID: "question:48213:4", answer: QuestionAnswer(selectedOptionIDs: ["Rebase onto main"]))),
             ("answer_question_custom", "", .answerQuestion(session, questionID: "", answer: QuestionAnswer())),
             ("resolve_approval", "req-0014", .resolveApproval(session, batchID: "controller:48213:7", decision: .approve)),
+            ("request_share", "req-0020", .requestShare(sessionID: session.sessionID)),
         ]
         for (name, _, template) in cases {
             let text = try golden("requests/\(name)")
@@ -193,7 +199,7 @@ import Testing
             #expect(try Contract.json(Data(encoded.utf8)) == Contract.json(Data(text.utf8)), "\(name) differs from the golden request")
         }
         // `list_sessions` is the one operation the app does not use: it subscribes instead.
-        #expect(cases.count == 13)
+        #expect(cases.count == 14)
 
         // The golden status request is the host-wide form. The app names the session it
         // sent the mutation to, which the protocol calls the precise form.
@@ -205,6 +211,25 @@ import Testing
         #expect(status.operation == goldenStatus.operation)
         #expect(status.sessionID == session.sessionID)
         #expect(status.registrationEpoch == session.registrationEpoch)
+    }
+
+    @Test func shareResultsMapToShareReplies() throws {
+        guard case .reply(_, .shareAccepted(let shared)) = try decodeGolden("response_share_accepted") else {
+            Issue.record("expected an accepted share")
+            return
+        }
+        #expect(shared.ref == session)
+        #expect(try decodeGolden("response_share_denied") == .reply(
+            requestID: RequestID("req-0020"),
+            .shareDenied(reason: "the terminal declined to share this session")
+        ))
+        #expect(try decodeGolden("response_share_request_sent") == .reply(
+            requestID: RequestID("req-0020"),
+            .shareRequestSent(pendingID: "7")
+        ))
+        // The outcome reported later through `get_request_status` maps the same way.
+        let status = #"{"kind":"response","protocol_version":1,"request_id":"r","receipt":"applied","result":{"type":"request_status","target_request_id":"req-0020","receipt":"rejected","result":{"type":"share_denied","reason":"expired"}}}"#
+        #expect(try codec.decode(status) == .reply(requestID: RequestID("r"), .shareDenied(reason: "expired")))
     }
 
     @Test func typedTextWinsOverASelectionBecauseTheWireTakesOnlyOne() {

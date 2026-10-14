@@ -413,6 +413,23 @@
             "reasoning_effort"
           ],
           "type": "object"
+        },
+        {
+          "description": "Ask the live terminal of an unshared session to share it. Answered at\nonce with `share_request_sent`; the outcome (accepted, denied,\nexpired) is reported by `get_request_status` on the request id.",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "request_share",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
         }
       ]
     },

@@ -72,12 +72,16 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
     case questionCancelled(QuestionAnswered)
     case questionAnswered(QuestionAnswered)
     case approvalResolved(ApprovalResolved)
+    case shareRequestSent(ShareRequestSent)
+    case shareAccepted(ShareAccepted)
+    case shareDenied(ShareDenied)
     case requestStatus(RequestStatus)
     case unknown(type: String, JSONValue)
 
     public static let knownTypes: Set<String> = [
         "image_uploaded", "directories", "session_created", "error", "sessions", "attached", "resumed", "detached", "history", "content",
         "session_settings_updated", "prompt_accepted", "turn_cancelled", "question_answered", "question_cancelled", "command_executed", "approval_resolved", "request_status",
+        "share_request_sent", "share_accepted", "share_denied",
     ]
 
     public struct SessionCreated: Codable, Equatable, Sendable { public var session: WireSessionInfo }
@@ -157,6 +161,22 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         }
     }
 
+    /// A `request_share` reached the session's terminal; the outcome follows from
+    /// `get_request_status` on the same request ID.
+    public struct ShareRequestSent: Codable, Equatable, Sendable {
+        public var pendingID: String
+
+        enum CodingKeys: String, CodingKey {
+            case pendingID = "pending_id"
+        }
+    }
+
+    /// The terminal shared the session; it can be attached.
+    public struct ShareAccepted: Codable, Equatable, Sendable { public var session: WireSessionInfo }
+
+    /// The terminal declined, the request expired, or the terminal went away.
+    public struct ShareDenied: Codable, Equatable, Sendable { public var reason: String }
+
     public struct RequestStatus: Codable, Equatable, Sendable {
         public var targetRequestID: String
         public var receipt: WireOpen<WireReceiptState>
@@ -189,6 +209,9 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .questionCancelled: "question_cancelled"
         case .questionAnswered: "question_answered"
         case .approvalResolved: "approval_resolved"
+        case .shareRequestSent: "share_request_sent"
+        case .shareAccepted: "share_accepted"
+        case .shareDenied: "share_denied"
         case .requestStatus: "request_status"
         case .unknown(let type, _): type
         }
@@ -214,6 +237,9 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case "question_cancelled": self = .questionCancelled(try QuestionAnswered(from: decoder))
         case "question_answered": self = .questionAnswered(try QuestionAnswered(from: decoder))
         case "approval_resolved": self = .approvalResolved(try ApprovalResolved(from: decoder))
+        case "share_request_sent": self = .shareRequestSent(try ShareRequestSent(from: decoder))
+        case "share_accepted": self = .shareAccepted(try ShareAccepted(from: decoder))
+        case "share_denied": self = .shareDenied(try ShareDenied(from: decoder))
         case "request_status": self = .requestStatus(try RequestStatus(from: decoder))
         default: self = .unknown(type: type, try JSONValue(from: decoder))
         }
@@ -238,6 +264,9 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .questionCancelled(let payload): payload
         case .questionAnswered(let payload): payload
         case .approvalResolved(let payload): payload
+        case .shareRequestSent(let payload): payload
+        case .shareAccepted(let payload): payload
+        case .shareDenied(let payload): payload
         case .requestStatus(let payload): payload
         case .unknown(_, let raw): raw
         }
@@ -528,6 +557,7 @@ public struct WireSessionInfo: Codable, Equatable, Sendable {
     public var activity: WireOpen<WireSessionActivity>
     public var attention: WireAttention
     public var turnCount: UInt64? = nil
+    public var lastActiveAt: String? = nil
     public var health: WireOpen<WireOwnerHealth>
 
     enum CodingKeys: String, CodingKey {
@@ -540,6 +570,7 @@ public struct WireSessionInfo: Codable, Equatable, Sendable {
         case attention
         case health
         case turnCount = "turn_count"
+        case lastActiveAt = "last_active_at"
     }
 }
 

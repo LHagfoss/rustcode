@@ -53,6 +53,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
     case answerQuestion(AnswerQuestion)
     case resolveApproval(ResolveApproval)
     case getRequestStatus(GetRequestStatus)
+    case requestShare(RequestShare)
     case unknown(type: String, JSONValue)
 
     /// Every `operation.type` this build knows.
@@ -60,6 +61,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
         "upload_image", "list_directories", "create_session", "list_sessions", "subscribe_sessions", "attach_session", "detach_session", "get_history",
         "get_content", "submit_prompt", "steer", "queue", "cancel_turn", "answer_question",
         "resolve_approval", "get_request_status", "set_session_settings", "execute_command", "cancel_question",
+        "request_share",
     ]
 
     public struct DirectoryPath: Codable, Equatable, Sendable { public var path: String? }
@@ -136,6 +138,15 @@ public enum WireOperation: Codable, Equatable, Sendable {
         }
     }
 
+    /// Asks the live terminal of an unshared session to share it.
+    public struct RequestShare: Codable, Equatable, Sendable {
+        public var sessionID: String
+
+        enum CodingKeys: String, CodingKey {
+            case sessionID = "session_id"
+        }
+    }
+
     public var type: String {
         switch self {
         case .uploadImage: "upload_image"
@@ -157,6 +168,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case .answerQuestion: "answer_question"
         case .resolveApproval: "resolve_approval"
         case .getRequestStatus: "get_request_status"
+        case .requestShare: "request_share"
         case .unknown(let type, _): type
         }
     }
@@ -183,6 +195,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case "answer_question": self = .answerQuestion(try AnswerQuestion(from: decoder))
         case "resolve_approval": self = .resolveApproval(try ResolveApproval(from: decoder))
         case "get_request_status": self = .getRequestStatus(try GetRequestStatus(from: decoder))
+        case "request_share": self = .requestShare(try RequestShare(from: decoder))
         default: self = .unknown(type: type, try JSONValue(from: decoder))
         }
     }
@@ -203,6 +216,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case .answerQuestion(let payload): payload
         case .resolveApproval(let payload): payload
         case .getRequestStatus(let payload): payload
+        case .requestShare(let payload): payload
         case .unknown(_, let raw): raw
         }
         if case .unknown(_, let raw) = self {
