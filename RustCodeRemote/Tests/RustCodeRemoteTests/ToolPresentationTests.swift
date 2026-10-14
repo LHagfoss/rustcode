@@ -22,4 +22,14 @@ import Testing
         #expect(ToolPresentation.title("explorer") == "Explorer")
         #expect(ToolPresentation.title("") == "")
     }
+
+    @Test func descriptionPrefersDetailThenWhatTheRowAlreadyHas() {
+        #expect(ToolPresentation.description(for: ToolCall(name: "view_file", summary: "src/a.rs", status: .running)) == "src/a.rs")
+        #expect(ToolPresentation.description(for: ToolCall(name: "run_command", summary: "\n  cargo test\nmore", status: .running)) == "cargo test")
+        #expect(ToolPresentation.description(for: ToolCall(name: "run_command", summary: "", output: "\nok: 3 passed\n", status: .succeeded)) == "ok: 3 passed")
+        let long = String(repeating: "x", count: 300)
+        #expect(ToolPresentation.description(for: ToolCall(name: "grep", summary: " ", output: long, status: .succeeded))?.count == 120)
+        #expect(ToolPresentation.description(for: ToolCall(name: "mcp__github__create_issue", summary: "", status: .running)) == "MCP tool")
+        #expect(ToolPresentation.description(for: ToolCall(name: "view_file", summary: "", status: .running)) == nil)
+    }
 }

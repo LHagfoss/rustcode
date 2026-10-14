@@ -148,7 +148,7 @@ public struct SessionSnapshot: Sendable, Equatable {
         // for and replaces everything, wherever the client was.
         if update.isSnapshot, case .replaced(let snapshot) = update.changes[0] {
             let session = session
-            self = snapshot
+            self = snapshot.keepingToolDetail(from: self)
             self.session = session
             return .applied
         }
@@ -193,7 +193,7 @@ public struct SessionSnapshot: Sendable, Equatable {
         case .toolFinished(let itemID, let succeeded, let isPending, let output, let isOutputTruncated):
             if itemID.hasPrefix("tool:"), hasRecordedTool(String(itemID.dropFirst(5))) { return }
             let index = items.lastIndex { $0.id == itemID }
-            var tool = ToolCall(name: "tool", summary: "", status: .running)
+            var tool = ToolCall(name: ToolCall.placeholderName, summary: "", status: .running)
             if let index, case .tool(let existing) = items[index].content {
                 tool = existing
             }
@@ -264,7 +264,7 @@ public struct SessionSnapshot: Sendable, Equatable {
             if pendingApproval?.batchID == batchID { pendingApproval = nil }
         case .replaced(let snapshot):
             let session = session
-            self = snapshot
+            self = snapshot.keepingToolDetail(from: self)
             self.session = session
         }
     }
@@ -293,16 +293,37 @@ public struct SessionSnapshot: Sendable, Equatable {
             var item = item
             // The host repeats a tool's start with its result, often without the detail
             // the first start carried. A missing detail is unknown, not cleared.
-            if case .tool(var tool) = item.content, case .tool(let existing) = items[index].content,
-               tool.summary.isEmpty, !existing.summary.isEmpty {
-                tool.summary = existing.summary
-                item.content = .tool(tool)
+            if case .tool(let tool) = item.content, case .tool(let existing) = items[index].content {
+                item.content = .tool(tool.keepingDetail(of: existing))
             }
             items[index] = item
         } else {
             finishStreaming { _ in true }
             items.append(item)
         }
+    }
+
+    /// This snapshot, with tool detail carried over from `previous` where this one has
+    /// none. A resync or a late snapshot can describe a tool more briefly than the events
+    /// already applied; what was known is not forgotten.
+    public func keepingToolDetail(from previous: SessionSnapshot?) -> SessionSnapshot {
+        guard let previous, previous.session.sessionID == session.sessionID else { return self }
+        var known: [String: ToolCall] = [:]
+        for item in previous.items {
+            guard case .tool(let tool) = item.content else { continue }
+            known[item.id] = tool
+            if let callID = tool.callID { known["call:\(callID)"] = tool }
+        }
+        guard !known.isEmpty else { return self }
+        var result = self
+        for index in result.items.indices {
+            guard case .tool(let tool) = result.items[index].content else { continue }
+            let match = known[result.items[index].id] ?? tool.callID.flatMap { known["call:\($0)"] }
+            if let match, match.name == tool.name || tool.name.isEmpty {
+                result.items[index].content = .tool(tool.keepingDetail(of: match))
+            }
+        }
+        return result
     }
 
     private func responseItemID(sequence: UInt64) -> String {
@@ -318,5 +339,26 @@ public struct SessionSnapshot: Sendable, Equatable {
                 items[index].content = .assistant(assistant)
             }
         }
+    }
+}
+
+extension ToolCall {
+    /// The name `toolFinished` uses for a row it had to create without a start.
+    static let placeholderName = "tool"
+
+    /// This state of the call, keeping the name and detail of `existing` where this one
+    /// arrived without them. A later event never makes a row less descriptive.
+    func keepingDetail(of existing: ToolCall) -> ToolCall {
+        var tool = self
+        if tool.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !existing.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            tool.summary = existing.summary
+        }
+        if tool.name.isEmpty || (tool.name == Self.placeholderName && existing.name != Self.placeholderName) {
+            tool.name = existing.name
+        }
+        if tool.input == nil { tool.input = existing.input }
+        if tool.callID == nil { tool.callID = existing.callID }
+        return tool
     }
 }

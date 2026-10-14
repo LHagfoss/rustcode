@@ -30,6 +30,16 @@ import Testing
         #expect(AssistantBlock.parse("A partial <thi") == [.markdown("A partial <thi")])
     }
 
+    @Test func dropsEmptyReasoningOnceItCanNoLongerFill() {
+        #expect(AssistantBlock.parse("<think></think>Answer") == [.markdown("Answer")])
+        #expect(AssistantBlock.parse("<think>\n  \n</think>Answer<think> </think>") == [.markdown("Answer")])
+        #expect(AssistantBlock.parse("<think>") == [])
+        // Streaming: an opened block with no text yet says it is thinking, but only while open.
+        #expect(AssistantBlock.parse("<think>", isStreaming: true) == [.thinking(text: "", isComplete: false)])
+        #expect(AssistantBlock.parse("<think></think>Ans", isStreaming: true) == [.markdown("Ans")])
+        #expect(AssistantBlock.parse("<think>Plan</think>", isStreaming: true) == [.thinking(text: "Plan", isComplete: true)])
+    }
+
     @Test func leavesLiteralTagsInsideCodeAlone() {
         for text in ["Use `<think>` and `</think>`.", "````xml\n<think>literal</think>\n```\n````", "~~~xml\n<think>literal</think>\n~~~", "Escaped \\<think>literal"] {
             #expect(AssistantBlock.parse(text) == [.markdown(text)])

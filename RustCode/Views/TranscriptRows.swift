@@ -80,13 +80,34 @@ private struct UserMessage: View {
             .padding(.vertical, 10)
             .background(.fill.tertiary, in: .rect(cornerRadius: 20))
             .contentShape(.contextMenuPreview, .rect(cornerRadius: 20))
-            .contextMenu { TextActions(text: text) }
+            .contextMenu {
+                RetryPromptButton(text: text)
+                Divider()
+                TextActions(text: text)
+            }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
             .accessibilityLabel("You: \(displayText)")
             .fullScreenCover(item: $selectedImage) { selection in
                 SentImageViewer(attachmentID: selection.id)
             }
+    }
+}
+
+/// Sends a user message again as a new prompt, with the same image references. While a
+/// turn runs it is queued for the next one, as the composer does.
+private struct RetryPromptButton: View {
+    @Environment(RemoteStore.self) private var store
+    let text: String
+
+    var body: some View {
+        let isRunning = store.attached?.isRunning == true
+        Button(isRunning ? "Queue Retry" : "Retry",
+               systemImage: isRunning ? "text.line.last.and.arrowtriangle.forward" : "arrow.clockwise") {
+            guard let prompt = RetryPrompt.text(of: TranscriptItem(id: "retry", .user(text))) else { return }
+            Task { await store.send(prompt) }
+        }
+        .disabled(store.connection != .connected || store.attached == nil)
     }
 }
 
@@ -202,7 +223,32 @@ private struct ThinkingBlock: View {
     var title = "Thinking"
     @State private var isExpanded = false
 
+    private var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     var body: some View {
+        if isEmpty {
+            // Reasoning has started but no text has arrived: say so, without an empty box.
+            if isThinking {
+                header.padding(.horizontal, 12)
+                    .accessibilityElement(children: .combine)
+            }
+        } else {
+            disclosure
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Label(title, systemImage: "brain")
+            if isThinking { ProgressView().controlSize(.mini).accessibilityHidden(true) }
+            Spacer(minLength: 0)
+        }
+        .font(.subheadline.weight(.medium))
+        .foregroundStyle(.secondary)
+        .frame(minHeight: 44)
+    }
+
+    private var disclosure: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             MarkdownText(text: text)
                 .foregroundStyle(.secondary)
@@ -213,14 +259,7 @@ private struct ThinkingBlock: View {
                     MessageActionPreview(text: MarkdownText.plainText(text))
                 }
         } label: {
-            HStack(spacing: 8) {
-                Label(title, systemImage: "brain")
-                if isThinking { ProgressView().controlSize(.mini).accessibilityHidden(true) }
-                Spacer(minLength: 0)
-            }
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(.secondary)
-            .frame(minHeight: 44)
+            header
         }
         .disclosureGroupStyle(ToolDisclosureStyle())
         .sensoryFeedback(.selection, trigger: isExpanded)
@@ -244,6 +283,7 @@ private struct ToolRow: View {
     @State private var isExpanded = LaunchOptions.current.expandsTools
 
     private var hasDetail: Bool { tool.input != nil || tool.output != nil }
+    private var description: String? { ToolPresentation.description(for: tool) }
 
     var body: some View {
         Group {
@@ -270,8 +310,10 @@ private struct ToolRow: View {
         .background(.fill.quaternary, in: .rect(cornerRadius: 14))
         .contentShape(.contextMenuPreview, .rect(cornerRadius: 14))
         .contextMenu {
-            Button("Copy Summary", systemImage: "doc.on.doc") {
-                Clipboard.copy(tool.summary)
+            if !tool.summary.isEmpty {
+                Button("Copy Summary", systemImage: "doc.on.doc") {
+                    Clipboard.copy(tool.summary)
+                }
             }
             if let input = tool.input {
                 Button("Copy Input", systemImage: "arrow.down.doc") {
@@ -303,16 +345,18 @@ private struct ToolRow: View {
                 Text(ToolPresentation.title(tool.name))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
-                Text(tool.summary)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if let description {
+                    Text(description)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
             Spacer(minLength: 8)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(ToolPresentation.title(tool.name)), \(statusDescription). \(tool.summary)")
+        .accessibilityLabel("\(ToolPresentation.title(tool.name)), \(statusDescription)" + (description.map { ". \($0)" } ?? ""))
     }
 
     private func detail(_ title: String, _ text: String) -> some View {

@@ -269,6 +269,12 @@ private struct SessionSidebar: View {
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12))
                     .contextMenu {
+                        Button("Retry Latest Prompt", systemImage: "arrow.clockwise") {
+                            didSelect()
+                            Task { await store.retryLatestPrompt(in: session.id) }
+                        }
+                        .disabled(store.connection != .connected)
+                        Divider()
                         Button("Copy Title", systemImage: "doc.on.doc") {
                             Clipboard.copy(session.displayTitle)
                         }

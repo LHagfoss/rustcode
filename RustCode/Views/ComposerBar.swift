@@ -33,6 +33,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState.Binding var isFocused: Bool
     @ScaledMetric(relativeTo: .body) private var buttonSize: CGFloat = 44
+    @ScaledMetric(relativeTo: .body) private var commandRowHeight: CGFloat = 58
 
     private var text: String {
         get { drafts.draft(for: sessionID).text }
@@ -151,7 +152,9 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         TextField(isRunning ? "Queue a message" : "Work with ChatGPT", text: Binding(get: { text }, set: { text = $0 }), axis: .vertical)
             .lineLimit(1...6)
             .font(.body)
-            .overlay(alignment: .leading) {
+            // Baseline-aligned: centring a Text over the field's editor leaves it a
+            // fraction of a point off the typed glyphs.
+            .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
                 if let completionSuffix {
                     // One shaped string in the field's own font: the typed text, drawn
                     // clear, places the remaining suffix exactly after the caret.
@@ -192,31 +195,40 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         text = choice.insertion.isEmpty ? commandText(choice) : choice.insertion
     }
 
+    /// Rows have one fixed, text-scaled height so the panel shows whole rows only: no row
+    /// is cut mid-text against the field, and scrolling rests on row boundaries.
     private var commandSuggestions: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !matchingCommands.isEmpty {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(matchingCommands.enumerated()), id: \.element.id) { index, choice in
-                            if index > 0 { Divider().padding(.leading, 16) }
                             Button { applyCommand(choice) } label: {
                                 commandRow(choice)
                             }
                             .buttonStyle(CommandRowStyle())
+                            .overlay(alignment: .top) {
+                                if index > 0 { Divider().padding(.leading, 16) }
+                            }
                             .accessibilityLabel(commandText(choice))
                             .accessibilityHint(choice.description)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .scrollTargetLayout()
                 }
-                .frame(height: min(CGFloat(matchingCommands.count) * 50 + 8, 176))
+                .frame(height: CGFloat(min(matchingCommands.count, Self.visibleCommandRows)) * commandRowHeight)
+                .scrollTargetBehavior(.viewAligned)
                 .scrollBounceBehavior(.basedOnSize)
                 .scrollDismissesKeyboard(.never)
+                .clipShape(.rect)
+                .padding(.top, 4)
                 .accessibilityIdentifier("commandSuggestions")
                 Divider().padding(.horizontal, 14)
             }
         }
     }
+
+    private static var visibleCommandRows: Int { 3 }
 
     private func commandRow(_ choice: SessionCommandChoice) -> some View {
         HStack(spacing: 12) {
@@ -224,11 +236,11 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                 Text(commandText(choice))
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary)
-                if !choice.description.isEmpty {
-                    Text(choice.description)
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                    .lineLimit(1)
+                // Always two lines tall, so every row has the same height.
+                Text(choice.description.isEmpty ? " " : choice.description)
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
             if choice.action == "terminal" {
@@ -238,7 +250,8 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             }
         }
         .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: commandRowHeight)
         .contentShape(.rect)
     }
 

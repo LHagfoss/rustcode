@@ -11,6 +11,23 @@ public enum ToolPresentation {
         return first.uppercased() + words.dropFirst()
     }
 
+    /// The line under a tool's title: the host's detail when it sent one, otherwise the
+    /// best the row can say from what it already has. Nil when there is nothing to add.
+    public static func description(for tool: ToolCall) -> String? {
+        if let detail = firstLine(tool.summary) { return detail }
+        if let output = tool.output, let line = firstLine(output) {
+            return line.count > 120 ? String(line.prefix(119)) + "…" : line
+        }
+        if mcpTitle(tool.name) != nil { return "MCP tool" }
+        return nil
+    }
+
+    private static func firstLine(_ text: String) -> String? {
+        text.split(whereSeparator: \.isNewline).lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+    }
+
     /// `mcp__<server>__<tool>` is how the host names a tool from an MCP server.
     private static func mcpTitle(_ name: String) -> String? {
         guard name.hasPrefix("mcp__") else { return nil }

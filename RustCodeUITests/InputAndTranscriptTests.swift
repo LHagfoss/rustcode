@@ -548,6 +548,24 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "You: Touch send regression").count, 1)
     }
 
+    func testUserMessageCanBeRetriedFromItsMenu() {
+        let app = launchChat(draft: "Retry regression")
+        app.buttons["Send message"].tap()
+        let message = app.descendants(matching: .any)["You: Retry regression"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        let sent = app.descendants(matching: .any).matching(identifier: "You: Retry regression")
+        // Wait for the demo turn to finish so the retry starts a turn rather than queueing.
+        XCTAssertTrue(app.buttons["Send message"].waitForExistence(timeout: 20))
+        message.press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 3))
+        let retry = app.buttons["Retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 3))
+        retry.tap()
+        let deadline = Date().addingTimeInterval(10)
+        while sent.count < 2, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
+        XCTAssertEqual(sent.count, 2)
+    }
+
     func testScrollingDismissesKeyboardAndPreservesMultilineDraft() {
         let app = launchChat(draft: "")
         let field = composer(in: app)
@@ -571,6 +589,13 @@ final class InputAndTranscriptTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["/session"].waitForExistence(timeout: 5))
+        // The panel shows whole rows only: none is cut off against the field below it.
+        let panel = app.scrollViews["commandSuggestions"]
+        XCTAssertTrue(panel.exists)
+        for row in panel.buttons.allElementsBoundByIndex where row.isHittable {
+            XCTAssertTrue(panel.frame.insetBy(dx: -1, dy: -1).contains(row.frame), "\(row.label) is clipped")
+        }
+        XCTAssertLessThanOrEqual(panel.frame.maxY, composer(in: app).frame.minY)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Inline slash completion beside typed prefix"
         screenshot.lifetime = .keepAlways

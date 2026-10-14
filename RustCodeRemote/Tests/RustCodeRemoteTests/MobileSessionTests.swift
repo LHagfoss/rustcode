@@ -120,6 +120,45 @@ import Testing
         #expect(tool.output == "fn main() {}")
     }
 
+    @Test func laterSnapshotDoesNotForgetToolDetail() {
+        let session = SessionRef(sessionID: "detail", registrationEpoch: 1)
+        var snapshot = SessionSnapshot(session: session, activeTurnID: "t")
+        let start = TranscriptItem(id: "tool:call-1", .tool(ToolCall(name: "view_file", summary: "src/main.rs", status: .running, callID: "call-1")))
+        _ = snapshot.apply(.init(session: session, sequence: 1, event: .itemAppended(start)))
+        // A resync snapshot lists the running tool without its detail, and the durable
+        // record of an earlier call arrives without one too.
+        let bare = TranscriptItem(id: "tool:call-1", .tool(ToolCall(name: "view_file", summary: "", status: .running, callID: "call-1")))
+        let replacement = SessionSnapshot(session: session, items: [bare], activeTurnID: "t", sequence: 9)
+        _ = snapshot.apply(.init(session: session, sequence: 0, event: .replaced(replacement)))
+        guard case .tool(let live) = snapshot.items.first?.content else { Issue.record("Missing tool"); return }
+        #expect(live.summary == "src/main.rs")
+        #expect(snapshot.sequence == 9)
+
+        let record = TranscriptItem(id: "m7", .tool(ToolCall(name: "view_file", summary: "", output: "fn main", status: .succeeded, callID: "call-1", isTranscriptRecord: true)))
+        let settled = SessionSnapshot(session: session, items: [record], sequence: 10)
+        guard case .tool(let durable) = settled.keepingToolDetail(from: snapshot).items.first?.content else { Issue.record("Missing record"); return }
+        #expect(durable.summary == "src/main.rs")
+        #expect(durable.output == "fn main")
+        // A different tool under a reused call ID keeps its own (empty) detail.
+        let other = SessionSnapshot(session: session, items: [TranscriptItem(id: "m8", .tool(ToolCall(name: "grep", summary: "", status: .succeeded, callID: "call-1")))])
+        guard case .tool(let unrelated) = other.keepingToolDetail(from: snapshot).items.first?.content else { Issue.record("Missing grep"); return }
+        #expect(unrelated.summary.isEmpty)
+    }
+
+    @Test func resultWithoutStartNeverRenamesAKnownTool() {
+        let session = SessionRef(sessionID: "names", registrationEpoch: 1)
+        var snapshot = SessionSnapshot(session: session)
+        _ = snapshot.apply(.init(session: session, sequence: 1, event: .toolFinished(itemID: "tool:x", succeeded: true, isPending: true, output: "", isOutputTruncated: false)))
+        let start = TranscriptItem(id: "tool:x", .tool(ToolCall(name: "run_command", summary: "make", status: .running)))
+        _ = snapshot.apply(.init(session: session, sequence: 2, event: .itemAppended(start)))
+        let placeholder = TranscriptItem(id: "tool:x", .tool(ToolCall(name: "tool", summary: "", status: .succeeded)))
+        _ = snapshot.apply(.init(session: session, sequence: 3, event: .itemUpdated(placeholder)))
+        guard case .tool(let tool) = snapshot.items.first?.content else { Issue.record("Missing tool"); return }
+        #expect(tool.name == "run_command")
+        #expect(tool.summary == "make")
+        #expect(tool.status == .succeeded)
+    }
+
     @Test func lateToolStartAndResultUpsertOneNamedRowAndRetainDistinctCalls() {
         let session = SessionRef(sessionID: "tools", registrationEpoch: 1)
         var snapshot = SessionSnapshot(session: session)

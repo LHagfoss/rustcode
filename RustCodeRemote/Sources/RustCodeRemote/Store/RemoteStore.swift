@@ -365,6 +365,42 @@ public final class RemoteStore {
         }
     }
 
+    /// Opens a session and sends its most recent user prompt again. Older history is
+    /// fetched when the attached tail holds no prompt. Returns false when nothing was sent.
+    @discardableResult
+    public func retryLatestPrompt(in sessionID: String) async -> Bool {
+        select(sessionID)
+        let deadline = ContinuousClock.now + .seconds(10)
+        while attached?.session.sessionID != sessionID {
+            guard selectedSessionID == sessionID, connection == .connected, ContinuousClock.now < deadline,
+                  (try? await Task.sleep(for: .milliseconds(100))) != nil else {
+                if selectedSessionID == sessionID { notice = "Couldn't open the session to retry its prompt." }
+                return false
+            }
+        }
+        guard let snapshot = attached else { return false }
+        var prompt = RetryPrompt.latest(in: snapshot.items)
+        var cursor = snapshot.historyCursor
+        var pages = 0
+        while prompt == nil, let before = cursor, pages < 10 {
+            do {
+                let page = try await client.getHistory(snapshot.session, before: before, limit: 50)
+                prompt = RetryPrompt.latest(in: page.items)
+                cursor = page.nextCursor
+                pages += 1
+            } catch {
+                notice = error.localizedDescription
+                return false
+            }
+        }
+        guard attached?.session == snapshot.session else { return false }
+        guard let prompt else {
+            notice = "This session has no prompt to retry."
+            return false
+        }
+        return await send(prompt)
+    }
+
     /// Fetches the full detail of every action in the pending approval that arrived only as
     /// a preview. Approving stays locked until this has succeeded: a preview is not the action.
     public func loadApprovalDetails() async {
@@ -814,7 +850,7 @@ public final class RemoteStore {
                 guard !Task.isCancelled, selectedSessionID == sessionID else { return }
                 switch attachment.start {
                 case .snapshot(let snapshot):
-                    attached = snapshot
+                    attached = snapshot.keepingToolDetail(from: attached)
                     retireObservedMutations()
                     snapshotInstanceID = currentInstanceID
                 case .resumed:
