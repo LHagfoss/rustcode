@@ -725,6 +725,49 @@ pub enum Verbosity {
     Low,
     #[default]
     High,
+    /// Like `High`, but file changes (write, edit, replace, delete) show
+    /// their diff open while every other tool call stays a single row.
+    Edits,
+}
+
+impl Verbosity {
+    /// Every level, in picker order.
+    pub const ALL: [Verbosity; 3] = [Verbosity::Low, Verbosity::High, Verbosity::Edits];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Verbosity::Low => "low",
+            Verbosity::High => "high",
+            Verbosity::Edits => "edits",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.label() == label)
+    }
+
+    /// Position in [`Verbosity::ALL`], which is also the picker row.
+    pub fn index(&self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|level| level == self)
+            .unwrap_or_default()
+    }
+
+    /// The level `toggle` moves to: low → high → edits → low.
+    pub fn next(&self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()].clone()
+    }
+
+    /// Whether tool output stays closed until opened (high and edits).
+    pub fn closed_by_default(&self) -> bool {
+        !matches!(self, Verbosity::Low)
+    }
+
+    /// Whether file-change bodies start open.
+    pub fn edits_open(&self) -> bool {
+        matches!(self, Verbosity::Edits)
+    }
 }
 
 #[cfg(test)]

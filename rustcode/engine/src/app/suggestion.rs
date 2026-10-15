@@ -243,7 +243,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/verbosity",
-        desc: "Show or set verbosity (low|high|toggle)",
+        desc: "Show or set verbosity (low|high|edits|toggle)",
     },
     CommandInfo {
         name: "/yolo",
@@ -389,8 +389,9 @@ const STATIC_ARGUMENTS: &[(&str, &[(&str, &str)])] = &[
         "/verbosity",
         &[
             ("low", "Compact output"),
-            ("high", "Detailed output"),
-            ("toggle", "Switch between low and high"),
+            ("high", "Tool calls only"),
+            ("edits", "Tool calls only, file edits open"),
+            ("toggle", "Cycle low, high, and edits"),
         ],
     ),
     (

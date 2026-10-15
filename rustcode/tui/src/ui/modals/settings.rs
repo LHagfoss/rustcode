@@ -56,6 +56,11 @@ pub(in crate::ui) fn render_verbosity_picker_modal(
             rustcode::controller::Verbosity::High,
             "Tool calls only · click or ctrl+o opens output",
         ),
+        (
+            "Edits",
+            rustcode::controller::Verbosity::Edits,
+            "Tool calls only · file edits open · ctrl+d toggles",
+        ),
     ];
 
     let selected_idx = state

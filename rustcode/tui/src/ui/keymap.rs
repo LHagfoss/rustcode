@@ -25,6 +25,7 @@ pub(crate) enum KeyAction {
     Paste,
     ToggleExpandAll,
     ToggleExpandStep,
+    ToggleExpandEdits,
     BackgroundCommand,
     MoveLeft,
     MoveRight,
@@ -154,6 +155,9 @@ impl KeyMap {
                 KeyAction::ToggleExpandStep
             }
             KeyCode::Char('o') | KeyCode::Char('O') if ctrl => KeyAction::ToggleExpandAll,
+            // Ctrl+D opens or closes every file edit at once, leaving the
+            // other tool output as it is.
+            KeyCode::Char('d') | KeyCode::Char('D') if ctrl => KeyAction::ToggleExpandEdits,
             KeyCode::Char('j') | KeyCode::Char('J') if ctrl => KeyAction::InsertNewline,
             // Moves the running command to the background (#2001).
             KeyCode::Char('b') | KeyCode::Char('B') if ctrl => KeyAction::BackgroundCommand,

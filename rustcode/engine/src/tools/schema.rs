@@ -1991,6 +1991,14 @@ pub(crate) fn tool_system_prompt_for_policy(
     protocol: crate::config::ToolProtocol,
     agent_mode: crate::config::AgentMode,
 ) -> String {
+    // The first-turn-only `set_session_title` tool must not vary the system
+    // prompt: a turn-1/turn-2 difference here invalidates the whole cached
+    // prefix. Its guidance (and, for text protocols, its call shape) rides in
+    // the per-turn context tail instead; see `session_title_turn_hint`.
+    let policy = ToolSchemaPolicy {
+        include_session_title_tool: false,
+        ..policy
+    };
     let mut p = String::new();
 
     p.push_str(
@@ -2077,12 +2085,6 @@ For local machine state check the shell first, never `list_skills` first. \
                 "Active tool protocol: API-native. Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Batch independent reads together; mutations run in order, control-plane calls first. Wait for results before the next action. When complete, reply with a plain-text summary and no tool call.\n\n"
             );
         }
-    }
-
-    if policy.include_session_title_tool && agent_mode != crate::config::AgentMode::Plan {
-        p.push_str(
-            "First-turn session title: a concise title is already saved from the user's request. You may call `set_session_title` once to refine it before doing other work. Do not copy the full prompt, transcript, or secrets into the title.\n\n",
-        );
     }
 
     // Text protocols enumerate tools in the prompt. ApiNative carries the full
@@ -2181,6 +2183,25 @@ Assistant: Hi! Ready to help with your code. What are you working on?\n",
     }
 
     p
+}
+
+/// First-turn guidance for `set_session_title`, injected into the per-turn
+/// context tail so the cached system prompt stays byte-identical across turns.
+/// Text protocols list tools only in the system prompt, so the hint also
+/// carries the call shape there; API-native requests get the schema from the
+/// request's `tools` field.
+pub(crate) fn session_title_turn_hint(protocol: crate::config::ToolProtocol) -> String {
+    let mut hint = String::from(
+        "First-turn session title: a concise title is already saved from the user's request. You may call `set_session_title` once to refine it before doing other work. Do not copy the full prompt, transcript, or secrets into the title.",
+    );
+    if !matches!(protocol, crate::config::ToolProtocol::ApiNative) {
+        let tool = &super::misc::SET_SESSION_TITLE;
+        hint.push_str(&format!(
+            "\nAvailable this turn only:\n- {} | Args: {} | {}",
+            tool.name, tool.arguments, tool.description
+        ));
+    }
+    hint
 }
 
 pub fn tool_system_prompt(

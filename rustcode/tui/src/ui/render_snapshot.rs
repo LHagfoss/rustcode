@@ -604,6 +604,12 @@ impl RenderSnapshot {
     pub(crate) fn expanded_thoughts(&self) -> &std::collections::HashSet<usize> {
         &self.expanded_thoughts
     }
+    /// Whether the tool body at `index` renders open. The stored set records
+    /// flips from the verbosity's default, which is open only for a file
+    /// edit at `edits` verbosity.
+    pub(crate) fn tool_body_expanded(&self, index: usize, is_edit: bool) -> bool {
+        self.expanded_thoughts.contains(&index) != (is_edit && self.verbosity.edits_open())
+    }
     pub(crate) fn agent_mode(&self) -> rustcode::controller::AgentMode {
         self.agent_mode
     }

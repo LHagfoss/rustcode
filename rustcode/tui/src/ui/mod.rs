@@ -1,6 +1,7 @@
 mod assistant_render;
 mod categorical;
 mod composer_render;
+mod composer_selection;
 mod context_usage;
 mod conversation_render;
 mod demo;
@@ -25,6 +26,7 @@ pub(crate) const RUSTCODE_WORDMARK_SPLIT: usize = 22;
 pub(crate) use crate::runtime::{Composer, ComposerAction};
 pub(crate) use composer_render::composer_cursor_from_mouse;
 pub(crate) use composer_render::render_input;
+pub(crate) use composer_selection::ComposerMouse;
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
 use history_cell::{HistoryCell, is_live_tool_call_visible};

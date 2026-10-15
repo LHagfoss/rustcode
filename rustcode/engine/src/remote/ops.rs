@@ -543,29 +543,17 @@ fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, Re
             if !arguments.is_empty() {
                 require_idle(state)?;
                 state.verbosity = match arguments {
-                    "low" => Verbosity::Low,
-                    "high" => Verbosity::High,
-                    "toggle" => match state.verbosity {
-                        Verbosity::Low => Verbosity::High,
-                        Verbosity::High => Verbosity::Low,
-                    },
-                    _ => {
-                        return Err(error(
+                    "toggle" => state.verbosity.next(),
+                    _ => Verbosity::from_label(arguments).ok_or_else(|| {
+                        error(
                             RemoteErrorCode::InvalidRequest,
-                            "Use low, high, or toggle",
-                        ));
-                    }
+                            "Use low, high, edits, or toggle",
+                        )
+                    })?,
                 };
                 state.config.verbosity = state.verbosity.clone();
             }
-            (
-                "Verbosity",
-                match state.verbosity {
-                    Verbosity::Low => "low",
-                    Verbosity::High => "high",
-                }
-                .into(),
-            )
+            ("Verbosity", state.verbosity.label().into())
         }
         "/thinking" => {
             let selected = settings.selected_model;
