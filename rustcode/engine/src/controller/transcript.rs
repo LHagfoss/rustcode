@@ -35,6 +35,7 @@ pub use rustcode_core::{ChatMessage, History, ToolCallRef, ToolResultRecord};
 /// protocol cannot drift from what compaction actually writes.
 pub fn is_compaction_summary(content: &str) -> bool {
     content.starts_with(crate::network::compaction::SUMMARY_MARKER)
+        || content.starts_with(crate::network::compaction::STRUCTURED_MEMORY_MARKER)
 }
 
 /// Strip recap framing to the plain text a history cell renders.

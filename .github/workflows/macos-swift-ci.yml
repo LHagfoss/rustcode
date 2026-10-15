@@ -1,0 +1,33 @@
+name: macOS Swift CI
+
+# The SwiftUI client in macos/ builds without Rust, so this stays fast and
+# runs only when the Swift sources or this workflow change.
+on:
+    pull_request:
+        branches: [main]
+        paths:
+            - .github/workflows/macos-swift-ci.yml
+            - macos/**
+            - scripts/package-swift-app.sh
+    workflow_dispatch:
+
+concurrency:
+    group: macos-swift-ci-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    swift:
+        name: Swift build and test
+        runs-on: macos-15
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Build
+              run: swift build --package-path macos
+
+            - name: Test
+              run: swift test --package-path macos

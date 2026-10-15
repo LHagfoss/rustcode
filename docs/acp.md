@@ -63,6 +63,22 @@ Terminal statuses reflect the real outcome: completed, failed, or cancelled.
 The generated RustCode task ID remains an internal task-management identifier
 and is not substituted for the provider call ID in ACP updates.
 
+## Questions
+
+ACP v1 has no method for asking the user a question, so a pending
+`ask_question` is sent as `session/request_permission`. Its options are the
+question's answers (`question_option_<index>`, kind `allow_once`) plus
+`question_cancel` (kind `reject_once`); choosing Cancel, or answering
+`cancelled`, cancels the turn, as Escape does in the terminal. Every question in
+a chain is sent in turn, each at most once.
+
+The request carries `_meta.rustcode` with `kind: "question"`, `version: 2`, the
+`questionId` and `answerKinds: ["options", "text"]`, and the full question in
+`toolCall.rawInput`. A RustCode-aware client can answer with several options or
+free text by selecting any answer option and adding `_meta.rustcode.answer`:
+`{"options": ["A", "B"]}` or `{"text": "..."}`. The engine validates that answer
+like a terminal answer; one it cannot take cancels the question.
+
 ## Failure behavior
 
 Per-session completion delivery is bounded so a disconnected or stalled client

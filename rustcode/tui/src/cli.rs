@@ -418,6 +418,11 @@ pub enum SessionCommands {
         #[arg(long)]
         all: bool,
     },
+    /// Print the on-disk directory of a session (history.json, logs, …)
+    Path {
+        /// Session id, as shown by `sessions list` or `/session`
+        id: String,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -665,6 +670,13 @@ mod tests {
             Some(Commands::Sessions {
                 command: Some(SessionCommands::Migrate { dry_run: true })
             })
+        ));
+        let path = Cli::try_parse_from(["rustcode", "sessions", "path", "abc"]).unwrap();
+        assert!(matches!(
+            path.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Path { id })
+            }) if id == "abc"
         ));
     }
 

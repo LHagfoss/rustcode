@@ -108,51 +108,46 @@ jobs:
               uses: actions/upload-artifact@v7
               with:
                   name: ${{ matrix.name }}
-                  # The -app bundle only exists on the macOS runner;
+                  # Each runner produces only one of these archives;
                   # unmatched patterns are skipped, not an error.
                   path: |
                       ${{ matrix.name }}.tar.gz
                       ${{ matrix.name }}.zip
 
-    # The macOS desktop bundle is not shipped for now: it was the slowest job in
-    # the release build. Restore this job, the `desktop` entry in the release
-    # job's `needs`, and the `-app` asset in the SHA256 manifest (and in
-    # `scripts/release.sh`) to bring it back.
-    # desktop:
-    #     needs: verify-tag
-    #     runs-on: macos-26
-    #     steps:
-    #         - uses: actions/checkout@v7
-    #
-    #         - name: Install Rust toolchain
-    #           uses: dtolnay/rust-toolchain@stable
-    #
-    #         - name: Rust Cache
-    #           uses: Swatinem/rust-cache@v2
-    #           with:
-    #               shared-key: macos-app
-    #
-    #         - name: Configure shared compiler cache
-    #           uses: mozilla-actions/sccache-action@v0.0.11
-    #
-    #         - name: Bundle tagged macOS desktop app
-    #           run: |
-    #               scripts/build-native-app.sh --release
-    #               tar czf rustcode-macos-aarch64-app.tar.gz -C target/release RustCode.app
-    #
-    #         - name: Show compiler cache stats
-    #           if: always()
-    #           run: ${SCCACHE_PATH} --show-stats
-    #
-    #         - name: Upload desktop artifact
-    #           uses: actions/upload-artifact@v7
-    #           with:
-    #               name: rustcode-macos-aarch64-app
-    #               path: rustcode-macos-aarch64-app.tar.gz
+    # Build Swift sources only on macOS and reuse the arm64 engine artifact,
+    # avoiding another Rust compile and leaving Linux/Windows jobs unchanged.
+    swift-app:
+        needs: build
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        runs-on: macos-15
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Download arm64 engine archive
+              uses: actions/download-artifact@v8
+              with:
+                  name: rustcode-macos-aarch64
+                  path: engine
+
+            - name: Test Swift package
+              run: swift test --package-path macos
+
+            - name: Package SwiftUI app
+              run: |
+                  tar xzf engine/rustcode-macos-aarch64.tar.gz -C engine
+                  chmod +x engine/rustcode-macos-aarch64
+                  scripts/package-swift-app.sh engine/rustcode-macos-aarch64 target/swift-release
+                  ditto -c -k --sequesterRsrc --keepParent target/swift-release/RustCode.app rustcode-macos-aarch64-swift-app.zip
+
+            - name: Upload app artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: rustcode-macos-aarch64-swift-app
+                  path: rustcode-macos-aarch64-swift-app.zip
 
     release:
         if: startsWith(github.ref, 'refs/tags/v')
-        needs: [build]
+        needs: [build, swift-app]
         runs-on: ubuntu-latest
         steps:
             - name: Download artifacts
@@ -171,7 +166,7 @@ jobs:
                   files=(
                       rustcode-linux-x86_64.tar.gz
                       rustcode-macos-aarch64.tar.gz
-                      # rustcode-macos-aarch64-app.tar.gz
+                      rustcode-macos-aarch64-swift-app.zip
                       rustcode-windows-x86_64.zip
                   )
                   for file in "${files[@]}"; do

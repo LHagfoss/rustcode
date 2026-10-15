@@ -1059,7 +1059,7 @@ phase_verify_release() {
     local expected_assets=(
         "rustcode-linux-x86_64.tar.gz"
         "rustcode-macos-aarch64.tar.gz"
-        # "rustcode-macos-aarch64-app.tar.gz"  # desktop bundle paused, see build.yml
+        "rustcode-macos-aarch64-swift-app.zip"
         "rustcode-windows-x86_64.zip"
         "SHA256SUMS"
     )

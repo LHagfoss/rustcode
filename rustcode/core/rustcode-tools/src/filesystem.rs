@@ -119,6 +119,8 @@ const MAX_MARKDOWN_OUTLINE_LIMIT: usize = 100;
 const MAX_MARKDOWN_OUTLINE_BYTES: usize = 24 * 1024;
 
 struct ReplacementChunk {
+    /// Position in the caller's `replacements` array, for error messages.
+    index: usize,
     start_line: usize,
     end_line: usize,
     target_content: String,
@@ -1405,6 +1407,20 @@ fn get_byte_offset_of_line_end(lines: &[&str], line_idx: usize, total_len: usize
     offset.min(total_len)
 }
 
+/// 0-based start lines where `target`'s lines appear as one block of whole
+/// lines, compared
+/// the same way a ranged segment is (trailing whitespace of the block ignored).
+fn unique_line_block_matches(file_lines: &[String], target: &str) -> Vec<usize> {
+    let target = target.trim_end();
+    let len = target.lines().count();
+    if len == 0 || len > file_lines.len() {
+        return Vec::new();
+    }
+    (0..=file_lines.len() - len)
+        .filter(|&start| file_lines[start..start + len].join("\n").trim_end() == target)
+        .collect()
+}
+
 pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
     let path = args
         .get("path")
@@ -1447,11 +1463,99 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
                 "replacement index {i} missing 'replacement_content'"
             ))?;
         chunks.push(ReplacementChunk {
+            index: i,
             start_line,
             end_line,
             target_content: target_content.to_string(),
             replacement_content: replacement_content.to_string(),
         });
+    }
+
+    // Validate matching target contents. A chunk whose range already reads
+    // as replacement_content is treated as already applied rather than a
+    // mismatch — re-sending the same multi_replace call must not error or
+    // re-stack content that a prior identical call already landed. A chunk
+    // whose lines moved (an earlier edit grew or shrank the file) is
+    // relocated when its target_content occurs exactly once.
+    let mut relocated = 0;
+    for chunk in chunks.iter_mut() {
+        let i = chunk.index;
+        let total = file_lines.len();
+        let in_bounds = chunk.start_line >= 1
+            && chunk.start_line <= total
+            && chunk.end_line >= chunk.start_line
+            && chunk.end_line <= total;
+        // Same insert-shaped mistake as the single-edit path: an empty target
+        // reported as "does not match" against a blank expectation reads like a
+        // file problem rather than a malformed edit.
+        if chunk.target_content.is_empty() {
+            return Err(format!(
+                "replacement index {i} has an empty target_content, which cannot anchor an edit. Set target_content to the lines currently at {}-{} and include them in replacement_content to insert around them.",
+                chunk.start_line, chunk.end_line
+            ));
+        }
+        if in_bounds {
+            let segment = file_lines[chunk.start_line - 1..chunk.end_line].join("\n");
+            if segment.trim_end() == chunk.target_content.trim_end()
+                || segment.trim_end() == chunk.replacement_content.trim_end()
+            {
+                continue;
+            }
+        }
+        // Never relocate a chunk whose replacement contains its own target: on
+        // a retried insert-around edit the only match is inside the text the
+        // first call wrote, and moving there would apply it twice.
+        let replacement_lines = chunk
+            .replacement_content
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let relocatable =
+            unique_line_block_matches(&replacement_lines, &chunk.target_content).is_empty();
+        let matches = unique_line_block_matches(&file_lines, &chunk.target_content);
+        if relocatable && let [start] = matches[..] {
+            let len = chunk.target_content.trim_end().lines().count();
+            chunk.start_line = start + 1;
+            chunk.end_line = start + len;
+            relocated += 1;
+            continue;
+        }
+        if !in_bounds {
+            return Err(format!(
+                "replacement index {i} range {}-{} is out of bounds (1-{})",
+                chunk.start_line, chunk.end_line, total
+            ));
+        }
+        let segment = file_lines[chunk.start_line - 1..chunk.end_line].join("\n");
+        let mut mismatch = format!(
+            "Discrepancy at replacement index {i} (lines {}-{}), target_content does not match file. No replacements were applied.\n",
+            chunk.start_line, chunk.end_line
+        );
+        mismatch.push_str("=== Expected (target_content) ===\n");
+        mismatch.push_str(&chunk.target_content);
+        mismatch.push_str("\n=== Found in File ===\n");
+        mismatch.push_str(&segment);
+        mismatch.push_str("\n======================\n");
+        if !relocatable && !matches.is_empty() {
+            mismatch.push_str(
+                "target_content occurs elsewhere, but replacement_content contains it, so this edit may already be applied. View the file before retrying.\n",
+            );
+        } else if matches.is_empty() {
+            mismatch.push_str(
+                "target_content does not occur anywhere in the file. View the current lines and rebuild this replacement from them; do not resend it unchanged.\n",
+            );
+        } else {
+            mismatch.push_str(&format!(
+                "target_content occurs {} times (starting at lines {}); fix start_line/end_line to pick one.\n",
+                matches.len(),
+                matches
+                    .iter()
+                    .map(|start| (start + 1).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        return Err(mismatch);
     }
 
     chunks.sort_by_key(|c| std::cmp::Reverse(c.start_line));
@@ -1469,51 +1573,14 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
         }
     }
 
-    // Validate matching target contents. A chunk whose range already reads
-    // as replacement_content is treated as already applied rather than a
-    // mismatch — re-sending the same multi_replace call must not error or
-    // re-stack content that a prior identical call already landed.
-    let mut needs_apply = vec![true; chunks.len()];
-    for (i, chunk) in chunks.iter().enumerate() {
-        let total = file_lines.len();
-        if chunk.start_line < 1
-            || chunk.start_line > total
-            || chunk.end_line < chunk.start_line
-            || chunk.end_line > total
-        {
-            return Err(format!(
-                "replacement index {i} range {}-{} is out of bounds (1-{})",
-                chunk.start_line, chunk.end_line, total
-            ));
-        }
-        // Same insert-shaped mistake as the single-edit path: an empty target
-        // reported as "does not match" against a blank expectation reads like a
-        // file problem rather than a malformed edit.
-        if chunk.target_content.is_empty() {
-            return Err(format!(
-                "replacement index {i} has an empty target_content, which cannot anchor an edit. Set target_content to the lines currently at {}-{} and include them in replacement_content to insert around them.",
-                chunk.start_line, chunk.end_line
-            ));
-        }
-        let segment = file_lines[chunk.start_line - 1..chunk.end_line].join("\n");
-        if segment.trim_end() == chunk.target_content.trim_end() {
-            continue;
-        }
-        if segment.trim_end() == chunk.replacement_content.trim_end() {
-            needs_apply[i] = false;
-            continue;
-        }
-        let mut mismatch = format!(
-            "Discrepancy at replacement index {i} (lines {}-{}), target_content does not match file.\n",
-            chunk.start_line, chunk.end_line
-        );
-        mismatch.push_str("=== Expected (target_content) ===\n");
-        mismatch.push_str(&chunk.target_content);
-        mismatch.push_str("\n=== Found in File ===\n");
-        mismatch.push_str(&segment);
-        mismatch.push_str("\n======================\n");
-        return Err(mismatch);
-    }
+    let needs_apply = chunks
+        .iter()
+        .map(|chunk| {
+            let segment = file_lines[chunk.start_line - 1..chunk.end_line].join("\n");
+            segment.trim_end() != chunk.replacement_content.trim_end()
+                || segment.trim_end() == chunk.target_content.trim_end()
+        })
+        .collect::<Vec<_>>();
 
     if needs_apply.iter().all(|&needed| !needed) {
         return Ok(format!(
@@ -1545,7 +1612,7 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
     std::fs::write(&resolved_path, &new_content)
         .map_err(|e| format!("cannot write '{path}': {e}"))?;
 
-    let note = if applied_count < replacements_val.len() {
+    let mut note = if applied_count < replacements_val.len() {
         format!(
             " ({} already applied, skipped)",
             replacements_val.len() - applied_count
@@ -1553,6 +1620,11 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
     } else {
         String::new()
     };
+    if relocated > 0 {
+        note.push_str(&format!(
+            " ({relocated} relocated: target_content had moved and matched exactly once)"
+        ));
+    }
     // One real diff from the true before/after full-file content — never
     // fabricated from each replacement's target/replacement arguments.
     let diff = generate_unified_diff(&content, &new_content);
