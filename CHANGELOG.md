@@ -1,3 +1,11 @@
+## [v0.69.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.69.0) - 2026-10-15
+
+### Features
+- New `edits` verbosity: tool calls stay one row while file edits (write, edit, replace, delete) start open. Ctrl+D toggles all file edits; Ctrl+O still toggles everything.
+- Composer text selection now matches the transcript: double-click word, triple-click line, shift-click extend, right-click copy, and the footer shows the copy hint.
+- Model prose and file-edit tool blocks no longer light up on hover; they remain copy targets.
+- Turn 2 keeps the prompt cache: the first-turn session-title guidance no longer changes the system prompt.
+- Common JS checks (npm/pnpm/yarn/bun lint, test, build, typecheck; eslint, tsc, vitest, jest) count as verification, so passing edit turns are recorded as completed.
 ## [v0.68.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.68.0) - 2026-10-15
 
 ### Features
