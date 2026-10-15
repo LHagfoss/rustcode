@@ -1,3 +1,11 @@
+## [v0.68.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.68.0) - 2026-10-15
+
+### Features
+- Native macOS app (SwiftUI): released as `rustcode-macos-aarch64-swift-app.zip`; runs the bundled engine over ACP, with per-session permission and question cards, session history and model picker ([#2036](https://github.com/LHagfoss/rustcode/pull/2036)).
+- ACP clients can answer `ask_question`: every question in a chain is asked once, and RustCode-aware clients can send several options or free text ([#2036](https://github.com/LHagfoss/rustcode/pull/2036)).
+- The deterministic compaction record is hidden in the TUI, kept in recent-turn requests, and no longer records cancel notices, successful reads or "continue" as instructions, failures or tasks ([#2036](https://github.com/LHagfoss/rustcode/pull/2036)).
+- `multi_replace_file_content` relocates a moved target that occurs once and never re-applies an insert-around edit; new `rustcode sessions path <id>` ([#2036](https://github.com/LHagfoss/rustcode/pull/2036)).
+- The remote gateway is named after the Mac's computer name ([#2016](https://github.com/LHagfoss/rustcode/pull/2016)).
 ## [v0.67.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.4) - 2026-10-15
 
 ### Fixes
