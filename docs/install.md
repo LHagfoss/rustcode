@@ -58,9 +58,43 @@ the bundled app to see its Dock and Finder icon.
 
 Build the terminal executable separately with `cargo build -p rustcode-tui`.
 
-Tagged releases publish the terminal binaries for Linux, macOS and Windows.
-The `RustCode.app` bundle is not published for now; build it locally with
-the script above.
+### SwiftUI macOS app
+
+The native SwiftUI app is a separate front end to the Rust engine. It launches
+`rustcode --acp` as a child process; the reusable protocol client and process
+management code live in the UI-independent `RustCodeKit` Swift package target.
+Build and test it on macOS with Swift 6:
+
+```bash
+cd macos
+swift build
+swift test
+```
+
+To create a local app bundle using an existing executable engine:
+
+```bash
+cd ..
+cargo build --release -p rustcode-tui
+scripts/package-swift-app.sh target/release/rustcode
+open target/swift-app/RustCode.app
+```
+
+Tagged releases publish `rustcode-macos-aarch64-swift-app.zip` alongside the
+CLI archives. The bundle is ad-hoc signed but not notarized, so macOS
+Gatekeeper warns when opening a downloaded copy; right-click it and choose
+Open, or clear the quarantine flag with
+`xattr -d com.apple.quarantine RustCode.app`.
+
+Questions the agent asks (`ask_question`) appear as cards: one button per
+option, ticks and Submit for multi-select questions, and a free-text answer.
+
+The Swift app remembers the last project folder and can choose another from
+its sidebar. Its workspace is sent as the ACP session working directory; the
+engine's configured sandbox and permission policy still govern file and tool
+access. Tool permissions are requested through ACP and the app never starts the
+engine with `--yolo`.
+
 
 ## Updating
 

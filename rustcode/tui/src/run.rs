@@ -478,6 +478,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some(crate::cli::SessionCommands::List { all }) => {
                 run_sessions_list(*all || cli_args.all);
             }
+            Some(crate::cli::SessionCommands::Path { id }) => {
+                match rustcode::config::get_active_session_dir(id) {
+                    Some(dir) if dir.is_dir() => println!("{}", dir.display()),
+                    Some(_) => {
+                        eprintln!("No saved session with id `{id}`.");
+                        std::process::exit(1);
+                    }
+                    None => {
+                        eprintln!("Configuration directory is unavailable.");
+                        std::process::exit(1);
+                    }
+                }
+            }
             None => {
                 run_sessions_list(cli_args.all);
             }

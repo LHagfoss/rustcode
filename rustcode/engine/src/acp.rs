@@ -1,6 +1,7 @@
 mod config;
 mod permissions;
 mod prompt;
+mod questions;
 mod session;
 mod streaming;
 
@@ -1866,6 +1867,24 @@ mod tests {
         let config_opts = resp.config_options.unwrap();
         assert_eq!(config_opts.len(), 1);
         assert_eq!(config_opts[0].id.0.as_ref(), "model");
+    }
+
+    /// The macOS app (`macos/Sources/RustCodeKit/ACPTypes.swift`,
+    /// `ModelOptions`) reads exactly these wire fields.
+    #[test]
+    fn acp_model_config_option_wire_shape_matches_the_macos_client() {
+        let state = crate::app::AppState::new();
+        let value = serde_json::to_value(build_session_config_options(&state)).unwrap();
+        let model = &value[0];
+        assert_eq!(model["id"], "model");
+        assert_eq!(model["type"], "select");
+        assert_eq!(model["currentValue"], state.config.default.big());
+        let options = model["options"].as_array().unwrap();
+        assert_eq!(options.len(), state.config.models.len());
+        for (option, profile) in options.iter().zip(state.config.models.iter()) {
+            assert_eq!(option["value"], profile.name.as_str());
+            assert_eq!(option["name"], profile.name.as_str());
+        }
     }
 
     #[test]

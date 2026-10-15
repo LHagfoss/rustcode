@@ -31,3 +31,6 @@ docs/superpowers/
 
 # Scratch directory written by agent sessions and by engine tests.
 /sandbox/
+
+# SwiftPM build products for the native macOS app.
+.build/

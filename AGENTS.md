@@ -74,8 +74,8 @@ imperative ("add", not "added"), under ~72 characters. Do not prefix with
 
 - Diagnose from evidence:
   `~/.config/rustcode/sessions/<yyyy>/<mm>/<dd>/<id>/{history.json,logs/debug.log,performance.json}`
-  (sessions are filed by start date; `rg --files ~/.config/rustcode/sessions | rg <id>`
-  finds one from its id) plus
+  (sessions are filed by start date; `rustcode sessions path <id>` prints one's
+  directory from its id) plus
   `operational_event` kinds (`turn.summary`, `tools.batch.finish`,
   `turn.stream_checkpoint`, budget/recovery events).
 - Log a GitHub issue first (`gh issue create`) with problem, session evidence,

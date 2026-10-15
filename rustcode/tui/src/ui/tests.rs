@@ -6739,6 +6739,13 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
 }
 
 #[test]
+fn deterministic_compaction_record_is_hidden_from_transcript() {
+    assert!(super::is_hidden_system_notice(
+        "[Deterministic context record]\nGoal: restructure the repos\nCurrent follow-up: continue"
+    ));
+}
+
+#[test]
 fn deferred_tool_batch_notice_explains_scheduling_without_a_failure_warning() {
     let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(

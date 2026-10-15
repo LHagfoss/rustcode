@@ -1017,6 +1017,92 @@ fn multi_replace_repeated_call_is_a_noop() {
     assert_eq!(content, "let a = 100;\nlet b = 2;\n");
 }
 
+// Session 01a13f13 (#2035): a multi-hunk edit planned from an earlier read
+// failed because an earlier edit had shifted the lines. A target that still
+// occurs exactly once is relocated instead of failing the whole call.
+#[test]
+fn multi_replace_relocates_a_moved_unique_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("main.swift");
+    std::fs::write(&file, "// header\n// added\nlet a = 1\nlet b = 2\n").expect("write");
+    let args = serde_json::json!({
+        "path": file.to_string_lossy(),
+        "replacements": [
+            { "start_line": 2, "end_line": 2, "target_content": "let a = 1", "replacement_content": "let a = 10" },
+            { "start_line": 3, "end_line": 3, "target_content": "let b = 2", "replacement_content": "let b = 20" },
+        ],
+    });
+    let result = multi_replace_file_content_tool(&args).expect("relocated edit applies");
+    assert!(result.contains("2 relocated"), "got: {result}");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "// header\n// added\nlet a = 10\nlet b = 20\n"
+    );
+}
+
+#[test]
+fn multi_replace_retried_insert_around_edit_is_not_applied_twice() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("doc.rs");
+    std::fs::write(&file, "x\ny\nfn a() {\n}\nz\n").expect("write");
+    let args = serde_json::json!({
+        "path": file.to_string_lossy(),
+        "replacements": [
+            { "start_line": 3, "end_line": 4, "target_content": "fn a() {\n}", "replacement_content": "/// doc\nfn a() {\n}" },
+        ],
+    });
+    multi_replace_file_content_tool(&args).expect("first apply");
+    let error = multi_replace_file_content_tool(&args).expect_err("retry must not re-apply");
+    assert!(error.contains("may already be applied"), "got: {error}");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "x\ny\n/// doc\nfn a() {\n}\nz\n"
+    );
+}
+
+#[test]
+fn multi_replace_relocates_when_the_file_shrank_below_the_range() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("short.rs");
+    std::fs::write(&file, "let a = 1\n").expect("write");
+    let args = serde_json::json!({
+        "path": file.to_string_lossy(),
+        "replacements": [
+            { "start_line": 4, "end_line": 4, "target_content": "let a = 1", "replacement_content": "let a = 2" },
+        ],
+    });
+    multi_replace_file_content_tool(&args).expect("relocated");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "let a = 2\n");
+}
+
+#[test]
+fn multi_replace_mismatch_names_the_callers_index_and_ambiguity() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("dup.rs");
+    std::fs::write(&file, "x\ndup\ny\ndup\nz\n").expect("write");
+    let args = serde_json::json!({
+        "path": file.to_string_lossy(),
+        "replacements": [
+            { "start_line": 5, "end_line": 5, "target_content": "z", "replacement_content": "Z" },
+            { "start_line": 1, "end_line": 1, "target_content": "dup", "replacement_content": "D" },
+        ],
+    });
+    let error = multi_replace_file_content_tool(&args).expect_err("ambiguous target fails");
+    assert!(error.contains("replacement index 1"), "got: {error}");
+    assert!(
+        error.contains("occurs 2 times (starting at lines 2, 4)"),
+        "got: {error}"
+    );
+    assert!(
+        error.contains("No replacements were applied"),
+        "got: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "x\ndup\ny\ndup\nz\n"
+    );
+}
+
 fn diff_block_of(result: &str) -> &str {
     result
         .split_once("```diff\n")

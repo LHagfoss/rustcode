@@ -78,11 +78,7 @@ fn normalize_message(message: &ChatMessage) -> HistoryEntry<'_> {
                 metadata: message.tool_result.as_ref(),
             }
         }
-        "system"
-            if message
-                .content
-                .starts_with(crate::network::compaction::SUMMARY_MARKER) =>
-        {
+        "system" if is_compaction_summary(message) => {
             HistoryEntry::CompactionSummary(&message.content)
         }
         "system" if message.content.starts_with('[') => HistoryEntry::Lifecycle(&message.content),
@@ -653,11 +649,12 @@ fn request_turn_starts(history: &[ChatMessage]) -> Option<(usize, Option<usize>)
     Some((active, previous))
 }
 
+/// Both compaction forms — the AI summary and the deterministic record — stand
+/// in for the compacted prefix, so both must survive request scoping.
 fn is_compaction_summary(message: &ChatMessage) -> bool {
     message.role == "system"
-        && message
-            .content
-            .starts_with(crate::network::compaction::SUMMARY_MARKER)
+        && (message.compaction_boundary.is_some()
+            || crate::controller::is_compaction_summary(&message.content))
 }
 
 fn is_lifecycle_notice(message: &ChatMessage) -> bool {
@@ -1221,6 +1218,34 @@ mod tests {
         assert!(!rendered.contains("previous recovery"));
         assert!(rendered.contains("current recovery"));
         assert_eq!(serde_json::to_string(&history).unwrap(), stored);
+    }
+
+    #[test]
+    fn recent_turn_scope_keeps_both_compaction_forms() {
+        for record in [
+            "[Session History Summary]\nOLD SUMMARY",
+            "[Deterministic context record]\nGoal: OLD SUMMARY",
+        ] {
+            let history = vec![
+                ChatMessage::new("system", record),
+                ChatMessage::new("user", "older task"),
+                ChatMessage::new("assistant", "older task done"),
+                ChatMessage::new("user", "previous task"),
+                ChatMessage::new("assistant", "previous task done"),
+                ChatMessage::new("user", "current task"),
+            ];
+            let messages = to_messages_for_request_with_scope(
+                &history,
+                RequestInstructions::new("base", Some("developer")),
+                RequestHistoryScope::RecentTurns,
+            );
+            let rendered = serde_json::to_string(&messages).expect("render request");
+            assert!(rendered.contains("OLD SUMMARY"), "{record} was dropped");
+            assert!(
+                rendered.contains("provenance=\\\"compaction\\\""),
+                "{rendered}"
+            );
+        }
     }
 
     #[test]

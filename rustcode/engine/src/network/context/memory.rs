@@ -49,6 +49,28 @@ pub struct StructuredSessionMemory {
     pub command_evidence: Vec<CommandEvidence>,
 }
 
+/// System messages the harness writes as turn bookkeeping. They are not
+/// project instructions and must not be carried into the record as such.
+fn is_harness_notice(content: &str) -> bool {
+    matches!(
+        content.trim(),
+        "Request cancelled by user" | "YOLO mode enabled" | "YOLO mode disabled"
+    )
+}
+
+/// A follow-up that only says "keep going". It carries no task, so it must
+/// not replace the last follow-up that did.
+fn is_bare_continuation(message: &str) -> bool {
+    let normalized = message
+        .trim()
+        .trim_end_matches(['.', '!'])
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "continue" | "go on" | "keep going" | "proceed" | "go ahead" | "ok" | "okay" | "yes"
+    )
+}
+
 pub(crate) fn compact_context_line(content: &str, max_chars: usize) -> String {
     let line = content
         .lines()
@@ -86,7 +108,8 @@ impl StructuredSessionMemory {
                         .starts_with("[Deterministic context record]")
                 {
                     memory.merge_from_text(&message.content);
-                } else if !message.content.starts_with('[') {
+                } else if !message.content.starts_with('[') && !is_harness_notice(&message.content)
+                {
                     let block = compact_context_block(&message.content, 900);
                     if !block.is_empty() && !memory.user_constraints.contains(&block) {
                         memory.user_constraints.push(block);
@@ -99,7 +122,10 @@ impl StructuredSessionMemory {
                     memory.initial_goal = compact_context_line(&message.content, 700);
                 } else {
                     let task = compact_context_line(&message.content, 700);
-                    if !task.is_empty() && task != memory.initial_goal {
+                    if !task.is_empty()
+                        && task != memory.initial_goal
+                        && !is_bare_continuation(&task)
+                    {
                         memory.current_task = Some(task);
                     }
                 }
@@ -220,7 +246,15 @@ impl StructuredSessionMemory {
                 }
             }
 
-            if message.role == "tool" {
+            // Text matching is a fallback for failures the typed result does
+            // not mark; a successful read of code that mentions `error:` is not
+            // a failure.
+            if message.role == "tool"
+                && message
+                    .tool_result
+                    .as_ref()
+                    .is_none_or(|result| !result.success || result.error_kind.is_some())
+            {
                 if let Some((_, body)) = message.content.split_once(": ") {
                     if body.contains("error:")
                         || body.contains("exit code: 1")
@@ -605,6 +639,43 @@ pub(super) fn compact_with_structured_memory_from_archive(
 mod tests {
     use super::*;
     use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
+
+    #[test]
+    fn harness_notices_and_successful_reads_are_not_carried_as_constraints_or_failures() {
+        let mut read = ChatMessage::new(
+            "tool",
+            "view_file: 1: try? await respond(id: id, error: .methodNotFound(method))",
+        );
+        read.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "view_file".into(),
+            success: true,
+            ..Default::default()
+        });
+        let history = vec![
+            ChatMessage::new("user", "build the app"),
+            ChatMessage::new("system", "Request cancelled by user"),
+            ChatMessage::new("system", "Keep the engine headless."),
+            read,
+            ChatMessage::new("tool", "run_command: error: Could not find Package.swift"),
+        ];
+        let memory = StructuredSessionMemory::extract_from_history(&history);
+        assert_eq!(memory.user_constraints, ["Keep the engine headless."]);
+        assert_eq!(
+            memory.failures_and_errors,
+            ["error: Could not find Package.swift"]
+        );
+    }
+
+    #[test]
+    fn bare_continuation_keeps_the_last_substantive_follow_up() {
+        let history = vec![
+            ChatMessage::new("user", "build the app"),
+            ChatMessage::new("user", "also run a review"),
+            ChatMessage::new("user", "Continue."),
+        ];
+        let memory = StructuredSessionMemory::extract_from_history(&history);
+        assert_eq!(memory.current_task.as_deref(), Some("also run a review"));
+    }
 
     #[test]
     fn read_and_command_receipts_survive_structured_memory_round_trip() {

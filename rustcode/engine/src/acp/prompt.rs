@@ -419,6 +419,8 @@ async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
         connection,
         session_id,
         event_stream,
+        state,
+        cancel_token,
     )
     .await
 }
@@ -452,6 +454,8 @@ async fn run_prompt_continuation<P: crate::network::policy::TurnPolicy + 'static
         connection,
         session_id,
         event_stream,
+        state,
+        cancel_token,
     )
     .await
 }
@@ -462,12 +466,15 @@ async fn forward_prompt_run<F>(
     connection: &ConnectionTo<Client>,
     session_id: &str,
     event_stream: &mut AcpEventStream,
+    state: &Arc<Mutex<crate::app::AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
 ) -> Result<crate::network::TurnContext, agent_client_protocol::Error>
 where
     F: std::future::Future<Output = crate::network::TurnContext>,
 {
     let mut run = Box::pin(run);
     let mut title_tracker = SessionTitleTracker::new(crate::config::load_session_title(session_id));
+    let asked = super::questions::AskedQuestions::default();
     let context = loop {
         tokio::select! {
             context = &mut run => break context,
@@ -489,6 +496,9 @@ where
                 if abort_background {
                     crate::tools::abort_background_starts(session_id);
                 }
+                if matches!(&event, crate::network::AgentUiEvent::QuestionRequested { .. }) {
+                    ask_pending_questions(connection, session_id, state, cancel_token, &asked)?;
+                }
                 let title_update = title_tracker.observe_event(&event, session_id);
                 send_updates(connection, session_id, event_stream.updates(event))?;
                 if let Some(update) = title_update {
@@ -498,6 +508,12 @@ where
         }
     };
     while let Ok(event) = receiver.try_recv() {
+        if matches!(
+            &event,
+            crate::network::AgentUiEvent::QuestionRequested { .. }
+        ) {
+            ask_pending_questions(connection, session_id, state, cancel_token, &asked)?;
+        }
         let title_update = title_tracker.observe_event(&event, session_id);
         send_updates(connection, session_id, event_stream.updates(event))?;
         if let Some(update) = title_update {
@@ -510,6 +526,25 @@ where
         send_updates(connection, session_id, vec![update])?;
     }
     Ok(context)
+}
+
+/// Forward the questions the turn is waiting on to the client. The question
+/// is read from state, not from the event, so a stale event cannot pair old
+/// text with a newer question's id.
+fn ask_pending_questions(
+    connection: &ConnectionTo<Client>,
+    session_id: &str,
+    state: &Arc<Mutex<crate::app::AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    asked: &super::questions::AskedQuestions,
+) -> Result<(), agent_client_protocol::Error> {
+    super::questions::spawn_question_requests(
+        connection,
+        session_id,
+        Arc::clone(state),
+        cancel_token.clone(),
+        Arc::clone(asked),
+    )
 }
 
 #[cfg(test)]
