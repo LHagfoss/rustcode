@@ -307,13 +307,73 @@ fn toggle_tool_expansion(state: &mut AppState, width: u16, step: bool) {
     let candidates = ui::collapsible_tool_indices(&snapshot, width);
     if candidates.is_empty() {
         state.set_transient_notice("No collapsed tool output");
-    } else if step {
-        // The single-entry step keeps the focus-driven walk
-        // that the whole-transcript toggle replaced.
-        rustcode::controller::toggle_expanded_thought(state, &candidates);
-    } else {
-        rustcode::controller::toggle_all_expanded_thoughts(state, &candidates);
+        return;
     }
+    let open_by_default = open_by_default(state, &snapshot, width);
+    with_visible_expansion(state, &open_by_default, |state| {
+        if step {
+            // The single-entry step keeps the focus-driven walk
+            // that the whole-transcript toggle replaced.
+            rustcode::controller::toggle_expanded_thought(state, &candidates);
+        } else {
+            rustcode::controller::toggle_all_expanded_thoughts(state, &candidates);
+        }
+    });
+}
+
+/// The edit key (ctrl+d): open every file edit, or close them all once all
+/// are open, leaving the other tool output as it is.
+fn toggle_edit_expansion(state: &mut AppState, width: u16) {
+    let snapshot = ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(state));
+    let edits = ui::collapsible_edit_indices(&snapshot, width);
+    if edits.is_empty() {
+        state.set_transient_notice("No file edits to expand");
+        return;
+    }
+    let open_by_default = open_by_default(state, &snapshot, width);
+    let outcome = with_visible_expansion(state, &open_by_default, |state| {
+        rustcode::controller::toggle_all_expanded_thoughts(state, &edits)
+    });
+    if let rustcode::controller::ExpandOutcome::CollapsedAll { .. } = outcome {
+        state.set_transient_notice("Collapsed file edits");
+    } else {
+        state.set_transient_notice("Expanded file edits");
+    }
+}
+
+/// The tool bodies the current verbosity opens before any toggle: the file
+/// edits at `edits` verbosity, nothing otherwise.
+fn open_by_default(
+    state: &AppState,
+    snapshot: &ui::render_snapshot::RenderSnapshot,
+    width: u16,
+) -> Vec<usize> {
+    if state.verbosity.edits_open() {
+        ui::collapsible_edit_indices(snapshot, width)
+    } else {
+        Vec::new()
+    }
+}
+
+/// Run a toggle over the *visible* open state. The stored set records flips
+/// from the verbosity's default, so flip the defaults in, toggle, and flip
+/// them back out; the toggles themselves stay unaware of verbosity.
+fn with_visible_expansion<R>(
+    state: &mut AppState,
+    open_by_default: &[usize],
+    toggle: impl FnOnce(&mut AppState) -> R,
+) -> R {
+    let flip = |state: &mut AppState| {
+        for index in open_by_default {
+            if !state.expanded_thoughts.remove(index) {
+                state.expanded_thoughts.insert(*index);
+            }
+        }
+    };
+    flip(state);
+    let outcome = toggle(state);
+    flip(state);
+    outcome
 }
 
 /// Open or close the output of one tool block: open while any of its calls is
@@ -328,16 +388,19 @@ fn toggle_tool_block(state: &mut AppState, width: u16, (first, end): ui::ToolBlo
         state.set_transient_notice("No output to show");
         return;
     }
-    if calls
-        .iter()
-        .all(|index| state.expanded_thoughts.contains(index))
-    {
-        for index in &calls {
-            state.expanded_thoughts.remove(index);
+    let open_by_default = open_by_default(state, &snapshot, width);
+    with_visible_expansion(state, &open_by_default, |state| {
+        if calls
+            .iter()
+            .all(|index| state.expanded_thoughts.contains(index))
+        {
+            for index in &calls {
+                state.expanded_thoughts.remove(index);
+            }
+        } else {
+            state.expanded_thoughts.extend(calls);
         }
-    } else {
-        state.expanded_thoughts.extend(calls);
-    }
+    });
     state.expanded_thought_focus = None;
     state.request_redraw();
 }
@@ -991,16 +1054,17 @@ pub(super) async fn handle_app_event(
                             }
                             KeyCode::Down => {
                                 let mut s = app_state.lock().await;
-                                s.modal_picker_index =
-                                    s.modal_picker_index.saturating_add(1).min(1); // 0 for Low, 1 for High
+                                s.modal_picker_index = s
+                                    .modal_picker_index
+                                    .saturating_add(1)
+                                    .min(Verbosity::ALL.len() - 1);
                             }
                             KeyCode::Enter => {
                                 let mut s = app_state.lock().await;
-                                let new_verbosity = match s.modal_picker_index {
-                                    0 => Verbosity::Low,
-                                    1 => Verbosity::High,
-                                    _ => Verbosity::Low, // Should not happen
-                                };
+                                let new_verbosity = Verbosity::ALL
+                                    .get(s.modal_picker_index)
+                                    .cloned()
+                                    .unwrap_or_default();
                                 s.verbosity = new_verbosity.clone();
                                 s.config.verbosity = new_verbosity;
                                 rustcode::controller::save_config(&s.config);
@@ -1811,6 +1875,13 @@ pub(super) async fn handle_app_event(
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
+                    ui::ComposerAction::ToggleExpandEdits => {
+                        let mut state = app_state.lock().await;
+                        let width = terminal_runtime.terminal().area().width;
+                        toggle_edit_expansion(&mut state, width);
+                        *needs_redraw = true;
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     ui::ComposerAction::Unhandled => {}
                 }
 
@@ -2332,6 +2403,7 @@ pub(super) async fn handle_app_event(
                         if matches!(
                             mouse.kind,
                             event::MouseEventKind::Down(event::MouseButton::Left)
+                                | event::MouseEventKind::Down(event::MouseButton::Right)
                                 | event::MouseEventKind::Drag(event::MouseButton::Left)
                                 | event::MouseEventKind::Up(event::MouseButton::Left)
                         ) {
@@ -2368,13 +2440,33 @@ pub(super) async fn handle_app_event(
                                         None
                                     }
                                 });
+                                // Same gestures as the transcript selection:
+                                // double-click a word, triple-click a line,
+                                // shift-click to extend, right-click to copy.
                                 match mouse.kind {
                                     event::MouseEventKind::Down(event::MouseButton::Left)
-                                        if mouse.modifiers.is_empty() =>
+                                        if mouse.modifiers.is_empty()
+                                            || mouse.modifiers == event::KeyModifiers::SHIFT =>
                                     {
                                         if let Some(cursor) = cursor_opt {
-                                            state.cursor_position = cursor;
-                                            state.composer_selection_anchor = Some(cursor);
+                                            let mouse_state = &mut transcript_state.composer_mouse;
+                                            if mouse.modifiers == event::KeyModifiers::SHIFT {
+                                                mouse_state.shift_press();
+                                                let anchor = state
+                                                    .composer_selection_anchor
+                                                    .unwrap_or(state.cursor_position);
+                                                state.composer_selection_anchor = Some(anchor);
+                                                state.cursor_position = cursor;
+                                            } else {
+                                                let (anchor, cursor) = mouse_state.press(
+                                                    &state.input_buffer,
+                                                    mouse.column,
+                                                    mouse.row,
+                                                    cursor,
+                                                );
+                                                state.composer_selection_anchor = Some(anchor);
+                                                state.cursor_position = cursor;
+                                            }
                                             state.composer_selecting = true;
                                             state.reset_suggestion_cycle();
                                             state.request_redraw();
@@ -2383,10 +2475,34 @@ pub(super) async fn handle_app_event(
                                             return Ok(InputFlow::ContinueIteration);
                                         }
                                     }
+                                    event::MouseEventKind::Down(event::MouseButton::Right)
+                                        if cursor_opt.is_some()
+                                            && state.has_composer_selection() =>
+                                    {
+                                        let text = state.composer_selected_text();
+                                        drop(state);
+                                        if let Some(text) = text {
+                                            report_selection_copy(
+                                                app_state,
+                                                &text,
+                                                rustcode::clipboard::copy_to_clipboard,
+                                            )
+                                            .await;
+                                        }
+                                        frame_requester.schedule_frame();
+                                        return Ok(InputFlow::ContinueIteration);
+                                    }
                                     event::MouseEventKind::Drag(event::MouseButton::Left)
                                         if state.composer_selecting =>
                                     {
                                         if let Some(cursor) = clamped {
+                                            let anchor = state
+                                                .composer_selection_anchor
+                                                .unwrap_or(state.cursor_position);
+                                            let (anchor, cursor) = transcript_state
+                                                .composer_mouse
+                                                .extend(&state.input_buffer, anchor, cursor);
+                                            state.composer_selection_anchor = Some(anchor);
                                             state.cursor_position = cursor;
                                             state.request_redraw();
                                             frame_requester.schedule_frame();
@@ -2399,6 +2515,13 @@ pub(super) async fn handle_app_event(
                                         if state.composer_selecting =>
                                     {
                                         if let Some(cursor) = clamped {
+                                            let anchor = state
+                                                .composer_selection_anchor
+                                                .unwrap_or(state.cursor_position);
+                                            let (anchor, cursor) = transcript_state
+                                                .composer_mouse
+                                                .extend(&state.input_buffer, anchor, cursor);
+                                            state.composer_selection_anchor = Some(anchor);
                                             state.cursor_position = cursor;
                                         }
                                         state.composer_selecting = false;

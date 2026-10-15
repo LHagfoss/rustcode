@@ -13,6 +13,7 @@ pub(crate) enum ComposerAction {
     ClearScreen,
     ToggleExpandAll,
     ToggleExpandStep,
+    ToggleExpandEdits,
     BackgroundCommand,
     Unhandled,
 }
@@ -130,6 +131,7 @@ impl Composer {
             // whole-transcript toggle, ctrl+shift+O the single-entry step.
             KeyAction::ToggleExpandAll => ComposerAction::ToggleExpandAll,
             KeyAction::ToggleExpandStep => ComposerAction::ToggleExpandStep,
+            KeyAction::ToggleExpandEdits => ComposerAction::ToggleExpandEdits,
             KeyAction::BackgroundCommand => ComposerAction::BackgroundCommand,
             KeyAction::MoveLeft => {
                 state.move_cursor_left();

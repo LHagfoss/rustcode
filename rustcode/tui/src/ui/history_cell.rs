@@ -121,6 +121,8 @@ pub(crate) struct TranscriptState {
     /// The running indicator last painted and when, see
     /// [`Self::settle_indicator`].
     held_indicator: Option<HeldIndicator>,
+    /// Click counting and word/line units for mouse selection in the composer.
+    pub(crate) composer_mouse: super::ComposerMouse,
 }
 
 struct HeldIndicator {
@@ -191,6 +193,7 @@ impl Default for TranscriptState {
             hovered_target: None,
             pointer: None,
             held_indicator: None,
+            composer_mouse: super::ComposerMouse::default(),
         }
     }
 }
@@ -511,8 +514,16 @@ impl TranscriptState {
     }
 
     /// Light the hovered block's rows in the painted frame.
-    pub(super) fn highlight_hovered_tool_block(&self, buffer: &mut ratatui::buffer::Buffer) {
-        let Some(hovered) = self.hovered_tool_block else {
+    ///
+    /// `lights` decides which blocks get the hover background: file edits
+    /// stay unlit so a diff never flashes under the pointer, while every
+    /// block stays a click and right-click copy target.
+    pub(super) fn highlight_hovered_tool_block(
+        &self,
+        buffer: &mut ratatui::buffer::Buffer,
+        lights: impl Fn(ToolBlock) -> bool,
+    ) {
+        let Some(hovered) = self.hovered_tool_block.filter(|&block| lights(block)) else {
             return;
         };
         let (area, rows) = &self.tool_rows;
@@ -528,8 +539,16 @@ impl TranscriptState {
     }
 
     /// Light the hovered message's rows in the painted frame.
-    pub(super) fn highlight_hovered_message(&self, buffer: &mut ratatui::buffer::Buffer) {
-        let Some(hovered) = self.hovered_message else {
+    ///
+    /// `lights` decides which messages get the hover background: plain model
+    /// prose stays unlit (it reads as text, not a control), while user bubbles
+    /// do. Every message stays a right-click copy target either way.
+    pub(super) fn highlight_hovered_message(
+        &self,
+        buffer: &mut ratatui::buffer::Buffer,
+        lights: impl Fn(usize) -> bool,
+    ) {
+        let Some(hovered) = self.hovered_message.filter(|&index| lights(index)) else {
             return;
         };
         let (area, rows) = &self.message_rows;
@@ -1312,10 +1331,7 @@ pub(super) fn render_live_tool_cell_at_refs(
         }
         // High verbosity keeps output closed while a call runs, as it does
         // once the call has finished.
-        if !call.execution_started
-            || call.finished.is_some()
-            || matches!(verbosity, Verbosity::High)
-        {
+        if !call.execution_started || call.finished.is_some() || verbosity.closed_by_default() {
             continue;
         }
         if lone_command {
@@ -1500,7 +1516,7 @@ mod tests {
         // The indicator row went away and every row moved down two.
         transcript.set_tool_rows(area, vec![None, None, Some(ran), None, Some(read)]);
         transcript.refresh_hover();
-        transcript.highlight_hovered_tool_block(&mut buffer);
+        transcript.highlight_hovered_tool_block(&mut buffer, |_| true);
         assert_eq!(buffer[(0, 2)].bg, hover);
         assert_ne!(buffer[(0, 4)].bg, hover);
         assert_eq!(transcript.tool_block_at(1, 2), Some(ran));
@@ -1514,10 +1530,22 @@ mod tests {
         let mut transcript = TranscriptState::default();
         transcript.set_tool_rows(visible, vec![Some((2, 3)); 4]);
         assert!(transcript.hover_at(1, 0));
-        transcript.highlight_hovered_tool_block(&mut buffer);
+        transcript.highlight_hovered_tool_block(&mut buffer, |_| true);
         assert_eq!(buffer[(0, 1)].bg, hover);
         assert_ne!(buffer[(0, 2)].bg, hover);
         assert_ne!(buffer[(0, 3)].bg, hover);
+    }
+
+    #[test]
+    fn hovering_an_edit_block_keeps_it_clickable_without_lighting_it() {
+        let (mut buffer, area) = painted(&["• Edited", "  src/main.rs"]);
+        let edit = (2, 3);
+        let mut transcript = TranscriptState::default();
+        transcript.set_tool_rows(area, vec![Some(edit); 2]);
+        assert!(transcript.hover_at(1, 1));
+        assert_eq!(transcript.tool_block_at(1, 1), Some(edit));
+        transcript.highlight_hovered_tool_block(&mut buffer, |block| block != edit);
+        assert_ne!(buffer[(0, 1)].bg, crate::ui::COLOR_HOVER_BG());
     }
 
     #[test]
@@ -1532,7 +1560,7 @@ mod tests {
         assert!(!transcript.hover_at(5, 0));
         assert_eq!(transcript.message_at(5, 0), Some(0));
         assert_eq!(transcript.message_at(5, 2), None);
-        transcript.highlight_hovered_message(&mut buffer);
+        transcript.highlight_hovered_message(&mut buffer, |_| true);
         assert_eq!(buffer[(0, 0)].bg, hover);
         assert_eq!(buffer[(area.right() - 1, 1)].bg, hover);
         assert_ne!(buffer[(0, 3)].bg, hover);
@@ -1540,8 +1568,19 @@ mod tests {
         // A message that scrolled out of the frame is no longer lit.
         transcript.set_message_rows(area, vec![None, None, None, Some(1)]);
         let (mut repainted, _) = painted(&["", "", "", "• answer"]);
-        transcript.highlight_hovered_message(&mut repainted);
+        transcript.highlight_hovered_message(&mut repainted, |_| true);
         assert_ne!(repainted[(0, 0)].bg, hover);
+    }
+
+    #[test]
+    fn hovering_model_prose_keeps_it_a_copy_target_without_lighting_it() {
+        let (mut buffer, area) = painted(&["• answer"]);
+        let mut transcript = TranscriptState::default();
+        transcript.set_message_rows(area, vec![Some(1)]);
+        assert!(transcript.hover_at(2, 0));
+        assert_eq!(transcript.message_at(2, 0), Some(1));
+        transcript.highlight_hovered_message(&mut buffer, |index| index != 1);
+        assert_ne!(buffer[(0, 0)].bg, crate::ui::COLOR_HOVER_BG());
     }
 
     #[test]

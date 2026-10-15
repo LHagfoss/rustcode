@@ -1374,6 +1374,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         native_schema_policy,
         active_profile,
         vision_profile,
+        session_title_hint,
     ) = {
         let mut s = state.lock().await;
         let history_snapshot = s.history.clone();
@@ -1431,7 +1432,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         if session_title_tool_available {
             schema_policy = schema_policy.with_session_title_tool();
         }
-        let mut system_prompt = if compact_tool_prompt || session_title_tool_available {
+        // The session-title tool only changes the native `tools` field; its
+        // guidance goes in the context tail so the system prompt (and the
+        // cached prefix) stays identical between the first and later turns.
+        let session_title_hint = session_title_tool_available
+            .then(|| crate::tools::schema::session_title_turn_hint(protocol));
+        let mut system_prompt = if compact_tool_prompt {
             crate::tools::tool_system_prompt_for_policy(schema_policy, protocol, agent_mode)
         } else {
             s.prompt_cache
@@ -1471,6 +1477,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             native_schema_policy,
             s.active_model_profile(),
             s.vision_model_profile(),
+            session_title_hint,
         )
     };
 
@@ -1613,6 +1620,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         Some(memory_query.as_str()),
     );
     prepend_skill_routing_hint(&mut dynamic_context, skill_hint.as_deref());
+    prepend_skill_routing_hint(&mut dynamic_context, session_title_hint.as_deref());
     let volatile_block =
         build_volatile_context_block(volatile_usage.as_ref(), volatile_quota, volatile_window);
     if !dynamic_context.is_empty() {

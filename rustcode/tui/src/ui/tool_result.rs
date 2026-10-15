@@ -57,7 +57,7 @@ pub(super) fn render_tool_result<'a>(
     verbosity: &rustcode::controller::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'a>> {
-    if matches!(verbosity, rustcode::controller::Verbosity::High) {
+    if verbosity.closed_by_default() {
         return Vec::new();
     }
 

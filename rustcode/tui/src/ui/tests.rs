@@ -2673,6 +2673,36 @@ fn steering_escape_hint_is_hidden_when_escape_dismisses_completion_or_selection(
     }
 }
 
+/// A composer selection names the copy chord in the footer just as a
+/// transcript selection does.
+#[test]
+fn composer_selection_shows_the_copy_hint() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let binding = rustcode::controller::copy_selection_binding();
+    let mut state = RenderState::new();
+    state.input_buffer = "hello world".to_owned();
+    state.cursor_position = 5;
+    state.composer_selection_anchor = Some(0);
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let footer = (0..100)
+        .map(|column| buffer[(column, footer_row(20))].symbol())
+        .collect::<String>();
+    assert!(
+        footer.starts_with(&format!("  {binding} · or right-click")),
+        "composer selection footer: {footer:?}"
+    );
+}
+
 /// The footer names the copy chord while a transcript selection is live, and
 /// stops naming it the moment the selection goes away (#1542).
 ///
@@ -4529,6 +4559,26 @@ fn low_verbosity_frame_shows_every_tool_result_and_high_shows_none() {
     for payload in payloads {
         assert!(expanded.contains(payload), "{payload}: {expanded}");
     }
+
+    // Edits keeps every row closed except the file edit, which starts open;
+    // a stored toggle on it closes it again.
+    state.expanded_thoughts.clear();
+    state.verbosity = Verbosity::Edits;
+    let edits = render_state_to_text(&mut state, 100, 40);
+    assert!(edits.contains("edit-diff-marker"), "{edits}");
+    for payload in [
+        "read-payload-marker",
+        "mcp-payload-marker",
+        "skill-payload-marker",
+    ] {
+        assert!(!edits.contains(payload), "{payload}: {edits}");
+    }
+    let snapshot = render_snapshot(&state);
+    assert_eq!(super::collapsible_edit_indices(&snapshot, 100), [5]);
+    assert_eq!(super::expand_progress(&snapshot, 100), (1, 5));
+    state.expanded_thoughts.insert(5);
+    let closed = render_state_to_text(&mut state, 100, 40);
+    assert!(!closed.contains("edit-diff-marker"), "{closed}");
 }
 
 #[test]
@@ -10595,7 +10645,7 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
 
     let expanded = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
     assert!(
-        expanded.contains("3/3 expanded · ctrl+o all · ctrl+shift+o step"),
+        expanded.contains("3/3 expanded · ctrl+o all · ctrl+d edits · ctrl+shift+o step"),
         "the whole-transcript state is visible while reading: {expanded}"
     );
     assert!(!expanded.contains("(ctrl+o all"), "{expanded}");

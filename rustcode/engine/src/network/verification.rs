@@ -241,7 +241,50 @@ fn classify_command(command: &str) -> Option<VerificationKind> {
     } else if normalized.contains("cargo build") || normalized.contains("go build") {
         Some(VerificationKind::Build)
     } else {
-        None
+        js_command_kind(&normalized)
+    }
+}
+
+/// JavaScript/TypeScript checks, matched as whole words per shell segment so
+/// `npm install eslint` or `cat .eslintrc` are not mistaken for a lint run.
+fn js_command_kind(normalized: &str) -> Option<VerificationKind> {
+    normalized.split(['&', '|', ';', '\n']).find_map(|segment| {
+        let words: Vec<&str> = segment.split_whitespace().collect();
+        let (first, rest) = words.split_first()?;
+        match *first {
+            "npx" | "bunx" => js_tool_kind(rest.first()?),
+            "npm" => match rest {
+                ["run" | "run-script", script, ..] => js_script_kind(script),
+                ["test" | "t", ..] => Some(VerificationKind::Test),
+                _ => None,
+            },
+            "pnpm" | "yarn" | "bun" => match rest {
+                ["run", script, ..] => js_script_kind(script),
+                ["exec" | "dlx", tool, ..] => js_tool_kind(tool),
+                [script, ..] => js_script_kind(script).or_else(|| js_tool_kind(script)),
+                [] => None,
+            },
+            tool => js_tool_kind(tool),
+        }
+    })
+}
+
+fn js_script_kind(script: &str) -> Option<VerificationKind> {
+    match script {
+        "test" => Some(VerificationKind::Test),
+        "build" => Some(VerificationKind::Build),
+        "lint" => Some(VerificationKind::Lint),
+        "typecheck" | "type-check" => Some(VerificationKind::Check),
+        _ => None,
+    }
+}
+
+fn js_tool_kind(tool: &str) -> Option<VerificationKind> {
+    match tool {
+        "eslint" => Some(VerificationKind::Lint),
+        "tsc" => Some(VerificationKind::Check),
+        "vitest" | "jest" => Some(VerificationKind::Test),
+        _ => None,
     }
 }
 
@@ -508,6 +551,41 @@ mod tests {
             "Run `markdownlint README.md` and report whether it passes.",
             "git diff --stat"
         ));
+    }
+
+    #[test]
+    fn js_verification_commands_are_classified_as_whole_words() {
+        use super::{VerificationKind as K, classify_command};
+        for (command, kind) in [
+            ("npm run lint", K::Lint),
+            ("npm run typecheck", K::Check),
+            ("npm run test", K::Test),
+            ("npm run build", K::Build),
+            ("pnpm lint", K::Lint),
+            ("pnpm run typecheck", K::Check),
+            ("yarn test", K::Test),
+            ("yarn run build", K::Build),
+            ("bun run lint", K::Lint),
+            ("bun build", K::Build),
+            ("npx eslint src", K::Lint),
+            ("eslint .", K::Lint),
+            ("tsc", K::Check),
+            ("npx tsc --noEmit", K::Check),
+            ("vitest run", K::Test),
+            ("npx jest", K::Test),
+            ("cd web && npm run lint", K::Lint),
+        ] {
+            assert_eq!(classify_command(command), Some(kind), "{command}");
+        }
+        for command in [
+            "npm install eslint",
+            "npm run dev",
+            "cat .eslintrc",
+            "yarn add -D vitest",
+            "echo linting",
+        ] {
+            assert_eq!(classify_command(command), None, "{command}");
+        }
     }
 
     #[test]

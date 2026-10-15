@@ -650,7 +650,7 @@ pub(super) fn indent_tool_result_body(
     width: u16,
     expanded: bool,
 ) -> Vec<Line<'static>> {
-    if matches!(verbosity, rustcode::controller::Verbosity::High) && !expanded {
+    if verbosity.closed_by_default() && !expanded {
         return Vec::new();
     }
 
@@ -1839,7 +1839,7 @@ pub(super) fn indent_generic_tool_body(
     show_picker: bool,
     expanded: bool,
 ) -> Vec<Line<'static>> {
-    if matches!(verbosity, rustcode::controller::Verbosity::High) && !expanded {
+    if verbosity.closed_by_default() && !expanded {
         return Vec::new();
     }
     // Expanded Tool bodies render in full; collapsed ones are capped after
@@ -2066,7 +2066,8 @@ fn render_tool_result_group_detailed(
             for (child_index, entry) in visible.iter().enumerate() {
                 {
                     owners.resize(lines.len(), None);
-                    let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
+                    let is_expanded = state
+                        .tool_body_expanded(entry.message_index, edit_entry_is_expandable(entry));
                     // Command, generic Tool, and Edit-with-diff entries collapse
                     // their bodies with the same expand affordance; Explored
                     // rows keep their kind-specific formatting. Edit previews
@@ -2209,6 +2210,23 @@ pub(crate) fn tool_call_copy_text(state: &RenderSnapshot, message_index: usize) 
 /// collapses, so dropping them would make a second press skip past the entry
 /// it expanded.
 pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Vec<usize> {
+    collapsible_tool_entries(state, width)
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// The collapsible file edits, oldest first: what ctrl+d toggles, and what
+/// `edits` verbosity opens by default.
+pub(crate) fn collapsible_edit_indices(state: &RenderSnapshot, width: u16) -> Vec<usize> {
+    collapsible_tool_entries(state, width)
+        .into_iter()
+        .filter_map(|(index, is_edit)| is_edit.then_some(index))
+        .collect()
+}
+
+/// [`collapsible_tool_indices`], each paired with whether it is a file edit.
+fn collapsible_tool_entries(state: &RenderSnapshot, width: u16) -> Vec<(usize, bool)> {
     let history = state.active_history();
     // Group consecutive tool messages the way the transcript does, joining
     // across tool-only assistant turns (one-tool-per-round orchestration).
@@ -2269,24 +2287,16 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
                 continue;
             }
             match entry.kind {
-                ToolTranscriptKind::Tool => {
+                ToolTranscriptKind::Tool
+                | ToolTranscriptKind::Command
+                | ToolTranscriptKind::Explored => {
                     if !entry.body.is_empty() {
-                        out.push(i);
-                    }
-                }
-                ToolTranscriptKind::Command => {
-                    if !entry.body.is_empty() {
-                        out.push(i);
+                        out.push((i, false));
                     }
                 }
                 ToolTranscriptKind::Edit => {
                     if edit_entry_is_expandable(&entry) {
-                        out.push(i);
-                    }
-                }
-                ToolTranscriptKind::Explored => {
-                    if !entry.body.is_empty() {
-                        out.push(i);
+                        out.push((i, true));
                     }
                 }
             }
@@ -2300,10 +2310,10 @@ pub(crate) fn collapsible_tool_indices(state: &RenderSnapshot, width: u16) -> Ve
 /// The transcript-level readout, so the whole-session state is visible while
 /// scrolling instead of only inferable from per-row hints (#1594).
 pub(crate) fn expand_progress(state: &RenderSnapshot, width: u16) -> (usize, usize) {
-    let candidates = collapsible_tool_indices(state, width);
+    let candidates = collapsible_tool_entries(state, width);
     let expanded = candidates
         .iter()
-        .filter(|index| state.expanded_thoughts().contains(index))
+        .filter(|&&(index, is_edit)| state.tool_body_expanded(index, is_edit))
         .count();
     (expanded, candidates.len())
 }

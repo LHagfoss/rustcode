@@ -463,46 +463,32 @@ async fn handle_enter_inner(
             }
             "/verbosity" => {
                 use crate::app::state::Verbosity;
-                let label = |v: &Verbosity| match v {
-                    Verbosity::Low => "low",
-                    Verbosity::High => "high",
-                };
                 let mut changed = false;
                 match tokens.get(1) {
                     None => {
-                        s.modal_picker_index = match s.verbosity {
-                            Verbosity::Low => 0,
-                            Verbosity::High => 1,
-                        };
+                        s.modal_picker_index = s.verbosity.index();
                         s.settings_picker = Some(crate::app::SettingsPicker::Verbosity);
                     }
-                    Some(&"low") => {
-                        s.verbosity = Verbosity::Low;
-                        changed = true;
-                        s.show_command_panel("Output verbosity", "Verbosity set to low.");
-                    }
-                    Some(&"high") => {
-                        s.verbosity = Verbosity::High;
-                        changed = true;
-                        s.show_command_panel("Output verbosity", "Verbosity set to high.");
-                    }
-                    Some(&"toggle") => {
-                        s.verbosity = match s.verbosity {
-                            Verbosity::Low => Verbosity::High,
-                            Verbosity::High => Verbosity::Low,
+                    Some(&argument) => {
+                        let level = if argument == "toggle" {
+                            Some(s.verbosity.next())
+                        } else {
+                            Verbosity::from_label(argument)
                         };
-                        changed = true;
-                        let current = label(&s.verbosity).to_string();
-                        s.show_command_panel(
-                            "Output verbosity",
-                            format!("Verbosity set to {}.", current),
-                        );
-                    }
-                    _ => {
-                        s.show_command_panel(
-                            "Output verbosity",
-                            "Invalid verbosity level. Use 'low', 'high', or 'toggle'.",
-                        );
+                        if let Some(level) = level {
+                            s.verbosity = level;
+                            changed = true;
+                            let current = s.verbosity.label();
+                            s.show_command_panel(
+                                "Output verbosity",
+                                format!("Verbosity set to {current}."),
+                            );
+                        } else {
+                            s.show_command_panel(
+                                "Output verbosity",
+                                "Invalid verbosity level. Use 'low', 'high', 'edits', or 'toggle'.",
+                            );
+                        }
                     }
                 }
                 if changed {

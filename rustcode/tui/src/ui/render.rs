@@ -154,7 +154,7 @@ fn render_transcript_status_row(
     // The candidate walk is proportional to the tool history, and the collapsed
     // default is the common case: an empty set is answered without walking, so
     // an ordinary frame never pays for the readout.
-    if state.expanded_thoughts().is_empty() {
+    if state.expanded_thoughts().is_empty() && !state.verbosity().edits_open() {
         return;
     }
     let (expanded, collapsible) = transcript.expand_progress(state, f.area().width);
@@ -163,7 +163,7 @@ fn render_transcript_status_row(
     }
     f.render_widget(
         Paragraph::new(format!(
-            "{expanded}/{collapsible} expanded · ctrl+o all · ctrl+shift+o step"
+            "{expanded}/{collapsible} expanded · ctrl+o all · ctrl+d edits · ctrl+shift+o step"
         ))
         .style(Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL())),
         gap,
@@ -574,7 +574,9 @@ pub(crate) fn render_with_transcript_snapshot(
             chunks[9],
             state,
             popup_hint,
-            transcript.selection.has_selection() || transcript.panel_selection.has_selection(),
+            transcript.selection.has_selection()
+                || transcript.panel_selection.has_selection()
+                || state.composer_selection_range().is_some(),
             tasks_hovered,
         );
     } else {
@@ -715,9 +717,25 @@ pub(crate) fn render_with_transcript_snapshot(
         transcript.set_message_rows(selection_area, rows);
     }
     transcript.refresh_hover();
-    transcript.highlight_hovered_message(f.buffer_mut());
+    transcript.highlight_hovered_message(f.buffer_mut(), |index| {
+        state
+            .history()
+            .get(index)
+            .is_some_and(|message| message.role != "assistant")
+    });
     transcript.highlight_hovered_target(f.buffer_mut());
-    transcript.highlight_hovered_tool_block(f.buffer_mut());
+    transcript.highlight_hovered_tool_block(f.buffer_mut(), |(first, end)| {
+        !state
+            .history()
+            .iter()
+            .skip(first)
+            .take(end - first)
+            .any(|message| {
+                message.tool_result.as_ref().is_some_and(|result| {
+                    rustcode_core::activity::is_editing_tool(&result.tool_name)
+                })
+            })
+    });
     transcript.selection.refresh_view(
         selection_area,
         f.buffer(),

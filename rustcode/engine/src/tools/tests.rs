@@ -1837,10 +1837,36 @@ fn session_title_tool_is_first_turn_only_in_native_and_text_menus() {
             tool_system_prompt_for_policy(regular, protocol, crate::config::AgentMode::Build);
         let first_turn_prompt =
             tool_system_prompt_for_policy(first_turn, protocol, crate::config::AgentMode::Build);
-        assert!(!regular_prompt.contains("set_session_title"));
-        assert!(first_turn_prompt.contains("set_session_title"));
-        assert!(first_turn_prompt.contains("Do not copy the full prompt"));
+        // The system prompt stays byte-identical across turns so the cached
+        // prefix survives; the first-turn guidance rides in the context tail.
+        assert_eq!(regular_prompt, first_turn_prompt);
+        assert!(!first_turn_prompt.contains("set_session_title"));
+        let hint = super::schema::session_title_turn_hint(protocol);
+        assert!(hint.contains("Do not copy the full prompt"));
+        assert!(hint.contains("- set_session_title | Args: "));
     }
+
+    for agent_mode in [
+        crate::config::AgentMode::Build,
+        crate::config::AgentMode::Plan,
+    ] {
+        assert_eq!(
+            tool_system_prompt_for_policy(
+                regular,
+                crate::config::ToolProtocol::ApiNative,
+                agent_mode
+            ),
+            tool_system_prompt_for_policy(
+                first_turn,
+                crate::config::ToolProtocol::ApiNative,
+                agent_mode
+            )
+        );
+    }
+    let native_hint =
+        super::schema::session_title_turn_hint(crate::config::ToolProtocol::ApiNative);
+    assert!(native_hint.contains("set_session_title"));
+    assert!(!native_hint.contains("| Args:"));
 
     let plan_prompt = tool_system_prompt_for_policy(
         first_turn,
