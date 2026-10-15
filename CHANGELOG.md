@@ -1,3 +1,7 @@
+## [v0.67.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.4) - 2026-10-15
+
+### Fixes
+- Check the shell before skills and MCP discovery: skills and MCP tools are now on-demand only, local machine state checks the shell first.
 ## [v0.67.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.67.3) - 2026-10-14
 
 ### Fixes
