@@ -233,7 +233,11 @@ struct TranscriptView: View {
         let footers = TimingPresentation.footerOwners(items: snapshot.items, lastTurn: snapshot.lastTurn)
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                // Not lazy: in the iOS 26.5 Simulator a LazyVStack here kept re-signalling
+                // its prefetch after a send and a scroll, holding the main thread at 100%
+                // for minutes. History arrives in pages of 50 and rows are equatable, so
+                // laying out every row is the cheaper trade.
+                VStack(alignment: .leading, spacing: 18) {
                     if snapshot.historyCursor != nil {
                         Button {
                             followsLatest = false
@@ -312,9 +316,8 @@ struct TranscriptView: View {
                     proxy.scrollTo("transcript-end", anchor: .bottom)
                 }
             }
-            // A lazy stack only estimates the height of rows it has not built, so the
-            // initial bottom anchor can land past the real end and show an empty
-            // screen. Once the first layout is in, scroll to the actual last row.
+            // Once the first layout is in, scroll to the actual last row, in case the
+            // initial bottom anchor was computed before every row had its size.
             .task(id: snapshot.session) {
                 await Task.yield()
                 proxy.scrollTo("transcript-end", anchor: .bottom)

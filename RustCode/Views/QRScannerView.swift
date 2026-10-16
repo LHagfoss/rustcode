@@ -109,6 +109,7 @@ struct QRScannerSheet: View {
     }
 
     private func resolveAccess() async -> Access {
+        if LaunchOptions.current.opensScannerWithoutCamera { return .ready }
         guard AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil else { return .unsupported }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -162,6 +163,12 @@ private final class ScannerController: UIViewController {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func loadView() {
+        let view = ScannerView()
+        view.windowChanged = { [weak self] attached in self?.setVisible(attached) }
+        self.view = view
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -220,20 +227,26 @@ private final class ScannerController: UIViewController {
         capture.setRegion(preview.metadataOutputRectConverted(fromLayerRect: target))
     }
 
+    // Visibility follows the view's window, not appearance callbacks, which reach a
+    // representable controller only as SwiftUI forwards them. A viewWillDisappear
+    // with no later viewDidAppear (a cancelled sheet swipe, a transition while the
+    // sheet presents) used to stop capture under a visible view: black, with no
+    // spinner, no watchdog and no error to retry from.
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        lifecycle.update(visible: true, active: UIApplication.shared.applicationState != .background)
-        updateCapture()
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        lifecycle.update(visible: false, active: lifecycle.isActive)
-        updateCapture()
-        super.viewWillDisappear(animated)
+        setVisible(view.window != nil)
     }
 
     func stop() {
-        lifecycle.update(visible: false, active: lifecycle.isActive)
+        setVisible(false)
+    }
+
+    private func setVisible(_ visible: Bool) {
+        guard visible != lifecycle.isVisible else { return }
+        // A newly shown scanner reads the app's state; afterwards the foreground
+        // notifications keep it current.
+        let active = visible ? UIApplication.shared.applicationState != .background : lifecycle.isActive
+        lifecycle.update(visible: visible, active: active)
         updateCapture()
     }
 
@@ -320,5 +333,16 @@ private final class ScannerController: UIViewController {
         updateCapture()
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         onScan(payload)
+    }
+}
+
+/// Reports joining and leaving a window, which is the one signal that reliably says
+/// the preview can be seen.
+private final class ScannerView: UIView {
+    var windowChanged: ((Bool) -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        windowChanged?(window != nil)
     }
 }

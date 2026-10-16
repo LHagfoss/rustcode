@@ -15,6 +15,8 @@ import RustCodeRemote
 /// - `-demoSettings`: present Settings.
 /// - `-demoSelectOption`: select the first option of a presented question.
 /// - `-demoSummary`: show the structured assistant summary presentation.
+/// - `-scannerWithoutCamera`: open the pairing scanner's capture view even though
+///   the Simulator has no camera, so its start-and-fail lifecycle can be tested.
 struct LaunchOptions {
     static let current = LaunchOptions(arguments: ProcessInfo.processInfo.arguments)
 
@@ -29,6 +31,7 @@ struct LaunchOptions {
     var selectsFirstOption = false
     var leavesFirstCreateUnconfirmed = false
     var showsSummaryDemo = false
+    var opensScannerWithoutCamera = false
 
     init(arguments: [String]) {
         startsDemo = arguments.contains("-demo")
@@ -50,6 +53,7 @@ struct LaunchOptions {
         selectsFirstOption = arguments.contains("-demoSelectOption")
         leavesFirstCreateUnconfirmed = arguments.contains("-demoUnconfirmedCreate")
         showsSummaryDemo = arguments.contains("-demoSummary")
+        opensScannerWithoutCamera = arguments.contains("-scannerWithoutCamera")
         if let index = arguments.firstIndex(of: "-demoDraft"), arguments.indices.contains(index + 1) {
             composerDraft = arguments[index + 1]
         }

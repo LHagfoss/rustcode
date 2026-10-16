@@ -137,6 +137,7 @@ final class InputAndTranscriptTests: XCTestCase {
     func testPairingKeyboardCanAdvanceAndDismissWithoutLosingInput() {
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let address = app.textFields["Host address and port"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         // Tap near the edge of the field, where the old padding did not focus it.
@@ -161,6 +162,7 @@ final class InputAndTranscriptTests: XCTestCase {
     func testPairingOutsideTapDismissesEachKeyboardWithoutLosingInput() {
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let address = app.textFields["Host address and port"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
@@ -179,6 +181,7 @@ final class InputAndTranscriptTests: XCTestCase {
     func testPairingAddressDoneUsesCompactNativeKeyboardToolbar() {
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let address = app.textFields["Host address and port"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
@@ -194,6 +197,7 @@ final class InputAndTranscriptTests: XCTestCase {
     func testPairingInputRowWhitespaceDismissesKeyboard() {
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let address = app.textFields["Host address and port"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
@@ -208,6 +212,7 @@ final class InputAndTranscriptTests: XCTestCase {
     func testPairingOutsideDismissalDoesNotBlockConnectValidation() {
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let address = app.textFields["Host address and port"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
@@ -223,6 +228,7 @@ final class InputAndTranscriptTests: XCTestCase {
         UIPasteboard.general.string = "12345678"
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let address = app.textFields["Host address and port"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
@@ -245,6 +251,7 @@ final class InputAndTranscriptTests: XCTestCase {
     func testPairingScannerCanCloseAndReopenWithoutLosingTypedCode() {
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let code = app.textFields["Pairing code"]
         XCTAssertTrue(code.waitForExistence(timeout: 5))
         code.tap()
@@ -267,9 +274,35 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertEqual(code.value as? String, "123", "Backspace must pass the automatic dash")
     }
 
+    /// The Simulator has no camera, so capture fails to configure. Reaching that
+    /// error on every open, retry and reopen proves the scanner always asks the
+    /// camera to start, instead of sitting on a black view with no way forward.
+    func testPairingScannerAlwaysStartsCaptureOnEveryOpenAndRetry() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-scannerWithoutCamera"]
+        app.launch()
+        dismissLaunchNotice(in: app)
+        let scan = app.buttons["Scan Pairing Code"]
+        XCTAssertTrue(scan.waitForExistence(timeout: 5))
+        let failure = app.staticTexts["Camera Couldn’t Start"]
+        for cycle in 0..<8 {
+            scan.tap()
+            XCTAssertTrue(failure.waitForExistence(timeout: 10), "Open \(cycle) never started capture")
+            app.buttons["Try Again"].tap()
+            XCTAssertTrue(failure.waitForExistence(timeout: 10), "Retry \(cycle) never started capture")
+            if cycle.isMultiple(of: 2) {
+                app.buttons["Enter Code Manually"].tap()
+            } else {
+                app.navigationBars["Scan Pairing Code"].buttons["Cancel"].tap()
+            }
+            XCTAssertTrue(app.navigationBars["Scan Pairing Code"].waitForNonExistence(timeout: 3))
+        }
+    }
+
     func testPairingUsesInlinePasteAndKeyboardDone() {
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let address = app.textFields["Host address and port"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
@@ -292,6 +325,7 @@ final class InputAndTranscriptTests: XCTestCase {
         UIPasteboard.general.string = "87654321"
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let code = app.textFields["Pairing code"]
         XCTAssertTrue(code.waitForExistence(timeout: 5))
         code.tap()
@@ -311,6 +345,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-pairingNearbyHost"]
         app.launch()
+        dismissLaunchNotice(in: app)
         let mac = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Fixture Mac")).firstMatch
         XCTAssertTrue(mac.waitForExistence(timeout: 5))
         let demo = app.buttons["Try the Demo"]
@@ -340,6 +375,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-pairingNearbyHost"]
         app.launch()
+        dismissLaunchNotice(in: app)
         let code = app.textFields["Pairing code"]
         XCTAssertTrue(code.waitForExistence(timeout: 5))
         code.tap()
@@ -356,6 +392,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-pairingNearbyHost"]
         app.launch()
+        dismissLaunchNotice(in: app)
         let mac = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Fixture Mac")).firstMatch
         XCTAssertTrue(mac.waitForExistence(timeout: 5))
         mac.tap()
@@ -383,6 +420,7 @@ final class InputAndTranscriptTests: XCTestCase {
     func testPairingCodeCaretStaysWhereTheDigitWasTyped() {
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let code = app.textFields["Pairing code"]
         XCTAssertTrue(code.waitForExistence(timeout: 5))
         code.tap()
@@ -403,6 +441,7 @@ final class InputAndTranscriptTests: XCTestCase {
         UIPasteboard.general.string = " 8765-43 "
         let app = XCUIApplication()
         app.launch()
+        dismissLaunchNotice(in: app)
         let code = app.textFields["Pairing code"]
         XCTAssertTrue(code.waitForExistence(timeout: 5))
         app.buttons["Paste pairing code"].tap()
@@ -417,6 +456,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-pairingNearbyHost"]
         app.launch()
+        dismissLaunchNotice(in: app)
         let connect = app.buttons["Connect"]
         XCTAssertTrue(connect.waitForExistence(timeout: 5))
         let done = app.buttons["pairingKeyboardDone"]
@@ -688,15 +728,14 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-demoSession", "idle"]
         app.launch()
-        let model = app.buttons["Model and effort"]
-        XCTAssertTrue(model.waitForExistence(timeout: 5))
+        let model = modelButton(in: app)
         model.tap()
         XCTAssertTrue(app.navigationBars["Model & Effort"].waitForExistence(timeout: 3))
         app.buttons["thinkingEffortPicker"].tap()
         app.buttons["High"].tap()
         XCTAssertTrue(app.navigationBars["Model & Effort"].exists)
         app.navigationBars["Model & Effort"].buttons["Done"].tap()
-        XCTAssertEqual(model.value as? String, "demo-model, high")
+        XCTAssertEqual(modelButton(in: app).value as? String, "demo-model, high")
         model.tap()
         let search = app.searchFields["Search models"]
         search.tap()
@@ -704,7 +743,7 @@ final class InputAndTranscriptTests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "demo-fast-model")).firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Model & Effort"].exists)
         app.navigationBars["Model & Effort"].buttons["Done"].tap()
-        XCTAssertEqual(model.value as? String, "demo-fast-model, default")
+        XCTAssertEqual(modelButton(in: app).value as? String, "demo-fast-model, default")
         XCTAssertFalse(app.staticTexts["sessionTurnCount"].exists)
     }
 
@@ -804,7 +843,7 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Model & Effort"].exists)
         app.navigationBars["Model & Effort"].buttons["Done"].tap()
         XCTAssertTrue(search.waitForNonExistence(timeout: 5))
-        XCTAssertEqual(app.buttons["Model and effort"].value as? String, "demo-fast-model, default")
+        XCTAssertEqual(modelButton(in: app).value as? String, "demo-fast-model, default")
         XCTAssertFalse(app.staticTexts["You: /model"].exists)
     }
 
@@ -832,7 +871,7 @@ final class InputAndTranscriptTests: XCTestCase {
         add(screenshot)
         start.tap()
         XCTAssertTrue(app.navigationBars["New Session"].waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Model and effort"].waitForExistence(timeout: 5))
+        XCTAssertTrue(modelButton(in: app).exists, "The new session opens in the chat")
     }
 
     func testUnconfirmedNewSessionKeepsBrowsingAndAllowsAnotherFolder() {
@@ -874,7 +913,7 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(replace.waitForExistence(timeout: 5))
         replace.tap()
         XCTAssertTrue(app.navigationBars["New Session"].waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Model and effort"].waitForExistence(timeout: 5))
+        XCTAssertTrue(modelButton(in: app).exists, "The new session opens in the chat")
     }
 
     func testSessionsDrawerDismissesWithoutLosingDraftAndSelectsAnotherSession() {
@@ -997,6 +1036,31 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         return app
+    }
+
+    /// An unsigned Simulator build (`CODE_SIGNING_ALLOWED=NO`) has no keychain
+    /// access, so loading a saved pairing at launch reports error -34018 in an
+    /// alert over the pairing screen. XCTest's interruption handler only runs for
+    /// interactions, and the tap that triggers it can be lost while the alert
+    /// animates away, so close it before the test looks at or touches the form.
+    private func dismissLaunchNotice(in app: XCUIApplication) {
+        let notice = app.alerts["RustCode"]
+        guard notice.waitForExistence(timeout: 2) else { return }
+        notice.buttons["OK"].tap()
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 3))
+    }
+
+    /// The empty, unfocused composer is compact and hides the session controls
+    /// (PR #32); focusing it brings the model and effort control back.
+    private func modelButton(in app: XCUIApplication) -> XCUIElement {
+        let model = app.buttons["Model and effort"]
+        if !model.waitForExistence(timeout: 2) {
+            let field = composer(in: app)
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            field.tap()
+            XCTAssertTrue(model.waitForExistence(timeout: 3))
+        }
+        return model
     }
 
     private func composer(in app: XCUIApplication) -> XCUIElement {
