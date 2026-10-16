@@ -32,11 +32,17 @@ mkdir -p "$STAGING/Contents/MacOS" "$STAGING/Contents/Helpers" "$STAGING/Content
 )
 install -m 755 "$ENGINE" "$STAGING/Contents/Helpers/rustcode"
 # Compile the Icon Composer source (Liquid Glass on macOS 26) with Xcode 26 or
-# later; older toolchains fall back to the committed flat AppIcon.icns.
+# later; older toolchains fall back to the committed flat AppIcon.icns, which
+# macOS 26 shows on a gray plate. REQUIRE_COMPILED_ICON=1 makes that an error.
 if ! xcrun actool "$ROOT/macos/Resources/AppIcon.icon" --compile "$STAGING/Contents/Resources" \
     --app-icon AppIcon --platform macosx --minimum-deployment-target 14.0 \
     --output-partial-info-plist "$OUTPUT/.icon-info.plist.$$" >/dev/null 2>&1 \
     || [[ ! -f "$STAGING/Contents/Resources/AppIcon.icns" ]]; then
+    if [[ "${REQUIRE_COMPILED_ICON:-}" == 1 ]]; then
+        echo "actool could not compile AppIcon.icon; release builds need Xcode 26 or later." >&2
+        exit 1
+    fi
+    echo "warning: actool could not compile AppIcon.icon; using the flat AppIcon.icns." >&2
     rm -f "$STAGING/Contents/Resources/Assets.car"
     cp "$ROOT/macos/Resources/AppIcon.icns" "$STAGING/Contents/Resources/AppIcon.icns"
 fi
