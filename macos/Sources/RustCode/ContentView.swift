@@ -557,17 +557,27 @@ private struct Composer: View {
     @State private var isDropTarget = false
 
     private var canSend: Bool {
-        !model.busy && (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty)
+        !model.busy && (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !model.attachments.isEmpty || model.draftCommand != nil)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !model.attachments.isEmpty { attachmentChips }
-            TextField(model.busy ? "RustCode is working…" : "Message RustCode…", text: $model.draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.body)
-                .lineLimit(1...10)
-                .focused($focused)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if let chip = model.draftCommand {
+                    Text(chip.name)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.brand)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.brand.opacity(0.15), in: .capsule)
+                        .help(chip.description)
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                }
+                messageField
+            }
+            .animation(.snappy(duration: 0.15), value: model.draftCommand)
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
                 .onKeyPress(.return, phases: .down) { press in
@@ -576,9 +586,9 @@ private struct Composer: View {
                     // waits for them, any other runs at once.
                     let suggestions = model.commandSuggestions
                     if !suggestions.isEmpty {
-                        let chosen = suggestions[min(model.commandSelection, suggestions.count - 1)]
-                        model.draft = chosen.insertion
-                        if chosen.takesArguments { return .handled }
+                        let takesArguments = suggestions[min(model.commandSelection, suggestions.count - 1)].takesArguments
+                        model.completeCommand()
+                        if takesArguments { return .handled }
                     }
                     Task { await model.submit() }
                     return .handled
@@ -603,13 +613,18 @@ private struct Composer: View {
                         model.composerPanel = nil
                         return .handled
                     }
-                    if !model.commandSuggestions.isEmpty {
+                    if !model.commandSuggestions.isEmpty || model.draftCommand != nil {
                         model.draft = ""
+                        model.draftCommand = nil
                         return .handled
                     }
                     return .ignored
                 }
-                .onChange(of: model.draft) { _, _ in model.commandSelection = 0 }
+                .onKeyPress(.delete) { model.unwrapCommandChip() ? .handled : .ignored }
+                .onChange(of: model.draft) { _, _ in
+                    model.commandSelection = 0
+                    model.promoteTypedCommand()
+                }
             HStack(spacing: 8) {
                 addMenu
                 Spacer(minLength: 0)
@@ -637,6 +652,37 @@ private struct Composer: View {
 
     private func toggle(_ next: ComposerPanel) {
         model.composerPanel = model.composerPanel == next ? nil : next
+    }
+
+    private var placeholder: String {
+        if model.draftCommand?.takesArguments == true { return "Arguments" }
+        if model.draftCommand != nil { return "" }
+        return model.busy ? "RustCode is working…" : "Message RustCode…"
+    }
+
+    /// The text, with the rest of a half-typed command shown in gray after it.
+    private var messageField: some View {
+        TextField(placeholder, text: $model.draft, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.body)
+            .lineLimit(1...10)
+            .focused($focused)
+            .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
+                if let suffix = model.commandCompletionSuffix {
+                    Text(ghost(suffix))
+                        .font(.body)
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+
+    private func ghost(_ suffix: String) -> AttributedString {
+        var typed = AttributedString(model.draft)
+        typed.foregroundColor = .clear
+        var rest = AttributedString(suffix)
+        rest.foregroundColor = Color.secondary.opacity(0.6)
+        return typed + rest
     }
 
     private var addMenu: some View {
@@ -688,8 +734,8 @@ private struct Composer: View {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 11, weight: .bold))
                     .frame(width: 30, height: 30)
-                    .background(.primary.opacity(0.85), in: .circle)
-                    .foregroundStyle(.background)
+                    .background(Color.red.gradient, in: .circle)
+                    .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
             .help("Stop turn (⌘.)")
