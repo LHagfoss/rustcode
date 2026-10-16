@@ -100,6 +100,13 @@ pub struct GatewayStatus {
     /// Holds one `<session id>.log` per session started from a device.
     #[serde(default)]
     pub owner_log_directory: Option<PathBuf>,
+    /// The bind is `auto` and follows the machine's addresses. `None` from a
+    /// gateway that does not report it.
+    #[serde(default)]
+    pub automatic_bind: Option<bool>,
+    /// The advertised host was given explicitly and never moves by itself.
+    #[serde(default)]
+    pub fixed_advertise: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
