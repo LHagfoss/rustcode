@@ -27,7 +27,7 @@ pub(crate) use policy::{
     persisted_approved_command_prefix, pull_request_base, reject_broad_git_stage,
     rememberable_command_forbid_prefix_for_call, rememberable_command_prefix_for_call,
 };
-use policy::{has_interactive_sudo, is_short_discovery_command};
+use policy::{has_interactive_sudo, is_home_wide_traversal, is_short_discovery_command};
 
 static BACKGROUND_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static BACKGROUND_TASK_MANAGER: OnceLock<TaskManager> = OnceLock::new();
@@ -377,6 +377,24 @@ pub const MANAGE_TASK: Tool = Tool {
 
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
 
+/// Default timeout for a command that walks the whole home directory or `/`
+/// when the call names no `timeout_ms`. Such a walk can stall on a
+/// privacy-protected or cloud-backed folder rather than fail (#2022); a short
+/// bound turns that stall into a quick, explained failure.
+const HOME_TRAVERSAL_TIMEOUT_MS: u64 = 20_000;
+
+const HOME_TRAVERSAL_TIMEOUT_HINT: &str = "hint: this command walks the whole home directory (or /). Privacy-protected folders (macOS Desktop, Documents, Downloads, Library, iCloud Drive, ~/Library/CloudStorage) and network or cloud mounts can block a background process indefinitely instead of failing, and the output is lost when it is killed. Do not retry a home-wide search: list ~ shallowly (ls ~) and search inside a specific directory such as ~/code, or pass timeout_ms explicitly if a full scan is really needed.";
+
+/// Attach traversal guidance to a timeout of a home-wide walk; any other
+/// error passes through unchanged.
+fn with_home_traversal_hint(error: String, home_traversal: bool) -> String {
+    if home_traversal && crate::network::loop_detect::is_command_timeout(&error) {
+        format!("{error}\n{HOME_TRAVERSAL_TIMEOUT_HINT}")
+    } else {
+        error
+    }
+}
+
 /// Return whether a command contains an unquoted shell background operator.
 /// This deliberately recognizes only a standalone `&`; `&&`, redirections,
 /// and quoted/escaped ampersands are not background jobs.
@@ -638,10 +656,15 @@ fn run_command_output_inner(
     }
 
     let cwd = args.get("cwd").and_then(|c| c.as_str());
+    let home_traversal = is_home_wide_traversal(command_str);
     let timeout_ms = args
         .get("timeout_ms")
         .and_then(parse_json_number)
-        .unwrap_or(DEFAULT_COMMAND_TIMEOUT_MS);
+        .unwrap_or(if home_traversal {
+            HOME_TRAVERSAL_TIMEOUT_MS
+        } else {
+            DEFAULT_COMMAND_TIMEOUT_MS
+        });
     let env = args.get("env").and_then(|e| e.as_object());
 
     let context = super::current_tool_context();
@@ -965,16 +988,17 @@ fn run_command_output_inner(
                 progress,
                 cancellation,
                 call_id,
-            )? {
+            )
+            .map_err(|error| with_home_traversal_hint(error, home_traversal))?
+            {
                 ForegroundOutcome::Finished(output) => output,
                 ForegroundOutcome::MovedToBackground(result) => return Ok(result),
             }
         }
-        None => rustcode_command::run_with_timeout_cancellable(
-            &command_request,
-            progress,
-            cancellation,
-        )?,
+        None => {
+            rustcode_command::run_with_timeout_cancellable(&command_request, progress, cancellation)
+                .map_err(|error| with_home_traversal_hint(error, home_traversal))?
+        }
     };
     let result = foreground_command_output(&output, &sandbox_context);
     if result.success
@@ -2686,6 +2710,47 @@ mod tests {
         .expect("run_command reports command failure in its output");
 
         assert!(result.contains("exit code: 1"), "{result}");
+    }
+
+    #[test]
+    fn home_traversal_timeout_hint_only_follows_a_home_wide_timeout() {
+        use super::{HOME_TRAVERSAL_TIMEOUT_HINT, with_home_traversal_hint};
+        let timeout = "command timed out after 20000 ms and was killed".to_string();
+        let hinted = with_home_traversal_hint(timeout.clone(), true);
+        assert!(hinted.starts_with(&timeout));
+        assert!(hinted.ends_with(HOME_TRAVERSAL_TIMEOUT_HINT));
+        assert_eq!(with_home_traversal_hint(timeout.clone(), false), timeout);
+        let spawn = "failed to spawn process: no such file".to_string();
+        assert_eq!(with_home_traversal_hint(spawn.clone(), true), spawn);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stalled_home_wide_walk_times_out_with_traversal_guidance() {
+        if !sandbox::runtime_tests_available() {
+            return;
+        }
+        // `sleep` stands in for a walk blocked on a protected folder (#2022).
+        let error = run_command_output(&serde_json::json!({
+            "command": "find ~ -maxdepth 0 >/dev/null 2>&1; sleep 5",
+            "timeout_ms": 200,
+        }))
+        .expect_err("the stalled walk must time out");
+        assert!(
+            error.starts_with("command timed out after 200 ms and was killed"),
+            "{error}"
+        );
+        assert!(
+            error.contains(super::HOME_TRAVERSAL_TIMEOUT_HINT),
+            "{error}"
+        );
+
+        let scoped = run_command_output(&serde_json::json!({
+            "command": "sleep 5",
+            "timeout_ms": 200,
+        }))
+        .expect_err("a plain sleep must time out");
+        assert!(!scoped.contains("hint:"), "{scoped}");
     }
 
     #[test]

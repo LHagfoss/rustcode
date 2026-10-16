@@ -2774,6 +2774,96 @@ pub(super) fn has_interactive_sudo(cmd: &str) -> bool {
         .any(|segment| segment_is_interactive_sudo(segment))
 }
 
+/// Whether a command walks the whole home directory (or `/`): a recursive
+/// tool such as `find ~` or `du -sh /`, or a glob that descends into home's
+/// children such as `~/*/name`. On macOS such a walk enters privacy-protected
+/// folders (Desktop, Documents, Downloads, iCloud and cloud-storage mounts),
+/// where a background session owner can block indefinitely instead of being
+/// refused (#2022). A scoped path like `find ~/code` is not a home-wide walk.
+pub(super) fn is_home_wide_traversal(cmd: &str) -> bool {
+    split_command_segments(cmd).iter().any(|segment| {
+        let tokens = segment
+            .split_whitespace()
+            .map(unquote_word)
+            .collect::<Vec<_>>();
+        let Some((program, arguments)) = tokens.split_first() else {
+            return false;
+        };
+        if arguments
+            .iter()
+            .any(|token| descends_into_home_children(token))
+        {
+            return true;
+        }
+        let recursive = match command_basename(program) {
+            "find" | "fd" | "fdfind" | "du" | "tree" | "rg" | "ag" => true,
+            "grep" | "egrep" | "fgrep" => arguments.iter().any(|token| {
+                matches!(*token, "--recursive" | "--dereference-recursive")
+                    || is_short_flag_with(token, &['r', 'R'])
+            }),
+            "ls" => arguments
+                .iter()
+                .any(|token| *token == "--recursive" || is_short_flag_with(token, &['R'])),
+            _ => false,
+        };
+        recursive && arguments.iter().any(|token| is_home_or_root(token))
+    })
+}
+
+fn unquote_word(word: &str) -> &str {
+    for quote in ['\'', '"'] {
+        if let Some(inner) = word
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    word
+}
+
+fn is_short_flag_with(token: &str, flags: &[char]) -> bool {
+    token.len() > 1
+        && token.starts_with('-')
+        && !token.starts_with("--")
+        && token[1..].chars().any(|flag| flags.contains(&flag))
+}
+
+/// The part of `path` after a home-directory prefix (`~/`, `$HOME/`,
+/// `/Users/<name>/`, `/home/<name>/`), or `None` when it is not under home.
+/// The bare home directory yields `Some("")`.
+fn home_relative(path: &str) -> Option<&str> {
+    for home in ["~", "$HOME"] {
+        if let Some(rest) = path.strip_prefix(home) {
+            if rest.is_empty() {
+                return Some("");
+            }
+            if let Some(rest) = rest.strip_prefix('/') {
+                return Some(rest);
+            }
+        }
+    }
+    for base in ["/Users/", "/home/"] {
+        if let Some(rest) = path.strip_prefix(base) {
+            let (user, rest) = rest.split_once('/').unwrap_or((rest, ""));
+            if !user.is_empty() && !user.contains(['*', '?', '[']) {
+                return Some(rest);
+            }
+        }
+    }
+    None
+}
+
+fn is_home_or_root(path: &str) -> bool {
+    path == "/" || home_relative(path).is_some_and(|rest| rest.trim_matches('/').is_empty())
+}
+
+fn descends_into_home_children(path: &str) -> bool {
+    home_relative(path)
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(child, _)| child.contains(['*', '?', '[']))
+}
+
 pub(crate) fn reject_broad_git_stage(cmd: &str) -> Option<&'static str> {
     for segment in split_command_segments(cmd) {
         let tokens = segment.split_whitespace().collect::<Vec<_>>();
@@ -2802,6 +2892,45 @@ pub(crate) fn reject_broad_git_stage(cmd: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod home_traversal_tests {
+    use super::is_home_wide_traversal;
+
+    #[test]
+    fn the_stalled_commands_from_issue_2022_are_home_wide() {
+        for command in [
+            r#"ls -la ~ | head -50; echo "---"; find ~ -maxdepth 3 -type d -name "*jev*" 2>/dev/null | head -20"#,
+            "ls -d ~/jev_trading ~/jev* ~/*/jev* ~/projects/* ~/dev/* ~/code/* 2>/dev/null | head -30",
+            r#"find "$HOME" -name '*.log'"#,
+            "du -sh /Users/lagos/",
+            "rg -l needle ~",
+            "grep -rn needle $HOME",
+            "ls -R ~",
+            "find / -name foo",
+            "cat /home/dev/*/config",
+        ] {
+            assert!(is_home_wide_traversal(command), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn scoped_or_shallow_commands_are_not_home_wide() {
+        for command in [
+            "ls -la ~",
+            "ls ~/code | grep -i jev",
+            "ls -d ~/jev*",
+            "find ~/code -maxdepth 2 -name Cargo.toml",
+            "rg needle src",
+            "grep -n needle ~/notes.txt",
+            "du -sh ~/code/rustcode",
+            "ls ~/code/*/Cargo.toml",
+            "cargo test --workspace",
+        ] {
+            assert!(!is_home_wide_traversal(command), "{command:?}");
+        }
+    }
 }
 
 #[cfg(test)]

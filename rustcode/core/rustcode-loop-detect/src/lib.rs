@@ -1405,7 +1405,7 @@ pub use reasoning::*;
 mod infrastructure;
 pub use infrastructure::{
     InfrastructureFailure, InfrastructureFailureDecision, InfrastructureFailureTracker,
-    WORKSPACE_BOUNDARY_FINGERPRINT, is_workspace_boundary_failure,
+    WORKSPACE_BOUNDARY_FINGERPRINT, is_command_timeout, is_workspace_boundary_failure,
 };
 
 #[cfg(test)]
