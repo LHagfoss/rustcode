@@ -25,6 +25,9 @@ struct SwipeRow<Content: View>: View {
     @State private var isHovered = false
     @State private var monitor: Any?
     @State private var tracking = false
+    /// Sideways movement since the gesture began, before it is claimed.
+    @State private var pending: CGSize = .zero
+    @State private var decided = false
 
     private static var buttonWidth: CGFloat { 58 }
     private var leadingWidth: CGFloat { CGFloat(leading.count) * Self.buttonWidth }
@@ -32,12 +35,20 @@ struct SwipeRow<Content: View>: View {
 
     var body: some View {
         ZStack {
-            HStack(spacing: 4) {
-                if offset > 0 { buttons(leading) }
+            // The buttons are uncovered as the row slides, never drawn under it.
+            HStack(spacing: 0) {
+                buttons(leading)
+                    .frame(width: max(0, offset), alignment: .leading)
+                    .clipped()
+                    .opacity(offset > 0 ? 1 : 0)
                 Spacer(minLength: 0)
-                if offset < 0 { buttons(trailing) }
+                buttons(trailing)
+                    .frame(width: max(0, -offset), alignment: .trailing)
+                    .clipped()
+                    .opacity(offset < 0 ? 1 : 0)
             }
             content
+                .background(Color.sidebarBackground)
                 .offset(x: offset)
                 // A click on an open row closes it instead of acting.
                 .overlay {
@@ -77,6 +88,7 @@ struct SwipeRow<Content: View>: View {
             }
         }
         .padding(.vertical, 2)
+        .padding(.horizontal, 2)
     }
 
     private func close() {
@@ -100,31 +112,51 @@ struct SwipeRow<Content: View>: View {
         monitor = nil
     }
 
+    /// The first events of a gesture often carry no movement, so the axis is
+    /// decided once the fingers have moved a few points: mostly sideways makes
+    /// it the row's, anything else is left to the list.
     private func handle(_ event: NSEvent) -> Bool {
         guard event.hasPreciseScrollingDeltas else { return false }
-        if event.phase == .began {
-            tracking = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) && (isHovered || openRow == id)
-            if tracking { openRow = id }
-            return tracking
-        }
-        // Momentum after a sideways gesture is swallowed so the list doesn't drift.
         if event.momentumPhase != [] { return tracking }
-        guard tracking else { return false }
         switch event.phase {
+        case .began:
+            tracking = false
+            decided = false
+            pending = .zero
+            return false
         case .changed:
-            let limitLeading = leading.isEmpty ? 0 : leadingWidth * 1.6
-            let limitTrailing = trailing.isEmpty ? 0 : trailingWidth * 1.3
-            // Follow the fingers whether or not natural scrolling is on.
-            let delta = event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX
-            offset = min(max(offset + delta, -limitTrailing), limitLeading)
+            let dx = event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX
+            if !decided {
+                pending.width += dx
+                pending.height += event.scrollingDeltaY
+                guard abs(pending.width) + abs(pending.height) > 6 else { return false }
+                decided = true
+                tracking = abs(pending.width) > abs(pending.height) * 1.5 && (isHovered || openRow == id)
+                guard tracking else { return false }
+                openRow = id
+                move(by: pending.width)
+                return true
+            }
+            guard tracking else { return false }
+            move(by: dx)
+            return true
         case .ended, .cancelled:
+            guard tracking else { return false }
             tracking = false
             settle()
             if !isHovered { remove() }
+            return true
         default:
-            break
+            return tracking
         }
-        return true
+    }
+
+    /// Follow the fingers, with resistance past the buttons.
+    private func move(by delta: CGFloat) {
+        let limitLeading = leading.isEmpty ? 0 : leadingWidth * 1.6
+        let limitTrailing = trailing.isEmpty ? 0 : trailingWidth * 1.25
+        let beyond = offset > leadingWidth || offset < -trailingWidth
+        offset = min(max(offset + (beyond ? delta * 0.4 : delta), -limitTrailing), limitLeading)
     }
 
     private func settle() {
