@@ -66,7 +66,7 @@ struct ToolbarCluster<Content: View>: View {
     var body: some View {
         HStack(spacing: 0) { content }
             .padding(.horizontal, 3)
-            .frame(height: 30)
+            .frame(height: 28)
             .glassSurface(in: .capsule)
     }
 }
@@ -109,6 +109,9 @@ private struct SessionSidebar: View {
 
     /// The hidden title bar's height, so buttons line up with the traffic lights.
     static let barHeight: CGFloat = 28
+    /// Room above the toolbar clusters so their glass does not touch the
+    /// window's top edge.
+    static let barTopInset: CGFloat = 6
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -127,7 +130,7 @@ private struct SessionSidebar: View {
             .padding(.leading, 80)
             .padding(.trailing, 10)
             .frame(height: Self.barHeight)
-            .padding(.top, 1)
+            .padding(.top, Self.barTopInset)
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -151,7 +154,7 @@ private struct SessionSidebar: View {
             }
             .font(.callout)
             .padding(.horizontal, 12)
-            .frame(height: 34)
+            .frame(height: 30)
             .glassSurface(in: .capsule)
             .padding(.horizontal, 12)
             .padding(.top, 8)
@@ -373,16 +376,37 @@ struct RenameSheet: View {
 /// control, which is Liquid Glass on macOS 26.
 private struct ScopeToggle: View {
     @Binding var showsAll: Bool
+    @Namespace private var selection
 
     var body: some View {
-        Picker("Chats", selection: $showsAll) {
-            Text("All").tag(true)
-            Text("Project").tag(false)
+        HStack(spacing: 0) {
+            segment("All", isOn: showsAll) { showsAll = true }
+            segment("Project", isOn: !showsAll) { showsAll = false }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .controlSize(.small)
-        .fixedSize()
+        .padding(2)
+        .glassSurface(in: .capsule)
+        .animation(.snappy(duration: 0.2), value: showsAll)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Chats")
+    }
+
+    private func segment(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(isOn ? .primary : .secondary)
+                .padding(.horizontal, 10)
+                .frame(height: 20)
+                .background {
+                    if isOn {
+                        Capsule().fill(Color.primary.opacity(0.14))
+                            .matchedGeometryEffect(id: "selection", in: selection)
+                    }
+                }
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
 
@@ -622,7 +646,7 @@ private struct ChatView: View {
         }
         .padding(.horizontal, 18)
         .frame(height: SessionSidebar.barHeight)
-        .padding(.top, 1)
+        .padding(.top, SessionSidebar.barTopInset)
         .padding(.bottom, 8)
         .background(Color.chatBackground.opacity(0.94))
     }

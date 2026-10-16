@@ -48,6 +48,15 @@ public enum ImageMarkers {
 
     public static func marker(for url: URL) -> String { "![image](file://\(url.path))" }
 
+    /// A chat title made from a message: markers, even one cut off by the
+    /// title's length limit, read as "Image".
+    public static func title(_ text: String) -> String {
+        var rest = split(text).text
+        if let cut = rest.range(of: prefix) { rest = String(rest[..<cut.lowerBound]) }
+        rest = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty && text.contains(prefix) ? "Image" : rest
+    }
+
     /// The message text without its markers, and the marked files in order.
     public static func split(_ text: String) -> (text: String, images: [URL]) {
         guard text.contains(prefix) else { return (text, []) }

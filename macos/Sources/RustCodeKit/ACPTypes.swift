@@ -162,7 +162,7 @@ public struct SessionSummary: Identifiable, Equatable, Sendable {
             return SessionSummary(
                 id: id,
                 cwd: entry["cwd"]?.stringValue ?? "",
-                title: entry["title"]?.stringValue,
+                title: entry["title"]?.stringValue.map(ImageMarkers.title),
                 updatedAt: stamp.flatMap { formatter.date(from: $0) ?? plain.date(from: $0) })
         }
     }

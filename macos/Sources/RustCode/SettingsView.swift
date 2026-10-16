@@ -370,7 +370,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .general: "gearshape.fill"
-        case .engine: "cpu.fill"
+        case .engine: "terminal.fill"
         case .about: "info.circle.fill"
         }
     }
@@ -378,7 +378,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var tile: Color {
         switch self {
         case .general: .gray
-        case .engine: .brandFill
+        case .engine: .orange
         case .about: .blue
         }
     }

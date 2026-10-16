@@ -18,6 +18,12 @@ final class ImageTests: XCTestCase {
         XCTAssertEqual(ImageMarkers.split(marker).images, [URL(fileURLWithPath: "/tmp/x.png")])
     }
 
+    func testTitlesHideMarkersEvenWhenCutOff() {
+        XCTAssertEqual(ImageMarkers.title("![image](file:///Users/lagos/.config"), "Image")
+        XCTAssertEqual(ImageMarkers.title("what is this\n![image](file:///a.png)"), "what is this")
+        XCTAssertEqual(ImageMarkers.title("fix the build"), "fix the build")
+    }
+
     func testPromptSendsTextThenImageBlocks() {
         let image = ImageAttachment(data: Data([1, 2, 3]), mimeType: "image/png")
         let params = ACPRequests.prompt(sessionId: "s", text: "look", images: [image])
