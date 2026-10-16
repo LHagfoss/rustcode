@@ -1,3 +1,10 @@
+## [v0.71.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.71.1) - 2026-10-16
+
+### Features
+- macOS app: swipe a chat to pin, rename, archive or move it to the Trash, and right-click chats and messages for more actions (copy, edit and resend, send again, quote, run again) ([#2053](https://github.com/LHagfoss/rustcode/pull/2053)).
+- macOS app: Cmd+N opens an empty draft that becomes a session when the first message is sent; archived chats get their own view; Cmd+B toggles the sidebar ([#2053](https://github.com/LHagfoss/rustcode/pull/2053)).
+- macOS app: reasoning effort in the composer, with a thinking switch and a slider over the model's levels; arrow keys in the +, model and effort pickers; Liquid Glass on the composer and its panels ([#2053](https://github.com/LHagfoss/rustcode/pull/2053)).
+- ACP sessions expose an `effort` config option for profiles with reasoning choices ([#2053](https://github.com/LHagfoss/rustcode/pull/2053)).
 ## [v0.71.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.71.0) - 2026-10-16
 
 ### Features
