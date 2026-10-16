@@ -59,6 +59,47 @@ struct ChromeButton: View {
     }
 }
 
+/// Toolbar buttons grouped in one Liquid Glass capsule, as in Finder.
+struct ToolbarCluster<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 0) { content }
+            .padding(.horizontal, 3)
+            .frame(height: 30)
+            .glassSurface(in: .capsule)
+    }
+}
+
+/// A button inside a `ToolbarCluster`. Symbols are centred on their visible
+/// shape, so a pencil reaching above its square does not sit lower than its
+/// neighbours.
+struct ClusterButton: View {
+    let systemImage: String
+    let help: String
+    var isOn = false
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isOn ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
+                .offset(y: Self.opticalOffset[systemImage] ?? 0)
+                .frame(width: 32, height: 24)
+                .background(isHovered || isOn ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .capsule)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    private static let opticalOffset: [String: CGFloat] = ["square.and.pencil": -1]
+}
+
 private struct SessionSidebar: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var updater: Updater
@@ -74,8 +115,14 @@ private struct SessionSidebar: View {
             // Room for the traffic lights, then the bar's own buttons.
             HStack(spacing: 2) {
                 Spacer()
-                ChromeButton(systemImage: "sidebar.left", help: "Hide sidebar (⌘B)") { model.toggleSidebar() }
-                ChromeButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
+                ToolbarCluster {
+                    ClusterButton(systemImage: "sidebar.left", help: "Hide sidebar (⌘B)") { model.toggleSidebar() }
+                    ClusterButton(systemImage: "archivebox", help: model.showsArchived ? "Back to chats" : "Archived chats",
+                                  isOn: model.showsArchived) {
+                        withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
+                    }
+                    ClusterButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
+                }
             }
             .padding(.leading, 80)
             .padding(.trailing, 10)
@@ -548,9 +595,9 @@ private struct ChatView: View {
     private var header: some View {
         HStack(spacing: 10) {
             if !model.showsSidebar {
-                HStack(spacing: 2) {
-                    ChromeButton(systemImage: "sidebar.left", help: "Show sidebar (⌘B)") { model.toggleSidebar() }
-                    ChromeButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
+                ToolbarCluster {
+                    ClusterButton(systemImage: "sidebar.left", help: "Show sidebar (⌘B)") { model.toggleSidebar() }
+                    ClusterButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
                 }
                 .padding(.leading, 70)
             }
@@ -559,6 +606,19 @@ private struct ChatView: View {
                 Text(projectName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
+            if let session = model.sessions.first(where: { $0.id == model.selectedSession }) {
+                ToolbarCluster {
+                    ClusterButton(systemImage: "magnifyingglass", help: "Find in chat (⌘F)", isOn: model.showsFind) {
+                        model.showsFind.toggle()
+                    }
+                    ClusterButton(systemImage: model.pinnedSessions.contains(session.id) ? "pin.fill" : "pin",
+                                  help: model.pinnedSessions.contains(session.id) ? "Unpin chat" : "Pin chat",
+                                  isOn: model.pinnedSessions.contains(session.id)) { model.togglePin(session) }
+                    ClusterButton(systemImage: "folder", help: "Show chat in Finder") {
+                        Task { await model.revealInFinder(session) }
+                    }
+                }
+            }
         }
         .padding(.horizontal, 18)
         .frame(height: SessionSidebar.barHeight)
