@@ -113,7 +113,9 @@ final class DesktopModel: ObservableObject {
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
     /// engine blocks until each one is answered, so none may be dropped.
-    @Published var permissionQueue: [PermissionRequest] = []
+    @Published var permissionQueue: [PermissionRequest] = [] {
+        didSet { TurnNotifier.shared.setBadge(permissionQueue.count) }
+    }
     @Published var models = ModelOptions.empty
     /// The model and effort new chats start with, shared with the terminal UI.
     @Published private(set) var modelDefaults: ModelDefaults?
@@ -134,6 +136,26 @@ final class DesktopModel: ObservableObject {
         workspace = savedPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? (launchPath == "/" ? FileManager.default.homeDirectoryForCurrentUser
                 : URL(fileURLWithPath: launchPath, isDirectory: true))
+        TurnNotifier.shared.openSession = { [weak self] id in
+            guard let self, let session = self.sessions.first(where: { $0.id == id }) else { return }
+            Task { await self.select(session) }
+        }
+        TurnNotifier.shared.start()
+    }
+
+    private func chatTitle(_ session: String) -> String {
+        sessions.first { $0.id == session }?.title ?? "RustCode"
+    }
+
+    /// Tell the user a background chat finished, with the start of its reply.
+    private func notifyFinished(_ session: String) {
+        let items = session == selectedSession ? transcript.items : openSessions[session]?.transcript.items ?? []
+        var reply = ""
+        if let last = items.last(where: { if case .assistant = $0.content { true } else { false } }),
+           case .assistant(let text) = last.content {
+            reply = notificationSnippet(text)
+        }
+        TurnNotifier.shared.notify(session: session, title: chatTitle(session), body: reply.isEmpty ? "Finished." : reply)
     }
 
     func start() async {
@@ -696,6 +718,7 @@ final class DesktopModel: ObservableObject {
         turnSession = nil
         // The turn is over, so the engine no longer waits on its requests.
         permissionQueue.removeAll { $0.sessionId == id }
+        if !stopped { notifyFinished(id) }
         guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else { return }
         removeQueued(next)
         await run(next)
@@ -862,7 +885,13 @@ final class DesktopModel: ObservableObject {
             default: transcript.apply(update)
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
-            if let request = PermissionRequest(rpcId: id, params: params) { permissionQueue.append(request) }
+            if let request = PermissionRequest(rpcId: id, params: params) {
+                permissionQueue.append(request)
+                TurnNotifier.shared.notify(
+                    session: request.sessionId,
+                    title: request.question == nil ? "Approval needed" : "RustCode has a question",
+                    body: "\(chatTitle(request.sessionId)): \(request.question?.text ?? request.title)")
+            }
             else { try? await engine?.connection.respond(id: id, error: .invalidParams(method)) }
         case .request(let id, let method, _):
             try? await engine?.connection.respond(id: id, error: .methodNotFound(method))

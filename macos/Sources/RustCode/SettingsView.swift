@@ -172,6 +172,7 @@ struct PillButtonStyle: ButtonStyle {
 private struct GeneralSettings: View {
     @ObservedObject var model: DesktopModel
     @AppStorage(AppearanceSetting.key) private var appearance = ""
+    @AppStorage(TurnNotifier.enabledKey) private var notifyTurns = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -189,6 +190,13 @@ private struct GeneralSettings: View {
             SettingsGroup(title: "Chat") {
                 SettingsRow(title: "Project", subtitle: model.workspace.path.abbreviatingHome) {
                     Button("Choose…") { model.chooseWorkspace() }.buttonStyle(PillButtonStyle())
+                }
+                RowDivider()
+                SettingsRow(title: "Notifications", subtitle: "When a chat finishes or needs you while RustCode is in the background") {
+                    Toggle("Notifications", isOn: $notifyTurns)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: notifyTurns) { _, on in if on { TurnNotifier.shared.start() } }
                 }
             }
 
