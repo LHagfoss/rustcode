@@ -44,7 +44,7 @@ pub(crate) use schema::native_tools_schema_for_context_with_sticky_at;
 pub(crate) use schema::{
     MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, ToolSchemaPhase, ToolSchemaPolicy,
     ToolSurface, agent_tool_count, append_tool_response_limit, append_tool_response_policy,
-    mcp_tool_read_only_hint, native_tools_schema_for_context_with_sticky_at_and_reserved_servers,
+    mcp_tool_is_read_only, native_tools_schema_for_context_with_sticky_at_and_reserved_servers,
     textual_tool_surface, tool_schema_phase, tool_system_prompt_for_policy, withheld_tools_notice,
 };
 
@@ -1454,8 +1454,9 @@ pub fn supports_parallel_execution(name: &str) -> bool {
 /// `rg … | head` pipeline. Anything unclassified stays mutating: a missing
 /// command, an unknown binary, or a write-like shell (`cargo test`, `rm`,
 /// redirections) still counts toward the limit. MCP tools outside the builtin
-/// registry opt into inspection with the standard `readOnlyHint` annotation
-/// (same rule the replay policy uses for repeatable reads).
+/// registry opt into inspection with the standard `readOnlyHint` annotation,
+/// or, when unannotated, by a lookup-verb name (same rule the replay policy
+/// uses for repeatable reads; see [`mcp_tool_is_read_only`]).
 /// Evaluate this before the mutating cap in every batch path, including
 /// recovery, so inspection is never dropped or reprimanded for budget reasons.
 pub fn is_read_only_call(call: &ToolCall) -> bool {
@@ -1466,7 +1467,7 @@ pub fn is_read_only_call(call: &ToolCall) -> bool {
         return !command_requires_confirmation(&call.arguments);
     }
     if matches!(tool_safety(&call.name), ToolSafety::Unknown) {
-        return mcp_tool_read_only_hint(&call.name);
+        return mcp_tool_is_read_only(&call.name);
     }
     false
 }

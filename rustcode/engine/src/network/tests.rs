@@ -7061,8 +7061,56 @@ async fn repeated_use_skill_returns_actionable_success_after_same_turn_load() {
     assert!(result.metadata.success, "got: {}", result.content);
     assert!(!result.metadata.replayed);
     assert!(result.metadata.inspection.is_none());
-    assert!(result.content.contains("already loaded and active"));
-    assert!(result.content.contains("do not call `use_skill` again"));
+    assert!(result.content.contains("already loaded"));
+    assert!(
+        result
+            .content
+            .contains("do not call `use_skill` for it again")
+    );
+}
+
+// Session 01a130ea (#1970): a skill loaded in the previous user turn is still
+// in context, so a new turn gets the short pointer, not the full body again.
+#[tokio::test]
+async fn use_skill_from_the_previous_turn_returns_a_pointer_not_the_body() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.history.push(ChatMessage::new("user", "Log my hours"));
+        state.history.push(
+            ChatMessage::new(
+                "tool",
+                "use_skill: <skill_content name=\"synthetic-skill\">\ninstructions",
+            )
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "use_skill".to_string(),
+                success: true,
+                ..Default::default()
+            }),
+        );
+        state.history.push(ChatMessage::new("assistant", "Logged."));
+        state
+            .history
+            .push(ChatMessage::new("user", "Now check the active timer"));
+    }
+
+    let result = run_one_tool_with_state(
+        &state,
+        test_tool_call("use_skill", serde_json::json!({"name": "synthetic-skill"})),
+    )
+    .await;
+
+    assert!(result.metadata.success, "got: {}", result.content);
+    assert!(
+        result.content.contains("already loaded"),
+        "{}",
+        result.content
+    );
+    assert!(
+        !result.content.contains("<skill_content"),
+        "{}",
+        result.content
+    );
 }
 
 #[test]

@@ -51,6 +51,7 @@ fn unexecuted_calls_notice(
     queued: &[usize],
     reissue: &[usize],
     closed: &[usize],
+    is_known_mutation: impl Fn(usize) -> bool,
     describe: impl Fn(&[usize]) -> String,
 ) -> Option<String> {
     if queued.is_empty() && reissue.is_empty() && closed.is_empty() {
@@ -59,11 +60,23 @@ fn unexecuted_calls_notice(
     let mut notice = format!(
         "[The model emitted {requested_calls} tool calls. {executed_calls} were executed this round."
     );
-    if !queued.is_empty() {
+    // Only a known mutation is described as a workspace change: an
+    // unannotated MCP call is held because it may have side effects, not
+    // because it changes the workspace (#1970).
+    let (queued_changes, queued_other): (Vec<usize>, Vec<usize>) =
+        queued.iter().partition(|index| is_known_mutation(**index));
+    if !queued_changes.is_empty() {
         notice.push_str(&format!(
             " The scheduler held {} over the per-response workspace-change limit and queued them for automatic execution in a later round ({}); do not reissue them, their real results arrive without another request from you.",
-            queued.len(),
-            describe(queued),
+            queued_changes.len(),
+            describe(&queued_changes),
+        ));
+    }
+    if !queued_other.is_empty() {
+        notice.push_str(&format!(
+            " The scheduler held {} call(s) that may have side effects over the per-response limit on such calls and queued them for automatic execution in a later round ({}); do not reissue them, their real results arrive without another request from you.",
+            queued_other.len(),
+            describe(&queued_other),
         ));
     }
     if !reissue.is_empty() {
@@ -100,6 +113,17 @@ fn absent_write_targets(
         .map(|path| (path.to_owned(), root.join(path)))
         .filter(|(_, resolved)| !resolved.exists())
         .collect()
+}
+
+/// A builtin call that changes the workspace, a process, or delegated work.
+/// Unknown (MCP) tools are not known mutations even when they are held.
+fn is_known_mutation_call(name: &str) -> bool {
+    matches!(
+        crate::tools::tool_safety(name),
+        crate::tools::ToolSafety::WorkspaceMutation
+            | crate::tools::ToolSafety::ProcessControl
+            | crate::tools::ToolSafety::Delegation
+    )
 }
 
 fn tool_changes_workspace(name: &str, arguments: Option<&serde_json::Value>) -> bool {
@@ -2041,6 +2065,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     &scheduled.queued,
                     &scheduled.reissue,
                     &closed,
+                    |index| {
+                        tool_calls
+                            .get(index)
+                            .is_some_and(|call| is_known_mutation_call(&call.name))
+                    },
                     describe,
                 ) {
                     dbg_log!("Deferred tool-call diagnostic: {notice}");
@@ -2587,17 +2616,50 @@ mod tests {
         // Session 01a11ffc (#1886): two calls, the edit ran, the write was
         // rejected by validation and answered by its own tool result.
         assert_eq!(
-            super::unexecuted_calls_notice(2, 1, &[], &[], &[], describe),
+            super::unexecuted_calls_notice(2, 1, &[], &[], &[], |_| true, describe),
             None
         );
 
-        let notice = super::unexecuted_calls_notice(3, 1, &[], &[2], &[2], describe)
+        let notice = super::unexecuted_calls_notice(3, 1, &[], &[2], &[2], |_| true, describe)
             .expect("an unscheduled call still needs the notice");
         assert!(
             notice.contains("did not schedule 1 call(s) ([2])"),
             "{notice}"
         );
         assert!(notice.contains("The remaining 1 call(s) ([2])"), "{notice}");
+    }
+
+    // Session 01a130ea (#1970): an unannotated MCP lookup held over the limit
+    // was told it exceeded the workspace-change limit.
+    #[test]
+    fn a_held_call_that_is_not_a_known_mutation_does_not_claim_a_workspace_change() {
+        let names = ["solidtime_whoami", "write_to_file", "run_command"];
+        let describe = |indices: &[usize]| {
+            indices
+                .iter()
+                .map(|index| names[*index])
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let known = |index: usize| super::is_known_mutation_call(names[index]);
+
+        let notice = super::unexecuted_calls_notice(3, 1, &[0], &[], &[], known, describe)
+            .expect("a held call needs the notice");
+        assert!(!notice.contains("workspace-change"), "{notice}");
+        assert!(notice.contains("may have side effects"), "{notice}");
+        assert!(notice.contains("(solidtime_whoami)"), "{notice}");
+
+        let notice = super::unexecuted_calls_notice(3, 1, &[0, 1, 2], &[], &[], known, describe)
+            .expect("held calls need the notice");
+        assert!(
+            notice.contains("held 2 over the per-response workspace-change limit"),
+            "{notice}"
+        );
+        assert!(notice.contains("(write_to_file, run_command)"), "{notice}");
+        assert!(
+            notice.contains("held 1 call(s) that may have side effects"),
+            "{notice}"
+        );
     }
 
     use super::super::{GroundedArtifactEvidence, TurnContext};

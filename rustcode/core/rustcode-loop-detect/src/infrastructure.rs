@@ -112,6 +112,12 @@ fn classify(
     let lower = content.to_ascii_lowercase();
     let provider_failure = kind == "providerfailed";
     let mcp_failure = kind == "mcpfailed";
+    // An MCP server that relays an upstream 4xx (`HTTP 404: No active time
+    // entry`) reached its service and got an answer: that is the tool's
+    // result, not a transport or service outage (#1970).
+    if mcp_failure && reports_upstream_client_error(&lower) {
+        return None;
+    }
     let dependency = if lower.contains("qdrant") {
         "qdrant"
     } else if lower.contains("socraticode") || lower.contains("socrati") {
@@ -186,6 +192,34 @@ fn classify(
         fingerprint,
         dependency: dependency.to_string(),
         class: class.to_string(),
+    })
+}
+
+/// Whether failure text carries an upstream HTTP 4xx status, e.g.
+/// `returned HTTP 404: ...` or `status 403`. Request timeout (408) and rate
+/// limiting (429) are transient service conditions and do not count.
+fn reports_upstream_client_error(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    [
+        "http ",
+        "http/1.1 ",
+        "http/2 ",
+        "status ",
+        "status code ",
+        "status: ",
+    ]
+    .iter()
+    .any(|prefix| {
+        lower.match_indices(prefix).any(|(index, _)| {
+            let rest = &lower[index + prefix.len()..];
+            let digits = rest.as_bytes();
+            digits.len() >= 3
+                && digits[0] == b'4'
+                && digits[1].is_ascii_digit()
+                && digits[2].is_ascii_digit()
+                && !digits.get(3).is_some_and(u8::is_ascii_digit)
+                && !matches!(&rest[..3], "408" | "429")
+        })
     })
 }
 
@@ -338,6 +372,57 @@ mod tests {
                 "error: cargo test failed with exit code 1",
             ),
             InfrastructureFailureDecision::NotInfrastructure
+        ));
+    }
+
+    // Session 01a130ea (#1970): the server answered "no active timer" with a
+    // 404, which was counted as an MCP transport failure.
+    #[test]
+    fn mcp_upstream_4xx_is_a_tool_answer_not_an_outage() {
+        let mut tracker = InfrastructureFailureTracker::default();
+        let content = "error: MCP tool call failed: Solidtime /api/v1/users/me/time-entries/active returned HTTP 404: {\"message\": \"No active time entry\"}";
+        assert!(matches!(
+            tracker.observe(
+                "solidtime_get_active_timer",
+                Some("McpFailed"),
+                true,
+                false,
+                content
+            ),
+            InfrastructureFailureDecision::NotInfrastructure
+        ));
+        assert_eq!(tracker.streak(), 0);
+    }
+
+    #[test]
+    fn upstream_client_error_detection_skips_transient_and_server_statuses() {
+        use super::reports_upstream_client_error;
+        assert!(reports_upstream_client_error(
+            "returned HTTP 404: not found"
+        ));
+        assert!(reports_upstream_client_error("upstream status code 422"));
+        assert!(reports_upstream_client_error("Status: 401 Unauthorized"));
+        assert!(!reports_upstream_client_error(
+            "returned HTTP 429: slow down"
+        ));
+        assert!(!reports_upstream_client_error("returned HTTP 408"));
+        assert!(!reports_upstream_client_error("returned HTTP 503"));
+        assert!(!reports_upstream_client_error("status 4000 items"));
+        assert!(!reports_upstream_client_error("MCP channel closed"));
+    }
+
+    #[test]
+    fn mcp_upstream_5xx_still_counts_as_infrastructure() {
+        let mut tracker = InfrastructureFailureTracker::default();
+        assert!(matches!(
+            tracker.observe(
+                "solidtime_get_active_timer",
+                Some("McpFailed"),
+                true,
+                false,
+                "error: MCP tool call failed: returned HTTP 503: service unavailable",
+            ),
+            InfrastructureFailureDecision::Allowed { .. }
         ));
     }
 }
