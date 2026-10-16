@@ -2540,7 +2540,7 @@ fn queue_preview_shows_recent_user_prompts_without_wakeups() {
         .map(|cell| cell.symbol())
         .collect();
 
-    assert!(rendered.contains("queued follow-ups (4) · ↑ edit last"));
+    assert!(rendered.contains("Queued · 4 · sent when this turn ends · ↑ edit last"));
     assert!(rendered.contains("second prompt"));
     assert!(rendered.contains("third prompt"));
     assert!(rendered.contains("fourth prompt"));
@@ -2576,9 +2576,9 @@ fn steering_previews_are_separate_and_show_interrupt_and_mode_hints() {
         .map(|cell| cell.symbol())
         .collect();
 
-    assert!(rendered.contains("pending steering · applies after a result or turn ends"));
+    assert!(rendered.contains("Steering · 2 · applies after the next result"));
     assert!(rendered.find("first steer").unwrap() < rendered.find("second steer").unwrap());
-    assert!(rendered.contains("queued follow-ups (2) · ↑ edit last"));
+    assert!(rendered.contains("Queued · 2 · sent when this turn ends · ↑ edit last"));
     assert!(rendered.contains("follow-up one"));
     assert!(rendered.contains("follow-up two"));
     assert!(!rendered.contains("esc interrupt and apply now"));
@@ -2605,7 +2605,7 @@ fn queued_steering_prompts_wrap_within_the_composer_width() {
         prompt_rows.iter().all(|row| line_width(row) <= 60),
         "{rendered}"
     );
-    assert!(rendered.contains("pending steering"), "{rendered}");
+    assert!(rendered.contains("Steering · 1"), "{rendered}");
 }
 
 #[test]

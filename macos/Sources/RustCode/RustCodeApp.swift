@@ -599,6 +599,34 @@ final class DesktopModel: ObservableObject {
         } catch { self.error = String(describing: error) }
     }
 
+    /// A message written while a turn runs. It waits here and is sent when
+    /// the chat's turn ends, as the iOS app queues them.
+    struct QueuedPrompt: Identifiable, Equatable {
+        let id = UUID()
+        let sessionId: String
+        /// What was typed, for the preview and for editing it again.
+        let typed: String
+        let text: String
+        let images: [ImageAttachment]
+    }
+
+    @Published var queuedPrompts: [QueuedPrompt] = []
+
+    /// The selected chat's queued messages, oldest first.
+    var selectedQueue: [QueuedPrompt] { queuedPrompts.filter { $0.sessionId == selectedSession } }
+
+    func removeQueued(_ prompt: QueuedPrompt) {
+        queuedPrompts.removeAll { $0.id == prompt.id }
+    }
+
+    /// Take a queued message back into the composer.
+    func editQueued(_ prompt: QueuedPrompt) {
+        removeQueued(prompt)
+        draftCommand = nil
+        draft = prompt.typed
+        images = prompt.images
+    }
+
     func submit() async {
         guard engine?.connection != nil else { return }
         if let chip = draftCommand {
@@ -606,7 +634,7 @@ final class DesktopModel: ObservableObject {
             draftCommand = nil
         }
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !typed.isEmpty || !attachments.isEmpty || !images.isEmpty, !busy else { return }
+        guard !typed.isEmpty || !attachments.isEmpty || !images.isEmpty else { return }
         if !images.isEmpty, capabilities?.promptImages != true {
             error = "This RustCode engine cannot take images. Update RustCode to attach them."
             return
@@ -618,35 +646,68 @@ final class DesktopModel: ObservableObject {
         }
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
         let sentImages = images
+        if busy {
+            // A draft has no chat to queue for until its first turn creates one.
+            guard let id = selectedSession ?? turnSession else { return }
+            queuedPrompts.append(QueuedPrompt(sessionId: id, typed: typed, text: text, images: sentImages))
+            draft = ""
+            attachments = []
+            images = []
+            return
+        }
         draft = ""
         attachments = []
         images = []
         let created = selectedSession == nil
-        guard let connection = engine?.connection,
-              let id = selectedSession == nil ? await createSession() : selectedSession else {
+        guard let id = selectedSession == nil ? await createSession() : selectedSession else {
             draft = typed
             images = sentImages
             return
         }
-        if text == typed, sentImages.isEmpty, SlashCommand.invoked(by: typed, in: commands)?.action == .execute {
-            transcript.appendCommand(typed)
+        if created { await refreshSessions() }
+        await run(QueuedPrompt(sessionId: id, typed: typed, text: text, images: sentImages))
+    }
+
+    /// Run one prompt as the chat's turn, then the chat's next queued message,
+    /// unless the turn was stopped.
+    private func run(_ prompt: QueuedPrompt) async {
+        guard let connection = engine?.connection else { return }
+        let id = prompt.sessionId
+        if prompt.text == prompt.typed, prompt.images.isEmpty,
+           SlashCommand.invoked(by: prompt.typed, in: commands)?.action == .execute {
+            appendToTranscript(of: id) { $0.appendCommand(prompt.typed) }
         } else {
-            let markers = sentImages.compactMap { $0.writePreview() }.map(ImageMarkers.marker)
-            transcript.appendUser(([text] + markers).filter { !$0.isEmpty }.joined(separator: "\n"))
+            let markers = prompt.images.compactMap { $0.writePreview() }.map(ImageMarkers.marker)
+            let shown = ([prompt.text] + markers).filter { !$0.isEmpty }.joined(separator: "\n")
+            appendToTranscript(of: id) { $0.appendUser(shown) }
         }
         busy = true
         turnSession = id
-        defer {
-            busy = false
-            turnSession = nil
-            // The turn is over, so the engine no longer waits on its requests.
-            permissionQueue.removeAll { $0.sessionId == id }
-        }
+        var stopped = false
         do {
-            if created { await refreshSessions() }
-            _ = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: text, images: sentImages))
+            let result = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: prompt.text, images: prompt.images))
+            stopped = result["stopReason"]?.stringValue == "cancelled"
             await refreshSessions()
-        } catch { self.error = String(describing: error) }
+        } catch {
+            self.error = String(describing: error)
+            stopped = true
+        }
+        busy = false
+        turnSession = nil
+        // The turn is over, so the engine no longer waits on its requests.
+        permissionQueue.removeAll { $0.sessionId == id }
+        guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else { return }
+        removeQueued(next)
+        await run(next)
+    }
+
+    /// The selected chat's transcript is live; another open chat's is stashed.
+    private func appendToTranscript(of session: String, _ update: (inout Transcript) -> Void) {
+        if session == selectedSession {
+            update(&transcript)
+        } else if openSessions[session] != nil {
+            update(&openSessions[session]!.transcript)
+        }
     }
 
     func cancel() async {

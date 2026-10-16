@@ -805,27 +805,24 @@ pub(super) fn queued_user_prompts(state: &RenderSnapshot) -> Vec<&str> {
         .collect()
 }
 
+/// Width of a preview row's number column: "  1  ".
+const QUEUE_PREFIX_WIDTH: usize = 5;
+
+/// Rows the steering and queue previews take: a blank row that separates them
+/// from the activity line above, then each group's header and prompts.
 pub(super) fn queue_preview_height(state: &RenderSnapshot, width: usize) -> u16 {
-    let steers = pending_steer_prompts(state);
-    let prompts = queued_user_prompts(state);
-    let prompt_width = width.saturating_sub("  › ".width()).max(1);
-    let steer_height = if steers.is_empty() {
-        0
-    } else {
-        1 + steers
-            .iter()
-            .map(|prompt| queue_prompt_preview_lines(prompt, prompt_width).len() as u16)
-            .sum::<u16>()
-    };
-    let queue_height = if prompts.is_empty() {
-        0
-    } else {
+    let prompt_width = width.saturating_sub(QUEUE_PREFIX_WIDTH).max(1);
+    let group = |prompts: &[&str]| -> u16 {
+        if prompts.is_empty() {
+            return 0;
+        }
         1 + prompts
             .iter()
             .map(|prompt| queue_prompt_preview_lines(prompt, prompt_width).len() as u16)
             .sum::<u16>()
     };
-    steer_height + queue_height
+    let rows = group(&pending_steer_prompts(state)) + group(&queued_user_prompts(state));
+    if rows == 0 { 0 } else { rows + 1 }
 }
 
 pub(super) fn queue_prompt_preview_lines(prompt: &str, max_width: usize) -> Vec<String> {
@@ -889,8 +886,9 @@ pub(super) fn truncate_queue_prompt(prompt: &str, max_width: usize) -> String {
 }
 
 /// Shows pending steers and the most recent queued user prompts directly
-/// above the input box. Internal wakeups stay queued but never consume
-/// composer space or leak into this transcript-like preview.
+/// above the input box: a header naming the group, then numbered prompts.
+/// Internal wakeups stay queued but never consume composer space or leak
+/// into this transcript-like preview.
 pub(super) fn render_queue_line(
     f: &mut Frame,
     chunks: &[ratatui::layout::Rect],
@@ -906,70 +904,111 @@ pub(super) fn render_queue_line(
         return;
     }
     let show_picker = state.modal_open();
-    let mut row_offset = 0u16;
+    // Row 0 stays blank, apart from the activity line above.
+    let mut row = 1u16;
     if !steers.is_empty() {
-        let header = Line::from(Span::styled(
-            truncate_queue_prompt(
-                "pending steering · applies after a result or turn ends",
-                block.width as usize,
-            ),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        f.render_widget(
-            Paragraph::new(header).style(Style::default().bg(COLOR_BG())),
-            ratatui::layout::Rect::new(block.x, block.y, block.width, 1),
+        let count = state.pending_steers().len();
+        render_queue_header(
+            f,
+            block,
+            row,
+            "Steering",
+            &format!("{count} · applies after the next result"),
+            show_picker,
         );
-        for steer in steers {
-            row_offset += render_preview_prompt(f, block, row_offset + 1, steer, show_picker);
+        row += 1;
+        let first = count - steers.len() + 1;
+        for (index, steer) in steers.into_iter().enumerate() {
+            row += render_preview_prompt(f, block, row, first + index, steer, show_picker);
         }
-        row_offset += 1;
     }
     if prompts.is_empty() {
         return;
     }
-    let queued_count = state
+    let count = state
         .pending_queue()
         .iter()
         .filter(|prompt| !prompt.starts_with("__task_wakeup__:"))
         .count();
-    let header = Line::from(Span::styled(
-        format!("queued follow-ups ({queued_count}) · ↑ edit last"),
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    ));
-    f.render_widget(
-        Paragraph::new(header).style(Style::default().bg(COLOR_BG())),
-        ratatui::layout::Rect::new(block.x, block.y + row_offset, block.width, 1),
+    render_queue_header(
+        f,
+        block,
+        row,
+        "Queued",
+        &format!("{count} · sent when this turn ends · ↑ edit last"),
+        show_picker,
     );
-
-    row_offset += 1;
-    for prompt in prompts {
-        row_offset += render_preview_prompt(f, block, row_offset, prompt, show_picker);
+    row += 1;
+    let first = count - prompts.len() + 1;
+    for (index, prompt) in prompts.into_iter().enumerate() {
+        row += render_preview_prompt(f, block, row, first + index, prompt, show_picker);
     }
+}
+
+fn render_queue_header(
+    f: &mut Frame,
+    block: ratatui::layout::Rect,
+    row: u16,
+    label: &str,
+    detail: &str,
+    show_picker: bool,
+) {
+    if row >= block.height {
+        return;
+    }
+    let width = block.width as usize;
+    let label = truncate_queue_prompt(&format!("  {label}"), width);
+    let detail =
+        truncate_queue_prompt(&format!(" · {detail}"), width.saturating_sub(label.width()));
+    let line = Line::from(vec![
+        Span::styled(
+            label,
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ),
+        Span::styled(
+            detail,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(line).style(Style::default().bg(COLOR_BG())),
+        ratatui::layout::Rect::new(block.x, block.y + row, block.width, 1),
+    );
 }
 
 fn render_preview_prompt(
     f: &mut Frame,
     block: ratatui::layout::Rect,
     row: u16,
+    number: usize,
     prompt: &str,
     show_picker: bool,
 ) -> u16 {
-    let prefix = "  › ";
-    let continuation = "    ";
+    let prefix = format!("{number:>3}  ");
+    let continuation = " ".repeat(QUEUE_PREFIX_WIDTH);
     let rows = queue_prompt_preview_lines(
         prompt,
-        (block.width as usize).saturating_sub(prefix.width()).max(1),
+        (block.width as usize)
+            .saturating_sub(QUEUE_PREFIX_WIDTH)
+            .max(1),
     );
     for (index, preview) in rows.iter().enumerate() {
-        let row_prefix = if index == 0 { prefix } else { continuation };
+        if row + index as u16 >= block.height {
+            break;
+        }
+        let row_prefix = if index == 0 {
+            prefix.as_str()
+        } else {
+            continuation.as_str()
+        };
         let line = Line::from(vec![
             Span::styled(
-                row_prefix,
+                row_prefix.to_owned(),
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
             Span::styled(
-                preview.as_str(),
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), show_picker),
+                preview.clone(),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
         ]);
         f.render_widget(

@@ -758,12 +758,13 @@ private struct Composer: View {
     @State private var pasteMonitor: Any?
 
     private var canSend: Bool {
-        !model.busy && (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !model.attachments.isEmpty || !model.images.isEmpty || model.draftCommand != nil)
+        !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !model.attachments.isEmpty || !model.images.isEmpty || model.draftCommand != nil
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !model.selectedQueue.isEmpty { QueuedPromptList(model: model) }
             if !model.images.isEmpty { imageChips }
             if !model.attachments.isEmpty { attachmentChips }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -890,7 +891,7 @@ private struct Composer: View {
     private var placeholder: String {
         if model.draftCommand?.takesArguments == true { return "Arguments" }
         if model.draftCommand != nil { return "" }
-        return model.busy ? "RustCode is working…" : "Message RustCode…"
+        return model.busy ? "Queue a message…" : "Message RustCode…"
     }
 
     /// The text, with the rest of a half-typed command shown in gray after it.
@@ -985,6 +986,18 @@ private struct Composer: View {
     @ViewBuilder
     private var trailingAction: some View {
         if model.busy {
+            if canSend {
+                Button { Task { await model.submit() } } label: {
+                    Image(systemName: "text.line.last.and.arrowtriangle.forward")
+                        .font(.system(size: 12, weight: .bold))
+                        .frame(width: 30, height: 30)
+                        .background(Color.brandFill, in: .circle)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .help("Queue for when this turn ends (⏎)")
+                .transition(.scale.combined(with: .opacity))
+            }
             Button { Task { await model.cancel() } } label: {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 11, weight: .bold))
@@ -1038,6 +1051,50 @@ private struct Composer: View {
 
 extension String {
     var abbreviatingHome: String { (self as NSString).abbreviatingWithTildeInPath }
+}
+
+/// Messages waiting for the running turn to end, sent in order. Each can be
+/// taken back into the composer or removed.
+private struct QueuedPromptList: View {
+    @ObservedObject var model: DesktopModel
+
+    var body: some View {
+        let queue = model.selectedQueue
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.line.last.and.arrowtriangle.forward")
+                Text("Queued").fontWeight(.semibold)
+                Text("· sent when this turn ends").foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .foregroundStyle(Color.brand)
+            .padding(.horizontal, 6)
+            ForEach(Array(queue.enumerated()), id: \.element.id) { index, prompt in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                    Text(prompt.typed.isEmpty ? "Image" : prompt.typed)
+                        .font(.callout)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !prompt.images.isEmpty {
+                        Image(systemName: "photo").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button { model.editQueued(prompt) } label: { Image(systemName: "pencil") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Edit")
+                    Button { model.removeQueued(prompt) } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Remove from queue")
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(.fill.tertiary, in: .rect(cornerRadius: 12))
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: queue)
+    }
 }
 
 private struct CommandRow: View {
