@@ -23,6 +23,7 @@ struct ContentView: View {
         .background(WindowChrome())
         .sheet(isPresented: $model.showsSettings) { SettingsView(model: model) }
         .sheet(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
+        .sheet(item: $model.contextSheet) { ContextSheet(context: $0) }
     }
 }
 
@@ -672,7 +673,11 @@ private struct ChatView: View {
                 Text(projectName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            if let usage = model.transcript.usage { UsageCapsule(usage: usage) }
+            if let usage = model.transcript.usage {
+                Button { model.showContext() } label: { UsageCapsule(usage: usage) }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Shows how the context window is used")
+            }
             if let session = model.sessions.first(where: { $0.id == model.selectedSession }) {
                 ToolbarCluster {
                     ClusterButton(systemImage: "magnifyingglass", help: "Find in chat (⌘F)", isOn: model.showsFind) {

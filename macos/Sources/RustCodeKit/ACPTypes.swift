@@ -222,6 +222,8 @@ public enum ToolStatus: String, Equatable, Sendable {
 public enum SessionUpdate: Equatable, Sendable {
     case userText(String)
     case agentText(String)
+    /// The `/context` reply: its Markdown text and the breakdown it carries.
+    case contextReport(text: String, context: ContextBreakdown)
     case thoughtText(String)
     case toolCall(id: String, title: String, kind: String?, status: ToolStatus?, input: JSONValue?)
     case toolCallUpdate(id: String, title: String?, status: ToolStatus?, output: String?, diffs: [FileDiff] = [])
@@ -239,7 +241,13 @@ public enum SessionUpdate: Equatable, Sendable {
         case "user_message_chunk":
             self = .userText(Self.text(update["content"]))
         case "agent_message_chunk":
-            self = .agentText(Self.text(update["content"]))
+            let meta = update["_meta"]?["rustcode"]
+            if meta?["kind"]?.stringValue == "context",
+               let context = ContextBreakdown(json: meta?["context"]) {
+                self = .contextReport(text: Self.text(update["content"]), context: context)
+            } else {
+                self = .agentText(Self.text(update["content"]))
+            }
         case "agent_thought_chunk":
             self = .thoughtText(Self.text(update["content"]))
         case "tool_call":

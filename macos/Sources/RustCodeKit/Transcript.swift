@@ -120,6 +120,8 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.tool(ToolItem(callId: id, title: title ?? "Tool", status: status, output: output, changes: changes)))
             }
+        case .contextReport(let text, _):
+            apply(.agentText(text))
         case .usage(let usage):
             self.usage = usage
         case .title, .configOptions, .availableCommands, .unknown:
