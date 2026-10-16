@@ -525,7 +525,8 @@ private struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(model.transcript.items) { item in
-                        TranscriptRow(item: item, isCurrentMatch: model.showsFind && item.id == model.currentMatch).id(item.id)
+                        TranscriptRow(item: item, isCurrentMatch: model.showsFind && item.id == model.currentMatch,
+                                      isStreaming: isReplyStreaming && item.id == model.transcript.items.last?.id).id(item.id)
                     }
                     if model.busy, model.turnSession == model.selectedSession, !isAgentWriting {
                         WorkingIndicator()
@@ -700,6 +701,11 @@ private struct ChatView: View {
     }
 
     private let bottomAnchor = "bottom"
+
+    /// The shown chat has a turn in progress, so its last reply may still grow.
+    private var isReplyStreaming: Bool {
+        model.busy && model.turnSession == model.selectedSession
+    }
 
     /// Visible reply text is streaming. Whitespace or a `<think>` section the
     /// model sends before its first words still counts as waiting, so
