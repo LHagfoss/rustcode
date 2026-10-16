@@ -97,7 +97,11 @@ public enum ACPRequests {
     }
 
     public static func setModel(sessionId: String, value: String) -> JSONValue {
-        ["sessionId": .string(sessionId), "configId": "model", "value": .string(value)]
+        setConfig(sessionId: sessionId, configId: "model", value: value)
+    }
+
+    public static func setConfig(sessionId: String, configId: String, value: String) -> JSONValue {
+        ["sessionId": .string(sessionId), "configId": .string(configId), "value": .string(value)]
     }
 
     public static func permissionSelected(optionId: String) -> JSONValue {
@@ -170,16 +174,24 @@ public struct ModelOptions: Equatable, Sendable {
 
     public static let empty = ModelOptions(current: nil, choices: [])
 
-    /// Reads the `model` select from a `configOptions` array.
+    /// The reasoning effort select, when the active model offers a choice.
+    public var effort: String?
+    public var efforts: [ModelChoice] = []
+
+    /// Reads the `model` and `effort` selects from a `configOptions` array.
     public init(configOptions: JSONValue?) {
-        let model = configOptions?.arrayValue?.first { $0["id"]?.stringValue == "model" }
-        current = model?["currentValue"]?.stringValue
-        choices = (model?["options"]?.arrayValue ?? []).compactMap { option in
-            guard let value = option["value"]?.stringValue else { return nil }
-            return ModelChoice(
-                id: value, name: option["name"]?.stringValue ?? value,
-                detail: option["description"]?.stringValue)
+        func select(_ id: String) -> (String?, [ModelChoice]) {
+            let option = configOptions?.arrayValue?.first { $0["id"]?.stringValue == id }
+            let choices: [ModelChoice] = (option?["options"]?.arrayValue ?? []).compactMap { option in
+                guard let value = option["value"]?.stringValue else { return nil }
+                return ModelChoice(
+                    id: value, name: option["name"]?.stringValue ?? value,
+                    detail: option["description"]?.stringValue)
+            }
+            return (option?["currentValue"]?.stringValue, choices)
         }
+        (current, choices) = select("model")
+        (effort, efforts) = select("effort")
     }
 
     public init(current: String?, choices: [ModelChoice]) {

@@ -22,6 +22,7 @@ struct ContentView: View {
         .tint(.brand)
         .background(WindowChrome())
         .sheet(isPresented: $model.showsSettings) { SettingsView(model: model) }
+        .sheet(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
     }
 }
 
@@ -62,6 +63,8 @@ private struct SessionSidebar: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var updater: Updater
     @FocusState private var searchFocused: Bool
+    /// The one chat row whose swipe actions are showing.
+    @State var openSwipeRow: String?
 
     /// The hidden title bar's height, so buttons line up with the traffic lights.
     static let barHeight: CGFloat = 28
@@ -71,7 +74,7 @@ private struct SessionSidebar: View {
             // Room for the traffic lights, then the bar's own buttons.
             HStack(spacing: 2) {
                 Spacer()
-                ChromeButton(systemImage: "sidebar.left", help: "Hide sidebar (⌃⌘S)") { model.toggleSidebar() }
+                ChromeButton(systemImage: "sidebar.left", help: "Hide sidebar (⌘B)") { model.toggleSidebar() }
                 ChromeButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
             }
             .padding(.leading, 80)
@@ -107,7 +110,7 @@ private struct SessionSidebar: View {
             .padding(.top, 8)
 
             HStack {
-                Text("Chats")
+                Text(model.showsArchived ? "Archived" : "Chats")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -119,17 +122,18 @@ private struct SessionSidebar: View {
             .padding(.bottom, 4)
 
             ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(model.visibleSessions) { session in
-                        SessionRow(session: session,
-                                   showsProject: model.showsAllProjects,
-                                   isSelected: session.id == model.selectedSession,
-                                   needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
-                                   isRunning: model.busy && model.turnSession == session.id) {
-                            guard session.id != model.selectedSession else { return }
-                            Task { await model.select(session) }
-                        }
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    let pinned = model.visibleSessions.filter { model.pinnedSessions.contains($0.id) }
+                    if !pinned.isEmpty {
+                        Label("Pinned", systemImage: "pin.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.top, 2)
+                        ForEach(pinned) { row($0) }
+                        Divider().opacity(0.4).padding(.vertical, 6).padding(.horizontal, 10)
                     }
+                    ForEach(model.visibleSessions.filter { !model.pinnedSessions.contains($0.id) }) { row($0) }
                 }
                 .padding(.horizontal, 10)
             }
@@ -137,12 +141,33 @@ private struct SessionSidebar: View {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
                 } else if model.visibleSessions.isEmpty {
-                    Text(model.sessions.isEmpty ? "No chats in this project yet." : "No matching chats.")
+                    Text(model.showsArchived ? "No archived chats." : model.sessions.isEmpty ? "No chats in this project yet." : "No matching chats.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             }
 
+            if !model.archivedSessions.isEmpty || model.showsArchived {
+                Button { withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() } } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: model.showsArchived ? "chevron.left" : "archivebox")
+                            .frame(width: 16)
+                        Text(model.showsArchived ? "Back to Chats" : "Archived")
+                        Spacer(minLength: 0)
+                        if !model.showsArchived {
+                            Text("\(model.archivedSessions.count)").foregroundStyle(.tertiary).monospacedDigit()
+                        }
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 30)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.top, 4)
+            }
             if let release = updater.available {
                 Button { Task { await updater.install() } } label: {
                     HStack(spacing: 8) {
@@ -192,6 +217,111 @@ private struct SessionSidebar: View {
     }
 }
 
+extension SessionSidebar {
+    @ViewBuilder
+    func row(_ session: SessionSummary) -> some View {
+        let isPinned = model.pinnedSessions.contains(session.id)
+        SwipeRow(id: session.id, openRow: $openSwipeRow,
+                 leading: [SwipeAction(title: isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash.fill" : "pin.fill",
+                                       tint: .brand) { model.togglePin(session) }],
+                 trailing: [
+                    SwipeAction(title: "Rename", systemImage: "pencil", tint: .secondary) { model.renamingSession = session },
+                    SwipeAction(title: model.archivedSessions.contains(session.id) ? "Unarchive" : "Archive",
+                                systemImage: model.archivedSessions.contains(session.id) ? "tray.and.arrow.up.fill" : "archivebox.fill",
+                                tint: .orange) { model.toggleArchive(session) },
+                    SwipeAction(title: "Trash", systemImage: "trash.fill", tint: .red) { Task { await model.trash(session) } },
+                 ]) {
+        SessionRow(session: session,
+                   showsProject: model.showsAllProjects,
+                   isSelected: session.id == model.selectedSession,
+                   isPinned: model.pinnedSessions.contains(session.id),
+                   needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
+                   isRunning: model.busy && model.turnSession == session.id) {
+            guard session.id != model.selectedSession else { return }
+            Task { await model.select(session) }
+        }
+        }
+        .contextMenu { SessionMenu(model: model, session: session) }
+    }
+}
+
+/// Right-click on a chat in the sidebar.
+private struct SessionMenu: View {
+    @ObservedObject var model: DesktopModel
+    let session: SessionSummary
+
+    var body: some View {
+        Button("Open", systemImage: "bubble.left") { Task { await model.select(session) } }
+        Button("Rename…", systemImage: "pencil") { model.renamingSession = session }
+        Button(model.pinnedSessions.contains(session.id) ? "Unpin" : "Pin", systemImage: "pin") { model.togglePin(session) }
+        Divider()
+        Button("Copy Title", systemImage: "doc.on.doc") { Clipboard.copy(session.title ?? "New chat") }
+        Button("Copy Session ID", systemImage: "number") { Clipboard.copy(session.id) }
+        Button("Show in Finder", systemImage: "folder") { Task { await model.revealInFinder(session) } }
+        if !session.cwd.isEmpty {
+            Button("Open Project in Finder", systemImage: "folder.badge.gearshape") {
+                NSWorkspace.shared.open(URL(fileURLWithPath: session.cwd, isDirectory: true))
+            }
+            Button("Search Chats in \(session.projectName)", systemImage: "line.3.horizontal.decrease") {
+                model.sessionFilter = session.projectName
+            }
+        }
+        Divider()
+        Button(model.archivedSessions.contains(session.id) ? "Unarchive" : "Archive",
+               systemImage: model.archivedSessions.contains(session.id) ? "tray.and.arrow.up" : "archivebox") {
+            model.toggleArchive(session)
+        }
+        Button("Move to Trash", systemImage: "trash", role: .destructive) { Task { await model.trash(session) } }
+    }
+}
+
+/// Edits a chat's title.
+struct RenameSheet: View {
+    @ObservedObject var model: DesktopModel
+    let session: SessionSummary
+    @State private var title: String
+    @FocusState private var focused: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    init(model: DesktopModel, session: SessionSummary) {
+        self.model = model
+        self.session = session
+        _title = State(initialValue: session.title ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rename Chat").font(.headline)
+            TextField("Title", text: $title)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .frame(height: 34)
+                .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 10))
+                .focused($focused)
+                .onSubmit(save)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(PillButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename", action: save)
+                    .buttonStyle(PillButtonStyle(prominent: true))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+        .onAppear { focused = true }
+    }
+
+    private func save() {
+        let title = title
+        dismiss()
+        Task { await model.rename(session, to: title) }
+    }
+}
+
 /// "All" or "Project": which chats the sidebar lists.
 private struct ScopeToggle: View {
     @Binding var showsAll: Bool
@@ -223,6 +353,7 @@ private struct SessionRow: View {
     let session: SessionSummary
     var showsProject = false
     let isSelected: Bool
+    var isPinned = false
     let needsAnswer: Bool
     let isRunning: Bool
     let action: () -> Void
@@ -278,7 +409,7 @@ private struct ChatView: View {
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
-    private var title: String { selected?.title ?? "RustCode" }
+    private var title: String { model.selectedSession == nil ? "New Chat" : selected?.title ?? "RustCode" }
 
     /// A chat from another project shows that project, not the open one.
     private var projectName: String {
@@ -315,6 +446,9 @@ private struct ChatView: View {
             }
         }
         .environment(\.findQuery, model.showsFind ? model.findQuery : "")
+        .environment(\.messageActions, MessageActions(
+            edit: { model.edit($0) },
+            retry: { text in Task { await model.retry(text) } }))
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 header
@@ -376,12 +510,8 @@ private struct ChatView: View {
                         proxy.scrollTo(suggestions[index].id)
                     }
                 }
-                .background {
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(.regularMaterial)
-                        .shadow(color: .black.opacity(0.28), radius: 20, y: 8)
-                }
                 .clipShape(.rect(cornerRadius: 20))
+                .glassSurface(in: .rect(cornerRadius: 20))
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28)
                 .padding(.bottom, composerHeight + 16 + 8)
@@ -400,21 +530,17 @@ private struct ChatView: View {
                 Color.black.opacity(0.001)
                     .onTapGesture { model.composerPanel = nil }
                 HStack {
-                    if panel == .model { Spacer(minLength: 0) }
+                    if panel != .add { Spacer(minLength: 0) }
                     Group {
                         switch panel {
                         case .add: AddPanel(model: model)
                         case .model: ModelListPanel(model: model) { model.composerPanel = nil }
+                        case .effort: EffortPanel(model: model)
                         }
                     }
                     .padding(6)
-                    .frame(width: panel == .model ? 340 : 260, alignment: .leading)
-                    .background {
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(.regularMaterial)
-                            .shadow(color: .black.opacity(0.28), radius: 20, y: 8)
-                    }
-                    .clipShape(.rect(cornerRadius: 20))
+                    .frame(width: panel == .model ? 340 : panel == .effort ? 300 : 260, alignment: .leading)
+                    .glassSurface(in: .rect(cornerRadius: 20))
                     if panel == .add { Spacer(minLength: 0) }
                 }
                 .frame(maxWidth: 760)
@@ -433,7 +559,7 @@ private struct ChatView: View {
         HStack(spacing: 10) {
             if !model.showsSidebar {
                 HStack(spacing: 2) {
-                    ChromeButton(systemImage: "sidebar.left", help: "Show sidebar (⌃⌘S)") { model.toggleSidebar() }
+                    ChromeButton(systemImage: "sidebar.left", help: "Show sidebar (⌘B)") { model.toggleSidebar() }
                     ChromeButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
                 }
                 .padding(.leading, 70)
@@ -628,12 +754,13 @@ private struct Composer: View {
             HStack(spacing: 8) {
                 addMenu
                 Spacer(minLength: 0)
+                effortMenu
                 modelMenu
                 trailingAction
             }
         }
         .padding(10)
-        .floatingSurface(in: .rect(cornerRadius: 22))
+        .glassSurface(in: .rect(cornerRadius: 22), interactive: true)
         // A click anywhere on the composer but its buttons puts the cursor in it.
         .contentShape(.rect(cornerRadius: 22))
         .onTapGesture { focused = true }
@@ -712,11 +839,33 @@ private struct Composer: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
                 .frame(height: 30)
-                .background(model.composerPanel == .model ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .capsule)
+                .background(model.composerPanel == .model ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.fill.tertiary), in: .capsule)
                 .contentShape(.capsule)
             }
             .buttonStyle(.plain)
             .help("Model")
+        }
+    }
+
+    @ViewBuilder
+    private var effortMenu: some View {
+        if model.models.efforts.count > 1 {
+            let current = model.models.efforts.first { $0.id == model.models.effort }
+            let isOn = (model.models.effort ?? "default") != "default"
+            Button { toggle(.effort) } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "brain").font(.caption.weight(.semibold))
+                    Text(isOn ? current?.name ?? "On" : "Off").lineLimit(1)
+                }
+                .font(.callout)
+                .foregroundStyle(isOn ? Color.brand : .secondary)
+                .padding(.horizontal, 11)
+                .frame(height: 30)
+                .background(model.composerPanel == .effort ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.fill.tertiary), in: .capsule)
+                .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .help("Reasoning effort")
         }
     }
 
@@ -816,25 +965,126 @@ private struct CommandRow: View {
     }
 }
 
+/// ↑↓ move, ⏎ chooses, Esc closes.
 struct AddPanel: View {
     @ObservedObject var model: DesktopModel
+    @State private var highlighted = 0
+    @FocusState private var focused: Bool
+
+    private var items: [(title: String, image: String, run: () -> Void)] {
+        [
+            ("Attach Files or Folders…", "paperclip", { model.chooseAttachments() }),
+            ("New Chat", "square.and.pencil", { Task { await model.newSession() } }),
+            ("Choose Project…", "folder", { model.chooseWorkspace() }),
+        ]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PopoverRow("Attach Files or Folders…", systemImage: "paperclip") {
-                model.composerPanel = nil
-                model.chooseAttachments()
-            }
-            Divider().padding(.vertical, 4).padding(.horizontal, 10).opacity(0.5)
-            PopoverRow("New Chat", systemImage: "square.and.pencil") {
-                model.composerPanel = nil
-                Task { await model.newSession() }
-            }
-            PopoverRow("Choose Project…", systemImage: "folder") {
-                model.composerPanel = nil
-                model.chooseWorkspace()
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                if index == 1 { Divider().padding(.vertical, 4).padding(.horizontal, 10).opacity(0.5) }
+                PopoverRow(item.title, systemImage: item.image, isHighlighted: index == highlighted) { run(index) }
             }
         }
+        .panelKeys(focused: $focused, count: items.count, highlighted: $highlighted,
+                   choose: { run(highlighted) }, close: { model.composerPanel = nil })
+    }
+
+    private func run(_ index: Int) {
+        model.composerPanel = nil
+        items[index].run()
+    }
+}
+
+extension View {
+    /// Arrow keys, ⏎ and Esc for a panel without a text field.
+    func panelKeys(focused: FocusState<Bool>.Binding, count: Int, highlighted: Binding<Int>,
+                   choose: @escaping () -> Void, close: @escaping () -> Void) -> some View {
+        focusable()
+            .focusEffectDisabled()
+            .focused(focused)
+            .onAppear { focused.wrappedValue = true }
+            .onKeyPress(.downArrow) {
+                highlighted.wrappedValue = (highlighted.wrappedValue + 1) % max(count, 1)
+                return .handled
+            }
+            .onKeyPress(.upArrow) {
+                highlighted.wrappedValue = (highlighted.wrappedValue - 1 + max(count, 1)) % max(count, 1)
+                return .handled
+            }
+            .onKeyPress(.return) { choose(); return .handled }
+            .onKeyPress(.escape) { close(); return .handled }
+    }
+}
+
+/// Reasoning effort: a switch for thinking at all and a slider over the levels.
+/// ←→ move the slider, Space toggles, ⏎ or Esc closes.
+struct EffortPanel: View {
+    @ObservedObject var model: DesktopModel
+    @FocusState private var focused: Bool
+
+    private var levels: [ModelChoice] { model.models.efforts.filter { $0.id != "default" } }
+    private var isOn: Bool { (model.models.effort ?? "default") != "default" }
+    private var index: Int { levels.firstIndex { $0.id == model.models.effort } ?? 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Reasoning", systemImage: "brain")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Toggle("", isOn: Binding(get: { isOn }, set: { on in
+                    set(on ? (levels.first { $0.id == "medium" } ?? levels.last)?.id : "default")
+                }))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.brandFill)
+                .labelsHidden()
+            }
+            if isOn, levels.count > 1 {
+                VStack(spacing: 6) {
+                    Slider(value: Binding(get: { Double(index) }, set: { set(levels[Int($0.rounded())].id) }),
+                           in: 0...Double(levels.count - 1), step: 1)
+                        .tint(.brandFill)
+                    HStack {
+                        ForEach(Array(levels.enumerated()), id: \.offset) { position, level in
+                            Text(level.name)
+                                .font(.caption.weight(position == index ? .semibold : .regular))
+                                .foregroundStyle(position == index ? Color.brand : .secondary)
+                                .frame(maxWidth: .infinity, alignment: position == 0 ? .leading
+                                       : position == levels.count - 1 ? .trailing : .center)
+                                .onTapGesture { set(level.id) }
+                        }
+                    }
+                }
+                .transition(.opacity)
+            } else if !isOn {
+                Text("The model answers without extra reasoning.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .animation(.snappy(duration: 0.2), value: isOn)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear { focused = true }
+        .onKeyPress(.leftArrow) { step(-1) }
+        .onKeyPress(.rightArrow) { step(1) }
+        .onKeyPress(.space) { set(isOn ? "default" : (levels.first { $0.id == "medium" } ?? levels.last)?.id); return .handled }
+        .onKeyPress(.return) { model.composerPanel = nil; return .handled }
+        .onKeyPress(.escape) { model.composerPanel = nil; return .handled }
+    }
+
+    private func step(_ delta: Int) -> KeyPress.Result {
+        guard isOn, !levels.isEmpty else { return .ignored }
+        set(levels[min(max(index + delta, 0), levels.count - 1)].id)
+        return .handled
+    }
+
+    private func set(_ effort: String?) {
+        guard let effort, effort != model.models.effort else { return }
+        Task { await model.setEffort(effort) }
     }
 }
 
@@ -845,6 +1095,7 @@ struct ModelListPanel: View {
     var maxHeight: CGFloat = 340
     let close: () -> Void
     @State private var filter = ""
+    @State private var highlighted = 0
     @FocusState private var focused: Bool
 
     private var choices: [ModelChoice] {
@@ -862,20 +1113,32 @@ struct ModelListPanel: View {
                 TextField("Filter models", text: $filter)
                     .textFieldStyle(.plain)
                     .focused($focused)
-                    .onSubmit { if let first = choices.first { pick(first) } }
+                    .onSubmit { if choices.indices.contains(highlighted) { pick(choices[highlighted]) } }
+                    .onKeyPress(.downArrow) {
+                        if !choices.isEmpty { highlighted = (highlighted + 1) % choices.count }
+                        return .handled
+                    }
+                    .onKeyPress(.upArrow) {
+                        if !choices.isEmpty { highlighted = (highlighted - 1 + choices.count) % choices.count }
+                        return .handled
+                    }
                     .onKeyPress(.escape) {
                         if filter.isEmpty { close() } else { filter = "" }
                         return .handled
                     }
+                    .onChange(of: filter) { _, _ in highlighted = 0 }
             }
             .padding(.horizontal, 12)
             .frame(height: 34)
             .background(Color.primary.opacity(0.06), in: .capsule)
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(choices) { choice in
+                    ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
                         PopoverRow(choice.name, detail: choice.detail == choice.name ? nil : choice.detail,
-                                   isSelected: choice.id == model.selectedModel) { pick(choice) }
+                                   isSelected: choice.id == model.selectedModel,
+                                   isHighlighted: index == highlighted) { pick(choice) }
+                            .id(choice.id)
                     }
                     if choices.isEmpty {
                         Text("No matching models").font(.callout).foregroundStyle(.secondary).padding(10)
@@ -884,8 +1147,15 @@ struct ModelListPanel: View {
             }
             .frame(maxHeight: maxHeight)
             .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: highlighted) { _, index in
+                if choices.indices.contains(index) { proxy.scrollTo(choices[index].id) }
+            }
+            }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            highlighted = choices.firstIndex { $0.id == model.selectedModel } ?? 0
+        }
     }
 
     private func pick(_ choice: ModelChoice) {
@@ -899,15 +1169,18 @@ struct PopoverRow: View {
     var systemImage: String?
     var detail: String?
     var isSelected = false
+    /// The row the arrow keys are on.
+    var isHighlighted = false
     let action: () -> Void
     @State private var isHovered = false
 
     init(_ title: String, systemImage: String? = nil, detail: String? = nil, isSelected: Bool = false,
-         action: @escaping () -> Void) {
+         isHighlighted: Bool = false, action: @escaping () -> Void) {
         self.title = title
         self.systemImage = systemImage
         self.detail = detail
         self.isSelected = isSelected
+        self.isHighlighted = isHighlighted
         self.action = action
     }
 
@@ -931,7 +1204,8 @@ struct PopoverRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 14))
+            .background(isHighlighted ? AnyShapeStyle(Color.brand.opacity(0.2))
+                        : isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 14))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

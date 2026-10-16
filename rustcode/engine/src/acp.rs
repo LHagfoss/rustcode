@@ -2003,13 +2003,63 @@ mod tests {
         assert_eq!(state.api_base_url, target_profile.url);
         assert_eq!(state.model_name, target_profile.model);
 
-        assert_eq!(updated_options.len(), 1);
+        // Model first; an effort option follows when the profile has choices.
+        assert!(!updated_options.is_empty());
         match &updated_options[0].kind {
             SessionConfigKind::Select(select) => {
                 assert_eq!(select.current_value.0.as_ref(), target_profile.name);
             }
             _ => panic!("expected select config option kind"),
         }
+    }
+
+    #[test]
+    fn acp_offers_and_sets_reasoning_effort_for_profiles_with_choices() {
+        let mut state = crate::app::AppState::new();
+        let active = state
+            .active_model_profile()
+            .expect("an active profile")
+            .name;
+        let profile = state
+            .config
+            .models
+            .iter_mut()
+            .find(|profile| profile.name == active)
+            .unwrap();
+        profile.supports_reasoning_effort = Some(true);
+        profile.reasoning_efforts = Some(vec!["low".into(), "high".into()]);
+        profile.reasoning_effort = None;
+
+        let effort = |options: &[agent_client_protocol::schema::v1::SessionConfigOption]| {
+            options
+                .iter()
+                .find(|option| option.id.0.as_ref() == "effort")
+                .map(|option| match &option.kind {
+                    SessionConfigKind::Select(select) => select.current_value.0.to_string(),
+                    _ => panic!("expected a select"),
+                })
+        };
+        assert_eq!(
+            effort(&build_session_config_options(&state)).as_deref(),
+            Some("default")
+        );
+
+        let updated = handle_set_config_option(
+            &mut state,
+            &SessionConfigId::new("effort"),
+            &SessionConfigOptionValue::value_id("high"),
+        )
+        .expect("a listed effort is accepted");
+        assert_eq!(effort(&updated).as_deref(), Some("high"));
+
+        assert!(
+            handle_set_config_option(
+                &mut state,
+                &SessionConfigId::new("effort"),
+                &SessionConfigOptionValue::value_id("ludicrous"),
+            )
+            .is_err()
+        );
     }
 
     #[test]

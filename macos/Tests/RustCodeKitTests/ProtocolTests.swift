@@ -82,6 +82,17 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(SlashCommand.invoked(by: "explain /model", in: commands))
     }
 
+    func testConfigOptionsCarryModelAndEffort() {
+        let options = ModelOptions(configOptions: [
+            ["id": "model", "currentValue": "a", "options": [["value": "a", "name": "A"]]],
+            ["id": "effort", "currentValue": "default", "options": [["value": "default", "name": "Off"], ["value": "high", "name": "High"]]],
+        ])
+        XCTAssertEqual(options.current, "a")
+        XCTAssertEqual(options.effort, "default")
+        XCTAssertEqual(options.efforts.map(\.name), ["Off", "High"])
+        XCTAssertEqual(ACPRequests.setConfig(sessionId: "s", configId: "effort", value: "high")["configId"], "effort")
+    }
+
     func testEngineLocatorPrefersBundledEngineBeforeCLI() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

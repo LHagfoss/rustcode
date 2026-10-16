@@ -51,14 +51,14 @@ struct RustCodeApp: App {
             }
             CommandGroup(before: .sidebar) {
                 Button(model.showsSidebar ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
-                    .keyboardShortcut("s", modifiers: [.command, .control])
+                    .keyboardShortcut("b", modifiers: .command)
             }
         }
     }
 }
 
 /// The panel open above the composer.
-enum ComposerPanel { case add, model }
+enum ComposerPanel { case add, model, effort }
 
 @MainActor
 final class DesktopModel: ObservableObject {
@@ -93,6 +93,13 @@ final class DesktopModel: ObservableObject {
     }
     /// False until the first session list arrives, so the sidebar can say it is loading.
     @Published private(set) var sessionsLoaded = false
+    /// Chats pinned to the top of the sidebar, kept on this Mac.
+    @Published private(set) var pinnedSessions = Set(UserDefaults.standard.stringArray(forKey: "pinnedSessions") ?? [])
+    /// Chats hidden from the list without deleting them, kept on this Mac.
+    @Published private(set) var archivedSessions = Set(UserDefaults.standard.stringArray(forKey: "archivedSessions") ?? [])
+    @Published var showsArchived = false
+    /// The chat whose title the rename sheet is editing.
+    @Published var renamingSession: SessionSummary?
     /// Set by /history to put the cursor in the chat search.
     @Published var focusSessionSearch = false
     /// Filters the sidebar's chats by title.
@@ -161,7 +168,10 @@ final class DesktopModel: ObservableObject {
             capabilities = try AgentInfo(initializeResult: result)
             try await process.connection.notify("initialized", params: [:])
             await refreshSessions()
-            if selectedSession == nil { await newSession() }
+            // Show the last known options at once, then read current ones: the
+            // models and their effort levels change with config and engine.
+            restoreLastConfig()
+            if selectedSession == nil { await fetchModelOptions() }
         } catch { self.error = String(describing: error) }
     }
 
@@ -194,8 +204,9 @@ final class DesktopModel: ObservableObject {
 
     var visibleSessions: [SessionSummary] {
         let filter = sessionFilter.trimmingCharacters(in: .whitespaces)
-        guard !filter.isEmpty else { return sessions }
-        return sessions.filter {
+        let shown = sessions.filter { archivedSessions.contains($0.id) == showsArchived }
+        guard !filter.isEmpty else { return shown }
+        return shown.filter {
             "\($0.title ?? "New chat") \($0.projectName)".range(of: filter, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
     }
@@ -260,6 +271,112 @@ final class DesktopModel: ObservableObject {
         }
     }
 
+    // MARK: - Chat actions
+
+    func toggleArchive(_ session: SessionSummary) {
+        if archivedSessions.contains(session.id) {
+            archivedSessions.remove(session.id)
+        } else {
+            archivedSessions.insert(session.id)
+            pinnedSessions.remove(session.id)
+            UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
+            if selectedSession == session.id { Task { await newSession() } }
+        }
+        UserDefaults.standard.set(Array(archivedSessions), forKey: "archivedSessions")
+    }
+
+    func togglePin(_ session: SessionSummary) {
+        if pinnedSessions.contains(session.id) { pinnedSessions.remove(session.id) } else { pinnedSessions.insert(session.id) }
+        UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
+    }
+
+    /// The chat's folder in the session store, from `rustcode sessions path`,
+    /// accepted only when it is that session's folder inside the store.
+    func sessionDirectory(_ session: SessionSummary) async -> URL? {
+        guard let engine = engineLocation?.url else { return nil }
+        let output: String? = await Task.detached {
+            let process = Process()
+            process.executableURL = engine
+            process.arguments = ["sessions", "path", session.id]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return nil }
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }.value
+        guard let path = output?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        guard url.lastPathComponent == session.id, url.path.contains("/rustcode/sessions/") else { return nil }
+        return url
+    }
+
+    /// Store a new title the way the engine does, in the chat's `title.txt`.
+    func rename(_ session: SessionSummary, to title: String) async {
+        let title = title.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty else { return }
+        guard let directory = await sessionDirectory(session) else {
+            error = "Could not find this chat's folder to rename it."
+            return
+        }
+        do {
+            try title.write(to: directory.appendingPathComponent("title.txt"), atomically: true, encoding: .utf8)
+            await refreshSessions()
+        } catch { self.error = "Could not rename the chat: \(error.localizedDescription)" }
+    }
+
+    /// Move the chat's folder to the Trash, where it can be put back. A chat
+    /// open in the engine is closed first so nothing writes to it afterwards.
+    func trash(_ session: SessionSummary) async {
+        if busy, turnSession == session.id {
+            error = "Stop the running turn before moving this chat to the Trash."
+            return
+        }
+        guard let directory = await sessionDirectory(session) else {
+            error = "Could not find this chat's folder."
+            return
+        }
+        if openSessions[session.id] != nil || selectedSession == session.id,
+           capabilities?.closeSession == true, let connection = engine?.connection {
+            _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(session.id), timeout: .seconds(10))
+        }
+        openSessions[session.id] = nil
+        do {
+            try await NSWorkspace.shared.recycle([directory])
+        } catch {
+            self.error = "Could not move the chat to the Trash: \(error.localizedDescription)"
+            return
+        }
+        pinnedSessions.remove(session.id)
+        UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
+        sessions.removeAll { $0.id == session.id }
+        if selectedSession == session.id {
+            selectedSession = nil
+            transcript.removeAll()
+            await newSession()
+        }
+    }
+
+    func revealInFinder(_ session: SessionSummary) async {
+        guard let directory = await sessionDirectory(session) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([directory])
+    }
+
+    /// Put a message back in the composer to change and send again.
+    func edit(_ text: String) {
+        draftCommand = nil
+        draft = text
+    }
+
+    /// Send a message again as a new prompt.
+    func retry(_ text: String) async {
+        guard !busy else { return }
+        draftCommand = nil
+        draft = text
+        await submit()
+    }
+
     func toggleSidebar() {
         withAnimation(.snappy(duration: 0.25)) { showsSidebar.toggle() }
     }
@@ -321,18 +438,38 @@ final class DesktopModel: ObservableObject {
         await start()
     }
 
+    /// A new chat starts as an empty draft. The engine session is created when
+    /// the first message is sent, so opening and leaving it leaves nothing behind.
     func newSession() async {
-        guard let connection = engine?.connection else { return }
+        stashSelectedSession()
+        selectedSession = nil
+        transcript.removeAll()
+        draftCommand = nil
+        composerPanel = nil
+    }
+
+    /// Create the engine session for a draft, keeping the model picked for it.
+    private func createSession() async -> String? {
+        guard let connection = engine?.connection else { return nil }
+        let wanted = selectedModel
+        let wantedEffort = models.effort
         do {
             let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
             guard let id = result["sessionId"]?.stringValue else { throw ACPProtocolError.malformed("session/new has no sessionId") }
-            stashSelectedSession()
             selectedSession = id
-            transcript.removeAll()
             applyConfig(result["configOptions"])
+            if let wanted, wanted != selectedModel, models.choices.contains(where: { $0.id == wanted }) {
+                await setModel(wanted)
+            }
+            if let wantedEffort, wantedEffort != models.effort, models.efforts.contains(where: { $0.id == wantedEffort }) {
+                await setEffort(wantedEffort)
+            }
             stashSelectedSession()
-            await refreshSessions()
-        } catch { self.error = String(describing: error) }
+            return id
+        } catch {
+            self.error = String(describing: error)
+            return nil
+        }
     }
 
     func refreshSessions() async {
@@ -387,7 +524,7 @@ final class DesktopModel: ObservableObject {
     }
 
     func submit() async {
-        guard let connection = engine?.connection, let id = selectedSession else { return }
+        guard engine?.connection != nil else { return }
         if let chip = draftCommand {
             draft = draft.isEmpty ? chip.name : chip.name + " " + draft
             draftCommand = nil
@@ -402,6 +539,12 @@ final class DesktopModel: ObservableObject {
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
         draft = ""
         attachments = []
+        let created = selectedSession == nil
+        guard let connection = engine?.connection,
+              let id = selectedSession == nil ? await createSession() : selectedSession else {
+            draft = typed
+            return
+        }
         if text == typed, SlashCommand.invoked(by: typed, in: commands)?.action == .execute {
             transcript.appendCommand(typed)
         } else {
@@ -416,6 +559,7 @@ final class DesktopModel: ObservableObject {
             permissionQueue.removeAll { $0.sessionId == id }
         }
         do {
+            if created { await refreshSessions() }
             _ = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: text))
             await refreshSessions()
         } catch { self.error = String(describing: error) }
@@ -464,10 +608,31 @@ final class DesktopModel: ObservableObject {
     }
 
     func setModel(_ model: String) async {
-        guard let connection = engine?.connection, let session = selectedSession else { return }
+        guard let session = selectedSession else {
+            selectedModel = model   // applied when the draft becomes a session
+            return
+        }
+        guard let connection = engine?.connection else { return }
         do {
-            _ = try await connection.request(ACPMethod.sessionSetConfigOption, params: ACPRequests.setModel(sessionId: session, value: model), timeout: .seconds(15))
+            let result = try await connection.request(ACPMethod.sessionSetConfigOption, params: ACPRequests.setModel(sessionId: session, value: model), timeout: .seconds(15))
+            if let options = result["configOptions"] { applyConfig(options) }
             selectedModel = model
+        } catch { self.error = String(describing: error) }
+    }
+
+    /// Reasoning effort for the chat. A draft keeps it until its session exists.
+    func setEffort(_ effort: String) async {
+        guard let session = selectedSession else {
+            models.effort = effort
+            return
+        }
+        guard let connection = engine?.connection else { return }
+        do {
+            let result = try await connection.request(
+                ACPMethod.sessionSetConfigOption,
+                params: ACPRequests.setConfig(sessionId: session, configId: "effort", value: effort),
+                timeout: .seconds(15))
+            if let options = result["configOptions"] { applyConfig(options) } else { models.effort = effort }
         } catch { self.error = String(describing: error) }
     }
 
@@ -486,6 +651,36 @@ final class DesktopModel: ObservableObject {
 
     private func applyConfig(_ value: JSONValue?) {
         guard let value else { return }
+        models = ModelOptions(configOptions: value)
+        selectedModel = models.current
+        UserDefaults.standard.set(try? JSONEncoder().encode(value), forKey: "lastConfigOptions")
+    }
+
+    /// With no saved model list, open a throwaway session to read one and close
+    /// it again; a session without messages is not listed.
+    private func fetchModelOptions() async {
+        guard let connection = engine?.connection else { return }
+        do {
+            let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
+            // Keep a model or effort picked on the draft while this was loading.
+            let (pickedModel, pickedEffort) = (selectedModel, models.effort)
+            applyConfig(result["configOptions"])
+            if selectedSession == nil {
+                if let pickedModel, models.choices.contains(where: { $0.id == pickedModel }) { selectedModel = pickedModel }
+                if let pickedEffort, models.efforts.contains(where: { $0.id == pickedEffort }) { models.effort = pickedEffort }
+            }
+            if let id = result["sessionId"]?.stringValue, capabilities?.closeSession == true {
+                _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(id), timeout: .seconds(10))
+            }
+        } catch { self.error = String(describing: error) }
+    }
+
+    /// A draft has no session yet, so its model picker uses the options the
+    /// engine last sent.
+    private func restoreLastConfig() {
+        guard models.choices.isEmpty,
+              let data = UserDefaults.standard.data(forKey: "lastConfigOptions"),
+              let value = try? JSONDecoder().decode(JSONValue.self, from: data) else { return }
         models = ModelOptions(configOptions: value)
         selectedModel = models.current
     }

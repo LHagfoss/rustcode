@@ -182,7 +182,7 @@ fn activity(state: &AppState) -> SessionActivity {
 
 /// Explicit provider catalogs take precedence. Capability-enabled legacy profiles
 /// use the same low/medium/high choices as the terminal effort picker.
-pub(super) fn reasoning_efforts(profile: &crate::config::ModelProfile) -> Vec<String> {
+pub(crate) fn reasoning_efforts(profile: &crate::config::ModelProfile) -> Vec<String> {
     let mut efforts = vec!["default".to_owned()];
     if profile.supports_reasoning_effort_wire() {
         let known = profile.reasoning_efforts.clone().unwrap_or_else(|| {
@@ -212,7 +212,7 @@ pub(super) fn bound_settings(
     (encoded_len(&settings) <= max_bytes).then_some(settings)
 }
 
-pub(super) fn project_settings(state: &AppState) -> RemoteSessionSettings {
+pub(crate) fn project_settings(state: &AppState) -> RemoteSessionSettings {
     let active = state.active_model_profile();
     RemoteSessionSettings {
         models: state

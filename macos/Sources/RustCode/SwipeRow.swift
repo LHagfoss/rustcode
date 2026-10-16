@@ -1,0 +1,188 @@
+import AppKit
+import SwiftUI
+
+/// One button revealed by swiping a row.
+struct SwipeAction: Identifiable {
+    let id = UUID()
+    var title: String
+    var systemImage: String
+    var tint: Color
+    var action: () -> Void
+}
+
+/// A row that a two-finger trackpad swipe slides aside to show rounded action
+/// buttons: `leading` ones when swiped right, `trailing` ones when swiped left.
+/// A swipe past the first action runs it. Vertical scrolling passes through.
+/// Only the row whose id is in `openRow` stays open.
+struct SwipeRow<Content: View>: View {
+    let id: String
+    @Binding var openRow: String?
+    var leading: [SwipeAction] = []
+    var trailing: [SwipeAction] = []
+    @ViewBuilder var content: Content
+
+    @State private var offset: CGFloat = 0
+    @State private var isHovered = false
+    @State private var monitor: Any?
+    @State private var tracking = false
+    /// Sideways movement since the gesture began, before it is claimed.
+    @State private var pending: CGSize = .zero
+    @State private var decided = false
+
+    private static var buttonWidth: CGFloat { 58 }
+    private var leadingWidth: CGFloat { CGFloat(leading.count) * Self.buttonWidth }
+    private var trailingWidth: CGFloat { CGFloat(trailing.count) * Self.buttonWidth }
+
+    var body: some View {
+        ZStack {
+            // The buttons are uncovered as the row slides, never drawn under it.
+            HStack(spacing: 0) {
+                if offset > 0 { buttons(leading, revealed: offset, full: leadingWidth) }
+                Spacer(minLength: 0)
+                if offset < 0 { buttons(trailing, revealed: -offset, full: trailingWidth) }
+            }
+            content
+                .background(Color.sidebarBackground)
+                .offset(x: offset)
+                // A click on an open row closes it instead of acting.
+                .overlay {
+                    if offset != 0 {
+                        Color.clear.contentShape(.rect).offset(x: offset).onTapGesture { close() }
+                    }
+                }
+        }
+        .clipShape(.rect(cornerRadius: 12))
+        .onHover { hovering in
+            isHovered = hovering
+            hovering ? install() : (tracking ? () : remove())
+        }
+        .onChange(of: openRow) { _, row in if row != id, offset != 0 { close() } }
+        .onDisappear(perform: remove)
+    }
+
+    /// The buttons share the uncovered width, so they stretch with the pull and
+    /// keep stretching past their resting size; icons grow in as they appear.
+    private func buttons(_ actions: [SwipeAction], revealed: CGFloat, full: CGFloat) -> some View {
+        let progress = min(1, revealed / max(full, 1))
+        let each = max(0, (revealed - 4 - CGFloat(actions.count - 1) * 4) / CGFloat(actions.count))
+        return HStack(spacing: 4) {
+            ForEach(actions) { action in
+                Button {
+                    close()
+                    action.action()
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: action.systemImage).font(.system(size: 13, weight: .semibold))
+                        Text(action.title).font(.caption2.weight(.medium)).lineLimit(1).fixedSize()
+                    }
+                    .scaleEffect(0.6 + 0.4 * progress)
+                    .opacity(Double(progress) * 1.4 - 0.3)
+                    .foregroundStyle(action.tint)
+                    .frame(width: each)
+                    .clipped()
+                    .frame(maxHeight: .infinity)
+                    .background(action.tint.opacity(0.16), in: .rect(cornerRadius: 12))
+                    .contentShape(.rect(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .help(action.title)
+            }
+        }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 2)
+    }
+
+    private static var spring: Animation { .spring(response: 0.38, dampingFraction: 0.72) }
+
+    private func close() {
+        withAnimation(Self.spring) { offset = 0 }
+        if openRow == id { openRow = nil }
+    }
+
+    // MARK: - Trackpad
+
+    /// Scroll events are read while the pointer is over the row. A gesture that
+    /// starts mostly sideways belongs to the row; anything else scrolls the list.
+    private func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            handle(event) ? nil : event
+        }
+    }
+
+    private func remove() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    /// The first events of a gesture often carry no movement, so the axis is
+    /// decided once the fingers have moved a few points: mostly sideways makes
+    /// it the row's, anything else is left to the list.
+    private func handle(_ event: NSEvent) -> Bool {
+        guard event.hasPreciseScrollingDeltas else { return false }
+        if event.momentumPhase != [] { return tracking }
+        switch event.phase {
+        case .began:
+            tracking = false
+            decided = false
+            pending = .zero
+            return false
+        case .changed:
+            let dx = event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX
+            if !decided {
+                pending.width += dx
+                pending.height += event.scrollingDeltaY
+                guard abs(pending.width) + abs(pending.height) > 6 else { return false }
+                decided = true
+                tracking = abs(pending.width) > abs(pending.height) * 1.5 && (isHovered || openRow == id)
+                guard tracking else { return false }
+                openRow = id
+                move(by: pending.width)
+                return true
+            }
+            guard tracking else { return false }
+            move(by: dx)
+            return true
+        case .ended, .cancelled:
+            guard tracking else { return false }
+            tracking = false
+            settle()
+            if !isHovered { remove() }
+            return true
+        default:
+            return tracking
+        }
+    }
+
+    /// Follow the fingers at a calmer rate than the raw deltas, with rubber-band
+    /// resistance past the buttons. Crossing the full-swipe point ticks the trackpad.
+    private func move(by delta: CGFloat) {
+        let limitLeading = leading.isEmpty ? 0 : leadingWidth * 1.8
+        let limitTrailing = trailing.isEmpty ? 0 : trailingWidth * 1.4
+        let beyond = offset > leadingWidth || offset < -trailingWidth
+        let wasPastFull = offset > leadingWidth * Self.fullSwipe
+        offset = min(max(offset + delta * (beyond ? 0.22 : 0.55), -limitTrailing), limitLeading)
+        if !leading.isEmpty, wasPastFull != (offset > leadingWidth * Self.fullSwipe) {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
+    }
+
+    private static var fullSwipe: CGFloat { 1.35 }
+
+    private func settle() {
+        withAnimation(Self.spring) {
+            if let first = leading.first, offset > leadingWidth * Self.fullSwipe {
+                offset = 0
+                openRow = nil
+                first.action()
+            } else if offset > leadingWidth / 2 {
+                offset = leadingWidth
+            } else if offset < -trailingWidth / 2 {
+                offset = -trailingWidth
+            } else {
+                offset = 0
+                if openRow == id { openRow = nil }
+            }
+        }
+    }
+}
