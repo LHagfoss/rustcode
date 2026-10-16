@@ -530,15 +530,16 @@ private struct ChatView: View {
                 Color.black.opacity(0.001)
                     .onTapGesture { model.composerPanel = nil }
                 HStack {
-                    if panel == .model { Spacer(minLength: 0) }
+                    if panel != .add { Spacer(minLength: 0) }
                     Group {
                         switch panel {
                         case .add: AddPanel(model: model)
                         case .model: ModelListPanel(model: model) { model.composerPanel = nil }
+                        case .effort: EffortPanel(model: model)
                         }
                     }
                     .padding(6)
-                    .frame(width: panel == .model ? 340 : 260, alignment: .leading)
+                    .frame(width: panel == .model ? 340 : panel == .effort ? 300 : 260, alignment: .leading)
                     .glassSurface(in: .rect(cornerRadius: 20))
                     if panel == .add { Spacer(minLength: 0) }
                 }
@@ -753,6 +754,7 @@ private struct Composer: View {
             HStack(spacing: 8) {
                 addMenu
                 Spacer(minLength: 0)
+                effortMenu
                 modelMenu
                 trailingAction
             }
@@ -837,11 +839,33 @@ private struct Composer: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
                 .frame(height: 30)
-                .background(model.composerPanel == .model ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .capsule)
+                .background(model.composerPanel == .model ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.fill.tertiary), in: .capsule)
                 .contentShape(.capsule)
             }
             .buttonStyle(.plain)
             .help("Model")
+        }
+    }
+
+    @ViewBuilder
+    private var effortMenu: some View {
+        if model.models.efforts.count > 1 {
+            let current = model.models.efforts.first { $0.id == model.models.effort }
+            let isOn = (model.models.effort ?? "default") != "default"
+            Button { toggle(.effort) } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "brain").font(.caption.weight(.semibold))
+                    Text(isOn ? current?.name ?? "On" : "Off").lineLimit(1)
+                }
+                .font(.callout)
+                .foregroundStyle(isOn ? Color.brand : .secondary)
+                .padding(.horizontal, 11)
+                .frame(height: 30)
+                .background(model.composerPanel == .effort ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.fill.tertiary), in: .capsule)
+                .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .help("Reasoning effort")
         }
     }
 
@@ -941,25 +965,126 @@ private struct CommandRow: View {
     }
 }
 
+/// ↑↓ move, ⏎ chooses, Esc closes.
 struct AddPanel: View {
     @ObservedObject var model: DesktopModel
+    @State private var highlighted = 0
+    @FocusState private var focused: Bool
+
+    private var items: [(title: String, image: String, run: () -> Void)] {
+        [
+            ("Attach Files or Folders…", "paperclip", { model.chooseAttachments() }),
+            ("New Chat", "square.and.pencil", { Task { await model.newSession() } }),
+            ("Choose Project…", "folder", { model.chooseWorkspace() }),
+        ]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PopoverRow("Attach Files or Folders…", systemImage: "paperclip") {
-                model.composerPanel = nil
-                model.chooseAttachments()
-            }
-            Divider().padding(.vertical, 4).padding(.horizontal, 10).opacity(0.5)
-            PopoverRow("New Chat", systemImage: "square.and.pencil") {
-                model.composerPanel = nil
-                Task { await model.newSession() }
-            }
-            PopoverRow("Choose Project…", systemImage: "folder") {
-                model.composerPanel = nil
-                model.chooseWorkspace()
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                if index == 1 { Divider().padding(.vertical, 4).padding(.horizontal, 10).opacity(0.5) }
+                PopoverRow(item.title, systemImage: item.image, isHighlighted: index == highlighted) { run(index) }
             }
         }
+        .panelKeys(focused: $focused, count: items.count, highlighted: $highlighted,
+                   choose: { run(highlighted) }, close: { model.composerPanel = nil })
+    }
+
+    private func run(_ index: Int) {
+        model.composerPanel = nil
+        items[index].run()
+    }
+}
+
+extension View {
+    /// Arrow keys, ⏎ and Esc for a panel without a text field.
+    func panelKeys(focused: FocusState<Bool>.Binding, count: Int, highlighted: Binding<Int>,
+                   choose: @escaping () -> Void, close: @escaping () -> Void) -> some View {
+        focusable()
+            .focusEffectDisabled()
+            .focused(focused)
+            .onAppear { focused.wrappedValue = true }
+            .onKeyPress(.downArrow) {
+                highlighted.wrappedValue = (highlighted.wrappedValue + 1) % max(count, 1)
+                return .handled
+            }
+            .onKeyPress(.upArrow) {
+                highlighted.wrappedValue = (highlighted.wrappedValue - 1 + max(count, 1)) % max(count, 1)
+                return .handled
+            }
+            .onKeyPress(.return) { choose(); return .handled }
+            .onKeyPress(.escape) { close(); return .handled }
+    }
+}
+
+/// Reasoning effort: a switch for thinking at all and a slider over the levels.
+/// ←→ move the slider, Space toggles, ⏎ or Esc closes.
+struct EffortPanel: View {
+    @ObservedObject var model: DesktopModel
+    @FocusState private var focused: Bool
+
+    private var levels: [ModelChoice] { model.models.efforts.filter { $0.id != "default" } }
+    private var isOn: Bool { (model.models.effort ?? "default") != "default" }
+    private var index: Int { levels.firstIndex { $0.id == model.models.effort } ?? 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Reasoning", systemImage: "brain")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Toggle("", isOn: Binding(get: { isOn }, set: { on in
+                    set(on ? (levels.first { $0.id == "medium" } ?? levels.last)?.id : "default")
+                }))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.brandFill)
+                .labelsHidden()
+            }
+            if isOn, levels.count > 1 {
+                VStack(spacing: 6) {
+                    Slider(value: Binding(get: { Double(index) }, set: { set(levels[Int($0.rounded())].id) }),
+                           in: 0...Double(levels.count - 1), step: 1)
+                        .tint(.brandFill)
+                    HStack {
+                        ForEach(Array(levels.enumerated()), id: \.offset) { position, level in
+                            Text(level.name)
+                                .font(.caption.weight(position == index ? .semibold : .regular))
+                                .foregroundStyle(position == index ? Color.brand : .secondary)
+                                .frame(maxWidth: .infinity, alignment: position == 0 ? .leading
+                                       : position == levels.count - 1 ? .trailing : .center)
+                                .onTapGesture { set(level.id) }
+                        }
+                    }
+                }
+                .transition(.opacity)
+            } else if !isOn {
+                Text("The model answers without extra reasoning.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .animation(.snappy(duration: 0.2), value: isOn)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear { focused = true }
+        .onKeyPress(.leftArrow) { step(-1) }
+        .onKeyPress(.rightArrow) { step(1) }
+        .onKeyPress(.space) { set(isOn ? "default" : (levels.first { $0.id == "medium" } ?? levels.last)?.id); return .handled }
+        .onKeyPress(.return) { model.composerPanel = nil; return .handled }
+        .onKeyPress(.escape) { model.composerPanel = nil; return .handled }
+    }
+
+    private func step(_ delta: Int) -> KeyPress.Result {
+        guard isOn, !levels.isEmpty else { return .ignored }
+        set(levels[min(max(index + delta, 0), levels.count - 1)].id)
+        return .handled
+    }
+
+    private func set(_ effort: String?) {
+        guard let effort, effort != model.models.effort else { return }
+        Task { await model.setEffort(effort) }
     }
 }
 
@@ -970,6 +1095,7 @@ struct ModelListPanel: View {
     var maxHeight: CGFloat = 340
     let close: () -> Void
     @State private var filter = ""
+    @State private var highlighted = 0
     @FocusState private var focused: Bool
 
     private var choices: [ModelChoice] {
@@ -987,20 +1113,32 @@ struct ModelListPanel: View {
                 TextField("Filter models", text: $filter)
                     .textFieldStyle(.plain)
                     .focused($focused)
-                    .onSubmit { if let first = choices.first { pick(first) } }
+                    .onSubmit { if choices.indices.contains(highlighted) { pick(choices[highlighted]) } }
+                    .onKeyPress(.downArrow) {
+                        if !choices.isEmpty { highlighted = (highlighted + 1) % choices.count }
+                        return .handled
+                    }
+                    .onKeyPress(.upArrow) {
+                        if !choices.isEmpty { highlighted = (highlighted - 1 + choices.count) % choices.count }
+                        return .handled
+                    }
                     .onKeyPress(.escape) {
                         if filter.isEmpty { close() } else { filter = "" }
                         return .handled
                     }
+                    .onChange(of: filter) { _, _ in highlighted = 0 }
             }
             .padding(.horizontal, 12)
             .frame(height: 34)
             .background(Color.primary.opacity(0.06), in: .capsule)
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(choices) { choice in
+                    ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
                         PopoverRow(choice.name, detail: choice.detail == choice.name ? nil : choice.detail,
-                                   isSelected: choice.id == model.selectedModel) { pick(choice) }
+                                   isSelected: choice.id == model.selectedModel,
+                                   isHighlighted: index == highlighted) { pick(choice) }
+                            .id(choice.id)
                     }
                     if choices.isEmpty {
                         Text("No matching models").font(.callout).foregroundStyle(.secondary).padding(10)
@@ -1009,8 +1147,15 @@ struct ModelListPanel: View {
             }
             .frame(maxHeight: maxHeight)
             .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: highlighted) { _, index in
+                if choices.indices.contains(index) { proxy.scrollTo(choices[index].id) }
+            }
+            }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            highlighted = choices.firstIndex { $0.id == model.selectedModel } ?? 0
+        }
     }
 
     private func pick(_ choice: ModelChoice) {
@@ -1024,15 +1169,18 @@ struct PopoverRow: View {
     var systemImage: String?
     var detail: String?
     var isSelected = false
+    /// The row the arrow keys are on.
+    var isHighlighted = false
     let action: () -> Void
     @State private var isHovered = false
 
     init(_ title: String, systemImage: String? = nil, detail: String? = nil, isSelected: Bool = false,
-         action: @escaping () -> Void) {
+         isHighlighted: Bool = false, action: @escaping () -> Void) {
         self.title = title
         self.systemImage = systemImage
         self.detail = detail
         self.isSelected = isSelected
+        self.isHighlighted = isHighlighted
         self.action = action
     }
 
@@ -1056,7 +1204,8 @@ struct PopoverRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 14))
+            .background(isHighlighted ? AnyShapeStyle(Color.brand.opacity(0.2))
+                        : isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 14))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

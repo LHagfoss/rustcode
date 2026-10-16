@@ -58,7 +58,7 @@ struct RustCodeApp: App {
 }
 
 /// The panel open above the composer.
-enum ComposerPanel { case add, model }
+enum ComposerPanel { case add, model, effort }
 
 @MainActor
 final class DesktopModel: ObservableObject {
@@ -168,8 +168,10 @@ final class DesktopModel: ObservableObject {
             capabilities = try AgentInfo(initializeResult: result)
             try await process.connection.notify("initialized", params: [:])
             await refreshSessions()
+            // Show the last known options at once, then read current ones: the
+            // models and their effort levels change with config and engine.
             restoreLastConfig()
-            if models.choices.isEmpty { await fetchModelOptions() }
+            if selectedSession == nil { await fetchModelOptions() }
         } catch { self.error = String(describing: error) }
     }
 
@@ -450,6 +452,7 @@ final class DesktopModel: ObservableObject {
     private func createSession() async -> String? {
         guard let connection = engine?.connection else { return nil }
         let wanted = selectedModel
+        let wantedEffort = models.effort
         do {
             let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
             guard let id = result["sessionId"]?.stringValue else { throw ACPProtocolError.malformed("session/new has no sessionId") }
@@ -457,6 +460,9 @@ final class DesktopModel: ObservableObject {
             applyConfig(result["configOptions"])
             if let wanted, wanted != selectedModel, models.choices.contains(where: { $0.id == wanted }) {
                 await setModel(wanted)
+            }
+            if let wantedEffort, wantedEffort != models.effort, models.efforts.contains(where: { $0.id == wantedEffort }) {
+                await setEffort(wantedEffort)
             }
             stashSelectedSession()
             return id
@@ -608,8 +614,25 @@ final class DesktopModel: ObservableObject {
         }
         guard let connection = engine?.connection else { return }
         do {
-            _ = try await connection.request(ACPMethod.sessionSetConfigOption, params: ACPRequests.setModel(sessionId: session, value: model), timeout: .seconds(15))
+            let result = try await connection.request(ACPMethod.sessionSetConfigOption, params: ACPRequests.setModel(sessionId: session, value: model), timeout: .seconds(15))
+            if let options = result["configOptions"] { applyConfig(options) }
             selectedModel = model
+        } catch { self.error = String(describing: error) }
+    }
+
+    /// Reasoning effort for the chat. A draft keeps it until its session exists.
+    func setEffort(_ effort: String) async {
+        guard let session = selectedSession else {
+            models.effort = effort
+            return
+        }
+        guard let connection = engine?.connection else { return }
+        do {
+            let result = try await connection.request(
+                ACPMethod.sessionSetConfigOption,
+                params: ACPRequests.setConfig(sessionId: session, configId: "effort", value: effort),
+                timeout: .seconds(15))
+            if let options = result["configOptions"] { applyConfig(options) } else { models.effort = effort }
         } catch { self.error = String(describing: error) }
     }
 
@@ -639,7 +662,13 @@ final class DesktopModel: ObservableObject {
         guard let connection = engine?.connection else { return }
         do {
             let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
+            // Keep a model or effort picked on the draft while this was loading.
+            let (pickedModel, pickedEffort) = (selectedModel, models.effort)
             applyConfig(result["configOptions"])
+            if selectedSession == nil {
+                if let pickedModel, models.choices.contains(where: { $0.id == pickedModel }) { selectedModel = pickedModel }
+                if let pickedEffort, models.efforts.contains(where: { $0.id == pickedEffort }) { models.effort = pickedEffort }
+            }
             if let id = result["sessionId"]?.stringValue, capabilities?.closeSession == true {
                 _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(id), timeout: .seconds(10))
             }

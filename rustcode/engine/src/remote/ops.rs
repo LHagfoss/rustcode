@@ -233,7 +233,7 @@ pub async fn apply_session_mutation(
     }
 }
 
-fn set_settings(
+pub(crate) fn set_settings(
     state: &mut AppState,
     model: &str,
     reasoning_effort: &str,

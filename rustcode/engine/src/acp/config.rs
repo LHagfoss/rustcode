@@ -29,7 +29,47 @@ pub(crate) fn build_session_config_options(
         .category(SessionConfigOptionCategory::Model)
         .description("Model profile");
 
-    vec![model_option]
+    let mut config = vec![model_option];
+    if let Some(effort) = effort_option(state) {
+        config.push(effort);
+    }
+    config
+}
+
+/// Reasoning effort for the active profile, with the same choices as the
+/// terminal and remote pickers ("default" leaves it to the provider). Absent
+/// when the profile offers no choice.
+fn effort_option(state: &crate::app::AppState) -> Option<SessionConfigOption> {
+    let profile = state.active_model_profile()?;
+    let efforts = crate::remote::projection::reasoning_efforts(&profile);
+    if efforts.len() < 2 {
+        return None;
+    }
+    let current = crate::remote::projection::project_settings(state).reasoning_effort;
+    let options = efforts
+        .iter()
+        .map(|effort| {
+            let name = if effort == "default" {
+                "Off".to_owned()
+            } else {
+                capitalized(effort)
+            };
+            SessionConfigSelectOption::new(effort.clone(), name)
+        })
+        .collect::<Vec<_>>();
+    Some(
+        SessionConfigOption::select("effort", "Effort", current, options)
+            .category(SessionConfigOptionCategory::ThoughtLevel)
+            .description("Reasoning effort"),
+    )
+}
+
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 pub(crate) fn handle_set_config_option(
@@ -37,6 +77,16 @@ pub(crate) fn handle_set_config_option(
     config_id: &SessionConfigId,
     value: &SessionConfigOptionValue,
 ) -> Result<Vec<SessionConfigOption>, agent_client_protocol::Error> {
+    if config_id.0.as_ref() == "effort" {
+        let Some(effort) = value.as_value_id().map(|v| v.0.to_string()) else {
+            return Err(agent_client_protocol::Error::invalid_params()
+                .data("expected value_id for select config option"));
+        };
+        let model = crate::remote::projection::project_settings(state).selected_model;
+        crate::remote::ops::set_settings(state, &model, &effort)
+            .map_err(|error| agent_client_protocol::Error::invalid_params().data(error.message))?;
+        return Ok(build_session_config_options(state));
+    }
     if config_id.0.as_ref() != "model" {
         return Err(agent_client_protocol::Error::invalid_params()
             .data(format!("unknown config option: {}", config_id.0)));
