@@ -1,3 +1,14 @@
+## [v0.71.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.71.0) - 2026-10-16
+
+### Features
+- ACP clients get slash commands: the engine advertises them with `available_commands_update` and runs host commands (`/status`, `/help`, `/usage`, `/memory`, …) without involving the model ([#2044](https://github.com/LHagfoss/rustcode/pull/2044)).
+- macOS app: every session from every project in the sidebar, slash suggestions and command chips, command and summary cards, selectable replies, switching between open chats, red Stop button ([#2044](https://github.com/LHagfoss/rustcode/pull/2044), [#2045](https://github.com/LHagfoss/rustcode/pull/2045)).
+- macOS app is built on macos-26 so the release ships the native Icon Composer icon ([#2043](https://github.com/LHagfoss/rustcode/pull/2043)).
+- Remote: devices can list saved sessions and resume one in a detached owner ([#2048](https://github.com/LHagfoss/rustcode/pull/2048)).
+- Each ACP session saves history only under its own id; new ACP sessions never reuse the shared last-active session ([#2051](https://github.com/LHagfoss/rustcode/pull/2051)).
+- Detached owners fail fast instead of waiting 120 s on a credential prompt ([#2047](https://github.com/LHagfoss/rustcode/pull/2047)).
+- Home-wide traversals get a short timeout and steering, and command timeouts are no longer counted as transport failures ([#2049](https://github.com/LHagfoss/rustcode/pull/2049)).
+- Unannotated MCP lookups count as reads, upstream 4xx answers are tool results, and a skill already in context is not loaded again ([#2050](https://github.com/LHagfoss/rustcode/pull/2050)).
 ## [v0.70.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.70.0) - 2026-10-16
 
 ### Features
