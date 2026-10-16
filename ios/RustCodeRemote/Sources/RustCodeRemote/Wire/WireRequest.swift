@@ -1,6 +1,6 @@
 import Foundation
 
-// DTOs for `docs/remote-protocol/v1/request.schema.json` in the RustCode repository.
+// DTOs for `docs/remote-protocol/v1/request.schema.json` at the repository root.
 // The Rust types in `rustcode/engine/src/remote/protocol.rs` are the source of truth.
 
 public struct WireRequest: Codable, Equatable, Sendable {

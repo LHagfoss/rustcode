@@ -29,7 +29,8 @@ host. What that means, precisely:
   adding model prompts. Approvals, general tools and sub-agents retain golden-frame and
   demo coverage.
 - Use a current RustCode build with remote session sharing and timing metadata.
-  The checked contract revision is recorded in the package's `Resources/remote-protocol/SOURCE.txt`.
+  The contract tests read `docs/remote-protocol/v1` at the repository root, so the app is
+  always checked against the host in the same commit.
 
 ## Pair with a host
 
@@ -241,8 +242,6 @@ RustCodeRemote/            Local Swift package, no dependencies, iOS 18 / macOS 
     Demo/                  DemoRemoteClient.
     Presentation/          MarkdownBlock.
   Tests/RustCodeRemoteTests/
-    Resources/remote-protocol/   The contract: schemas, golden frames, SOURCE.txt.
-Scripts/sync-protocol.sh   Refreshes the contract from a RustCode checkout.
 docs/screenshots/          Simulator screenshots of the pairing screen, the demo and the icon.
 ```
 
@@ -275,15 +274,8 @@ has to be covered, and the tags and enum values the DTOs know are compared with 
 schemas allow, so a change on the RustCode side shows up as a failing test here. The
 Keychain store is tested against the login keychain of the Mac running the tests.
 
-To pick up a new version of the contract:
-
-```sh
-Scripts/sync-protocol.sh /path/to/rustcode            # reads origin/main
-Scripts/sync-protocol.sh /path/to/rustcode some-ref
-```
-
-It copies the schemas and golden frames from that commit into the test resources and
-records the commit in `Resources/remote-protocol/SOURCE.txt`.
+The tests read the contract in place from `docs/remote-protocol/v1`, so a host change
+and the matching app change land in one PR.
 
 The integration tests need a real `rustcode` binary and are skipped unless you name one:
 
@@ -416,10 +408,13 @@ tells you when an address is neither local nor NetBird.
 
 ## GitHub releases
 
-Pull requests run the remote package tests, device-helper fixture tests and a
-Simulator build on macOS. After merging a version/build update, a matching
-`v<VERSION>` tag on `main` runs the release workflow. It publishes a Simulator
-app, an unsigned iOS archive and `SHA256SUMS`. Personal signing profiles never
+Pull requests that touch `ios/` or the protocol contract run the remote package
+tests, device-helper fixture tests and a Simulator build on macOS
+(`.github/workflows/ios-ci.yml`). The app ships in every RustCode release under the
+RustCode version: `scripts/release.sh` sets `MARKETING_VERSION` to it and derives
+`CURRENT_PROJECT_VERSION` from it, and the tag build publishes
+`rustcode-ios-simulator.zip` and `rustcode-ios-unsigned.xcarchive.zip`, listed in the
+release's `SHA256SUMS`. Personal signing profiles never
 enter those public artifacts. The installer below downloads the CI-built device
 archive and signs it on your Mac for your registered iPhone; it does not rebuild
 the app. GitHub needs no Apple signing credentials.
@@ -451,7 +446,7 @@ do not provide App Store or TestFlight distribution.
 Connect and unlock the iPhone, trust this Mac, and enable Developer Mode. Run:
 
 ```sh
-cd ~/code/rustcode_app && Scripts/install-on-iphone.sh
+cd ~/code/rustcode/ios && Scripts/install-on-iphone.sh
 ```
 
 The default downloads the latest published GitHub release, verifies the archive

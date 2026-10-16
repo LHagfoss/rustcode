@@ -1,5 +1,7 @@
 # Changelog
 
+Entries after 0.1.31 are in the repository root `CHANGELOG.md`; the app now ships with each RustCode release.
+
 ## 0.1.19 — 2026-10-12
 
 - Compact the plus menu, group secondary actions under More, and use equal composer insets ([PR #34](https://github.com/LHagfoss/rustcode_app/pull/34)).

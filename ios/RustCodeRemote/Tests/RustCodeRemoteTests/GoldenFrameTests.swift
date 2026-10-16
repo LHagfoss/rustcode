@@ -2,9 +2,16 @@ import Foundation
 import Testing
 @testable import RustCodeRemote
 
-/// The contract copied from the RustCode repository by `Scripts/sync-protocol.sh`.
+/// The contract in this repository's `docs/remote-protocol/v1`, read in place so
+/// the app is always tested against the host it ships with.
 enum Contract {
-    static let root = Bundle.module.resourceURL!.appendingPathComponent("remote-protocol/v1")
+    static let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()  // RustCodeRemoteTests
+        .deletingLastPathComponent()  // Tests
+        .deletingLastPathComponent()  // RustCodeRemote
+        .deletingLastPathComponent()  // ios
+        .deletingLastPathComponent()  // repository root
+        .appendingPathComponent("docs/remote-protocol/v1")
 
     static func goldenFiles(_ directory: String) throws -> [URL] {
         try FileManager.default

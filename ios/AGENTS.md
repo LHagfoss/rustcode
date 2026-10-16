@@ -1,53 +1,11 @@
-# AGENTS.md
+# AGENTS.md (ios/)
 
-## Scope and instruction priority
-
-This repository is the native SwiftUI iOS client for RustCode. The Rust host
-lives separately in `~/code/rustcode`. These instructions adapt that project's
-workflow to this app; host-specific Cargo commands and engine rules do not apply.
-Follow explicit user instructions first, then repository guidance over generic
-skills and workflow recipes, subject to higher-priority system instructions.
-
-## Workflow
-
-- Inspect the branch, working tree and existing behavior before changing code.
-  Make the smallest scoped change and preserve unrelated work.
-- Work in the active checkout on a task branch. Create it with
-  `git switch -c <type>/<scope>-<slug>`. Use a separate worktree only for
-  concurrent work or unrelated dirty work in the active checkout.
-- Never discard the user's work: do not rebase, reset hard, force-push, or stash
-  and drop their changes to make a task easier. Work around unrelated edits.
-- Keep clean checkouts synced with `git pull --ff-only` at task start and finish.
-  On a task branch, pull its upstream; update `main` before branching from it.
-  If local changes prevent a safe pull, preserve them and explain the limitation.
-- Commit explicit paths, push the task branch and open a PR. Inspect any checks.
-  When the user asks for a PR, leave it open; merge when they authorize merging.
-- The user has authorized auto-merge for new PRs. Enable it after required checks
-  pass, then sync the local checkout after the merge.
-- Publish a new native app release for each PR: bump `MARKETING_VERSION` and
-  `CURRENT_PROJECT_VERSION` in both build configurations, then tag the merged
-  commit as `v<VERSION>`. Verify the release workflow and its assets. Use
-  `.github/workflows/release.yml` and `Scripts/build-ios-release.sh`; this app
-  does not use the Rust host's release script. Do not install on a phone unless asked.
-- After an authorized merge, return to `main` and run
-  `git pull --ff-only origin main`. Confirm local HEAD matches `origin/main`
-  and report the working-tree state.
-- Remove task branches and temporary worktrees after merging, only after
-  checking that no unique work is lost. For squash merges, verify the content;
-  ancestry alone is insufficient. Keep an open PR's branch available.
-
-## Naming
-
-Use Conventional Commits for branch names, commits and PR titles:
-
-- Branch: `<type>/<scope>-<short-slug>`, e.g. `fix/ios-composer-focus`.
-- Commit and PR: `<type>(<scope>): <imperative summary>`, e.g.
-  `fix(ios): preserve the draft when dismissing the keyboard`.
-- Reuse the main change's commit title for the PR. Use a draft PR for unfinished
-  work rather than a `wip:` prefix.
-- Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `chore`, `ci`, `build`.
-  Prefer existing scopes such as `app`, `ios`, `remote`, `docs` and `ci`.
-  Keep titles concise, with no trailing period.
+The native SwiftUI iOS client for RustCode. The repository root `AGENTS.md`
+governs workflow, naming and releases; these notes add what is specific to the
+app. Cargo commands do not cover it: run the checks below for changes here.
+The app ships in every RustCode release under the RustCode version, set by
+`scripts/release.sh`; do not bump its version or tag it separately. Use the
+`ios` scope for app changes.
 
 ## Search and architecture
 
@@ -64,9 +22,8 @@ Use Conventional Commits for branch names, commits and PR titles:
 - Check the actual host contract before adding controls or metadata. Do not
   invent model choices, timing, completion timestamps or operations the host
   does not expose. Keep unknown values and absent optional fields compatible.
-- Refresh protocol schemas and golden frames with
-  `Scripts/sync-protocol.sh /path/to/rustcode [ref]`; record the source revision
-  through that script. Host changes belong in the host repository.
+- The contract tests read `docs/remote-protocol/v1` in place. A host protocol
+  change and the matching app change belong in the same PR.
 
 ## Verification
 

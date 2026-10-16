@@ -11,9 +11,7 @@ let package = Package(
         .target(name: "RustCodeRemote"),
         .testTarget(
             name: "RustCodeRemoteTests",
-            dependencies: ["RustCodeRemote"],
-            // The protocol contract, copied from the RustCode repository by Scripts/sync-protocol.sh.
-            resources: [.copy("Resources/remote-protocol")]
+            dependencies: ["RustCodeRemote"]
         ),
     ],
     swiftLanguageModes: [.v6]

@@ -145,9 +145,55 @@ jobs:
                   name: rustcode-macos-aarch64-swift-app
                   path: rustcode-macos-aarch64-swift-app.zip
 
+    # The iOS app in ios/ ships under the same version. Its archive is unsigned:
+    # ios/Scripts/install-on-iphone.sh re-signs it locally with the user's profile.
+    ios-app:
+        needs: verify-tag
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        runs-on: macos-26
+        defaults:
+            run:
+                working-directory: ios
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Verify app version
+              if: startsWith(github.ref, 'refs/tags/v')
+              env:
+                  RELEASE_TAG: ${{ github.ref_name }}
+              run: |
+                  xcodebuild -project RustCode.xcodeproj -scheme RustCode -configuration Release -destination 'generic/platform=iOS' -showBuildSettings -json > /tmp/release-settings.json
+                  version=$(python3 Scripts/ios-release-support.py metadata /tmp/release-settings.json | head -1)
+                  test "$RELEASE_TAG" = "v$version"
+
+            - name: Test remote client and installers
+              run: |
+                  swift test --package-path RustCodeRemote
+                  python3 tests/test_ios_release_helpers.py
+                  python3 tests/test_github_ios_install.py
+
+            - name: Build Simulator app and unsigned device archive
+              run: |
+                  xcodebuild -quiet -project RustCode.xcodeproj -scheme RustCode \
+                      -configuration Release -destination 'generic/platform=iOS Simulator' \
+                      -derivedDataPath /tmp/RustCodeSimulator build CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM=
+                  xcodebuild -quiet -project RustCode.xcodeproj -scheme RustCode \
+                      -configuration Release -destination 'generic/platform=iOS' \
+                      -archivePath /tmp/RustCode.xcarchive archive CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM=
+                  ditto -c -k --sequesterRsrc --keepParent /tmp/RustCodeSimulator/Build/Products/Release-iphonesimulator/RustCode.app ../rustcode-ios-simulator.zip
+                  ditto -c -k --sequesterRsrc --keepParent /tmp/RustCode.xcarchive ../rustcode-ios-unsigned.xcarchive.zip
+
+            - name: Upload iOS artifacts
+              uses: actions/upload-artifact@v7
+              with:
+                  name: rustcode-ios
+                  path: |
+                      rustcode-ios-simulator.zip
+                      rustcode-ios-unsigned.xcarchive.zip
+
     release:
         if: startsWith(github.ref, 'refs/tags/v')
-        needs: [build, swift-app]
+        needs: [build, swift-app, ios-app]
         runs-on: ubuntu-latest
         steps:
             - name: Download artifacts
@@ -167,6 +213,8 @@ jobs:
                       rustcode-linux-x86_64.tar.gz
                       rustcode-macos-aarch64.tar.gz
                       rustcode-macos-aarch64-swift-app.zip
+                      rustcode-ios-simulator.zip
+                      rustcode-ios-unsigned.xcarchive.zip
                       rustcode-windows-x86_64.zip
                   )
                   for file in "${files[@]}"; do

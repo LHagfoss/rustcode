@@ -16,9 +16,9 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO = 'LHagfoss/rustcode_app'
+REPO = 'LHagfoss/rustcode'
 BUNDLE = 'com.lhagfoss.rustcode'
-ASSET = 'RustCode-iOS-unsigned.xcarchive.zip'
+ASSET = 'rustcode-ios-unsigned.xcarchive.zip'
 RECOVERY = ('Unlock the iPhone and keep its screen on, reconnect it directly by USB, '
             'then try again. If Xcode also cannot connect, restart the phone and Xcode. '
             'The installer has not uninstalled the existing app.')

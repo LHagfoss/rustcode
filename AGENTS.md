@@ -31,6 +31,7 @@ instructions for work in this repository.
 - Run `cargo check --workspace --tests` and `cargo test --workspace`. Without
   `--workspace` only the engine package is built, and a TUI change passes
   unchecked. CI also runs `cargo fmt --all -- --check`.
+- The iOS app lives in `ios/` with its own checks; see `ios/AGENTS.md`.
 - For releases, load `~/.agents/skills/release-automation/SKILL.md`;
   use `scripts/release.sh` as the source of truth.
 
@@ -47,7 +48,7 @@ PR titles:
 
 Accepted `type` values: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
 `chore`, `ci`, `build`. Keep `scope` to the area touched; reuse an existing
-scope (`tui`, `workspace`, `sandbox`, `engine`, `mcp`, `ci`) rather than
+scope (`tui`, `workspace`, `sandbox`, `engine`, `mcp`, `ci`, `macos`, `ios`) rather than
 inventing near-duplicates. No period at the end. Write the summary in the
 imperative ("add", not "added"), under ~72 characters. Do not prefix with
 `wip:` on a PR; use a draft PR instead.

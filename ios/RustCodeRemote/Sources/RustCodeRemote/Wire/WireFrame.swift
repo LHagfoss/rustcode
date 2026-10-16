@@ -1,6 +1,6 @@
 import Foundation
 
-// DTOs for `docs/remote-protocol/v1/frame.schema.json` in the RustCode repository.
+// DTOs for `docs/remote-protocol/v1/frame.schema.json` at the repository root.
 // The host omits absent optionals; the schema also tolerates null. Both decode to nil.
 
 public enum WireFrame: Codable, Equatable, Sendable {

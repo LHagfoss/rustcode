@@ -80,7 +80,7 @@ class GitHubInstallTests(unittest.TestCase):
         self.set_devices(['phone-a'])
         self.release=Path(self.temp.name)/'release.json'
         self.release.write_text(json.dumps({'tagName':'v4.5.6','isDraft':False,'isPrerelease':False,
-            'assets':[{'name':'RustCode-iOS-unsigned.xcarchive.zip'},{'name':'SHA256SUMS'}]}))
+            'assets':[{'name':'rustcode-ios-unsigned.xcarchive.zip'},{'name':'SHA256SUMS'}]}))
         self.info={'CFBundleIdentifier':'com.lhagfoss.rustcode','CFBundleShortVersionString':'4.5.6',
             'CFBundleVersion':'12','CFBundleExecutable':'RustCode','CFBundleSupportedPlatforms':['iPhoneOS']}
         self.make_archive()
@@ -104,7 +104,7 @@ class GitHubInstallTests(unittest.TestCase):
             'tunnelState':'connected','pairingState':'paired'},'deviceProperties':{'name':'Fixture '+i}} for i in ids]}}))
 
     def make_archive(self,extra=None):
-        p=self.assets/'RustCode-iOS-unsigned.xcarchive.zip'
+        p=self.assets/'rustcode-ios-unsigned.xcarchive.zip'
         with zipfile.ZipFile(p,'w') as z:
             base='RustCode.xcarchive/Products/Applications/RustCode.app/'
             z.writestr(base+'Info.plist',plistlib.dumps(self.info))
@@ -162,7 +162,7 @@ class GitHubInstallTests(unittest.TestCase):
         self.assert_no_install()
 
     def test_corrupt_download_stops_before_signing_and_install(self):
-        (self.assets/'RustCode-iOS-unsigned.xcarchive.zip').write_bytes(b'corrupt')
+        (self.assets/'rustcode-ios-unsigned.xcarchive.zip').write_bytes(b'corrupt')
         p=self.run_install()
         self.assertNotEqual(p.returncode,0)
         self.assertIn('checksum',p.stderr.lower())
