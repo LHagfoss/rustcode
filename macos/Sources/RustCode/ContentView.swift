@@ -617,6 +617,9 @@ private struct Composer: View {
         }
         .padding(10)
         .floatingSurface(in: .rect(cornerRadius: 22))
+        // A click anywhere on the composer but its buttons puts the cursor in it.
+        .contentShape(.rect(cornerRadius: 22))
+        .onTapGesture { focused = true }
         .overlay {
             if isDropTarget {
                 RoundedRectangle(cornerRadius: 22).strokeBorder(Color.brand, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
@@ -743,7 +746,8 @@ private struct CommandRow: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Text(command.name)
-                    .font(.callout.monospaced().weight(.medium))
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.brand)
                     .frame(minWidth: 110, alignment: .leading)
                 Text(command.description)
                     .font(.callout)

@@ -35,6 +35,22 @@ final class TranscriptTests: XCTestCase {
         XCTAssertEqual(transcript.matches("  "), [])
     }
 
+    func testSummaryAfterProseIsSplitOff() {
+        let text = #"Done here.{"summary":"Caught up.","next_action":null}"#
+        let (prose, summary) = AssistantSummary.split(text)
+        XCTAssertEqual(prose, "Done here.")
+        XCTAssertEqual(summary, AssistantSummary(summary: "Caught up.", nextAction: nil))
+        XCTAssertNil(AssistantSummary.split(#"Use {"a": 1} here"#).summary)
+        XCTAssertNil(AssistantSummary.split(#"{"summary":"x","extra":1}"#).summary)
+    }
+
+    func testCommandOutputJoinsItsCommand() {
+        var transcript = Transcript()
+        transcript.appendCommand("/status")
+        transcript.apply(.agentText("**Status**\n\nok"))
+        XCTAssertEqual(transcript.items.map(\.content), [.command(input: "/status", output: "**Status**\n\nok")])
+    }
+
     func testUpdateForUnknownCallStillShows() {
         var transcript = Transcript()
         transcript.apply(.toolCallUpdate(id: "late", title: nil, status: .failed, output: "boom"))

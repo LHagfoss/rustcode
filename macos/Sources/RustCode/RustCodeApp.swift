@@ -334,7 +334,11 @@ final class DesktopModel: ObservableObject {
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
         draft = ""
         attachments = []
-        transcript.appendUser(text)
+        if text == typed, SlashCommand.invoked(by: typed, in: commands)?.action == .execute {
+            transcript.appendCommand(typed)
+        } else {
+            transcript.appendUser(text)
+        }
         busy = true
         turnSession = id
         defer {

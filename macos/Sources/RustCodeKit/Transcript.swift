@@ -21,6 +21,8 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
         case assistant(String)
         case thinking(String)
         case tool(ToolItem)
+        /// A host slash command the user ran and the engine's answer to it.
+        case command(input: String, output: String)
     }
 
     public let id: Int
@@ -31,6 +33,7 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
         switch content {
         case .user(let text), .assistant(let text), .thinking(let text): text
         case .tool(let tool): [tool.title, tool.input, tool.output].compactMap { $0 }.joined(separator: "\n")
+        case .command(let input, let output): input + "\n" + output
         }
     }
 }
@@ -64,12 +67,19 @@ public struct Transcript: Equatable, Sendable {
         append(.user(text))
     }
 
+    /// A host command the user sent; the engine's reply fills it in.
+    public mutating func appendCommand(_ input: String) {
+        append(.command(input: input, output: ""))
+    }
+
     public mutating func apply(_ update: SessionUpdate) {
         switch update {
         case .userText(let text):
             append(.user(text))
         case .agentText(let text):
-            if case .assistant(let previous) = items.last?.content {
+            if case .command(let input, let output) = items.last?.content {
+                items[items.count - 1].content = .command(input: input, output: output + text)
+            } else if case .assistant(let previous) = items.last?.content {
                 items[items.count - 1].content = .assistant(previous + text)
             } else {
                 append(.assistant(text))
