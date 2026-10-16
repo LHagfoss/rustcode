@@ -1,3 +1,11 @@
+## [v0.74.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.74.0) - 2026-10-16
+
+### Features
+- macOS app: notifications when a chat finishes or needs approval while the app is in the background, a Dock badge for waiting requests, and a Settings toggle ([#2073](https://github.com/LHagfoss/rustcode/pull/2073)).
+- macOS app: context and token usage in the chat header, per chat; the engine sends ACP usage updates after each turn and on load ([#2076](https://github.com/LHagfoss/rustcode/pull/2076)).
+- Search chat contents from the macOS sidebar, backed by the new `rustcode sessions search <query> [--all] [--json]` ([#2077](https://github.com/LHagfoss/rustcode/pull/2077)).
+- macOS app: each file edit shows its diff in the tool card, with Reveal in Finder and Open; the ACP server now sends diff content for edit tools ([#2078](https://github.com/LHagfoss/rustcode/pull/2078)).
+- Remote: starting a new session from a paired device always gets an answer within 15 s, slow owners are picked up on retry, and new sessions are limited to folders in home or `[remote] roots` ([#2079](https://github.com/LHagfoss/rustcode/pull/2079)).
 ## [v0.73.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.73.0) - 2026-10-16
 
 ### Features
