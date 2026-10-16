@@ -659,7 +659,7 @@ async fn handle_enter_inner(
                         goal_text
                     );
                     s.history.push(ChatMessage::new("user", goal_msg));
-                    crate::config::save_history(&s.history);
+                    crate::config::save_session_history(&s.active_session_id, &s.history);
                     s.input_buffer.clear();
                     s.cursor_position = 0;
                     return true;

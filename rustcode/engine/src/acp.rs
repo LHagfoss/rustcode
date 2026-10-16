@@ -272,6 +272,18 @@ pub(crate) fn build_loaded_app_state(
     state
 }
 
+/// State for `session/new`. The id is always fresh: reusing the shared
+/// last-active session, as the TUI does when it is still empty, would hand two
+/// ACP sessions (or two processes) the same history file.
+fn new_session_state(cwd: &std::path::Path) -> crate::app::AppState {
+    let session_id = crate::config::create_detached_session();
+    let state = crate::app::AppState::new_with_workspace_session(cwd, Some(&session_id));
+    if !session_id.is_empty() {
+        crate::config::record_session_settings(&session_id, &state.config);
+    }
+    state
+}
+
 fn canonical_acp_cwd(
     cwd: &std::path::Path,
     operation: &str,
@@ -676,7 +688,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: NewSessionRequest, responder, _connection| {
                     let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
-                    let mut state = crate::app::AppState::new_with_workspace_session(&cwd, None);
+                    let mut state = new_session_state(&cwd);
                     let session_id = state.active_session_id.clone();
                     state.raw_cli_mode = false;
                     state.task_working_directory = Some(cwd.clone());
@@ -1289,6 +1301,80 @@ mod tests {
         assert_eq!(
             state.effective_workspace_root().as_deref(),
             Some(cwd.path())
+        );
+    }
+
+    #[test]
+    fn new_sessions_never_reuse_the_shared_last_active_session() {
+        let cwd = tempfile::tempdir().unwrap();
+        // The TUI reuses an empty last-active session; another process may own it.
+        let (_, _, mut config) = crate::config::load_config();
+        let shared = crate::config::create_new_session(&mut config);
+
+        let first = new_session_state(cwd.path());
+        let second = new_session_state(cwd.path());
+
+        assert!(!first.active_session_id.is_empty());
+        assert_ne!(first.active_session_id, shared);
+        assert_ne!(second.active_session_id, shared);
+        assert_ne!(first.active_session_id, second.active_session_id);
+        let (_, _, config) = crate::config::load_config();
+        assert_eq!(
+            config.last_active_session_id.as_deref(),
+            Some(shared.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_loaded_session_persists_only_to_its_own_history() {
+        let store = rustcode_session::SessionStore::new(crate::config::get_config_dir().unwrap());
+        let cwd = tempfile::tempdir().unwrap();
+        // session/new, then session/load of an older session, as the macOS app does.
+        let created = new_session_state(cwd.path()).active_session_id;
+        crate::config::set_active_session_id(&created);
+        let loaded = rustcode_session::next_session_id();
+        let earlier = vec![
+            crate::app::ChatMessage::new("user", "check my daily dev feed"),
+            crate::app::ChatMessage::new("assistant", "Here is your feed."),
+        ];
+        store.save_session_history(&loaded, &earlier);
+        crate::config::flush_history();
+
+        let mut state = build_loaded_app_state(&loaded, cwd.path(), earlier);
+        state.history.push(crate::app::ChatMessage::new(
+            "user",
+            "follow-up in the loaded session",
+        ));
+        let state = Arc::new(Mutex::new(state));
+        crate::network::prepare_turn_request(
+            &reqwest::Client::new(),
+            &state,
+            0,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("request preparation");
+        crate::config::flush_history();
+
+        let loaded_history = store.load_session_file(
+            &store
+                .session_dir(&loaded)
+                .join(rustcode_session::HISTORY_FILE),
+        );
+        assert_eq!(
+            loaded_history
+                .last()
+                .map(|message| message.content.as_str()),
+            Some("follow-up in the loaded session")
+        );
+        let created_history = store.load_session_file(
+            &store
+                .session_dir(&created)
+                .join(rustcode_session::HISTORY_FILE),
+        );
+        assert!(
+            created_history.is_empty(),
+            "the session from session/new must not receive the loaded transcript"
         );
     }
 
