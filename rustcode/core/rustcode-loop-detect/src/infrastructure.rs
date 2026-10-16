@@ -27,6 +27,16 @@ pub fn is_workspace_boundary_failure(content: &str) -> bool {
         || lower.contains("outside the task working directory")
 }
 
+/// Whether tool output reports the harness killing a local command at its
+/// timeout (`command timed out after N ms and was killed`). That is a command
+/// that ran too long on this machine (for example a traversal stalled on a
+/// protected folder), not an unreachable service or a broken transport, so it
+/// never counts toward an infrastructure outage (#2022).
+pub fn is_command_timeout(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    lower.contains("command timed out after") && lower.contains("and was killed")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InfrastructureFailureDecision {
     NotInfrastructure,
@@ -107,6 +117,9 @@ fn classify(
             dependency: "workspace".to_string(),
             class: "boundary".to_string(),
         });
+    }
+    if is_command_timeout(content) {
+        return None;
     }
     let kind = error_kind.unwrap_or_default().to_ascii_lowercase();
     let lower = content.to_ascii_lowercase();
@@ -324,6 +337,38 @@ mod tests {
                 other => panic!("expected Allowed, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn command_timeout_is_not_a_transport_outage() {
+        // #2022: a run_command killed at its timeout arrives as a retryable
+        // CommandFailed whose text contains "timed out"; it must not be
+        // recorded as `unknown:transport`.
+        let content = "error: command timed out after 120000 ms and was killed";
+        assert!(super::is_command_timeout(content));
+        let mut tracker = InfrastructureFailureTracker::default();
+        for _ in 0..InfrastructureFailureTracker::MAX_STREAK {
+            assert_eq!(
+                tracker.observe("run_command", Some("CommandFailed"), true, false, content),
+                InfrastructureFailureDecision::NotInfrastructure
+            );
+        }
+        assert_eq!(tracker.streak(), 0);
+    }
+
+    #[test]
+    fn a_service_timeout_reported_by_a_command_still_counts() {
+        let mut tracker = InfrastructureFailureTracker::default();
+        assert!(matches!(
+            tracker.observe(
+                "run_command",
+                Some("CommandFailed"),
+                true,
+                false,
+                "curl: (28) Connection timed out after 10001 milliseconds",
+            ),
+            InfrastructureFailureDecision::Allowed { .. }
+        ));
     }
 
     #[test]
