@@ -89,6 +89,8 @@ final class DesktopModel: ObservableObject {
             Task { await refreshSessions() }
         }
     }
+    /// False until the first session list arrives, so the sidebar can say it is loading.
+    @Published private(set) var sessionsLoaded = false
     /// Set by /history to put the cursor in the chat search.
     @Published var focusSessionSearch = false
     /// Filters the sidebar's chats by title.
@@ -299,6 +301,7 @@ final class DesktopModel: ObservableObject {
                 if cursor == nil { break }
             }
             sessions = all
+            sessionsLoaded = true
         } catch { self.error = String(describing: error) }
     }
 

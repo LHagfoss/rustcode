@@ -134,7 +134,9 @@ private struct SessionSidebar: View {
                 .padding(.horizontal, 10)
             }
             .overlay {
-                if model.visibleSessions.isEmpty {
+                if !model.sessionsLoaded {
+                    ProgressView().controlSize(.small)
+                } else if model.visibleSessions.isEmpty {
                     Text(model.sessions.isEmpty ? "No chats in this project yet." : "No matching chats.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
