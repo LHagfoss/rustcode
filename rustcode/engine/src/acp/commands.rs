@@ -181,6 +181,12 @@ pub(crate) fn classify(state: &mut crate::app::AppState, text: &str) -> Option<A
     })
 }
 
+/// Whether `text` is a bare `/context`, whose reply carries the breakdown
+/// as data too.
+pub(crate) fn is_context_report(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("/context")
+}
+
 /// Runs a command that waits on I/O or the model, under the session's turn,
 /// and returns its Markdown reply. `progress` receives interim lines, such as
 /// a device code to enter while a login waits.

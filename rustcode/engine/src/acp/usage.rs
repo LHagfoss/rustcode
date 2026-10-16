@@ -52,14 +52,63 @@ pub(crate) fn usage_update(state: &crate::app::AppState) -> SessionUpdate {
             "outputTokens": output,
             "cachedTokens": cached,
             "responses": responses,
+            "context": context_breakdown(state),
         }),
     );
     SessionUpdate::UsageUpdate(UsageUpdate::new(used, size).meta(meta))
 }
 
+/// Bumped when the `_meta.rustcode` context fields change incompatibly.
+pub(crate) const CONTEXT_META_VERSION: u32 = 1;
+
+/// The `/context` breakdown as data, for clients that draw it themselves.
+/// Category names and order match the TUI legend. `reserves` is null when the
+/// active profile's reserves do not describe the window in view.
+pub(crate) fn context_breakdown(state: &crate::app::AppState) -> serde_json::Value {
+    let breakdown = crate::controller::ContextBreakdown::from_state(state);
+    let categories = crate::controller::CONTEXT_CATEGORY_LABELS
+        .iter()
+        .zip(breakdown.category_tokens())
+        .map(|(name, tokens)| serde_json::json!({"name": name, "tokens": tokens}))
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "version": CONTEXT_META_VERSION,
+        "model": state.active_model_profile().map(|profile| profile.name),
+        "window": breakdown.context_window,
+        "used": breakdown.current_usage.used_tokens,
+        "estimated": breakdown.current_usage.source
+            == crate::controller::ContextUsageSource::HistoryEstimate,
+        "free": breakdown.remaining_tokens,
+        "categories": categories,
+        "reserves": breakdown.configured_guards.map(|guards| serde_json::json!({
+            "output": guards.output_tokens,
+            "thinking": guards.thinking_tokens,
+            "tools": guards.tool_tokens,
+            "safety": guards.safety_tokens,
+            "providerOverhead": guards.provider_framing_tokens,
+        })),
+    })
+}
+
+/// `_meta` for the `/context` reply chunk: the breakdown beside the Markdown.
+pub(crate) fn context_reply_meta(
+    state: &crate::app::AppState,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "rustcode".to_owned(),
+        serde_json::json!({
+            "kind": "context",
+            "version": CONTEXT_META_VERSION,
+            "context": context_breakdown(state),
+        }),
+    );
+    meta
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{USAGE_META_VERSION, usage_update};
+    use super::{USAGE_META_VERSION, context_reply_meta, usage_update};
     use crate::app::{ChatMessage, TokenUsage};
 
     fn assistant(prompt: u32, completion: u32, cached: Option<u32>) -> ChatMessage {
@@ -119,5 +168,32 @@ mod tests {
         assert_eq!(value["used"], 101);
         assert_eq!(value["_meta"]["rustcode"]["estimated"], true);
         assert_eq!(value["_meta"]["rustcode"]["inputTokens"], 9_000);
+    }
+
+    #[test]
+    fn context_breakdown_rides_on_usage_and_the_command_reply() {
+        let mut state = crate::app::AppState::new();
+        state.history.replace(Vec::new());
+        state
+            .history
+            .push(ChatMessage::new("user", "a".repeat(400)));
+        let value = serde_json::to_value(usage_update(&state)).unwrap();
+        let context = &value["_meta"]["rustcode"]["context"];
+        assert_eq!(context["version"], 1);
+        assert_eq!(context["window"], u64::from(state.active_context_window()));
+        assert_eq!(context["used"], 100);
+        assert_eq!(context["estimated"], true);
+        let categories = context["categories"].as_array().unwrap();
+        assert_eq!(categories.len(), 7);
+        assert_eq!(categories[0]["name"], "User messages");
+        assert!(categories[0]["tokens"].as_u64().unwrap() > 0);
+        assert_eq!(
+            context["free"].as_u64().unwrap(),
+            u64::from(state.active_context_window()) - 100
+        );
+
+        let meta = context_reply_meta(&state);
+        assert_eq!(meta["rustcode"]["kind"], "context");
+        assert_eq!(meta["rustcode"]["context"], *context);
     }
 }

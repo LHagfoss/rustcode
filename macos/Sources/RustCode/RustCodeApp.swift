@@ -64,6 +64,8 @@ enum ComposerPanel { case add, model, effort }
 final class DesktopModel: ObservableObject {
     let updater = Updater()
     @Published var composerPanel: ComposerPanel?
+    /// The `/context` breakdown shown in its sheet.
+    @Published var contextSheet: ContextBreakdown?
     /// Slash commands the engine advertised, and the highlighted suggestion.
     @Published var commands: [SlashCommand] = []
     @Published var commandSelection = 0
@@ -317,6 +319,12 @@ final class DesktopModel: ObservableObject {
         let count = commandSuggestions.count
         guard count > 0 else { return }
         commandSelection = ((commandSelection + step) % count + count) % count
+    }
+
+    /// Open the context sheet on the chat's latest breakdown.
+    func showContext() {
+        guard let usage = transcript.usage else { return }
+        contextSheet = usage.context ?? ContextBreakdown(usage: usage)
     }
 
     /// The commands the app answers itself rather than the engine.
@@ -918,6 +926,9 @@ final class DesktopModel: ObservableObject {
             switch update {
             case .title: await refreshSessions()
             case .configOptions(let options): applyConfig(options)
+            case .contextReport(_, let context):
+                transcript.apply(update)
+                contextSheet = context
             default: transcript.apply(update)
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
