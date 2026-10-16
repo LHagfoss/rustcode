@@ -131,6 +131,7 @@ pub mod session;
 mod submit;
 #[path = "actions/workspace_inspection.rs"]
 mod workspace_inspection;
+pub(crate) use workspace_inspection::inspect_workspace;
 
 #[cfg(test)]
 #[path = "actions/tests.rs"]

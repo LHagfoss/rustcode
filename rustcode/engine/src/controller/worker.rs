@@ -736,6 +736,15 @@ fn finish_native_provider_auth(
     state: &mut AppState,
     result: anyhow::Result<crate::provider_auth::AuthCommandResult>,
 ) {
+    let message = apply_provider_auth_result(state, result);
+    state.set_notice(message);
+}
+
+/// Install what a provider auth command produced and return its message.
+pub(crate) fn apply_provider_auth_result(
+    state: &mut AppState,
+    result: anyhow::Result<crate::provider_auth::AuthCommandResult>,
+) -> String {
     match result {
         Ok(result) => {
             if result.profile.is_some() || !result.profiles.is_empty() {
@@ -752,9 +761,9 @@ fn finish_native_provider_auth(
                 }
                 crate::config::save_entire_config(&state.config);
             }
-            state.set_notice(result.message);
+            result.message
         }
-        Err(error) => state.set_notice(format!("Provider authentication failed: {error:#}")),
+        Err(error) => format!("Provider authentication failed: {error:#}"),
     }
 }
 
@@ -765,12 +774,29 @@ pub(crate) fn native_status_report(state: &AppState) -> String {
     } else {
         "inactive"
     };
-    format!(
-        "{provider}\nSession: {}\nModel: {}\nTurn: {turn}\nQueue: {}",
+    let count = |role: &str| {
+        state
+            .history
+            .iter()
+            .filter(|message| message.role == role)
+            .count()
+    };
+    let mut report = format!(
+        "{provider}\nSession: {}\nModel: {}\nTurn: {turn}\nQueue: {}\nMessages: {} user · {} assistant · {} tool calls",
         state.active_session_id,
         state.model_name,
         state.pending_queue.len(),
-    )
+        count("user"),
+        count("assistant"),
+        count("tool"),
+    );
+    if let Some(usage) = state.current_token_usage.as_ref() {
+        report.push_str(&format!(
+            "\nLast turn: {} prompt + {} completion = {} tokens",
+            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+        ));
+    }
+    report
 }
 
 pub(crate) fn native_usage_report(state: &AppState) -> String {

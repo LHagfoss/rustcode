@@ -775,79 +775,88 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
 }
 
 pub fn trigger_quota_fetch(s: &AppState, state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
-    let (url, key_opt) = {
-        let active_url = s.api_base_url.clone();
-        let key = s
-            .config
-            .models
-            .iter()
-            .find(|m| m.url == active_url || m.model == s.model_name)
-            .and_then(|m| m.api_key.clone());
-        (active_url, key)
-    };
+    let (url, key_opt) = quota_request(s);
     let state_clone = Arc::clone(state);
     let client_clone = client.clone();
     tokio::spawn(async move {
-        let base_url = if let Some(idx) = url.find("/v1") {
-            &url[..idx]
-        } else {
-            url.trim_end_matches('/')
-        };
-        let status_url = format!("{}/auth/status", base_url);
-        let mut req = client_clone.get(&status_url);
-        if let Some(key) = key_opt {
-            req = req.header("Authorization", format!("Bearer {key}"));
-        }
-        match req.send().await {
-            Ok(res) => {
-                if let Ok(json) = res.json::<serde_json::Value>().await {
-                    let mut text = String::from("📊 Model Quota Status:\n");
-                    let quota_obj = json.get("quota");
-                    let buckets_arr = quota_obj
-                        .and_then(|q| q.get("buckets").or_else(|| q.get("quotaBuckets")))
-                        .and_then(|b| b.as_array());
-
-                    if let Some(buckets) = buckets_arr {
-                        for b in buckets {
-                            if let (Some(m), Some(f)) = (
-                                b.get("modelId").and_then(|x| x.as_str()),
-                                b.get("remainingFraction").and_then(|x| x.as_f64()),
-                            ) {
-                                let display_name = match m {
-                                    "gemini-2.5-flash" => {
-                                        "gemini-2.5-flash / gemini-3.6-flash / 3.5-flash"
-                                    }
-                                    "gemini-2.5-pro" => "gemini-2.5-pro",
-                                    _ => m,
-                                };
-                                text.push_str(&format!(
-                                    "\n  • {}: {:.1}% remaining",
-                                    display_name,
-                                    f * 100.0
-                                ));
-                            }
-                        }
-                    } else if let Some(rate_limits) =
-                        json.get("rate_limits").or_else(|| json.get("rate_limit"))
-                    {
-                        append_codex_rate_limits(&mut text, rate_limits);
-                    } else {
-                        text.push_str("\n  No quota information returned by this provider.");
-                    }
-                    let mut s = state_clone.lock().await;
-                    s.update_command_panel("Model quota", text);
-                } else {
-                    let mut s = state_clone.lock().await;
-                    s.update_command_panel("Model quota", "Failed to parse quota JSON response.");
-                }
-            }
-            Err(e) => {
-                let mut s = state_clone.lock().await;
-                s.update_command_panel("Model quota", format!("Failed to reach proxy: {}", e));
-            }
-        }
-        state_clone.lock().await.request_redraw();
+        let text = fetch_quota_report(&client_clone, &url, key_opt).await;
+        let mut s = state_clone.lock().await;
+        s.update_command_panel("Model quota", text);
+        s.request_redraw();
     });
+}
+
+/// The endpoint and key `/quota` asks: the active profile's.
+pub(crate) fn quota_request(s: &AppState) -> (String, Option<String>) {
+    let active_url = s.api_base_url.clone();
+    let key = s
+        .config
+        .models
+        .iter()
+        .find(|m| m.url == active_url || m.model == s.model_name)
+        .and_then(|m| m.api_key.clone());
+    (active_url, key)
+}
+
+/// Ask the provider proxy's `/auth/status` for its quota and describe it.
+pub(crate) async fn fetch_quota_report(
+    client: &reqwest::Client,
+    url: &str,
+    key: Option<String>,
+) -> String {
+    let base_url = if let Some(idx) = url.find("/v1") {
+        &url[..idx]
+    } else {
+        url.trim_end_matches('/')
+    };
+    let status_url = format!("{}/auth/status", base_url);
+    let mut req = client.get(&status_url);
+    if let Some(key) = key {
+        req = req.header("Authorization", format!("Bearer {key}"));
+    }
+    match req.send().await {
+        Ok(res) => {
+            if let Ok(json) = res.json::<serde_json::Value>().await {
+                let mut text = String::from("📊 Model Quota Status:\n");
+                let quota_obj = json.get("quota");
+                let buckets_arr = quota_obj
+                    .and_then(|q| q.get("buckets").or_else(|| q.get("quotaBuckets")))
+                    .and_then(|b| b.as_array());
+
+                if let Some(buckets) = buckets_arr {
+                    for b in buckets {
+                        if let (Some(m), Some(f)) = (
+                            b.get("modelId").and_then(|x| x.as_str()),
+                            b.get("remainingFraction").and_then(|x| x.as_f64()),
+                        ) {
+                            let display_name = match m {
+                                "gemini-2.5-flash" => {
+                                    "gemini-2.5-flash / gemini-3.6-flash / 3.5-flash"
+                                }
+                                "gemini-2.5-pro" => "gemini-2.5-pro",
+                                _ => m,
+                            };
+                            text.push_str(&format!(
+                                "\n  • {}: {:.1}% remaining",
+                                display_name,
+                                f * 100.0
+                            ));
+                        }
+                    }
+                } else if let Some(rate_limits) =
+                    json.get("rate_limits").or_else(|| json.get("rate_limit"))
+                {
+                    append_codex_rate_limits(&mut text, rate_limits);
+                } else {
+                    text.push_str("\n  No quota information returned by this provider.");
+                }
+                text
+            } else {
+                "Failed to parse quota JSON response.".to_owned()
+            }
+        }
+        Err(e) => format!("Failed to reach proxy: {}", e),
+    }
 }
 
 pub(super) fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_json::Value) {
@@ -896,4 +905,100 @@ pub(super) fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_js
             ));
         }
     }
+}
+
+/// Compact the session history now, as `/compact` does, and return the
+/// notice it adds to the transcript. The history is compacted from a snapshot
+/// and merged back only when the session and its history still match it.
+pub(crate) async fn compact_history(
+    state: &Arc<Mutex<AppState>>,
+    client: &reqwest::Client,
+    cancel_token: &tokio_util::sync::CancellationToken,
+) -> String {
+    let (
+        api_base_url,
+        model_name,
+        chatgpt_plan_profile,
+        active_session_id,
+        original_history,
+        budget,
+    ) = {
+        let s = state.lock().await;
+        if s.history.len() < 2 {
+            return "Not enough messages to compact.".to_owned();
+        }
+        // Subscription-backed profiles have no plain summarizer endpoint.
+        let chatgpt_plan_profile = s.active_model_profile().is_some_and(|profile| {
+            profile
+                .credential
+                .as_ref()
+                .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli())
+        });
+        (
+            s.api_base_url.clone(),
+            s.model_name.clone(),
+            chatgpt_plan_profile,
+            s.active_session_id.clone(),
+            s.history.clone(),
+            s.get_history_token_budget() as usize,
+        )
+    };
+    let mut history_to_compact = original_history.clone();
+    let compact_result = if chatgpt_plan_profile {
+        crate::network::compaction::force_compact_with_budget_deterministic(
+            history_to_compact.as_mut_vec(),
+            Some(budget),
+        )
+        .await
+    } else {
+        crate::network::compaction::force_compact_with_budget(
+            client,
+            &api_base_url,
+            &model_name,
+            history_to_compact.as_mut_vec(),
+            Some(budget),
+            Some(cancel_token),
+        )
+        .await
+        .map_err(|error| error.to_string())
+    };
+    let mut s = state.lock().await;
+    let live_session_id = s.active_session_id.clone();
+    let notice = match compact_result {
+        Ok((before, after)) => {
+            if !super::try_merge_compacted_history(
+                &live_session_id,
+                s.history.as_mut_vec(),
+                &active_session_id,
+                &original_history,
+                history_to_compact.into_vec(),
+            ) {
+                super::report_stale_compaction(
+                    &live_session_id,
+                    &active_session_id,
+                    s.history.as_mut_vec(),
+                );
+                return "History compaction discarded as stale: the active session or history changed while compaction was running.".to_owned();
+            }
+            format!("🧹 History compacted: reduced context from {before} to {after} tokens.")
+        }
+        Err(error) => {
+            if !super::history_matches_snapshot(
+                &live_session_id,
+                &s.history,
+                &active_session_id,
+                &original_history,
+            ) {
+                super::report_stale_compaction(
+                    &live_session_id,
+                    &active_session_id,
+                    s.history.as_mut_vec(),
+                );
+                return "History compaction discarded as stale: the active session or history changed while compaction was running.".to_owned();
+            }
+            format!("History compaction failed: {error}")
+        }
+    };
+    s.history.push(ChatMessage::new("system", notice.clone()));
+    notice
 }

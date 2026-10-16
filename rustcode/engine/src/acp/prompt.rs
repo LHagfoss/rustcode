@@ -268,30 +268,56 @@ pub(crate) async fn run_prompt(
         return Err(agent_client_protocol::Error::internal_error()
             .data("ACP background task completion backlog overflowed; session must be reopened"));
     }
-    // Host slash commands answer in the transcript and never reach the model
-    // or provider history, as for the remote client.
-    let command_reply = {
+    // Slash commands answer in the transcript and never reach the model or
+    // provider history, as for the remote client. `/goal` is the exception:
+    // it becomes the turn's prompt.
+    let command = {
         let mut state = state.lock().await;
-        super::commands::run(&mut state, &text)
-            .map(|reply| (reply, super::usage::usage_update(&state)))
+        super::commands::classify(&mut state, &text)
     };
-    if let Some((reply, usage)) = command_reply {
-        // A host command such as `/compact` or `/clear` can change the
-        // context, so the usage follows its reply.
-        send_updates(
-            &connection,
-            &session_id,
-            vec![
-                SessionUpdate::AgentMessageChunk(
-                    agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(
-                        agent_client_protocol::schema::v1::TextContent::new(reply),
-                    )),
-                ),
-                usage,
-            ],
-        )?;
-        return Ok(StopReason::EndTurn);
-    }
+    let agent_text = |text: String| {
+        SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
+            ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text)),
+        ))
+    };
+    let text = match command {
+        None => text,
+        Some(super::commands::AcpCommand::Goal(prompt)) => {
+            // The command card says what started; the goal prompt is the
+            // user turn the model answers, as a session replay shows it.
+            send_updates(
+                &connection,
+                &session_id,
+                vec![
+                    agent_text(
+                        "**Goal**\n\nContinuous mode is on until the goal is complete.".into(),
+                    ),
+                    SessionUpdate::UserMessageChunk(
+                        agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(
+                            agent_client_protocol::schema::v1::TextContent::new(prompt.clone()),
+                        )),
+                    ),
+                ],
+            )?;
+            prompt
+        }
+        Some(command) => {
+            let reply =
+                super::commands::run(command, &state, &client, turn.cancel_token(), |progress| {
+                    let _ = send_updates(&connection, &session_id, vec![agent_text(progress)]);
+                })
+                .await;
+            // A command such as `/compact` can change the context, so the
+            // usage follows its reply.
+            let usage = super::usage::usage_update(&*state.lock().await);
+            send_updates(&connection, &session_id, vec![agent_text(reply), usage])?;
+            return Ok(if turn.cancel_token().is_cancelled() {
+                StopReason::Cancelled
+            } else {
+                StopReason::EndTurn
+            });
+        }
+    };
     state
         .lock()
         .await
