@@ -302,7 +302,7 @@ fn set_settings(
 
 /// One catalog shared with terminal autocomplete. Native app actions replace
 /// terminal pickers; commands requiring a host UI remain visible and labelled.
-pub(super) fn command_catalog() -> Vec<super::protocol::RemoteCommandInfo> {
+pub(crate) fn command_catalog() -> Vec<super::protocol::RemoteCommandInfo> {
     let mut commands: Vec<_> = crate::app::suggestion::COMMANDS
         .iter()
         .map(|command| {
@@ -384,7 +384,10 @@ fn switch_value(arguments: &str, current: bool) -> Result<bool, RemoteError> {
 
 /// Explicitly allowed owner commands. Their output is presentation-only and
 /// never enters provider history or the terminal's draft/panel state.
-fn execute_command(state: &mut AppState, input: &str) -> Result<RemoteResult, RemoteError> {
+pub(crate) fn execute_command(
+    state: &mut AppState,
+    input: &str,
+) -> Result<RemoteResult, RemoteError> {
     let input = input.trim();
     let (name, arguments) = input
         .split_once(char::is_whitespace)

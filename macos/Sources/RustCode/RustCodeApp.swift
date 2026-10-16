@@ -64,6 +64,9 @@ enum ComposerPanel { case add, model }
 final class DesktopModel: ObservableObject {
     let updater = Updater()
     @Published var composerPanel: ComposerPanel?
+    /// Slash commands the engine advertised, and the highlighted suggestion.
+    @Published var commands: [SlashCommand] = []
+    @Published var commandSelection = 0
     /// The Settings section to show when the sheet opens.
     @Published var settingsSection: SettingsSection = .general
     @Published var transcript = Transcript()
@@ -79,6 +82,17 @@ final class DesktopModel: ObservableObject {
     @Published var showsFind = false
     @Published var findQuery = "" { didSet { findIndex = 0 } }
     @Published var findIndex = 0
+    /// The sidebar lists chats from every project, or only the open one.
+    @Published var showsAllProjects = UserDefaults.standard.object(forKey: "showsAllProjects") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(showsAllProjects, forKey: "showsAllProjects")
+            Task { await refreshSessions() }
+        }
+    }
+    /// False until the first session list arrives, so the sidebar can say it is loading.
+    @Published private(set) var sessionsLoaded = false
+    /// Set by /history to put the cursor in the chat search.
+    @Published var focusSessionSearch = false
     /// Filters the sidebar's chats by title.
     @Published var sessionFilter = ""
     /// Files and folders added with + or by dropping them on the composer. The
@@ -180,7 +194,39 @@ final class DesktopModel: ObservableObject {
         let filter = sessionFilter.trimmingCharacters(in: .whitespaces)
         guard !filter.isEmpty else { return sessions }
         return sessions.filter {
-            ($0.title ?? "New chat").range(of: filter, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            "\($0.title ?? "New chat") \($0.projectName)".range(of: filter, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    /// Commands matching the draft while its first word is being typed.
+    var commandSuggestions: [SlashCommand] { SlashCommand.suggestions(for: draft, in: commands) }
+
+    /// Put the highlighted command in the composer.
+    func completeCommand() {
+        let suggestions = commandSuggestions
+        guard !suggestions.isEmpty else { return }
+        draft = suggestions[min(commandSelection, suggestions.count - 1)].insertion
+        commandSelection = 0
+    }
+
+    func moveCommandSelection(_ step: Int) {
+        let count = commandSuggestions.count
+        guard count > 0 else { return }
+        commandSelection = ((commandSelection + step) % count + count) % count
+    }
+
+    /// The commands the app answers itself rather than the engine.
+    private func perform(_ command: SlashCommand) async {
+        switch command.action {
+        case .newSession: await newSession()
+        case .modelPicker: composerPanel = .model
+        case .sessionPicker:
+            if !showsSidebar { toggleSidebar() }
+            focusSessionSearch = true
+        case .copyResponse:
+            let last = transcript.items.last { if case .assistant = $0.content { true } else { false } }
+            if case .assistant(let text) = last?.content { Clipboard.copy(text) }
+        case .execute: break
         }
     }
 
@@ -243,9 +289,19 @@ final class DesktopModel: ObservableObject {
 
     func refreshSessions() async {
         guard let connection = engine?.connection, capabilities?.listSessions == true else { return }
+        // The engine pages `session/list`; read every page, up to a bound.
         do {
-            let result = try await connection.request(ACPMethod.sessionList, params: ACPRequests.listSessions(cwd: workspace), timeout: .seconds(15))
-            sessions = SessionSummary.list(from: result)
+            var all: [SessionSummary] = []
+            var cursor: String?
+            for _ in 0..<40 {
+                let params = ACPRequests.listSessions(cwd: showsAllProjects ? nil : workspace, cursor: cursor)
+                let result = try await connection.request(ACPMethod.sessionList, params: params, timeout: .seconds(15))
+                all += SessionSummary.list(from: result)
+                cursor = SessionSummary.nextCursor(from: result)
+                if cursor == nil { break }
+            }
+            sessions = all
+            sessionsLoaded = true
         } catch { self.error = String(describing: error) }
     }
 
@@ -273,10 +329,19 @@ final class DesktopModel: ObservableObject {
         guard let connection = engine?.connection, let id = selectedSession else { return }
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !typed.isEmpty || !attachments.isEmpty, !busy else { return }
+        if let command = SlashCommand.invoked(by: typed, in: commands), command.action != .execute {
+            draft = ""
+            await perform(command)
+            return
+        }
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
         draft = ""
         attachments = []
-        transcript.appendUser(text)
+        if text == typed, SlashCommand.invoked(by: typed, in: commands)?.action == .execute {
+            transcript.appendCommand(typed)
+        } else {
+            transcript.appendUser(text)
+        }
         busy = true
         turnSession = id
         defer {
@@ -364,6 +429,10 @@ final class DesktopModel: ObservableObject {
         case .closed(let reason):
             busy = false
             if engine != nil { error = reason }
+        case .notification(let method, let params) where method == ACPMethod.sessionUpdate
+            && params["update"]?["sessionUpdate"]?.stringValue == "available_commands_update":
+            // Commands are the same for every session, so take them from any.
+            if case .availableCommands(let list) = SessionUpdate(notificationParams: params) { commands = list }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate:
             guard params["sessionId"]?.stringValue == selectedSession else { return }
             let update = SessionUpdate(notificationParams: params)

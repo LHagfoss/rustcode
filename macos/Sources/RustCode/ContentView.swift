@@ -61,6 +61,7 @@ struct ChromeButton: View {
 private struct SessionSidebar: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var updater: Updater
+    @FocusState private var searchFocused: Bool
 
     /// The hidden title bar's height, so buttons line up with the traffic lights.
     static let barHeight: CGFloat = 28
@@ -82,6 +83,10 @@ private struct SessionSidebar: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search chats", text: $model.sessionFilter)
                     .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onChange(of: model.focusSessionSearch) { _, focus in
+                        if focus { searchFocused = true; model.focusSessionSearch = false }
+                    }
                     .onKeyPress(.escape) {
                         guard !model.sessionFilter.isEmpty else { return .ignored }
                         model.sessionFilter = ""
@@ -101,17 +106,23 @@ private struct SessionSidebar: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
-            Text("Chats")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 4)
+            HStack {
+                Text("Chats")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                ScopeToggle(showsAll: $model.showsAllProjects)
+            }
+            .padding(.leading, 20)
+            .padding(.trailing, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
 
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(model.visibleSessions) { session in
                         SessionRow(session: session,
+                                   showsProject: model.showsAllProjects,
                                    isSelected: session.id == model.selectedSession,
                                    needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
                                    isRunning: model.busy && model.turnSession == session.id) {
@@ -123,7 +134,9 @@ private struct SessionSidebar: View {
                 .padding(.horizontal, 10)
             }
             .overlay {
-                if model.visibleSessions.isEmpty {
+                if !model.sessionsLoaded {
+                    ProgressView().controlSize(.small)
+                } else if model.visibleSessions.isEmpty {
                     Text(model.sessions.isEmpty ? "No chats in this project yet." : "No matching chats.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -179,8 +192,36 @@ private struct SessionSidebar: View {
     }
 }
 
+/// "All" or "Project": which chats the sidebar lists.
+private struct ScopeToggle: View {
+    @Binding var showsAll: Bool
+
+    var body: some View {
+        HStack(spacing: 0) {
+            segment("All", isOn: showsAll) { showsAll = true }
+            segment("Project", isOn: !showsAll) { showsAll = false }
+        }
+        .padding(2)
+        .background(Color.primary.opacity(0.06), in: .capsule)
+    }
+
+    private func segment(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(isOn ? .primary : .secondary)
+                .padding(.horizontal, 9)
+                .frame(height: 20)
+                .background(isOn ? Color.primary.opacity(0.1) : .clear, in: .capsule)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct SessionRow: View {
     let session: SessionSummary
+    var showsProject = false
     let isSelected: Bool
     let needsAnswer: Bool
     let isRunning: Bool
@@ -193,11 +234,19 @@ private struct SessionRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.title ?? "New chat")
                         .lineLimit(1)
-                    if let updated = session.updatedAt {
-                        Text(updated, format: .relative(presentation: .named))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        if showsProject, !session.projectName.isEmpty {
+                            Label(session.projectName, systemImage: "folder")
+                                .labelStyle(.titleAndIcon)
+                                .lineLimit(1)
+                            if session.updatedAt != nil { Text("·") }
+                        }
+                        if let updated = session.updatedAt {
+                            Text(updated, format: .relative(presentation: .named))
+                        }
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
                 if needsAnswer {
@@ -227,8 +276,14 @@ private struct ChatView: View {
     @ObservedObject var model: DesktopModel
     @State private var composerHeight: CGFloat = 60
 
-    private var title: String {
-        model.sessions.first { $0.id == model.selectedSession }?.title ?? "RustCode"
+    private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
+
+    private var title: String { selected?.title ?? "RustCode" }
+
+    /// A chat from another project shows that project, not the open one.
+    private var projectName: String {
+        if let name = selected?.projectName, !name.isEmpty { return name }
+        return model.workspace.lastPathComponent
     }
 
     var body: some View {
@@ -289,7 +344,51 @@ private struct ChatView: View {
             .frame(maxWidth: .infinity)
         }
         .overlay { composerPanel }
+        .overlay { commandSuggestions }
         .animation(.snappy(duration: 0.18), value: model.composerPanel)
+    }
+
+    /// Slash commands matching what is typed, above the composer. ↑↓ choose,
+    /// Tab or ⏎ completes, Esc clears.
+    @ViewBuilder
+    private var commandSuggestions: some View {
+        let suggestions = model.commandSuggestions
+        if model.composerPanel == nil, !suggestions.isEmpty {
+            VStack {
+                Spacer()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, command in
+                                CommandRow(command: command, isSelected: index == min(model.commandSelection, suggestions.count - 1)) {
+                                    model.commandSelection = index
+                                    model.completeCommand()
+                                }
+                                .id(command.id)
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(maxHeight: 280)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onChange(of: model.commandSelection) { _, index in
+                        guard index < suggestions.count else { return }
+                        proxy.scrollTo(suggestions[index].id)
+                    }
+                }
+                .background {
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(.regularMaterial)
+                        .shadow(color: .black.opacity(0.28), radius: 20, y: 8)
+                }
+                .clipShape(.rect(cornerRadius: 20))
+                .frame(maxWidth: 760)
+                .padding(.horizontal, 28)
+                .padding(.bottom, composerHeight + 16 + 8)
+                .frame(maxWidth: .infinity)
+            }
+            .transition(.opacity)
+        }
     }
 
     /// The + or model panel, drawn over the whole chat so nothing clips it, with
@@ -341,7 +440,7 @@ private struct ChatView: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(title).font(.headline).lineLimit(1)
-                Text(model.workspace.lastPathComponent).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                Text(projectName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
         }
@@ -473,14 +572,44 @@ private struct Composer: View {
                 .padding(.top, 4)
                 .onKeyPress(.return, phases: .down) { press in
                     if press.modifiers.contains(.shift) { return .ignored }
+                    // ⏎ on a suggestion takes it: a command that wants arguments
+                    // waits for them, any other runs at once.
+                    let suggestions = model.commandSuggestions
+                    if !suggestions.isEmpty {
+                        let chosen = suggestions[min(model.commandSelection, suggestions.count - 1)]
+                        model.draft = chosen.insertion
+                        if chosen.takesArguments { return .handled }
+                    }
                     Task { await model.submit() }
                     return .handled
                 }
-                .onKeyPress(.escape) {
-                    guard model.composerPanel != nil else { return .ignored }
-                    model.composerPanel = nil
+                .onKeyPress(.tab) {
+                    guard !model.commandSuggestions.isEmpty else { return .ignored }
+                    model.completeCommand()
                     return .handled
                 }
+                .onKeyPress(.upArrow) {
+                    guard !model.commandSuggestions.isEmpty else { return .ignored }
+                    model.moveCommandSelection(-1)
+                    return .handled
+                }
+                .onKeyPress(.downArrow) {
+                    guard !model.commandSuggestions.isEmpty else { return .ignored }
+                    model.moveCommandSelection(1)
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    if model.composerPanel != nil {
+                        model.composerPanel = nil
+                        return .handled
+                    }
+                    if !model.commandSuggestions.isEmpty {
+                        model.draft = ""
+                        return .handled
+                    }
+                    return .ignored
+                }
+                .onChange(of: model.draft) { _, _ in model.commandSelection = 0 }
             HStack(spacing: 8) {
                 addMenu
                 Spacer(minLength: 0)
@@ -490,6 +619,9 @@ private struct Composer: View {
         }
         .padding(10)
         .floatingSurface(in: .rect(cornerRadius: 22))
+        // A click anywhere on the composer but its buttons puts the cursor in it.
+        .contentShape(.rect(cornerRadius: 22))
+        .onTapGesture { focused = true }
         .overlay {
             if isDropTarget {
                 RoundedRectangle(cornerRadius: 22).strokeBorder(Color.brand, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
@@ -605,6 +737,37 @@ private struct Composer: View {
 
 extension String {
     var abbreviatingHome: String { (self as NSString).abbreviatingWithTildeInPath }
+}
+
+private struct CommandRow: View {
+    let command: SlashCommand
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(command.name)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.brand)
+                    .frame(minWidth: 110, alignment: .leading)
+                Text(command.description)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if command.action != .execute {
+                    Image(systemName: "macwindow").font(.caption).foregroundStyle(.tertiary)
+                        .help("Handled by the app")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(isSelected ? Color.brand.opacity(0.18) : .clear, in: .rect(cornerRadius: 14))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 struct AddPanel: View {

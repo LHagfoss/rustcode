@@ -54,6 +54,34 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(text["_meta"]?["rustcode"]?["answer"]?["text"]?.stringValue, "Neither")
     }
 
+    func testSessionListCoversEveryProjectAndPage() {
+        XCTAssertEqual(ACPRequests.listSessions(cwd: nil), [:])
+        XCTAssertEqual(ACPRequests.listSessions(cwd: URL(fileURLWithPath: "/tmp/p"), cursor: "v1:abc"),
+                       ["cwd": "/tmp/p", "cursor": "v1:abc"])
+        let page: JSONValue = ["sessions": [["sessionId": "s1", "cwd": "/Users/me/code/app"]], "nextCursor": "v1:s1"]
+        XCTAssertEqual(SessionSummary.nextCursor(from: page), "v1:s1")
+        XCTAssertEqual(SessionSummary.list(from: page).first?.projectName, "app")
+    }
+
+    func testAvailableCommandsCarryActionAndArguments() {
+        let update = SessionUpdate(notificationParams: ["sessionId": "s", "update": [
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [
+                ["name": "status", "description": "Session status"],
+                ["name": "model", "description": "Choose a model", "input": ["hint": "arguments"],
+                 "_meta": ["rustcode": ["action": "model_picker"]]],
+            ],
+        ]])
+        guard case .availableCommands(let commands) = update else { return XCTFail("expected commands") }
+        XCTAssertEqual(commands.map(\.name), ["/status", "/model"])
+        XCTAssertEqual(commands[1].action, .modelPicker)
+        XCTAssertEqual(commands[1].insertion, "/model ")
+        XCTAssertEqual(SlashCommand.suggestions(for: "/st", in: commands).map(\.name), ["/status"])
+        XCTAssertEqual(SlashCommand.suggestions(for: "/status now", in: commands), [])
+        XCTAssertEqual(SlashCommand.invoked(by: "/model gpt", in: commands)?.action, .modelPicker)
+        XCTAssertNil(SlashCommand.invoked(by: "explain /model", in: commands))
+    }
+
     func testEngineLocatorPrefersBundledEngineBeforeCLI() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

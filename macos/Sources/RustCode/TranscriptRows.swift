@@ -25,7 +25,78 @@ struct TranscriptRow: View {
         case .assistant(let text): AssistantMessage(text: text)
         case .thinking(let text): ThinkingBlock(text: text)
         case .tool(let tool): ToolRow(tool: tool)
+        case .command(let input, let output): CommandCard(input: input, output: output)
         }
+    }
+}
+
+/// `/command args` with the command in the brand colour, as the iOS app shows it.
+func slashCommandText(_ text: String) -> Text {
+    let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+    let command = Text(String(parts[0])).foregroundStyle(Color.brand).fontWeight(.semibold)
+    guard parts.count > 1 else { return command }
+    return command + Text(" " + parts[1])
+}
+
+/// A host command and its answer: the engine replies `**Title**` then the output,
+/// shown like the iOS app's command result.
+private struct CommandCard: View {
+    let input: String
+    let output: String
+
+    private var title: String? {
+        guard output.hasPrefix("**"), let end = output.dropFirst(2).range(of: "**") else { return nil }
+        return String(output[output.index(output.startIndex, offsetBy: 2)..<end.lowerBound])
+    }
+
+    private var content: String {
+        guard let title else { return output }
+        return String(output.dropFirst(title.count + 4)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "terminal").foregroundStyle(Color.brand)
+                slashCommandText(input).font(.callout).textSelection(.enabled)
+                Spacer(minLength: 8)
+                if output.isEmpty { ProgressView().controlSize(.small) }
+            }
+            if let title {
+                Text(title).font(.headline)
+            }
+            if !content.isEmpty {
+                MarkdownText(text: content)
+            }
+        }
+        .card()
+        .contextMenu {
+            Button("Copy Output", systemImage: "doc.on.doc") { Clipboard.copy(content) }
+        }
+    }
+}
+
+/// The engine's closing summary, as the iOS app shows it.
+private struct SummaryCard: View {
+    let summary: AssistantSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Summary", systemImage: "text.quote")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(summary.summary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            if let next = summary.nextAction {
+                Divider().opacity(0.5)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Next action").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Text(next).font(.callout).textSelection(.enabled)
+                }
+            }
+        }
+        .card()
     }
 }
 
@@ -34,7 +105,13 @@ private struct UserMessage: View {
     @Environment(\.findQuery) private var findQuery
 
     var body: some View {
-        Text(FindHighlight.apply(AttributedString(text), query: findQuery))
+        Group {
+            if text.hasPrefix("/"), findQuery.isEmpty {
+                slashCommandText(text)
+            } else {
+                Text(FindHighlight.apply(AttributedString(text), query: findQuery))
+            }
+        }
             .textSelection(.enabled)
             .lineSpacing(2)
             .padding(.horizontal, 14)
@@ -52,12 +129,14 @@ private struct AssistantMessage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(AssistantBlock.parse(text).enumerated()), id: \.offset) { _, block in
+            let (prose, summary) = AssistantSummary.split(text)
+            ForEach(Array(AssistantBlock.parse(prose).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .markdown(let text): MarkdownText(text: text)
                 case .thinking(let text, _): ThinkingBlock(text: text)
                 }
             }
+            if let summary { SummaryCard(summary: summary) }
         }
     }
 }

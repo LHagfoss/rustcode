@@ -2,41 +2,93 @@ import RustCodeKit
 import SwiftUI
 
 /// Assistant text. Blocks come from `MarkdownBlock`; inline styling from
-/// `AttributedString(markdown:)`.
+/// `AttributedString(markdown:)`. Consecutive prose blocks (paragraphs, headings,
+/// list items, quotes) render as one selectable text, so a drag can select across
+/// them; code blocks, tables and rules stand on their own.
 struct MarkdownText: View {
     let text: String
     @Environment(\.findQuery) private var findQuery
 
+    private enum Segment {
+        case prose([MarkdownBlock])
+        case block(MarkdownBlock)
+    }
+
+    private var segments: [Segment] {
+        var segments: [Segment] = []
+        for block in MarkdownBlock.parse(text) {
+            switch block {
+            case .paragraph, .heading, .listItem, .quote:
+                if case .prose(let blocks) = segments.last {
+                    segments[segments.count - 1] = .prose(blocks + [block])
+                } else {
+                    segments.append(.prose([block]))
+                }
+            default:
+                segments.append(.block(block))
+            }
+        }
+        return segments
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
-                view(for: block)
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .prose(let blocks):
+                    Text(prose(blocks)).lineSpacing(2)
+                case .block(let block):
+                    view(for: block)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
     }
 
+    /// One attributed string for a run of prose blocks. Blank lines between
+    /// blocks are set small, so blocks sit about as far apart as the stack spacing.
+    private func prose(_ blocks: [MarkdownBlock]) -> AttributedString {
+        var result = AttributedString()
+        var previous: MarkdownBlock?
+        for block in blocks {
+            if let previous {
+                var gap = AttributedString("\n")
+                if !(previous.isListItem && block.isListItem) {
+                    var spacer = AttributedString("\n")
+                    spacer.font = .system(size: 5)
+                    gap += spacer
+                }
+                result += gap
+            }
+            switch block {
+            case .paragraph(let text):
+                result += highlighted(text)
+            case .heading(let level, let text):
+                var heading = highlighted(text)
+                heading.font = level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline
+                result += heading
+            case .listItem(let marker, let text):
+                var bullet = AttributedString(marker + " ")
+                bullet.foregroundColor = .secondary
+                result += bullet + highlighted(text)
+            case .quote(let text):
+                var bar = AttributedString("▍ ")
+                bar.foregroundColor = Color.secondary.opacity(0.5)
+                var quote = highlighted(text)
+                quote.foregroundColor = .secondary
+                result += bar + quote
+            default:
+                break
+            }
+            previous = block
+        }
+        return result
+    }
+
     @ViewBuilder
     private func view(for block: MarkdownBlock) -> some View {
         switch block {
-        case .paragraph(let text):
-            Text(highlighted(text)).lineSpacing(2)
-        case .heading(let level, let text):
-            Text(highlighted(text))
-                .font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
-                .padding(.top, 4)
-                .accessibilityAddTraits(.isHeader)
-        case .listItem(let marker, let text):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(marker).foregroundStyle(.secondary).monospacedDigit()
-                Text(highlighted(text)).lineSpacing(2)
-            }
-        case .quote(let text):
-            Text(highlighted(text))
-                .foregroundStyle(.secondary)
-                .padding(.leading, 12)
-                .overlay(alignment: .leading) { Capsule().fill(.quaternary).frame(width: 3) }
         case .code(let language, let text):
             CodeBlock(language: language, text: text)
         case .table(let headers, let rows):
@@ -61,6 +113,8 @@ struct MarkdownText: View {
             .background(.fill.quaternary, in: .rect(cornerRadius: 12))
         case .rule:
             Divider().padding(.vertical, 4)
+        default:
+            EmptyView()
         }
     }
 
@@ -137,5 +191,12 @@ enum FindHighlight {
             searchStart = range.upperBound
         }
         return text
+    }
+}
+
+private extension MarkdownBlock {
+    var isListItem: Bool {
+        if case .listItem = self { return true }
+        return false
     }
 }
