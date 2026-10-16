@@ -113,6 +113,8 @@ struct MarkdownText: View {
             .background(.fill.quaternary, in: .rect(cornerRadius: 12))
         case .rule:
             Divider().padding(.vertical, 4)
+        case .image(let alt, let url):
+            InlineImage(url: url, alt: alt)
         default:
             EmptyView()
         }

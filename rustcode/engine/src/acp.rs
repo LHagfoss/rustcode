@@ -7,11 +7,12 @@ mod session;
 mod streaming;
 
 pub(crate) use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse,
+    AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock,
     InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse,
-    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionCapabilities, SessionCloseCapabilities, SessionInfo, SessionInfoUpdate,
-    SessionListCapabilities, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
+    PromptCapabilities, PromptRequest, PromptResponse, SessionCapabilities,
+    SessionCloseCapabilities, SessionInfo, SessionInfoUpdate, SessionListCapabilities,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse,
 };
 #[cfg(test)]
@@ -29,7 +30,7 @@ use tokio::sync::Mutex;
 pub(crate) use config::{build_session_config_options, handle_set_config_option};
 #[cfg(test)]
 pub(crate) use permissions::{ApprovalRequirement, approval_requirement};
-pub(crate) use prompt::prompt_text;
+pub(crate) use prompt::prompt_input;
 pub(crate) use session::{AcpSession, KnownTaskIds, SessionTurnState, Sessions, new_registry};
 #[cfg(test)]
 pub(crate) use streaming::{AcpEventStream, acp_stop_reason};
@@ -43,6 +44,7 @@ fn valid_acp_session_id(session_id: &str) -> bool {
 fn server_capabilities() -> AgentCapabilities {
     AgentCapabilities::new()
         .load_session(true)
+        .prompt_capabilities(PromptCapabilities::new().image(true))
         .session_capabilities(
             SessionCapabilities::new()
                 .list(SessionListCapabilities::new())
@@ -833,7 +835,6 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: PromptRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
-                    let text = prompt_text(&request.prompt);
                     let session = server
                         .sessions
                         .lock()
@@ -863,6 +864,21 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         return Err(agent_client_protocol::Error::invalid_params()
                             .data(format!("unknown ACP session: {session_id}")));
                     };
+                    let has_images = request
+                        .prompt
+                        .iter()
+                        .any(|block| matches!(block, ContentBlock::Image(_)));
+                    if has_images {
+                        if let Some(message) = state.lock().await.image_support_error() {
+                            return Err(agent_client_protocol::Error::invalid_params()
+                                .data(message.to_string()));
+                        }
+                    }
+                    let text = prompt_input(&request.prompt)
+                        .map_err(|message| {
+                            agent_client_protocol::Error::invalid_params().data(message)
+                        })?
+                        .text;
 
                     // Request handlers run on ACP's dispatch loop. A model turn can
                     // perform many network and tool operations, so awaiting it here
@@ -1025,7 +1041,10 @@ mod tests {
             ContentBlock::Text(TextContent::new(" and explain it")),
         ];
 
-        assert_eq!(prompt_text(&prompt), "inspect the project and explain it");
+        assert_eq!(
+            prompt_input(&prompt).unwrap().text,
+            "inspect the project and explain it"
+        );
     }
 
     #[test]
@@ -1048,6 +1067,7 @@ mod tests {
         assert_eq!(capabilities["loadSession"], true);
         assert!(capabilities["sessionCapabilities"]["list"].is_object());
         assert!(capabilities["sessionCapabilities"]["close"].is_object());
+        assert_eq!(capabilities["promptCapabilities"]["image"], true);
     }
 
     #[test]

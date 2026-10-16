@@ -103,9 +103,9 @@ private struct SessionSidebar: View {
                 }
             }
             .font(.callout)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 10))
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .glassSurface(in: .capsule)
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
@@ -322,30 +322,20 @@ struct RenameSheet: View {
     }
 }
 
-/// "All" or "Project": which chats the sidebar lists.
+/// "All" or "Project": which chats the sidebar lists. The native segmented
+/// control, which is Liquid Glass on macOS 26.
 private struct ScopeToggle: View {
     @Binding var showsAll: Bool
 
     var body: some View {
-        HStack(spacing: 0) {
-            segment("All", isOn: showsAll) { showsAll = true }
-            segment("Project", isOn: !showsAll) { showsAll = false }
+        Picker("Chats", selection: $showsAll) {
+            Text("All").tag(true)
+            Text("Project").tag(false)
         }
-        .padding(2)
-        .background(Color.primary.opacity(0.06), in: .capsule)
-    }
-
-    private func segment(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(isOn ? .primary : .secondary)
-                .padding(.horizontal, 9)
-                .frame(height: 20)
-                .background(isOn ? Color.primary.opacity(0.1) : .clear, in: .capsule)
-                .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
     }
 }
 
@@ -626,7 +616,7 @@ private struct FindBar: View {
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .frame(height: 38)
-        .floatingSurface(in: .rect(cornerRadius: 14))
+        .glassSurface(in: .capsule)
         .frame(maxWidth: 560)
         .padding(.horizontal, 28)
         .padding(.bottom, 8)
@@ -681,14 +671,16 @@ private struct Composer: View {
     @ObservedObject var model: DesktopModel
     @FocusState private var focused: Bool
     @State private var isDropTarget = false
+    @State private var pasteMonitor: Any?
 
     private var canSend: Bool {
         !model.busy && (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !model.attachments.isEmpty || model.draftCommand != nil)
+            || !model.attachments.isEmpty || !model.images.isEmpty || model.draftCommand != nil)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !model.images.isEmpty { imageChips }
             if !model.attachments.isEmpty { attachmentChips }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if let chip = model.draftCommand {
@@ -760,7 +752,7 @@ private struct Composer: View {
             }
         }
         .padding(10)
-        .glassSurface(in: .rect(cornerRadius: 22), interactive: true)
+        .glassSurface(in: .rect(cornerRadius: 22))
         // A click anywhere on the composer but its buttons puts the cursor in it.
         .contentShape(.rect(cornerRadius: 22))
         .onTapGesture { focused = true }
@@ -774,7 +766,37 @@ private struct Composer: View {
             model.attach(files)
             return !files.isEmpty
         } isTargeted: { isDropTarget = $0 }
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            installPasteMonitor()
+        }
+        .onDisappear {
+            if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
+            pasteMonitor = nil
+        }
+    }
+
+    /// The text field pastes text only, so ⌘V with images on the pasteboard is
+    /// caught before it and the images are attached instead.
+    private func installPasteMonitor() {
+        guard pasteMonitor == nil else { return }
+        pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [model] event in
+            guard focused, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  event.charactersIgnoringModifiers == "v", model.pasteImages() else { return event }
+            return nil
+        }
+    }
+
+    private var imageChips: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(model.images) { image in
+                    ImageChip(image: image) { model.images.removeAll { $0.id == image.id } }
+                }
+            }
+            .padding(.top, 2)
+        }
+        .scrollIndicators(.never)
     }
 
     private func toggle(_ next: ComposerPanel) {
@@ -974,6 +996,7 @@ struct AddPanel: View {
     private var items: [(title: String, image: String, run: () -> Void)] {
         [
             ("Attach Files or Folders…", "paperclip", { model.chooseAttachments() }),
+            ("Attach Image…", "photo", { model.chooseImages() }),
             ("New Chat", "square.and.pencil", { Task { await model.newSession() } }),
             ("Choose Project…", "folder", { model.chooseWorkspace() }),
         ]
@@ -982,7 +1005,7 @@ struct AddPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                if index == 1 { Divider().padding(.vertical, 4).padding(.horizontal, 10).opacity(0.5) }
+                if index == 2 { Divider().padding(.vertical, 4).padding(.horizontal, 10).opacity(0.5) }
                 PopoverRow(item.title, systemImage: item.image, isHighlighted: index == highlighted) { run(index) }
             }
         }

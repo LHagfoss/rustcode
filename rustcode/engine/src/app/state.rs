@@ -1775,6 +1775,37 @@ impl AppState {
             })
     }
 
+    /// Why an image prompt cannot be answered with the current model setup, or
+    /// `None` when the main model or a usable `vision_model` can see images.
+    pub fn image_support_error(&self) -> Option<&'static str> {
+        if self
+            .active_model_profile()
+            .is_some_and(|profile| profile.image_input_supported() == Some(true))
+        {
+            return None;
+        }
+        let Some(fallback) = self.vision_model_profile() else {
+            return Some(
+                "Select a vision-capable model or configure vision_model on the Mac before attaching images",
+            );
+        };
+        if fallback.image_input_supported() == Some(false) {
+            return Some(
+                "The configured vision_model does not support images; choose a vision-capable profile on the Mac",
+            );
+        }
+        if fallback
+            .credential
+            .as_ref()
+            .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+        {
+            return Some(
+                "Use the vision-capable ChatGPT model as the main model, or configure an API-key vision_model on the Mac",
+            );
+        }
+        None
+    }
+
     pub fn get_history_token_budget(&self) -> u32 {
         self.active_context_budget().history_tokens
     }

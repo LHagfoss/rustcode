@@ -160,14 +160,66 @@ impl BackgroundTurnTasks {
     }
 }
 
-pub(crate) fn prompt_text(prompt: &[ContentBlock]) -> String {
-    prompt
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect()
+/// Largest base64 payload accepted before decoding: 20 MiB of image bytes.
+const MAX_ENCODED_IMAGE_LEN: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
+
+/// The user turn built from an ACP prompt: text blocks verbatim, each image
+/// saved as an attachment and referenced by a `![image](file://…)` marker in
+/// block order, the same marker the TUI and the remote client send.
+#[derive(Debug)]
+pub(crate) struct PromptInput {
+    pub(crate) text: String,
+    pub(crate) has_images: bool,
+}
+
+pub(crate) fn prompt_input(prompt: &[ContentBlock]) -> Result<PromptInput, String> {
+    prompt_input_with(prompt, |bytes, extension| {
+        crate::controller::save_image_attachment(bytes, extension)
+    })
+}
+
+fn prompt_input_with(
+    prompt: &[ContentBlock],
+    mut save_image: impl FnMut(&[u8], &str) -> std::io::Result<PathBuf>,
+) -> Result<PromptInput, String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let mut text = String::new();
+    let mut has_images = false;
+    for block in prompt {
+        match block {
+            ContentBlock::Text(block) => text.push_str(&block.text),
+            ContentBlock::Image(image) => {
+                let extension = match image.mime_type.to_ascii_lowercase().as_str() {
+                    "image/png" => "png",
+                    "image/jpeg" | "image/jpg" => "jpg",
+                    "image/gif" => "gif",
+                    "image/webp" => "webp",
+                    other => {
+                        return Err(format!(
+                            "unsupported image type {other}; use PNG, JPEG, GIF or WebP"
+                        ));
+                    }
+                };
+                if image.data.len() > MAX_ENCODED_IMAGE_LEN {
+                    return Err("images must be 20 MiB or smaller".into());
+                }
+                let bytes = STANDARD
+                    .decode(image.data.trim())
+                    .map_err(|error| format!("image data is not valid base64: {error}"))?;
+                let path = save_image(&bytes, extension)
+                    .map_err(|error| format!("could not save the image: {error}"))?;
+                if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+                    text.push('\n');
+                }
+                text.push_str(&format!("![image](file://{})", path.display()));
+                text.push('\n');
+                has_images = true;
+            }
+            _ => {}
+        }
+    }
+    Ok(PromptInput { text, has_images })
 }
 
 pub(crate) async fn run_prompt(
@@ -556,10 +608,75 @@ fn ask_pending_questions(
 
 #[cfg(test)]
 mod tests {
-    use super::{BackgroundTurnTasks, SessionTitleTracker, drain_task_events};
+    use super::{BackgroundTurnTasks, SessionTitleTracker, drain_task_events, prompt_input_with};
+    use agent_client_protocol::schema::v1::{ContentBlock, ImageContent, TextContent};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use rustcode_tasks::TaskEvent;
     use std::collections::{HashSet, VecDeque};
+    use std::path::PathBuf;
     use std::sync::Arc;
+
+    fn image(bytes: &[u8], mime: &str) -> ContentBlock {
+        ContentBlock::Image(ImageContent::new(STANDARD.encode(bytes), mime))
+    }
+
+    #[test]
+    fn image_blocks_become_markers_in_block_order() {
+        let mut saved = Vec::new();
+        let prompt = vec![
+            ContentBlock::Text(TextContent::new("compare")),
+            image(b"png", "image/png"),
+            ContentBlock::Text(TextContent::new("with")),
+            image(b"jpg", "image/JPEG"),
+            image(b"gif", "image/gif"),
+            image(b"webp", "image/webp"),
+        ];
+        let input = prompt_input_with(&prompt, |bytes, extension| {
+            saved.push((bytes.to_vec(), extension.to_string()));
+            Ok(PathBuf::from(format!("/a/{}.{extension}", saved.len())))
+        })
+        .unwrap();
+        assert!(input.has_images);
+        assert_eq!(
+            input.text,
+            "compare\n![image](file:///a/1.png)\nwith\n![image](file:///a/2.jpg)\n\
+             ![image](file:///a/3.gif)\n![image](file:///a/4.webp)\n"
+        );
+        assert_eq!(saved[1], (b"jpg".to_vec(), "jpg".to_string()));
+    }
+
+    #[test]
+    fn text_only_prompt_has_no_images() {
+        let prompt = vec![ContentBlock::Text(TextContent::new("hi"))];
+        let input = prompt_input_with(&prompt, |_, _| unreachable!()).unwrap();
+        assert_eq!(input.text, "hi");
+        assert!(!input.has_images);
+    }
+
+    #[test]
+    fn rejects_unsupported_oversized_and_malformed_images() {
+        let save = |_: &[u8], _: &str| -> std::io::Result<PathBuf> { unreachable!() };
+        assert!(
+            prompt_input_with(&[image(b"x", "image/tiff")], save)
+                .unwrap_err()
+                .contains("unsupported image type")
+        );
+        let huge = ContentBlock::Image(ImageContent::new(
+            "A".repeat(super::MAX_ENCODED_IMAGE_LEN + 4),
+            "image/png",
+        ));
+        assert!(
+            prompt_input_with(&[huge], save)
+                .unwrap_err()
+                .contains("20 MiB")
+        );
+        let malformed = ContentBlock::Image(ImageContent::new("not base64!", "image/png"));
+        assert!(
+            prompt_input_with(&[malformed], save)
+                .unwrap_err()
+                .contains("base64")
+        );
+    }
 
     #[test]
     fn title_tracker_emits_protocol_updates_when_persisted_title_changes() {

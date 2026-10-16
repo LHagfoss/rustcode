@@ -810,35 +810,10 @@ fn image_error(error: anyhow::Error) -> RemoteError {
 
 #[cfg(unix)]
 fn ensure_image_support(state: &AppState) -> Result<(), RemoteError> {
-    if state
-        .active_model_profile()
-        .is_some_and(|profile| profile.image_input_supported() == Some(true))
-    {
-        return Ok(());
+    match state.image_support_error() {
+        Some(message) => Err(error(RemoteErrorCode::UnsupportedOperation, message)),
+        None => Ok(()),
     }
-    if let Some(fallback) = state.vision_model_profile() {
-        if fallback.image_input_supported() == Some(false) {
-            return Err(error(
-                RemoteErrorCode::UnsupportedOperation,
-                "The configured vision_model does not support images; choose a vision-capable profile on the Mac",
-            ));
-        }
-        if fallback
-            .credential
-            .as_ref()
-            .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
-        {
-            return Err(error(
-                RemoteErrorCode::UnsupportedOperation,
-                "Use the vision-capable ChatGPT model as the main model, or configure an API-key vision_model on the Mac",
-            ));
-        }
-        return Ok(());
-    }
-    Err(error(
-        RemoteErrorCode::UnsupportedOperation,
-        "Select a vision-capable model or configure vision_model on the Mac before attaching images",
-    ))
 }
 
 async fn accept_prompt(
