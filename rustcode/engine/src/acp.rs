@@ -115,13 +115,8 @@ fn session_info(
 }
 
 fn session_file_is_contained(path: &std::path::Path) -> bool {
-    let Some(root) = crate::config::get_config_dir()
-        .map(|path| path.join(rustcode_session::SESSIONS_DIR))
-        .and_then(|path| std::fs::canonicalize(path).ok())
-    else {
-        return false;
-    };
-    std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(root))
+    crate::config::get_config_dir()
+        .is_some_and(|config| crate::config::session_file_in_store(&config, path))
 }
 
 fn acp_list_sessions(

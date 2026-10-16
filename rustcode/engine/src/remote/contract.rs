@@ -213,6 +213,7 @@ fn request(
 }
 
 const SESSION: (&str, u64) = ("5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44", 3);
+const SAVED_SESSION: &str = "20260714-091502-3fa2c1";
 const GATEWAY: &str = "gw-8e1f4b7a";
 const INSTANCE: &str = "inst-41c07d92";
 const TURN: &str = "turn:48213:12";
@@ -328,6 +329,28 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
                 None,
                 RemoteOperation::RequestShare {
                     session_id: SESSION.0.to_owned(),
+                },
+            ),
+        ),
+        (
+            "list_saved_sessions",
+            request(
+                "req-saved",
+                None,
+                RemoteOperation::ListSavedSessions {
+                    cursor: Some(SAVED_SESSION.to_owned()),
+                    limit: Some(30),
+                    query: Some("parser".to_owned()),
+                },
+            ),
+        ),
+        (
+            "resume_session",
+            request(
+                "req-resume",
+                None,
+                RemoteOperation::ResumeSession {
+                    session_id: SAVED_SESSION.to_owned(),
                 },
             ),
         ),
@@ -788,6 +811,48 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             },
         ),
         response(
+            "session_resumed",
+            "req-resume",
+            Some(ReceiptState::Applied),
+            RemoteResult::SessionResumed {
+                session: golden_session_info(),
+            },
+        ),
+        response(
+            "saved_sessions",
+            "req-saved",
+            None,
+            RemoteResult::SavedSessions {
+                sessions: vec![
+                    RemoteSavedSession {
+                        session_id: SAVED_SESSION.to_owned(),
+                        title: "Fix the parser".to_owned(),
+                        workspace: Some("/Users/example/projects/parser".to_owned()),
+                        updated_at: Some("2026-07-14T09:40:12Z".to_owned()),
+                        message_count: 42,
+                        state: SavedSessionState::Saved,
+                    },
+                    RemoteSavedSession {
+                        session_id: SESSION.0.to_owned(),
+                        title: "Refactor the session store".to_owned(),
+                        workspace: Some("/Users/example/projects/rustcode".to_owned()),
+                        updated_at: Some("2026-07-14T08:02:55Z".to_owned()),
+                        message_count: 118,
+                        state: SavedSessionState::Shared,
+                    },
+                    RemoteSavedSession {
+                        session_id: "20260713-171233-9b0e44".to_owned(),
+                        title: "Untitled".to_owned(),
+                        workspace: None,
+                        updated_at: None,
+                        message_count: 3,
+                        state: SavedSessionState::Open,
+                    },
+                ],
+                next_cursor: Some("20260713-171233-9b0e44".to_owned()),
+            },
+        ),
+        response(
             "share_request_sent",
             "req-0020",
             Some(ReceiptState::Applied),
@@ -820,6 +885,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                 instance_id: Some(INSTANCE.to_owned()),
                 sessions: vec![golden_session_info()],
                 subscribed: false,
+                capabilities: vec![host_capability::SAVED_SESSIONS.to_owned()],
             },
         ),
         response(

@@ -311,7 +311,7 @@
         },
         {
           "const": "busy",
-          "description": "`submit_prompt` while a turn is running.",
+          "description": "`submit_prompt` while a turn is running, or `resume_session` for a\nsession that a terminal or session owner already holds.",
           "type": "string"
         },
         {
@@ -1114,6 +1114,50 @@
           "type": "object"
         },
         {
+          "description": "A saved session is shared again; attach to it.",
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/RemoteSessionInfo"
+            },
+            "type": {
+              "const": "session_resumed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One page of `list_saved_sessions`.",
+          "properties": {
+            "next_cursor": {
+              "description": "Pass as `cursor` for the next page; absent on the last one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sessions": {
+              "items": {
+                "$ref": "#/$defs/RemoteSavedSession"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "saved_sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sessions"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/RemoteError",
           "properties": {
             "type": {
@@ -1128,6 +1172,13 @@
         },
         {
           "properties": {
+            "capabilities": {
+              "description": "Optional host-wide operations this gateway implements, such as\n`saved_sessions`. Absent from gateways that implement none.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "gateway_id": {
               "type": "string"
             },
@@ -1473,6 +1524,46 @@
           "type": "object"
         }
       ]
+    },
+    "RemoteSavedSession": {
+      "description": "One saved session as `list_saved_sessions` reports it.",
+      "properties": {
+        "message_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SavedSessionState"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "RFC 3339 time the transcript was last written.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "description": "The recorded working directory. Absent for a session that predates\nworkspace recording; such a session cannot be resumed from a device.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "title",
+        "message_count",
+        "state"
+      ],
+      "type": "object"
     },
     "RemoteSessionInfo": {
       "properties": {
@@ -1977,6 +2068,25 @@
         {
           "const": "history_changed",
           "description": "The transcript was rewritten; history cursors are invalid.",
+          "type": "string"
+        }
+      ]
+    },
+    "SavedSessionState": {
+      "oneOf": [
+        {
+          "const": "saved",
+          "description": "No process holds it: `resume_session` opens it.",
+          "type": "string"
+        },
+        {
+          "const": "shared",
+          "description": "Shared and in the live list: attach to it.",
+          "type": "string"
+        },
+        {
+          "const": "open",
+          "description": "A terminal or session owner holds it without sharing it. It cannot\nbe resumed; a terminal can be asked with `request_share`.",
           "type": "string"
         }
       ]

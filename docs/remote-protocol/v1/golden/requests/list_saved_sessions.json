@@ -1,0 +1,10 @@
+{
+  "protocol_version": 1,
+  "request_id": "req-saved",
+  "operation": {
+    "type": "list_saved_sessions",
+    "cursor": "20260714-091502-3fa2c1",
+    "limit": 30,
+    "query": "parser"
+  }
+}

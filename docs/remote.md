@@ -1,8 +1,11 @@
 # Remote sessions
 
 Share a running terminal session with a paired device, watch it live and
-continue it from there. The terminal keeps running the session and must stay
-open; the device is a remote control. macOS and Linux only.
+continue it from there. A shared terminal session keeps running in its
+terminal, which must stay open; the device is a remote control. A device can
+also start a new session, or reopen any saved one, without a terminal (see
+[Sessions started from a device](#sessions-started-from-a-device)). macOS and
+Linux only.
 
 Three pieces are involved:
 
@@ -281,6 +284,23 @@ restarts, and ends when it is killed or the machine restarts.
   register with the next gateway. `rustcode remote status` lists owners that
   are running without being shared under `idle owners`.
 
+### Saved sessions
+
+A device also sees the sessions saved on the host that are not shared right
+now, newest first and searchable (`list_saved_sessions`), and can reopen one
+(`resume_session`). Reopening works exactly like starting a new session: the
+gateway starts a session owner on the saved session, in the workspace
+recorded with it, and the device attaches once it has registered. The owner
+picks up the transcript, the session's settings and its task worktree. The
+same receipt, retry, 20-second start limit and owner log rules apply.
+
+Only sessions in the host's session store can be reopened, by their full ID.
+A session that a terminal or another owner holds without sharing it is
+refused instead of being opened twice, and so is one with no recorded
+workspace or whose workspace directory no longer exists: reopen those in a
+terminal with `rustcode --resume`. The gateway advertises this with the
+`saved_sessions` capability; an older gateway lists only shared sessions.
+
 To continue a device-started session in a terminal, run
 `/adopt <session-id>` there: it asks the detached owner to exit (gracefully,
 saving history first), waits for its lease to release, then opens the session
@@ -358,7 +378,8 @@ gateway.
 
 - No TLS; see the warning at the top.
 - The terminal owns execution. Closing it ends the session's availability. A
-  session started from a device is owned by its session owner process instead.
+  session started or reopened from a device is owned by its session owner
+  process instead.
 - No push notifications.
 - Pairing details show the challenge's lifetime but do not count it down.
 - Access is per host: a paired device sees every session open in a terminal.

@@ -23,6 +23,9 @@
         "health": "live"
       }
     ],
-    "subscribed": false
+    "subscribed": false,
+    "capabilities": [
+      "saved_sessions"
+    ]
   }
 }

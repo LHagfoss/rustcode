@@ -1,0 +1,33 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-saved",
+  "result": {
+    "type": "saved_sessions",
+    "sessions": [
+      {
+        "session_id": "20260714-091502-3fa2c1",
+        "title": "Fix the parser",
+        "workspace": "/Users/example/projects/parser",
+        "updated_at": "2026-07-14T09:40:12Z",
+        "message_count": 42,
+        "state": "saved"
+      },
+      {
+        "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+        "title": "Refactor the session store",
+        "workspace": "/Users/example/projects/rustcode",
+        "updated_at": "2026-07-14T08:02:55Z",
+        "message_count": 118,
+        "state": "shared"
+      },
+      {
+        "session_id": "20260713-171233-9b0e44",
+        "title": "Untitled",
+        "message_count": 3,
+        "state": "open"
+      }
+    ],
+    "next_cursor": "20260713-171233-9b0e44"
+  }
+}

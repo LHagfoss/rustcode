@@ -653,6 +653,16 @@ pub fn list_sessions_page(
         .unwrap_or(Ok((Vec::new(), None)))
 }
 
+/// Whether `path` resolves inside the session store of `config_dir`. Session
+/// listings that a remote client can act on (ACP, remote devices) refuse any
+/// other file, even one the store itself would follow.
+pub fn session_file_in_store(config_dir: &Path, path: &Path) -> bool {
+    let Ok(root) = std::fs::canonicalize(config_dir.join(rustcode_session::SESSIONS_DIR)) else {
+        return false;
+    };
+    std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(root))
+}
+
 pub fn load_session_by_id(session_id: &str) -> Option<(SessionMeta, Vec<ChatMessage>)> {
     let session_store = store()?;
     let meta = session_store.session_meta_by_id(session_id)?;
