@@ -7,7 +7,7 @@ sharing and revoke a device. The wire contract the iOS app is built against is
 [remote-protocol/README.md](remote-protocol/README.md), and the design behind
 both is
 [`Live terminal sessions from an iOS client`](architecture/mobile-remote-plan.md).
-The app itself lives in its own repository.
+The app itself lives in [`ios/`](../ios/README.md).
 
 Plain LAN traffic to the gateway is authenticated but not encrypted; NetBird is
 the recommended way to reach it from a phone.

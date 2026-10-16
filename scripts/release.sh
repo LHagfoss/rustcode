@@ -497,6 +497,30 @@ phase_update_versions() {
     if [[ "$crate_count" -eq 0 ]]; then
         die "Could not discover any workspace crate manifests."
     fi
+
+    # The iOS app ships in the same release under the same version. Its build
+    # number is derived from the version so it always increases.
+    local pbxproj="$REPO_ROOT/$IOS_PROJECT"
+    [[ -f "$pbxproj" ]] || die "iOS project not found: $pbxproj"
+    tmp="$(mktemp)"
+    sed -e 's/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = '"$VERSION"';/' \
+        -e 's/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = '"$(ios_build_number "$VERSION")"';/' \
+        "$pbxproj" > "$tmp"
+    if $DRY_RUN; then
+        info "[dry-run] mv $tmp $pbxproj"
+        rm -f -- "$tmp"
+    else
+        mv -- "$tmp" "$pbxproj"
+    fi
+}
+
+IOS_PROJECT="ios/RustCode.xcodeproj/project.pbxproj"
+
+# 0.72.3 -> 72003: monotonic across releases, as CFBundleVersion must be.
+ios_build_number() {
+    local core="${1%%-*}" major minor patch
+    IFS=. read -r major minor patch <<< "$core"
+    echo $((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))
 }
 
 verify_workspace_versions() {
@@ -658,7 +682,7 @@ To resume: fix the reported issues and re-run: scripts/release.sh --version $VER
 # Files the release is allowed to touch. Everything else must be committed
 # or stashed before releasing, and is never swept into the release commit.
 release_files() {
-    printf '%s\n' "Cargo.toml" "Cargo.lock" "CHANGELOG.md"
+    printf '%s\n' "Cargo.toml" "Cargo.lock" "CHANGELOG.md" "$IOS_PROJECT"
     local crate_path
     while IFS= read -r crate_path; do
         [[ -z "$crate_path" ]] && continue
@@ -1060,6 +1084,8 @@ phase_verify_release() {
         "rustcode-linux-x86_64.tar.gz"
         "rustcode-macos-aarch64.tar.gz"
         "rustcode-macos-aarch64-swift-app.zip"
+        "rustcode-ios-unsigned.xcarchive.zip"
+        "rustcode-ios-simulator.zip"
         "rustcode-windows-x86_64.zip"
         "SHA256SUMS"
     )
@@ -1294,6 +1320,8 @@ run_tests() {
        [[ "$(bump_version 0.51.7 minor)" == "0.52.0" ]] && \
        [[ "$(bump_version 0.51.7 major)" == "1.0.0" ]] && \
        [[ "$(bump_version 1.2.3-rc.1 patch)" == "1.2.4" ]] && \
+       [[ "$(ios_build_number 0.72.3)" == "72003" ]] && \
+       [[ "$(ios_build_number 1.0.0-rc.1)" == "1000000" ]] && \
        ! bump_version 1.2.3 bogus >/dev/null 2>&1; then
         info "  ✓ patch/minor/major bumps correct, pre-release dropped, invalid rejected"
     else

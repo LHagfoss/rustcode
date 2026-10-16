@@ -14,7 +14,7 @@ Three pieces are involved:
 - the **remote gateway**, a small host process that pairs devices, keeps the
   list of shared sessions and routes each device command to the terminal that
   owns the session. It never runs agent turns;
-- the **device** (the iOS app, in its own repository), which speaks the
+- the **device** (the iOS app in [`ios/`](../ios/README.md)), which speaks the
   [remote protocol](remote-protocol/README.md) to the gateway over WebSocket.
 
 The plan this implements is

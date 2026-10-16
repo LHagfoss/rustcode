@@ -189,10 +189,12 @@ serve as the reviewed action. Rate-limit/coalesce deltas without changing text.
 
 ## iOS app
 
-The app lives in a separate private repository (`rustcode_app`), is written in
-Swift with SwiftUI, targets iPhone, and is built and installed from Xcode. It
-needs no paid Apple developer account; a free account re-signs every seven
-days. Nothing in this repository depends on it.
+The app lives in [`ios/`](../../ios/README.md) (until v0.72 the separate
+`rustcode_app` repository), is written in Swift with SwiftUI, targets iPhone,
+and ships in each RustCode release as an unsigned archive that
+`ios/Scripts/install-on-iphone.sh` re-signs locally. It needs no paid Apple
+developer account; a free account re-signs every seven days. Nothing in the
+Rust workspace depends on it.
 
 Structure it as a local Swift package, `RustCodeRemote`, holding the protocol
 types, transport and state, with the SwiftUI app on top, so the package is

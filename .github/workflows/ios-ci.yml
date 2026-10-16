@@ -1,0 +1,44 @@
+name: iOS CI
+
+# The iOS client in ios/ builds without Rust. It runs when its sources, the
+# remote protocol contract it is tested against, or this workflow change.
+on:
+    pull_request:
+        branches: [main]
+        paths:
+            - .github/workflows/ios-ci.yml
+            - ios/**
+            - docs/remote-protocol/**
+    workflow_dispatch:
+
+concurrency:
+    group: ios-ci-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    ios:
+        name: iOS build and test
+        runs-on: macos-26
+        timeout-minutes: 30
+        defaults:
+            run:
+                working-directory: ios
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Test remote client and contract
+              run: swift test --package-path RustCodeRemote
+
+            - name: Test release installers without hardware
+              run: |
+                  python3 tests/test_ios_release_helpers.py
+                  python3 tests/test_github_ios_install.py
+
+            - name: Build iOS Simulator app
+              run: >-
+                  xcodebuild -quiet -project RustCode.xcodeproj -scheme RustCode
+                  -destination 'generic/platform=iOS Simulator'
+                  build CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM=
