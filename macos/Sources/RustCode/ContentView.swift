@@ -475,7 +475,16 @@ private struct SessionRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
+        .onContinuousHover { phase in
+            if case .active = phase { isHovered = true } else { isHovered = false }
+        }
+        // A context menu or a pin that moves the row never reports the pointer
+        // leaving, which left a second row looking selected.
+        .onChange(of: isPinned) { _, _ in isHovered = false }
+        .onChange(of: isSelected) { _, _ in isHovered = false }
+        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
+            isHovered = false
+        }
     }
 
     /// The snippet with every occurrence of the query emphasized.
