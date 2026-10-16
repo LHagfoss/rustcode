@@ -430,6 +430,59 @@
             "session_id"
           ],
           "type": "object"
+        },
+        {
+          "description": "Sessions saved on this host, shared or not, newest first by the time\nthey were started. Requires the `saved_sessions` host capability.",
+          "properties": {
+            "cursor": {
+              "description": "`next_cursor` of the previous page; omit for the first page.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "description": "Page size, 1 to 100; 30 when absent.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "query": {
+              "description": "Case-insensitive text that the title, workspace or session ID must\ncontain.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "list_saved_sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Open a saved session that no process holds: the gateway starts a\nsession owner on it in its recorded workspace, as `create_session`\ndoes for a new one. Answered with `session_resumed` once it is shared.\nRequires the `saved_sessions` host capability.",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "resume_session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
         }
       ]
     },

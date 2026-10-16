@@ -13,6 +13,19 @@ use crate::controller::ApprovalChoice;
 
 pub const REMOTE_PROTOCOL_VERSION: u32 = 1;
 
+/// Host-wide optional operations a gateway implements, advertised in the
+/// `sessions` result. A client offers a feature only when its flag is listed;
+/// an older gateway lists none and answers the operations with
+/// `unsupported_operation`.
+pub mod host_capability {
+    /// `list_saved_sessions` and `resume_session`.
+    pub const SAVED_SESSIONS: &str = "saved_sessions";
+}
+
+/// Default and largest page of `list_saved_sessions`.
+pub const SAVED_SESSIONS_DEFAULT_LIMIT: u32 = 30;
+pub const SAVED_SESSIONS_MAX_LIMIT: u32 = 100;
+
 /// Upper bound for one encoded frame in either direction. Content that does
 /// not fit is truncated with metadata and fetched with `get_content`.
 pub const MAX_REMOTE_FRAME_BYTES: usize = 256 * 1024;
@@ -130,11 +143,32 @@ pub enum RemoteOperation {
     RequestShare {
         session_id: String,
     },
+    /// Sessions saved on this host, shared or not, newest first by the time
+    /// they were started. Requires the `saved_sessions` host capability.
+    ListSavedSessions {
+        /// `next_cursor` of the previous page; omit for the first page.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+        /// Page size, 1 to 100; 30 when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+        /// Case-insensitive text that the title, workspace or session ID must
+        /// contain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+    /// Open a saved session that no process holds: the gateway starts a
+    /// session owner on it in its recorded workspace, as `create_session`
+    /// does for a new one. Answered with `session_resumed` once it is shared.
+    /// Requires the `saved_sessions` host capability.
+    ResumeSession {
+        session_id: String,
+    },
 }
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 20] = [
+    pub const NAMES: [&'static str; 22] = [
         "list_sessions",
         "list_directories",
         "create_session",
@@ -155,6 +189,8 @@ impl RemoteOperation {
         "get_request_status",
         "set_session_settings",
         "request_share",
+        "list_saved_sessions",
+        "resume_session",
     ];
 
     pub fn name(&self) -> &'static str {
@@ -179,6 +215,8 @@ impl RemoteOperation {
             Self::GetRequestStatus { .. } => "get_request_status",
             Self::SetSessionSettings { .. } => "set_session_settings",
             Self::RequestShare { .. } => "request_share",
+            Self::ListSavedSessions { .. } => "list_saved_sessions",
+            Self::ResumeSession { .. } => "resume_session",
         }
     }
 
@@ -193,6 +231,8 @@ impl RemoteOperation {
                 | Self::ListDirectories { .. }
                 | Self::CreateSession { .. }
                 | Self::RequestShare { .. }
+                | Self::ListSavedSessions { .. }
+                | Self::ResumeSession { .. }
         )
     }
 
@@ -213,6 +253,7 @@ impl RemoteOperation {
                 | Self::ResolveApproval { .. }
                 | Self::SetSessionSettings { .. }
                 | Self::RequestShare { .. }
+                | Self::ResumeSession { .. }
         )
     }
 }
@@ -327,6 +368,17 @@ pub enum RemoteResult {
     SessionCreated {
         session: RemoteSessionInfo,
     },
+    /// A saved session is shared again; attach to it.
+    SessionResumed {
+        session: RemoteSessionInfo,
+    },
+    /// One page of `list_saved_sessions`.
+    SavedSessions {
+        sessions: Vec<RemoteSavedSession>,
+        /// Pass as `cursor` for the next page; absent on the last one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_cursor: Option<String>,
+    },
     Error(RemoteError),
     Sessions {
         gateway_id: String,
@@ -336,6 +388,10 @@ pub enum RemoteResult {
         sessions: Vec<RemoteSessionInfo>,
         /// True when `sessions` frames will follow.
         subscribed: bool,
+        /// Optional host-wide operations this gateway implements, such as
+        /// `saved_sessions`. Absent from gateways that implement none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
     },
     /// Authoritative state. Events with `sequence` above
     /// `snapshot.sequence` follow.
@@ -460,7 +516,8 @@ pub enum RemoteErrorCode {
     /// `session_id` or `registration_epoch` no longer names the live
     /// registration.
     StaleSession,
-    /// `submit_prompt` while a turn is running.
+    /// `submit_prompt` while a turn is running, or `resume_session` for a
+    /// session that a terminal or session owner already holds.
     Busy,
     /// `steer` or `queue` while no turn is running.
     NotRunning,
@@ -628,6 +685,34 @@ pub struct RemoteSessionInfo {
     pub activity: SessionActivity,
     pub attention: RemoteAttention,
     pub health: OwnerHealth,
+}
+
+/// One saved session as `list_saved_sessions` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteSavedSession {
+    pub session_id: String,
+    pub title: String,
+    /// The recorded working directory. Absent for a session that predates
+    /// workspace recording; such a session cannot be resumed from a device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// RFC 3339 time the transcript was last written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    pub message_count: u64,
+    pub state: SavedSessionState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedSessionState {
+    /// No process holds it: `resume_session` opens it.
+    Saved,
+    /// Shared and in the live list: attach to it.
+    Shared,
+    /// A terminal or session owner holds it without sharing it. It cannot
+    /// be resumed; a terminal can be asked with `request_share`.
+    Open,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1209,6 +1294,14 @@ mod tests {
                 reasoning_effort: "default".into(),
             },
             RemoteOperation::RequestShare {
+                session_id: String::new(),
+            },
+            RemoteOperation::ListSavedSessions {
+                cursor: None,
+                limit: None,
+                query: None,
+            },
+            RemoteOperation::ResumeSession {
                 session_id: String::new(),
             },
         ];

@@ -35,10 +35,31 @@ impl std::fmt::Display for OwnerStartFailed {
 
 impl std::error::Error for OwnerStartFailed {}
 
+/// A request the gateway turns down before anything is started, with the
+/// code the device is told. Nothing is recorded, so the device may ask again.
+#[derive(Debug)]
+struct Refused(RemoteErrorCode, String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.1)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+fn refused(code: RemoteErrorCode, message: impl Into<String>) -> anyhow::Error {
+    Refused(code, message.into()).into()
+}
+
 /// Whether the owner process of `session_id` is running: it holds its lease
 /// for as long as it lives. The probe takes a free lease for an instant,
 /// which [`owner_state`] rides out.
 pub(crate) fn owner_alive(owners: &Path, session_id: &str) -> bool {
+    // No lease file, no owner: probing would create one for every session asked about.
+    if !owners.join(format!("{session_id}.lock")).exists() {
+        return false;
+    }
     match lock_private_file(owners, &format!("{session_id}.lock"), OWNER_LEASE) {
         Ok(_free) => false,
         Err(error) => is_lock_busy(&error),
@@ -147,6 +168,179 @@ pub fn list_directories(path: Option<&str>) -> Result<RemoteResult> {
     })
 }
 
+/// Longest accepted `query` of `list_saved_sessions`, in bytes.
+const MAX_SAVED_SESSION_QUERY_BYTES: usize = 256;
+/// Longest title reported per saved session, in characters.
+const MAX_SAVED_SESSION_TITLE_CHARS: usize = 200;
+
+/// One page of the host's saved sessions, newest first, each marked with
+/// whether a process holds it. Only ids the store itself lists, with a file
+/// inside the store, are ever reported: the same rule ACP's `session/list`
+/// applies.
+fn list_saved_sessions(
+    config: &Path,
+    state_of: impl Fn(&str) -> SavedSessionState,
+    cursor: Option<&str>,
+    limit: Option<u32>,
+    query: Option<&str>,
+) -> Result<RemoteResult> {
+    let limit = limit.unwrap_or(SAVED_SESSIONS_DEFAULT_LIMIT);
+    if !(1..=SAVED_SESSIONS_MAX_LIMIT).contains(&limit) {
+        return Err(refused(
+            RemoteErrorCode::InvalidRequest,
+            format!("limit must be 1 to {SAVED_SESSIONS_MAX_LIMIT}"),
+        ));
+    }
+    if cursor.is_some_and(|cursor| !rustcode_session::valid_session_id(cursor)) {
+        return Err(refused(
+            RemoteErrorCode::InvalidRequest,
+            "the cursor is not one this host issued",
+        ));
+    }
+    let query = query
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .map(|query| {
+            if query.len() > MAX_SAVED_SESSION_QUERY_BYTES {
+                return Err(refused(
+                    RemoteErrorCode::InvalidRequest,
+                    format!("query is longer than {MAX_SAVED_SESSION_QUERY_BYTES} bytes"),
+                ));
+            }
+            Ok(query.to_lowercase())
+        })
+        .transpose()?;
+    let store = rustcode_session::SessionStore::new(config);
+    let (metas, mut next_cursor) = store
+        .list_sessions_page(
+            cursor,
+            limit as usize,
+            &rustcode_session::SessionScope::All,
+            |meta| {
+                let Some(id) = rustcode_session::SessionStore::session_id_from_path(&meta.path)
+                else {
+                    return false;
+                };
+                if !rustcode_session::valid_session_id(&id)
+                    || !crate::config::session_file_in_store(config, &meta.path)
+                {
+                    return false;
+                }
+                query.as_deref().is_none_or(|query| {
+                    meta.title.to_lowercase().contains(query)
+                        || id.contains(query)
+                        || meta
+                            .workspace_cwd
+                            .as_ref()
+                            .is_some_and(|cwd| cwd.to_string_lossy().to_lowercase().contains(query))
+                })
+            },
+        )
+        .map_err(|()| {
+            refused(
+                RemoteErrorCode::InvalidRequest,
+                "unknown or stale cursor; list again from the first page",
+            )
+        })?;
+    let mut sessions = Vec::with_capacity(metas.len());
+    let mut bytes = 0usize;
+    for meta in metas {
+        let Some(session_id) = rustcode_session::SessionStore::session_id_from_path(&meta.path)
+        else {
+            continue;
+        };
+        let updated_at = std::fs::metadata(&meta.path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .map(|modified| {
+                chrono::DateTime::<chrono::Utc>::from(modified)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            });
+        let session = RemoteSavedSession {
+            state: state_of(&session_id),
+            title: meta
+                .title
+                .chars()
+                .take(MAX_SAVED_SESSION_TITLE_CHARS)
+                .collect(),
+            workspace: meta
+                .workspace_cwd
+                .as_ref()
+                .map(|cwd| cwd.to_string_lossy().into_owned()),
+            updated_at,
+            message_count: meta.message_count as u64,
+            session_id,
+        };
+        bytes += serde_json::to_vec(&session)?.len() + 1;
+        // Long workspace paths must not push the page past one frame: end
+        // the page early and continue after the last session that fits.
+        if bytes > MAX_REMOTE_FRAME_BYTES / 2 {
+            next_cursor = sessions
+                .last()
+                .map(|last: &RemoteSavedSession| last.session_id.clone());
+            break;
+        }
+        sessions.push(session);
+    }
+    Ok(RemoteResult::SavedSessions {
+        sessions,
+        next_cursor,
+    })
+}
+
+/// The directory a saved session's owner runs in: its recorded workspace,
+/// which must still exist. Only a session the store lists, with its file
+/// inside the store, is accepted.
+fn saved_session_directory(config: &Path, session_id: &str) -> Result<PathBuf> {
+    if !rustcode_session::valid_session_id(session_id) {
+        return Err(refused(
+            RemoteErrorCode::InvalidRequest,
+            "not a session identifier",
+        ));
+    }
+    let store = rustcode_session::SessionStore::new(config);
+    let not_found = || {
+        refused(
+            RemoteErrorCode::NotFound,
+            "no saved session has this identifier",
+        )
+    };
+    let meta = store.session_meta_by_id(session_id).ok_or_else(not_found)?;
+    if !crate::config::session_file_in_store(config, &meta.path) {
+        return Err(not_found());
+    }
+    let cwd = store
+        .load_session_workspace(session_id)
+        .map(|workspace| workspace.cwd)
+        .or(meta.workspace_cwd)
+        .ok_or_else(|| {
+            refused(
+                RemoteErrorCode::InvalidRequest,
+                "this session has no recorded workspace; resume it in a terminal",
+            )
+        })?;
+    std::fs::canonicalize(&cwd)
+        .ok()
+        .filter(|cwd| cwd.is_dir())
+        .ok_or_else(|| {
+            refused(
+                RemoteErrorCode::InvalidRequest,
+                format!(
+                    "the session's workspace {} no longer exists; resume it in a terminal",
+                    cwd.display()
+                ),
+            )
+        })
+}
+
+/// The result a launched owner's registration answers `request` with.
+fn launched(request: &RemoteRequest, session: RemoteSessionInfo) -> RemoteResult {
+    match request.operation {
+        RemoteOperation::ResumeSession { .. } => RemoteResult::SessionResumed { session },
+        _ => RemoteResult::SessionCreated { session },
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Creation {
     request: RemoteRequest,
@@ -170,6 +364,7 @@ pub struct WorkspaceRouter {
 }
 impl WorkspaceRouter {
     pub fn new(hub: Arc<SessionHub>, config: PathBuf, program: PathBuf) -> Self {
+        hub.advertise_capabilities(&[host_capability::SAVED_SESSIONS]);
         Self {
             hub,
             config,
@@ -187,6 +382,20 @@ impl WorkspaceRouter {
             .join("created")
             .join(format!("{}.json", hex::encode(digest.finalize())))
     }
+    /// The stored outcome of `request`, or the receipt of an attempt that
+    /// has not finished. The same request ID with other arguments is refused.
+    fn prior(receipt: &Path, request: &RemoteRequest) -> Result<Option<Creation>> {
+        if !receipt.exists() {
+            return Ok(None);
+        }
+        let stored: Creation = read_private_json(receipt, 64 * 1024)?;
+        ensure!(
+            stored.request == *request,
+            "request identifier already used with different arguments"
+        );
+        Ok(Some(stored))
+    }
+
     async fn create(
         hub: &SessionHub,
         config: &Path,
@@ -198,19 +407,10 @@ impl WorkspaceRouter {
     ) -> Result<RemoteResponse> {
         let receipt = Self::receipt_path(config, device, &request.request_id);
         ensure_private_directory(receipt.parent().unwrap(), "remote session creation")?;
-        let previous = if receipt.exists() {
-            let stored: Creation = read_private_json(&receipt, 64 * 1024)?;
-            ensure!(
-                stored.request == *request,
-                "request identifier already used with different arguments"
-            );
-            if let Some(response) = &stored.response {
-                return Ok(response.clone());
-            }
-            Some(stored)
-        } else {
-            None
-        };
+        let previous = Self::prior(&receipt, request)?;
+        if let Some(response) = previous.as_ref().and_then(|stored| stored.response.clone()) {
+            return Ok(response);
+        }
         let directory = resolve_directory(path)?;
         // A home directory works but tracks hundreds of thousands of files:
         // flag it in the session log so the next slow-turn report starts with
@@ -224,7 +424,7 @@ impl WorkspaceRouter {
                 }),
             );
         }
-        let mut creation = if let Some(stored) = previous {
+        let creation = if let Some(stored) = previous {
             stored
         } else {
             ensure!(
@@ -235,20 +435,105 @@ impl WorkspaceRouter {
             publish_private_json(&receipt, &creation)?;
             creation
         };
+        Self::launch(hub, config, program, &receipt, creation, directory, timeout).await
+    }
+
+    /// Open a saved session from a device: start a session owner on it in
+    /// its recorded workspace, exactly as `create` does for a new one, and
+    /// answer once it has registered. A session that is already shared is
+    /// answered at once; one that a terminal holds is refused.
+    async fn resume(
+        hub: &SessionHub,
+        config: &Path,
+        program: &Path,
+        device: &str,
+        request: &RemoteRequest,
+        session_id: &str,
+        timeout: Duration,
+    ) -> Result<RemoteResponse> {
+        let receipt = Self::receipt_path(config, device, &request.request_id);
+        ensure_private_directory(receipt.parent().unwrap(), "remote session creation")?;
+        let previous = Self::prior(&receipt, request)?;
+        if let Some(response) = previous.as_ref().and_then(|stored| stored.response.clone()) {
+            return Ok(response);
+        }
+        let directory = saved_session_directory(config, session_id)?;
+        let creation = if let Some(stored) = previous {
+            stored
+        } else {
+            if let Some(session) = hub.session_info(session_id) {
+                let response = RemoteResponse::new(
+                    request.request_id.clone(),
+                    RemoteResult::SessionResumed { session },
+                )
+                .with_receipt(ReceiptState::Applied);
+                publish_private_json(
+                    &receipt,
+                    &Creation {
+                        request: request.clone(),
+                        session_id: session_id.to_owned(),
+                        response: Some(response.clone()),
+                    },
+                )?;
+                return Ok(response);
+            }
+            if hub.is_announced(session_id) {
+                return Err(refused(
+                    RemoteErrorCode::Busy,
+                    "this session is open in a terminal; ask that terminal to share it",
+                ));
+            }
+            let owners = config.join("remote").join("owners");
+            if owner_alive(&owners, session_id) {
+                return Err(refused(
+                    RemoteErrorCode::Busy,
+                    "a session owner already holds this session without sharing it; check `rustcode remote status`",
+                ));
+            }
+            ensure!(
+                hub.summary().len() < 32,
+                "too many shared sessions; close a session first"
+            );
+            let creation = Creation {
+                request: request.clone(),
+                session_id: session_id.to_owned(),
+                response: None,
+            };
+            publish_private_json(&receipt, &creation)?;
+            creation
+        };
+        Self::launch(hub, config, program, &receipt, creation, directory, timeout).await
+    }
+
+    /// Start the owner of `creation.session_id` in `directory` unless one is
+    /// already running, and wait for it to register with the hub.
+    async fn launch(
+        hub: &SessionHub,
+        config: &Path,
+        program: &Path,
+        receipt: &Path,
+        mut creation: Creation,
+        directory: PathBuf,
+        timeout: Duration,
+    ) -> Result<RemoteResponse> {
         let session_id = creation.session_id.clone();
         let owners = config.join("remote").join("owners");
         ensure_private_directory(&owners, "remote session owners")?;
         let log_path = owners.join(format!("{session_id}.log"));
+        let verb = match creation.request.operation {
+            RemoteOperation::ResumeSession { .. } => "resumed",
+            _ => "created",
+        };
         // Nothing is left of a failed start, so the same request may run again.
         let failed = |reason: String| -> anyhow::Error {
             note_in_log(&log_path, &reason);
-            let _ = remove_if_exists(&receipt);
+            let _ = remove_if_exists(receipt);
             let output = match log_tail(&log_path) {
                 Some(tail) => format!("its last output: {tail}"),
                 None => "it wrote nothing".to_owned(),
             };
             OwnerStartFailed(format!(
-                "session {session_id} was not created: {reason}; {output} (owner log {})",
+                "session {session_id} was not {verb}: {reason}; {output} (owner log {})",
                 log_path.display()
             ))
             .into()
@@ -321,13 +606,13 @@ impl WorkspaceRouter {
                 let _ = owner.wait().await;
             });
         }
-        let mut response = RemoteResponse::new(
-            request.request_id.clone(),
-            RemoteResult::SessionCreated { session },
-        );
-        response.receipt = Some(ReceiptState::Applied);
+        let response = RemoteResponse::new(
+            creation.request.request_id.clone(),
+            launched(&creation.request, session),
+        )
+        .with_receipt(ReceiptState::Applied);
         creation.response = Some(response.clone());
-        publish_private_json(&receipt, &creation)?;
+        publish_private_json(receipt, &creation)?;
         Ok(response)
     }
 }
@@ -368,7 +653,57 @@ impl FrameRouter for WorkspaceRouter {
                     send(&sink, response);
                 });
             }
-            RemoteOperation::CreateSession { path } => {
+            RemoteOperation::ListSavedSessions {
+                cursor,
+                limit,
+                query,
+            } => {
+                let (cursor, limit, query) = (cursor.clone(), *limit, query.clone());
+                let hub = self.hub.clone();
+                let config = self.config.clone();
+                let sink = sink.clone();
+                tokio::spawn(async move {
+                    let owners = config.join("remote").join("owners");
+                    let result = tokio::task::spawn_blocking(move || {
+                        list_saved_sessions(
+                            &config,
+                            |session_id| {
+                                if hub.session_info(session_id).is_some() {
+                                    SavedSessionState::Shared
+                                } else if hub.is_announced(session_id)
+                                    || owner_alive(&owners, session_id)
+                                {
+                                    SavedSessionState::Open
+                                } else {
+                                    SavedSessionState::Saved
+                                }
+                            },
+                            cursor.as_deref(),
+                            limit,
+                            query.as_deref(),
+                        )
+                    })
+                    .await;
+                    let response = match result {
+                        Ok(Ok(result)) => RemoteResponse::new(request.request_id, result),
+                        Ok(Err(error)) => {
+                            let code = error
+                                .downcast_ref::<Refused>()
+                                .map_or(RemoteErrorCode::Internal, |refused| refused.0);
+                            RemoteResponse::error(
+                                request.request_id,
+                                RemoteError::new(code, format!("{error:#}")),
+                            )
+                        }
+                        Err(error) => RemoteResponse::error(
+                            request.request_id,
+                            RemoteError::new(RemoteErrorCode::Internal, error.to_string()),
+                        ),
+                    };
+                    send(&sink, response);
+                });
+            }
+            RemoteOperation::CreateSession { .. } | RemoteOperation::ResumeSession { .. } => {
                 if let Ok(stored) = read_private_json::<Creation>(
                     &Self::receipt_path(&self.config, &device.device_id, &request.request_id),
                     64 * 1024,
@@ -385,7 +720,6 @@ impl FrameRouter for WorkspaceRouter {
                     send(sink, response);
                     return;
                 }
-                let path = path.clone();
                 let hub = self.hub.clone();
                 let config = self.config.clone();
                 let program = self.program.clone();
@@ -394,27 +728,48 @@ impl FrameRouter for WorkspaceRouter {
                 let device = device.device_id.clone();
                 tokio::spawn(async move {
                     let _guard = gate.lock().await;
-                    let response = Self::create(
-                        &hub,
-                        &config,
-                        &program,
-                        &device,
-                        &request,
-                        path.as_deref(),
-                        OWNER_START_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|error| {
+                    let outcome = match &request.operation {
+                        RemoteOperation::ResumeSession { session_id } => {
+                            Self::resume(
+                                &hub,
+                                &config,
+                                &program,
+                                &device,
+                                &request,
+                                session_id,
+                                OWNER_START_TIMEOUT,
+                            )
+                            .await
+                        }
+                        RemoteOperation::CreateSession { path } => {
+                            Self::create(
+                                &hub,
+                                &config,
+                                &program,
+                                &device,
+                                &request,
+                                path.as_deref(),
+                                OWNER_START_TIMEOUT,
+                            )
+                            .await
+                        }
+                        _ => unreachable!("only session starts are routed here"),
+                    };
+                    let response = outcome.unwrap_or_else(|error| {
                         // A failed start is a decided outcome, not a
                         // lost one: the device is free to ask again.
                         let failed = error.downcast_ref::<OwnerStartFailed>().is_some();
+                        let refusal = error.downcast_ref::<Refused>().map(|refused| refused.0);
                         let uncertain = !failed
+                            && refusal.is_none()
                             && Self::receipt_path(&config, &device, &request.request_id).exists();
                         let mut response = RemoteResponse::error(
                             request.request_id.clone(),
                             RemoteError::new(
                                 if failed {
                                     RemoteErrorCode::Internal
+                                } else if let Some(code) = refusal {
+                                    code
                                 } else if uncertain {
                                     RemoteErrorCode::OwnerUnavailable
                                 } else {
@@ -441,7 +796,7 @@ impl FrameRouter for WorkspaceRouter {
                     {
                         let mut response = RemoteResponse::new(
                             creation.request.request_id.clone(),
-                            RemoteResult::SessionCreated { session },
+                            launched(&creation.request, session),
                         );
                         response.receipt = Some(ReceiptState::Applied);
                         creation.response = Some(response);
@@ -710,6 +1065,287 @@ mod tests {
         assert!(receipt.exists());
     }
 
+    /// Saved sessions in a fresh store under `config`, oldest first, each
+    /// with `workspace` recorded when given.
+    fn saved_sessions(config: &Path, sessions: &[(&str, Option<&Path>)]) -> Vec<String> {
+        let store = rustcode_session::SessionStore::new(config);
+        let ids = sessions
+            .iter()
+            .map(|(title, workspace)| {
+                let id = rustcode_session::next_session_id();
+                let history = vec![
+                    crate::app::ChatMessage::new("user", *title),
+                    crate::app::ChatMessage::new("assistant", "answer"),
+                ];
+                store.save_session_history(&id, &history);
+                store.save_session_title(&id, title);
+                if let Some(cwd) = workspace {
+                    store
+                        .save_session_workspace(
+                            &id,
+                            &rustcode_session::SessionWorkspace {
+                                cwd: cwd.to_path_buf(),
+                                additional_directories: Vec::new(),
+                                task_workspace_id: None,
+                            },
+                        )
+                        .unwrap();
+                }
+                id
+            })
+            .collect();
+        rustcode_session::flush_history();
+        ids
+    }
+
+    fn saved_page(result: RemoteResult) -> (Vec<RemoteSavedSession>, Option<String>) {
+        let RemoteResult::SavedSessions {
+            sessions,
+            next_cursor,
+        } = result
+        else {
+            panic!("not a saved-sessions page: {result:?}");
+        };
+        (sessions, next_cursor)
+    }
+
+    fn refusal(error: anyhow::Error) -> RemoteErrorCode {
+        error
+            .downcast_ref::<Refused>()
+            .unwrap_or_else(|| panic!("not a refusal: {error:#}"))
+            .0
+    }
+
+    #[test]
+    fn saved_sessions_are_paged_newest_first_marked_and_searchable() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let ids = saved_sessions(
+            config.path(),
+            &[
+                ("Fix the parser", Some(project.path())),
+                ("Write docs", None),
+                ("Tune the Parser cache", Some(project.path())),
+            ],
+        );
+        let shared = ids[1].clone();
+        let state_of = |id: &str| {
+            if id == shared {
+                SavedSessionState::Shared
+            } else {
+                SavedSessionState::Saved
+            }
+        };
+        let (first, cursor) =
+            saved_page(list_saved_sessions(config.path(), state_of, None, Some(2), None).unwrap());
+        assert_eq!(
+            first
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            [ids[2].as_str(), ids[1].as_str()]
+        );
+        assert_eq!(first[0].title, "Tune the Parser cache");
+        assert_eq!(first[0].state, SavedSessionState::Saved);
+        assert_eq!(first[0].message_count, 2);
+        assert!(
+            first[0]
+                .updated_at
+                .as_deref()
+                .is_some_and(|at| at.ends_with('Z'))
+        );
+        assert!(first[0].workspace.is_some());
+        assert_eq!(first[1].state, SavedSessionState::Shared);
+        assert_eq!(first[1].workspace, None);
+        let (second, next) = saved_page(
+            list_saved_sessions(config.path(), state_of, cursor.as_deref(), Some(2), None).unwrap(),
+        );
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].session_id, ids[0]);
+        assert_eq!(next, None);
+
+        let (found, _) = saved_page(
+            list_saved_sessions(config.path(), state_of, None, None, Some(" parser ")).unwrap(),
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            [ids[2].as_str(), ids[0].as_str()]
+        );
+
+        for (cursor, limit, query) in [
+            (Some("../escape"), None, None),
+            (Some("no-such-session"), None, None),
+            (None, Some(0), None),
+            (None, Some(SAVED_SESSIONS_MAX_LIMIT + 1), None),
+        ] {
+            let error = list_saved_sessions(config.path(), state_of, cursor, limit, query)
+                .expect_err("refused");
+            assert_eq!(refusal(error), RemoteErrorCode::InvalidRequest);
+        }
+        let long = "x".repeat(MAX_SAVED_SESSION_QUERY_BYTES + 1);
+        let error = list_saved_sessions(config.path(), state_of, None, None, Some(&long))
+            .expect_err("refused");
+        assert_eq!(refusal(error), RemoteErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn only_stored_sessions_with_a_live_workspace_can_be_resumed() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let gone = tempfile::tempdir().unwrap();
+        let gone_path = gone.path().to_path_buf();
+        let ids = saved_sessions(
+            config.path(),
+            &[
+                ("ok", Some(project.path())),
+                ("legacy", None),
+                ("removed", Some(&gone_path)),
+            ],
+        );
+        drop(gone);
+        assert_eq!(
+            saved_session_directory(config.path(), &ids[0]).unwrap(),
+            project.path().canonicalize().unwrap()
+        );
+        assert_eq!(
+            refusal(saved_session_directory(config.path(), &ids[1]).unwrap_err()),
+            RemoteErrorCode::InvalidRequest
+        );
+        let error = saved_session_directory(config.path(), &ids[2]).unwrap_err();
+        assert!(error.to_string().contains("no longer exists"), "{error:#}");
+        assert_eq!(refusal(error), RemoteErrorCode::InvalidRequest);
+        for id in ["../../etc", "", "a/b"] {
+            assert_eq!(
+                refusal(saved_session_directory(config.path(), id).unwrap_err()),
+                RemoteErrorCode::InvalidRequest
+            );
+        }
+        assert_eq!(
+            refusal(saved_session_directory(config.path(), "unknown-session").unwrap_err()),
+            RemoteErrorCode::NotFound
+        );
+    }
+
+    fn resume_request(id: &str, session_id: &str) -> RemoteRequest {
+        RemoteRequest {
+            authenticated_device_id: None,
+            protocol_version: REMOTE_PROTOCOL_VERSION,
+            request_id: id.into(),
+            session_id: None,
+            registration_epoch: None,
+            operation: RemoteOperation::ResumeSession {
+                session_id: session_id.into(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn resuming_starts_an_owner_on_the_saved_session_in_its_workspace() {
+        let config = tempfile::tempdir().unwrap();
+        // The stand-in owner records how it was started, then exits.
+        let project = stand_in_owner("echo \"$@\" > started.args\npwd > started.cwd\nexit 4\n");
+        let ids = saved_sessions(config.path(), &[("saved", Some(project.path()))]);
+        let request = resume_request("resume-1", &ids[0]);
+        let hub = SessionHub::start(Default::default());
+        let error = WorkspaceRouter::resume(
+            &hub,
+            config.path(),
+            Path::new("/bin/sh"),
+            "phone",
+            &request,
+            &ids[0],
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.downcast_ref::<OwnerStartFailed>().is_some());
+        let message = error.to_string();
+        assert!(message.contains("was not resumed"), "{message}");
+        let args = std::fs::read_to_string(project.path().join("started.args")).unwrap();
+        assert_eq!(
+            args.trim(),
+            format!("session-owner --session-id {}", ids[0])
+        );
+        let cwd = std::fs::read_to_string(project.path().join("started.cwd")).unwrap();
+        assert_eq!(
+            Path::new(cwd.trim()).canonicalize().unwrap(),
+            project.path().canonicalize().unwrap()
+        );
+        // A failed start leaves nothing behind: the device may ask again.
+        assert!(!WorkspaceRouter::receipt_path(config.path(), "phone", "resume-1").exists());
+    }
+
+    #[tokio::test]
+    async fn a_session_held_elsewhere_is_not_resumed_a_second_time() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let ids = saved_sessions(
+            config.path(),
+            &[
+                ("terminal", Some(project.path())),
+                ("owner", Some(project.path())),
+            ],
+        );
+        let hub = SessionHub::start(Default::default());
+        let _announcement = hub
+            .announce_owner(ids[0].clone(), "terminal".into(), None)
+            .unwrap();
+        let owners = config.path().join("remote/owners");
+        let _lease = lock_private_file(&owners, &format!("{}.lock", ids[1]), OWNER_LEASE).unwrap();
+        for id in &ids {
+            let error = WorkspaceRouter::resume(
+                &hub,
+                config.path(),
+                Path::new("/never/launch"),
+                "phone",
+                &resume_request(&format!("resume-{id}"), id),
+                id,
+                Duration::from_millis(200),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(refusal(error), RemoteErrorCode::Busy);
+            assert!(
+                !WorkspaceRouter::receipt_path(config.path(), "phone", &format!("resume-{id}"))
+                    .exists()
+            );
+        }
+    }
+
+    #[test]
+    fn probing_a_session_without_an_owner_leaves_no_lease_file() {
+        let config = tempfile::tempdir().unwrap();
+        let owners = config.path().join("remote/owners");
+        assert!(!owner_alive(&owners, "never-owned"));
+        assert!(!owners.join("never-owned.lock").exists());
+    }
+
+    #[test]
+    fn the_gateway_advertises_saved_sessions() {
+        let config = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let hub = SessionHub::start(Default::default());
+            let _router = WorkspaceRouter::new(
+                hub.clone(),
+                config.path().to_path_buf(),
+                PathBuf::from("/never/launch"),
+            );
+            let _again = WorkspaceRouter::new(
+                hub.clone(),
+                config.path().to_path_buf(),
+                PathBuf::from("/never/launch"),
+            );
+            assert_eq!(hub.capabilities(), [host_capability::SAVED_SESSIONS]);
+        });
+    }
+
     #[test]
     fn oversized_folder_listing_is_bounded_before_transport() {
         let root = tempfile::tempdir().unwrap();
@@ -757,10 +1393,15 @@ pub fn owner_state(
     };
     note_owner_pid(&lease);
     let workspace = std::env::current_dir()?;
-    let mut state = crate::app::AppState::new_with_workspace_session(&workspace, Some(session_id));
-    state.workspace_root = Some(workspace.clone());
-    state.task_working_directory = Some(workspace.clone());
-    state.history = crate::config::load_session_history_direct(session_id).into();
+    // A saved session resumed from a device runs in its recorded workspace:
+    // keep what was recorded with it (extra directories, its task worktree)
+    // and load it the way ACP and the terminal resume a session.
+    let recorded = crate::config::load_session_workspace(session_id).filter(|recorded| {
+        rustcode_session::canonicalize_best_effort(&recorded.cwd)
+            == rustcode_session::canonicalize_best_effort(&workspace)
+    });
+    let history = crate::config::load_session_history_direct(session_id);
+    let mut state = crate::acp::build_loaded_app_state(session_id, &workspace, history);
     // A detached owner has no `--yolo` flag: start as the session last was,
     // or as the user's `yolo` default for a session that never set it.
     state.restore_auto_confirm();
@@ -768,11 +1409,11 @@ pub fn owner_state(
     crate::config::record_session_settings(session_id, &state.config);
     let _ = crate::config::save_session_workspace(
         session_id,
-        &rustcode_session::SessionWorkspace {
+        &recorded.unwrap_or(rustcode_session::SessionWorkspace {
             cwd: workspace,
             additional_directories: Vec::new(),
             task_workspace_id: None,
-        },
+        }),
     );
     Ok((lease, state))
 }

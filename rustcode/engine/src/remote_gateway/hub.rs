@@ -242,6 +242,8 @@ struct State {
     pending_shares: HashMap<u64, PendingShare>,
     share_outcomes: HashMap<String, ShareOutcome>,
     next_id: u64,
+    /// Host-wide optional operations, listed in every `sessions` result.
+    capabilities: Vec<String>,
 }
 
 /// How long a terminal may take to answer a share request before the device
@@ -572,6 +574,27 @@ impl SessionHub {
 
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().expect("remote session hub is poisoned")
+    }
+
+    /// Advertise host-wide operations that a router in front of the hub
+    /// implements, such as `saved_sessions`.
+    pub fn advertise_capabilities(&self, capabilities: &[&str]) {
+        let mut state = self.state();
+        for capability in capabilities {
+            if !state.capabilities.iter().any(|known| known == capability) {
+                state.capabilities.push((*capability).to_owned());
+            }
+        }
+    }
+
+    /// Host-wide operations listed in `sessions` results.
+    pub fn capabilities(&self) -> Vec<String> {
+        self.state().capabilities.clone()
+    }
+
+    /// Whether a terminal announced `id` without sharing it.
+    pub fn is_announced(&self, id: &str) -> bool {
+        self.state().standby_by_session.contains_key(id)
     }
 
     /// Shared sessions and the devices attached to each.
@@ -1650,6 +1673,7 @@ impl FrameRouter for SessionHub {
                             .connections
                             .get(&device.connection_id)
                             .is_some_and(|connection| connection.list_subscribed),
+                        capabilities: state.capabilities.clone(),
                     },
                 );
             }

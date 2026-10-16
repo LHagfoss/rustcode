@@ -192,7 +192,9 @@ after `subscribe_sessions` whenever it changes. It replaces the list the
 client holds.
 
 `session_id` and `registration_epoch` are required on every operation except
-`list_sessions`, `subscribe_sessions` and `get_request_status`. Device identity
+the host-wide ones: `list_sessions`, `subscribe_sessions`, `get_request_status`,
+`list_directories`, `create_session`, `request_share`, `list_saved_sessions`
+and `resume_session`. Device identity
 comes from authentication and is never part of a frame.
 
 ## Operations
@@ -211,6 +213,8 @@ comes from authentication and is never part of a frame.
 | `answer_question` | terminal | `question_answered` | `stale_question`, `invalid_answer` |
 | `resolve_approval` | terminal | `approval_resolved` | `stale_approval` |
 | `get_request_status` | terminal that holds the receipt | `request_status` | |
+| `list_saved_sessions` | gateway (`saved_sessions`) | `saved_sessions` | `invalid_request` |
+| `resume_session` | gateway (`saved_sessions`) | `session_resumed` | `not_found`, `busy`, `invalid_request`, `internal` |
 
 Any request can also be rejected with:
 
@@ -249,6 +253,11 @@ session on screen, and host-wide configuration remain local-only.
   }
 }
 ```
+
+The `sessions` result also carries `capabilities`, the optional host-wide
+operations the gateway implements. It is absent from gateways that implement
+none; currently the only flag is `saved_sessions`. A client offers a host-wide
+feature only when its flag is listed.
 
 A session leaves the list the moment its terminal stops sharing, switches
 session or exits. `health` is `unresponsive` when the terminal has been silent
@@ -616,6 +625,42 @@ mobile sessions immediately use the installed owner version. Automatic network
 selection is retained in the login service instead of persisting a temporary
 Wi-Fi/DHCP address; explicitly configured bind and advertised addresses remain
 explicit.
+
+### Saved sessions
+
+Gateways that list `saved_sessions` in their `capabilities` let a device see
+every session saved on the host, not only the shared ones, and open one that
+nothing holds.
+
+`list_saved_sessions { cursor?, limit?, query? }` returns one page,
+`saved_sessions { sessions, next_cursor? }`, newest first by the time each
+session was started; pass `next_cursor` back as `cursor` for the next page.
+`limit` is 1 to 100 (30 when absent). `query` keeps sessions whose title,
+workspace or ID contains it, ignoring case. Each entry has `session_id`,
+`title`, `workspace` (absent for sessions that predate workspace recording),
+`updated_at` (when the transcript was last written), `message_count` and
+`state`:
+
+| `state` | Meaning | What the client does |
+| --- | --- | --- |
+| `saved` | No process holds it. | `resume_session` |
+| `shared` | It is in the live list. | attach to it |
+| `open` | A terminal or session owner holds it without sharing it. | nothing, or `request_share` for a terminal |
+
+Only sessions the host's session store lists, whose files lie inside the
+store, are reported: the same rule as ACP's `session/list`.
+
+`resume_session { session_id }` opens a `saved` session. The gateway checks the
+ID against the store, then starts a detached session owner on it in its
+recorded workspace, exactly as `create_session` starts one for a new session,
+and answers `session_resumed { session }` once it is shared; attach to it as
+usual. The owner loads the saved transcript, its recorded settings and its task
+worktree, if any. It is a host-wide mutation with the same durable receipt,
+retry and `get_request_status` rules as `create_session`. A session that is
+already shared is answered at once. One that a terminal or another owner holds
+is refused with `busy`, a session without a recorded workspace, or whose
+workspace no longer exists, with `invalid_request`, an unknown ID with
+`not_found`; nothing is started for any of them.
 
 ### Image attachments
 
