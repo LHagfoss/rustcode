@@ -13,9 +13,13 @@ public enum MarkdownBlock: Sendable, Equatable {
     case rule
     /// A line holding only `![alt](url)` with a `file://` or `http(s)://` URL.
     case image(alt: String, url: URL)
+    /// A `rustcode-viz` fence; only produced when `visualizations` is set.
+    case visualization(VisualizationBlock)
 
     /// Tolerates text that is still streaming: an unterminated fence is a code block so far.
-    public static func parse(_ text: String) -> [MarkdownBlock] {
+    /// `visualizations` turns `rustcode-viz` fences into `.visualization` blocks; only
+    /// assistant replies set it, so other text never renders a widget.
+    public static func parse(_ text: String, visualizations: Bool = false) -> [MarkdownBlock] {
         let normalizedText = text.replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         if let json = formattedJSON(in: normalizedText) {
@@ -24,7 +28,11 @@ public enum MarkdownBlock: Sendable, Equatable {
 
         var blocks: [MarkdownBlock] = []
         var paragraph: [String] = []
-        var code: (fence: MarkdownFence, lines: [String])?
+        var code: (fence: MarkdownFence, opening: String, lines: [String])?
+
+        func isVisualization(_ fence: MarkdownFence) -> Bool {
+            visualizations && Visualization.isInfoString(fence.language)
+        }
 
         func flushParagraph() {
             guard !paragraph.isEmpty else { return }
@@ -41,7 +49,11 @@ public enum MarkdownBlock: Sendable, Equatable {
 
             if let open = code {
                 if open.fence.closes(line) {
-                    blocks.append(.code(language: open.fence.language, text: open.lines.joined(separator: "\n")))
+                    if isVisualization(open.fence) {
+                        blocks.append(.visualization(VisualizationBlock(opening: open.opening, lines: open.lines, closing: line)))
+                    } else {
+                        blocks.append(.code(language: open.fence.language, text: open.lines.joined(separator: "\n")))
+                    }
                     code = nil
                 } else {
                     code?.lines.append(line)
@@ -51,7 +63,7 @@ public enum MarkdownBlock: Sendable, Equatable {
 
             if let fence = MarkdownFence.opening(line) {
                 flushParagraph()
-                code = (fence, [])
+                code = (fence, line, [])
             } else if index < lines.count,
                       let headers = tableCells(line),
                       let separators = tableCells(lines[index]),
@@ -89,7 +101,11 @@ public enum MarkdownBlock: Sendable, Equatable {
 
         flushParagraph()
         if let open = code {
-            blocks.append(.code(language: open.fence.language, text: open.lines.joined(separator: "\n")))
+            if isVisualization(open.fence) {
+                blocks.append(.visualization(VisualizationBlock(opening: open.opening, lines: open.lines, closing: nil)))
+            } else {
+                blocks.append(.code(language: open.fence.language, text: open.lines.joined(separator: "\n")))
+            }
         }
         return blocks
     }

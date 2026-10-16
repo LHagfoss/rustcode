@@ -4,6 +4,8 @@ import SwiftUI
 struct TranscriptRow: View {
     let item: TranscriptItem
     var isCurrentMatch = false
+    /// This is the reply the agent is still writing.
+    var isStreaming = false
 
     var body: some View {
         content
@@ -22,7 +24,7 @@ struct TranscriptRow: View {
     private var content: some View {
         switch item.content {
         case .user(let text): UserMessage(text: text)
-        case .assistant(let text): AssistantMessage(text: text)
+        case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming)
         case .thinking(let text): ThinkingBlock(text: text)
         case .tool(let tool): ToolRow(tool: tool)
         case .command(let input, let output): CommandCard(input: input, output: output)
@@ -171,6 +173,7 @@ private struct UserBubble: View {
 /// Agent text, with `<think>` sections the engine leaves inline folded away.
 private struct AssistantMessage: View {
     let text: String
+    var isStreaming = false
     @Environment(\.messageActions) private var messageActions
 
     var body: some View {
@@ -178,7 +181,7 @@ private struct AssistantMessage: View {
             let (prose, summary) = AssistantSummary.split(text)
             ForEach(Array(AssistantBlock.parse(prose).enumerated()), id: \.offset) { _, block in
                 switch block {
-                case .markdown(let text): MarkdownText(text: text)
+                case .markdown(let text): MarkdownText(text: text, visualizations: true, isStreaming: isStreaming)
                 case .thinking(let text, _): ThinkingBlock(text: text)
                 }
             }

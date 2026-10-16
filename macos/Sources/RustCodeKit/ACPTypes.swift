@@ -69,6 +69,9 @@ public enum ACPRequests {
             "clientCapabilities": [
                 "fs": ["readTextFile": false, "writeTextFile": false],
                 "terminal": false,
+                // The transcript draws `rustcode-viz` blocks natively, so the
+                // engine may teach the agent the format (docs/visualizations.md).
+                "_meta": ["rustcode": ["visualizations": .number(Double(Visualization.version))]],
             ],
             "clientInfo": ["name": "rustcode-macos", "title": "RustCode", "version": .string(appVersion)],
         ]

@@ -7,6 +7,10 @@ import SwiftUI
 /// them; code blocks, tables and rules stand on their own.
 struct MarkdownText: View {
     let text: String
+    /// Draw `rustcode-viz` blocks as widgets. Only assistant replies set it.
+    var visualizations = false
+    /// The reply is still streaming, so an unclosed visualization shows a placeholder.
+    var isStreaming = false
     @Environment(\.findQuery) private var findQuery
 
     private enum Segment {
@@ -16,7 +20,7 @@ struct MarkdownText: View {
 
     private var segments: [Segment] {
         var segments: [Segment] = []
-        for block in MarkdownBlock.parse(text) {
+        for block in MarkdownBlock.parse(text, visualizations: visualizations) {
             switch block {
             case .paragraph, .heading, .listItem, .quote:
                 if case .prose(let blocks) = segments.last {
@@ -111,6 +115,8 @@ struct MarkdownText: View {
             Divider().padding(.vertical, 4)
         case .image(let alt, let url):
             InlineImage(url: url, alt: alt)
+        case .visualization(let visualization):
+            VisualizationView(block: visualization, isStreaming: isStreaming)
         default:
             EmptyView()
         }

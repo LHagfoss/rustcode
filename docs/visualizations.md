@@ -116,6 +116,27 @@ live stream, committed scrollback chunks, and finalized history cells all
 draw the same rows through the same renderer. That renderer is cached by
 width and theme like any other assistant message.
 
+## macOS app
+
+The macOS app (`macos/`) renders the same schema with the same limits and
+fallback reasons. `RustCodeKit/Visualization.swift` parses and bounds the
+payload, and `RustCode/VisualizationView.swift` draws it in SwiftUI:
+
+- `bar_chart` uses Swift Charts. Hovering a bar highlights it and shows its
+  exact value.
+- `table` headers sort it: click once for ascending, again for descending.
+  Every row is kept so a sort covers the whole table, but at most 50 are
+  shown. `sort_by` sets the initial order.
+- `tree` branches collapse and expand. The first two levels start open.
+
+The card's Copy button and context menu copy the source fence. A block that
+is still streaming shows a "Building visualization…" placeholder. Invalid or
+unfinished blocks show the source with the same note as the TUI. Only
+assistant replies render widgets: command output, user messages and tool
+output keep the fence as code. The app advertises
+`clientCapabilities._meta.rustcode.visualizations = 1` in its ACP
+`initialize`.
+
 ## Assistant-only
 
 Only the assistant message renderer recognizes the fence. User messages,
@@ -141,6 +162,7 @@ prompt and its cached prefix do not change during a session. The default is
 | Frontend                          | Hint | How it is decided                                   |
 | --------------------------------- | ---- | --------------------------------------------------- |
 | TUI (local)                       | yes  | Set at startup                                      |
+| macOS app                         | yes  | Advertises the ACP capability below                 |
 | ACP client advertising support    | yes  | `clientCapabilities._meta.rustcode.visualizations >= 1` at `initialize` |
 | Any other ACP client              | no   | Capability absent, malformed, or `0`                |
 | Remote gateway, iOS, Rust desktop, remote TUI | no | Default                                |
