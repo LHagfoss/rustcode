@@ -1122,14 +1122,21 @@ phase_verify_distribution() {
         return
     fi
 
-    local formula encoded formula_version
-    encoded="$(gh api repos/LHagfoss/homebrew-tap/contents/Formula/rustcode.rb --jq '.content')" || \
-        die "Could not read the published Homebrew formula."
-    if ! formula="$(printf '%s' "$encoded" | tr -d '\n' | base64 --decode 2>/dev/null)"; then
-        formula="$(printf '%s' "$encoded" | tr -d '\n' | base64 -D)" || \
-            die "Could not decode the published Homebrew formula."
-    fi
-    formula_version="$(printf '%s\n' "$formula" | sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' | head -n1)"
+    # The tap commit can take a moment to show up through the API, so poll
+    # (30 × 10 s) before calling a stale formula a mismatch.
+    local formula encoded formula_version attempt
+    for attempt in $(seq 1 30); do
+        encoded="$(gh api repos/LHagfoss/homebrew-tap/contents/Formula/rustcode.rb --jq '.content')" || \
+            die "Could not read the published Homebrew formula."
+        if ! formula="$(printf '%s' "$encoded" | tr -d '\n' | base64 --decode 2>/dev/null)"; then
+            formula="$(printf '%s' "$encoded" | tr -d '\n' | base64 -D)" || \
+                die "Could not decode the published Homebrew formula."
+        fi
+        formula_version="$(printf '%s\n' "$formula" | sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' | head -n1)"
+        [[ "$formula_version" == "$VERSION" ]] && break
+        info "Waiting for the Homebrew formula to show $VERSION (found ${formula_version:-none}, attempt $attempt/30)…"
+        sleep 10
+    done
     if [[ "$formula_version" != "$VERSION" ]]; then
         die "Homebrew formula version mismatch: expected $VERSION, found ${formula_version:-none}."
     fi
