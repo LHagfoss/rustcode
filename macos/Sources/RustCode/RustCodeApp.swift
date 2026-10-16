@@ -67,6 +67,8 @@ final class DesktopModel: ObservableObject {
     /// Slash commands the engine advertised, and the highlighted suggestion.
     @Published var commands: [SlashCommand] = []
     @Published var commandSelection = 0
+    /// A recognized slash command, shown as a chip in front of the draft.
+    @Published var draftCommand: SlashCommand?
     /// The Settings section to show when the sheet opens.
     @Published var settingsSection: SettingsSection = .general
     @Published var transcript = Transcript()
@@ -199,14 +201,42 @@ final class DesktopModel: ObservableObject {
     }
 
     /// Commands matching the draft while its first word is being typed.
-    var commandSuggestions: [SlashCommand] { SlashCommand.suggestions(for: draft, in: commands) }
+    var commandSuggestions: [SlashCommand] {
+        draftCommand == nil ? SlashCommand.suggestions(for: draft, in: commands) : []
+    }
 
-    /// Put the highlighted command in the composer.
+    /// Turn the highlighted suggestion into the command chip.
     func completeCommand() {
         let suggestions = commandSuggestions
         guard !suggestions.isEmpty else { return }
-        draft = suggestions[min(commandSelection, suggestions.count - 1)].insertion
+        draftCommand = suggestions[min(commandSelection, suggestions.count - 1)]
+        draft = ""
         commandSelection = 0
+    }
+
+    /// Typing a whole command name and a space makes it a chip.
+    func promoteTypedCommand() {
+        guard draftCommand == nil, draft.hasPrefix("/"), let space = draft.firstIndex(of: " "),
+              let command = SlashCommand.invoked(by: String(draft[..<space]), in: commands) else { return }
+        draftCommand = command
+        draft = String(draft[draft.index(after: space)...])
+    }
+
+    /// Backspace on an empty draft turns the chip back into text.
+    func unwrapCommandChip() -> Bool {
+        guard let chip = draftCommand, draft.isEmpty else { return false }
+        draftCommand = nil
+        draft = chip.name
+        return true
+    }
+
+    /// The rest of the highlighted command's name after what is typed, shown in gray.
+    var commandCompletionSuffix: String? {
+        let suggestions = commandSuggestions
+        guard draftCommand == nil, !suggestions.isEmpty else { return nil }
+        let name = suggestions[min(commandSelection, suggestions.count - 1)].name
+        guard name.lowercased().hasPrefix(draft.lowercased()), name.count > draft.count else { return nil }
+        return String(name.dropFirst(draft.count))
     }
 
     func moveCommandSelection(_ step: Int) {
@@ -267,6 +297,22 @@ final class DesktopModel: ObservableObject {
         await restartForWorkspace()
     }
 
+    /// What a session opened in this engine looked like when the user left it.
+    /// The engine refuses a second `session/load` of an open session, so
+    /// switching back restores this instead, kept current by its updates.
+    private struct OpenSession {
+        var transcript: Transcript
+        var models: ModelOptions
+        var selectedModel: String?
+    }
+
+    private var openSessions: [String: OpenSession] = [:]
+
+    private func stashSelectedSession() {
+        guard let current = selectedSession else { return }
+        openSessions[current] = OpenSession(transcript: transcript, models: models, selectedModel: selectedModel)
+    }
+
     private func restartForWorkspace() async {
         stop()
         transcript.removeAll()
@@ -280,9 +326,11 @@ final class DesktopModel: ObservableObject {
         do {
             let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
             guard let id = result["sessionId"]?.stringValue else { throw ACPProtocolError.malformed("session/new has no sessionId") }
+            stashSelectedSession()
             selectedSession = id
             transcript.removeAll()
             applyConfig(result["configOptions"])
+            stashSelectedSession()
             await refreshSessions()
         } catch { self.error = String(describing: error) }
     }
@@ -311,7 +359,16 @@ final class DesktopModel: ObservableObject {
     }
 
     func select(_ session: SessionSummary) async {
-        guard let connection = engine?.connection, capabilities?.loadSession == true else { return }
+        guard let connection = engine?.connection, capabilities?.loadSession == true,
+              session.id != selectedSession else { return }
+        stashSelectedSession()
+        if let open = openSessions[session.id] {
+            selectedSession = session.id
+            transcript = open.transcript
+            models = open.models
+            selectedModel = open.selectedModel
+            return
+        }
         // `session/load` replays the transcript as `session/update`
         // notifications before it answers, so select the session first or
         // the replay is filtered out as belonging to another session.
@@ -320,13 +377,21 @@ final class DesktopModel: ObservableObject {
         do {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
             // Another session may have been picked while this one loaded.
-            guard selectedSession == session.id else { return }
+            guard selectedSession == session.id else {
+                openSessions[session.id] = openSessions[session.id] ?? OpenSession(transcript: Transcript(), models: .empty)
+                return
+            }
             applyConfig(result["configOptions"])
+            stashSelectedSession()
         } catch { self.error = String(describing: error) }
     }
 
     func submit() async {
         guard let connection = engine?.connection, let id = selectedSession else { return }
+        if let chip = draftCommand {
+            draft = draft.isEmpty ? chip.name : chip.name + " " + draft
+            draftCommand = nil
+        }
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !typed.isEmpty || !attachments.isEmpty, !busy else { return }
         if let command = SlashCommand.invoked(by: typed, in: commands), command.action != .execute {
@@ -407,6 +472,7 @@ final class DesktopModel: ObservableObject {
     }
 
     func stop() {
+        openSessions = [:]
         inboundTask?.cancel()
         inboundTask = nil
         if let engine { DispatchQueue.global().async { engine.stop() } }
@@ -434,7 +500,15 @@ final class DesktopModel: ObservableObject {
             // Commands are the same for every session, so take them from any.
             if case .availableCommands(let list) = SessionUpdate(notificationParams: params) { commands = list }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate:
-            guard params["sessionId"]?.stringValue == selectedSession else { return }
+            guard let sessionId = params["sessionId"]?.stringValue else { return }
+            // A session open in the background keeps its transcript current.
+            guard sessionId == selectedSession else {
+                if var open = openSessions[sessionId] {
+                    open.transcript.apply(SessionUpdate(notificationParams: params))
+                    openSessions[sessionId] = open
+                }
+                return
+            }
             let update = SessionUpdate(notificationParams: params)
             switch update {
             case .title: await refreshSessions()
