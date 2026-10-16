@@ -1,3 +1,10 @@
+## [v0.72.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.72.0) - 2026-10-16
+
+### Features
+- macOS app: paste screenshots with ⌘V, drop or attach images, see them in your messages and in reopened chats (click for Quick Look); image-only lines in replies render inline ([#2056](https://github.com/LHagfoss/rustcode/pull/2056)).
+- ACP: `session/prompt` accepts image blocks and the engine advertises `promptCapabilities.image`; a model without vision support gets an actionable error ([#2056](https://github.com/LHagfoss/rustcode/pull/2056)).
+- macOS app: Liquid Glass search bars, native All/Project segmented control, and Finder-style toolbar clusters with Archived, Find, Pin and Show in Finder ([#2056](https://github.com/LHagfoss/rustcode/pull/2056), [#2058](https://github.com/LHagfoss/rustcode/pull/2058)).
+- iOS app now lives in `ios/` and ships with every release under the RustCode version (`rustcode-ios-unsigned.xcarchive.zip`, `rustcode-ios-simulator.zip`); `ios/Scripts/install-on-iphone.sh` installs it ([#2057](https://github.com/LHagfoss/rustcode/pull/2057)).
 ## [v0.71.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.71.1) - 2026-10-16
 
 ### Features
