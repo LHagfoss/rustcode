@@ -10,6 +10,7 @@ struct RustCodeApp: App {
         // A write to the engine's stdin after it exits must surface as an
         // error, not kill the app with the default SIGPIPE action.
         signal(SIGPIPE, SIG_IGN)
+        AppearanceSetting.apply(UserDefaults.standard.string(forKey: AppearanceSetting.key))
     }
 
     var body: some Scene {
@@ -17,36 +18,72 @@ struct RustCodeApp: App {
             ContentView(model: model)
                 .frame(minWidth: 850, minHeight: 620)
                 .task { await model.start() }
+                .task { await model.updater.checkOnLaunch() }
                 .onDisappear { model.stop() }
         }
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { Task { await model.newSession() } }
                     .keyboardShortcut("n", modifiers: .command)
             }
             CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    model.settingsSection = .about
+                    model.showsSettings = true
+                    Task { await model.updater.check() }
+                }
                 Button("Choose Project…") { model.chooseWorkspace() }
                     .keyboardShortcut("o", modifiers: .command)
+            }
+            // Settings open as a sheet in the main window, not a window of their own.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { model.settingsSection = .general; model.showsSettings = true }
+                    .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandGroup(after: .textEditing) {
+                Button("Find in Chat…") { model.showsFind = true }
+                    .keyboardShortcut("f", modifiers: .command)
+                Button("Find Next") { model.findNext() }
+                    .keyboardShortcut("g", modifiers: .command)
+                Button("Find Previous") { model.findNext(-1) }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+            }
+            CommandGroup(before: .sidebar) {
+                Button(model.showsSidebar ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
             }
         }
     }
 }
 
+/// The panel open above the composer.
+enum ComposerPanel { case add, model }
+
 @MainActor
 final class DesktopModel: ObservableObject {
-    struct Message: Identifiable {
-        let id = UUID()
-        var role: String
-        var text: String
-    }
-
-    @Published var messages: [Message] = []
+    let updater = Updater()
+    @Published var composerPanel: ComposerPanel?
+    /// The Settings section to show when the sheet opens.
+    @Published var settingsSection: SettingsSection = .general
+    @Published var transcript = Transcript()
     @Published var sessions: [SessionSummary] = []
     @Published var selectedSession: String?
     @Published var workspace: URL {
         didSet { UserDefaults.standard.set(workspace.path, forKey: "workspacePath") }
     }
     @Published var draft = ""
+    @Published var showsSidebar = true
+    @Published var showsSettings = false
+    /// ⌘F: the find bar over the chat, its text and which match is current.
+    @Published var showsFind = false
+    @Published var findQuery = "" { didSet { findIndex = 0 } }
+    @Published var findIndex = 0
+    /// Filters the sidebar's chats by title.
+    @Published var sessionFilter = ""
+    /// Files and folders added with + or by dropping them on the composer. The
+    /// engine takes text prompts, so they are sent as paths for the agent to read.
+    @Published var attachments: [URL] = []
     @Published var busy = false
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
@@ -54,23 +91,29 @@ final class DesktopModel: ObservableObject {
     @Published var permissionQueue: [PermissionRequest] = []
     @Published var models = ModelOptions.empty
     @Published var selectedModel: String?
+    /// The engine binary in use and where it was found, shown in Settings.
+    @Published private(set) var engineLocation: EngineLocation?
     private var engine: EngineProcess?
     /// The session whose prompt turn is running; Stop cancels this one even
     /// after the user switches to another session.
-    private var turnSession: String?
+    @Published private(set) var turnSession: String?
     private var inboundTask: Task<Void, Never>?
     private var capabilities: AgentInfo?
 
     init() {
         let savedPath = UserDefaults.standard.string(forKey: "workspacePath")
+        // An app opened from Finder or the Dock starts in `/`, which is no project.
+        let launchPath = FileManager.default.currentDirectoryPath
         workspace = savedPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            ?? (launchPath == "/" ? FileManager.default.homeDirectoryForCurrentUser
+                : URL(fileURLWithPath: launchPath, isDirectory: true))
     }
 
     func start() async {
         guard engine == nil else { return }
         do {
             let location = try EngineLocator(userSetting: UserDefaults.standard.string(forKey: "enginePath")).locate()
+            engineLocation = location
             var launched: EngineProcess?
             let process = EngineProcess(executable: location.url, workingDirectory: workspace) { [weak self] exit in
                 Task { @MainActor in
@@ -117,9 +160,70 @@ final class DesktopModel: ObservableObject {
         }
     }
 
+    var findMatches: [Int] { transcript.matches(findQuery) }
+
+    /// The transcript item the find bar is on, if any matched.
+    var currentMatch: Int? {
+        let matches = findMatches
+        return matches.isEmpty ? nil : matches[min(findIndex, matches.count - 1)]
+    }
+
+    /// Step through the matches, wrapping at either end.
+    func findNext(_ step: Int = 1) {
+        let count = findMatches.count
+        guard count > 0 else { return }
+        showsFind = true
+        findIndex = ((findIndex + step) % count + count) % count
+    }
+
+    var visibleSessions: [SessionSummary] {
+        let filter = sessionFilter.trimmingCharacters(in: .whitespaces)
+        guard !filter.isEmpty else { return sessions }
+        return sessions.filter {
+            ($0.title ?? "New chat").range(of: filter, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    func toggleSidebar() {
+        withAnimation(.snappy(duration: 0.25)) { showsSidebar.toggle() }
+    }
+
+    func chooseAttachments() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = workspace
+        panel.prompt = "Attach"
+        if panel.runModal() == .OK { attach(panel.urls) }
+    }
+
+    func attach(_ urls: [URL]) {
+        for url in urls where !attachments.contains(url) { attachments.append(url) }
+    }
+
+    /// The typed message followed by the attached paths, relative to the project
+    /// when they are inside it.
+    static func prompt(_ text: String, attaching files: [URL], in workspace: URL) -> String {
+        guard !files.isEmpty else { return text }
+        let root = workspace.standardizedFileURL.path
+        let paths = files.map { url -> String in
+            let path = url.standardizedFileURL.path
+            return path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : path
+        }
+        let list = paths.map { "- `\($0)`" }.joined(separator: "\n")
+        return (text.isEmpty ? "" : text + "\n\n") + "Attached files:\n" + list
+    }
+
+    /// Start a fresh engine, e.g. after its path changed in Settings.
+    func restartEngine() async {
+        error = nil
+        await restartForWorkspace()
+    }
+
     private func restartForWorkspace() async {
         stop()
-        messages = []
+        transcript.removeAll()
         sessions = []
         selectedSession = nil
         await start()
@@ -131,7 +235,7 @@ final class DesktopModel: ObservableObject {
             let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
             guard let id = result["sessionId"]?.stringValue else { throw ACPProtocolError.malformed("session/new has no sessionId") }
             selectedSession = id
-            messages = []
+            transcript.removeAll()
             applyConfig(result["configOptions"])
             await refreshSessions()
         } catch { self.error = String(describing: error) }
@@ -156,7 +260,7 @@ final class DesktopModel: ObservableObject {
         // notifications before it answers, so select the session first or
         // the replay is filtered out as belonging to another session.
         selectedSession = session.id
-        messages = []
+        transcript.removeAll()
         do {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
             // Another session may have been picked while this one loaded.
@@ -167,9 +271,12 @@ final class DesktopModel: ObservableObject {
 
     func submit() async {
         guard let connection = engine?.connection, let id = selectedSession else { return }
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !busy else { return }
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty || !attachments.isEmpty, !busy else { return }
+        let text = Self.prompt(typed, attaching: attachments, in: workspace)
         draft = ""
+        attachments = []
+        transcript.appendUser(text)
         busy = true
         turnSession = id
         defer {
@@ -259,18 +366,11 @@ final class DesktopModel: ObservableObject {
             if engine != nil { error = reason }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate:
             guard params["sessionId"]?.stringValue == selectedSession else { return }
-            switch SessionUpdate(notificationParams: params) {
-            case .userText(let text): messages.append(Message(role: "You", text: text))
-            case .agentText(let text): appendAssistant(text)
-            case .thoughtText(let text): appendAssistant("Thinking: \(text)")
-            case .toolCall(_, let title, _, let status, let input):
-                let detail = input.map { "\n\($0.prettyPrinted())" } ?? ""
-                messages.append(Message(role: status == .inProgress ? "Running" : "Tool", text: title + detail))
-            case .toolCallUpdate(_, let title, let status, let output):
-                if let output { messages.append(Message(role: status == .failed ? "Tool failed" : "Result", text: (title.map { $0 + "\n" } ?? "") + output)) }
+            let update = SessionUpdate(notificationParams: params)
+            switch update {
             case .title: await refreshSessions()
             case .configOptions(let options): applyConfig(options)
-            case .unknown: break
+            default: transcript.apply(update)
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
             if let request = PermissionRequest(rpcId: id, params: params) { permissionQueue.append(request) }
@@ -279,169 +379,5 @@ final class DesktopModel: ObservableObject {
             try? await engine?.connection.respond(id: id, error: .methodNotFound(method))
         default: break
         }
-    }
-
-    private func appendAssistant(_ text: String) {
-        if let last = messages.last, last.role == "RustCode" { messages[messages.count - 1].text += text }
-        else { messages.append(Message(role: "RustCode", text: text)) }
-    }
-}
-
-struct ContentView: View {
-    @ObservedObject var model: DesktopModel
-
-    var body: some View {
-        NavigationSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("RustCode").font(.headline)
-                    Spacer()
-                    Button { model.chooseWorkspace() } label: { Image(systemName: "folder") }
-                        .help("Choose project folder")
-                }.padding()
-                Text(model.workspace.path).font(.caption).lineLimit(1).truncationMode(.middle).padding(.horizontal)
-                Button { Task { await model.newSession() } } label: {
-                    Label("New Chat", systemImage: "plus").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent).padding()
-                List(model.sessions) { session in
-                    Button { Task { await model.select(session) } } label: {
-                        VStack(alignment: .leading) {
-                            HStack {
-                                Text(session.title ?? URL(fileURLWithPath: session.cwd).lastPathComponent)
-                                if model.permissionQueue.contains(where: { $0.sessionId == session.id }) {
-                                    Image(systemName: "questionmark.circle.fill").foregroundStyle(.orange)
-                                        .help("Waiting for your answer")
-                                }
-                            }
-                            Text(session.updatedAt?.formatted() ?? session.id.prefix(8).description)
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.buttonStyle(.plain)
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
-        } detail: {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("\(modelsTitle)").font(.headline)
-                    Spacer()
-                    if !model.models.choices.isEmpty {
-                        Picker("Model", selection: Binding(get: { model.selectedModel ?? "" }, set: { value in Task { await model.setModel(value) } })) {
-                            ForEach(model.models.choices) { Text($0.name).tag($0.id) }
-                        }.frame(width: 210)
-                    }
-                }.padding()
-                if let error = model.error {
-                    HStack { Image(systemName: "exclamationmark.triangle"); Text(error); Spacer(); Button("Dismiss") { model.error = nil } }
-                        .padding().background(.red.opacity(0.1))
-                }
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
-                            ForEach(model.messages) { message in
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(message.role).font(.caption.bold()).foregroundStyle(message.role == "RustCode" ? .blue : .secondary)
-                                    Text(message.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                                }.padding(12).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10)).id(message.id)
-                            }
-                        }.padding()
-                    }.onChange(of: model.messages.count) { _, _ in
-                        if let last = model.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                }
-                if let permission = model.pendingPermission {
-                    if permission.question != nil {
-                        QuestionCard(model: model, request: permission).id(permission.id)
-                    } else {
-                        permissionCard(permission)
-                    }
-                }
-                HStack(alignment: .bottom) {
-                    TextField("Message RustCode…", text: $model.draft, axis: .vertical)
-                        .lineLimit(1...6).textFieldStyle(.roundedBorder)
-                        .onSubmit { Task { await model.submit() } }
-                        .disabled(model.busy)
-                    if model.busy {
-                        Button { Task { await model.cancel() } } label: { Image(systemName: "stop.fill") }
-                            .buttonStyle(.bordered).help("Stop turn")
-                    } else {
-                        Button { Task { await model.submit() } } label: { Image(systemName: "arrow.up") }
-                            .buttonStyle(.borderedProminent).disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            .keyboardShortcut(.return, modifiers: .command)
-                    }
-                }.padding()
-            }
-        }
-        .alert("RustCode", isPresented: Binding(get: { model.error != nil && model.error!.isEmpty }, set: { if !$0 { model.error = nil } })) { Button("OK") { model.error = nil } }
-    }
-
-    private var modelsTitle: String { model.selectedSession == nil ? "Choose a project" : "RustCode" }
-
-    @ViewBuilder private func permissionCard(_ request: PermissionRequest) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Permission requested", systemImage: "hand.raised").font(.headline)
-            Text(request.title).textSelection(.enabled)
-            if let input = request.input { Text(input.prettyPrinted()).font(.system(.caption, design: .monospaced)).textSelection(.enabled).lineLimit(8) }
-            HStack {
-                ForEach(request.options) { option in
-                    if option.kind?.isAllow == true {
-                        Button(option.name) { Task { await model.answer(request, with: option) } }
-                            .buttonStyle(.borderedProminent)
-                    } else {
-                        Button(option.name) { Task { await model.answer(request, with: option) } }
-                            .buttonStyle(.bordered)
-                    }
-                }
-            }
-        }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.orange.opacity(0.12))
-    }
-}
-
-/// An `ask_question` from the engine: one button per option, ticks and a
-/// Submit for multi-select questions, and a free-text answer.
-struct QuestionCard: View {
-    @ObservedObject var model: DesktopModel
-    let request: PermissionRequest
-    @State private var ticked: Set<String> = []
-    @State private var custom = ""
-
-    var body: some View {
-        let question = request.question!
-        VStack(alignment: .leading, spacing: 10) {
-            Label(question.header.isEmpty ? "RustCode has a question" : question.header, systemImage: "questionmark.circle")
-                .font(.headline)
-            Text(question.text).textSelection(.enabled)
-            if question.multiple {
-                ForEach(request.answerOptions) { option in
-                    Toggle(option.name, isOn: Binding(
-                        get: { ticked.contains(option.id) },
-                        set: { if $0 { ticked.insert(option.id) } else { ticked.remove(option.id) } }))
-                }
-            }
-            HStack {
-                if question.multiple {
-                    Button("Submit") {
-                        let chosen = request.answerOptions.filter { ticked.contains($0.id) }
-                        Task { await model.answer(request, choosing: chosen) }
-                    }.buttonStyle(.borderedProminent).disabled(ticked.isEmpty)
-                } else {
-                    ForEach(request.answerOptions) { option in
-                        Button(option.name) { Task { await model.answer(request, with: option) } }
-                            .buttonStyle(.borderedProminent)
-                    }
-                }
-                if let reject = request.rejectOption {
-                    Button(reject.name) { Task { await model.answer(request, with: reject) } }
-                        .buttonStyle(.bordered)
-                }
-            }
-            HStack {
-                TextField("Or write your own answer…", text: $custom)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { Task { await model.answer(request, text: custom) } }
-                Button("Send") { Task { await model.answer(request, text: custom) } }
-                    .disabled(custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.orange.opacity(0.12))
     }
 }

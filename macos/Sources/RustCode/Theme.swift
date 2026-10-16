@@ -1,0 +1,64 @@
+import AppKit
+import SwiftUI
+
+// The palette of the iOS app, so both clients read as one product:
+//
+// - `brand`: the logo's slate blue, for text and symbols. Lighter in dark mode.
+// - `brandFill`: the same hue as a fill that carries a white label in both appearances.
+// - `attention`: something is waiting for the user (an approval, a question, an error).
+//   Amber, so it never reads as the brand accent.
+extension Color {
+    static let brand = Color.dynamic(light: 0x435C6E, dark: 0x7FA3BD)
+    static let brandFill = Color.dynamic(light: 0x435C6E, dark: 0x4F6D83)
+    static let attention = Color.dynamic(light: 0x8A5A00, dark: 0xFFD60A)
+    /// The window's two planes: a gray sidebar beside a lighter (or, in dark
+    /// mode, deeper) chat, told apart by tone instead of a divider line.
+    static let sidebarBackground = Color.dynamic(light: 0xEEEEF0, dark: 0x2A2A2D)
+    static let chatBackground = Color.dynamic(light: 0xFFFFFF, dark: 0x1E1E20)
+
+    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let hex = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255,
+                           green: CGFloat(hex >> 8 & 0xFF) / 255,
+                           blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+        })
+    }
+}
+
+extension View {
+    /// A panel that floats over the transcript: a translucent material and a soft
+    /// shadow, with no outline.
+    func floatingSurface(in shape: some Shape) -> some View {
+        background {
+            shape
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.10), radius: 10, y: 3)
+        }
+    }
+
+    /// A card in the transcript: a quiet fill with an optional coloured hairline.
+    func card(cornerRadius: CGFloat = 14, outline: Color? = nil) -> some View {
+        padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.fill.quaternary, in: .rect(cornerRadius: cornerRadius))
+            .overlay {
+                if let outline {
+                    RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(outline.opacity(0.45), lineWidth: 1)
+                }
+            }
+    }
+
+    /// The main action of a card, filled with the brand colour.
+    func brandProminent() -> some View {
+        buttonStyle(.borderedProminent).tint(.brandFill)
+    }
+}
+
+enum Clipboard {
+    @MainActor
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
