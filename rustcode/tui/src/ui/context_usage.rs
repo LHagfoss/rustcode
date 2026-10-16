@@ -1,17 +1,7 @@
 use crate::ui::render_snapshot::RenderSnapshot;
 use rustcode::controller::TokenUsage;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ContextUsageSource {
-    ProviderPrompt,
-    HistoryEstimate,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ContextUsage {
-    pub(crate) used_tokens: u32,
-    pub(crate) source: ContextUsageSource,
-}
+pub(crate) use rustcode::controller::{ContextUsage, ContextUsageSource};
 
 /// The footer and `/context` headline use usage from the current request when
 /// available. Completion tokens do not occupy the context window. When there

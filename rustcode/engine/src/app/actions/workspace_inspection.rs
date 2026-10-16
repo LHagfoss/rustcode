@@ -17,7 +17,7 @@ enum GitError {
     Timeout,
 }
 
-pub(super) async fn inspect_workspace(root: &Path) -> Result<String, String> {
+pub(crate) async fn inspect_workspace(root: &Path) -> Result<String, String> {
     let status = match run_git(
         root,
         &["status", "--short", "--untracked-files=normal"],

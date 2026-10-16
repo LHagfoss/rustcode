@@ -144,93 +144,12 @@ async fn handle_enter_inner(
                     s.set_transient_notice("Not enough messages to compact");
                     return false;
                 }
-                let api_base_url = s.api_base_url.clone();
-                let model_name = s.model_name.clone();
-                // Subscription-backed profiles have no plain summarizer endpoint.
-                let chatgpt_plan_profile = s.active_model_profile().is_some_and(|profile| {
-                    profile
-                        .credential
-                        .as_ref()
-                        .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli())
-                });
-                let active_session_id = s.active_session_id.clone();
-                let original_history = s.history.clone();
-                let mut history_to_compact = original_history.clone();
                 let compaction_cancel_token = cancel_token.clone();
                 drop(s);
                 let state_clone = Arc::clone(state);
                 let client_clone = client.clone();
-                let budget = {
-                    let s = state_clone.lock().await;
-                    s.get_history_token_budget() as usize
-                };
                 tokio::spawn(async move {
-                    let compact_result = if chatgpt_plan_profile {
-                        crate::network::compaction::force_compact_with_budget_deterministic(
-                            history_to_compact.as_mut_vec(),
-                            Some(budget),
-                        )
-                        .await
-                    } else {
-                        crate::network::compaction::force_compact_with_budget(
-                            &client_clone,
-                            &api_base_url,
-                            &model_name,
-                            history_to_compact.as_mut_vec(),
-                            Some(budget),
-                            Some(&compaction_cancel_token),
-                        )
-                        .await
-                        .map_err(|error| error.to_string())
-                    };
-                    match compact_result {
-                        Ok((before, after)) => {
-                            let mut s = state_clone.lock().await;
-                            let live_session_id = s.active_session_id.clone();
-                            if try_merge_compacted_history(
-                                &live_session_id,
-                                s.history.as_mut_vec(),
-                                &active_session_id,
-                                &original_history,
-                                history_to_compact.into_vec(),
-                            ) {
-                                s.history.push(ChatMessage::new(
-                                    "system",
-                                    format!(
-                                        "🧹 History compacted: reduced context from {} to {} tokens.",
-                                        before, after
-                                    ),
-                                ));
-                            } else {
-                                report_stale_compaction(
-                                    &live_session_id,
-                                    &active_session_id,
-                                    s.history.as_mut_vec(),
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            let mut s = state_clone.lock().await;
-                            let live_session_id = s.active_session_id.clone();
-                            if history_matches_snapshot(
-                                &live_session_id,
-                                &s.history,
-                                &active_session_id,
-                                &original_history,
-                            ) {
-                                s.history.push(ChatMessage::new(
-                                    "system",
-                                    format!("History compaction failed: {}", e),
-                                ));
-                            } else {
-                                report_stale_compaction(
-                                    &live_session_id,
-                                    &active_session_id,
-                                    s.history.as_mut_vec(),
-                                );
-                            }
-                        }
-                    }
+                    compact_history(&state_clone, &client_clone, &compaction_cancel_token).await;
                     state_clone.lock().await.request_redraw();
                 });
                 return false;

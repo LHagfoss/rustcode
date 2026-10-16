@@ -688,6 +688,18 @@ pub(super) fn current_server_statuses() -> Vec<McpServerStatus> {
     server_statuses(&configured, &running, &crate::mcp::mcp_startup_failures())
 }
 
+/// Each configured or connected server's name and state label, such as
+/// `running (3 tools)`, for command reports.
+pub(crate) fn mcp_server_status_labels() -> Vec<(String, String)> {
+    current_server_statuses()
+        .into_iter()
+        .map(|status| {
+            let label = status.label();
+            (status.name, label)
+        })
+        .collect()
+}
+
 /// System-prompt section naming every configured MCP server and its state.
 /// Built only from the registry, config and startup failures, so it is
 /// byte-identical across requests until one of those changes.
