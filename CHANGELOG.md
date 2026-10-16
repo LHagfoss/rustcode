@@ -1,3 +1,11 @@
+## [v0.70.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.70.0) - 2026-10-16
+
+### Features
+- macOS app: redesigned to match the iOS app, with Markdown replies, folded thinking, tool cards and a floating composer ([#2041](https://github.com/LHagfoss/rustcode/pull/2041)).
+- macOS app: proper app icon, gray sidebar without divider, in-window Settings (⌘,) ([#2041](https://github.com/LHagfoss/rustcode/pull/2041)).
+- macOS app: composer + menu to attach files and folders, filterable model picker, drag and drop files ([#2041](https://github.com/LHagfoss/rustcode/pull/2041)).
+- macOS app: ⌘F find in chat and chat search in the sidebar ([#2041](https://github.com/LHagfoss/rustcode/pull/2041)).
+- macOS app: checks GitHub for new releases and updates itself in place ([#2041](https://github.com/LHagfoss/rustcode/pull/2041)).
 ## [v0.69.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.69.0) - 2026-10-15
 
 ### Features
