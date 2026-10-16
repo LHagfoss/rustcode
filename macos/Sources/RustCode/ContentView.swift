@@ -63,6 +63,8 @@ private struct SessionSidebar: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var updater: Updater
     @FocusState private var searchFocused: Bool
+    /// The one chat row whose swipe actions are showing.
+    @State var openSwipeRow: String?
 
     /// The hidden title bar's height, so buttons line up with the traffic lights.
     static let barHeight: CGFloat = 28
@@ -119,23 +121,22 @@ private struct SessionSidebar: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            // A native List, so a two-finger swipe on a row reveals its actions.
-            List {
-                let pinned = model.visibleSessions.filter { model.pinnedSessions.contains($0.id) }
-                if !pinned.isEmpty {
-                    Section {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    let pinned = model.visibleSessions.filter { model.pinnedSessions.contains($0.id) }
+                    if !pinned.isEmpty {
+                        Label("Pinned", systemImage: "pin.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.top, 2)
                         ForEach(pinned) { row($0) }
-                    } header: {
-                        Label("Pinned", systemImage: "pin.fill").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Divider().opacity(0.4).padding(.vertical, 6).padding(.horizontal, 10)
                     }
-                }
-                Section {
                     ForEach(model.visibleSessions.filter { !model.pinnedSessions.contains($0.id) }) { row($0) }
                 }
+                .padding(.horizontal, 10)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 1)
             .overlay {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
@@ -198,6 +199,14 @@ private struct SessionSidebar: View {
 extension SessionSidebar {
     @ViewBuilder
     func row(_ session: SessionSummary) -> some View {
+        let isPinned = model.pinnedSessions.contains(session.id)
+        SwipeRow(id: session.id, openRow: $openSwipeRow,
+                 leading: [SwipeAction(title: isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash.fill" : "pin.fill",
+                                       tint: .brand) { model.togglePin(session) }],
+                 trailing: [
+                    SwipeAction(title: "Rename", systemImage: "pencil", tint: .secondary) { model.renamingSession = session },
+                    SwipeAction(title: "Trash", systemImage: "trash.fill", tint: .red) { Task { await model.trash(session) } },
+                 ]) {
         SessionRow(session: session,
                    showsProject: model.showsAllProjects,
                    isSelected: session.id == model.selectedSession,
@@ -207,24 +216,6 @@ extension SessionSidebar {
             guard session.id != model.selectedSession else { return }
             Task { await model.select(session) }
         }
-        .listRowInsets(EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10))
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
-        .swipeActions(edge: .leading, allowsFullSwipe: true) {
-            Button { model.togglePin(session) } label: {
-                Label(model.pinnedSessions.contains(session.id) ? "Unpin" : "Pin",
-                      systemImage: model.pinnedSessions.contains(session.id) ? "pin.slash" : "pin")
-            }
-            .tint(.brandFill)
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) { Task { await model.trash(session) } } label: {
-                Label("Trash", systemImage: "trash")
-            }
-            Button { model.renamingSession = session } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            .tint(.gray)
         }
         .contextMenu { SessionMenu(model: model, session: session) }
     }
