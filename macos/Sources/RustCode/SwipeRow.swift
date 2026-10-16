@@ -37,15 +37,9 @@ struct SwipeRow<Content: View>: View {
         ZStack {
             // The buttons are uncovered as the row slides, never drawn under it.
             HStack(spacing: 0) {
-                buttons(leading)
-                    .frame(width: max(0, offset), alignment: .leading)
-                    .clipped()
-                    .opacity(offset > 0 ? 1 : 0)
+                if offset > 0 { buttons(leading, revealed: offset, full: leadingWidth) }
                 Spacer(minLength: 0)
-                buttons(trailing)
-                    .frame(width: max(0, -offset), alignment: .trailing)
-                    .clipped()
-                    .opacity(offset < 0 ? 1 : 0)
+                if offset < 0 { buttons(trailing, revealed: -offset, full: trailingWidth) }
             }
             content
                 .background(Color.sidebarBackground)
@@ -66,8 +60,12 @@ struct SwipeRow<Content: View>: View {
         .onDisappear(perform: remove)
     }
 
-    private func buttons(_ actions: [SwipeAction]) -> some View {
-        HStack(spacing: 4) {
+    /// The buttons share the uncovered width, so they stretch with the pull and
+    /// keep stretching past their resting size; icons grow in as they appear.
+    private func buttons(_ actions: [SwipeAction], revealed: CGFloat, full: CGFloat) -> some View {
+        let progress = min(1, revealed / max(full, 1))
+        let each = max(0, (revealed - 4 - CGFloat(actions.count - 1) * 4) / CGFloat(actions.count))
+        return HStack(spacing: 4) {
             ForEach(actions) { action in
                 Button {
                     close()
@@ -75,10 +73,13 @@ struct SwipeRow<Content: View>: View {
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: action.systemImage).font(.system(size: 13, weight: .semibold))
-                        Text(action.title).font(.caption2.weight(.medium)).lineLimit(1)
+                        Text(action.title).font(.caption2.weight(.medium)).lineLimit(1).fixedSize()
                     }
+                    .scaleEffect(0.6 + 0.4 * progress)
+                    .opacity(Double(progress) * 1.4 - 0.3)
                     .foregroundStyle(action.tint)
-                    .frame(width: Self.buttonWidth - 4)
+                    .frame(width: each)
+                    .clipped()
                     .frame(maxHeight: .infinity)
                     .background(action.tint.opacity(0.16), in: .rect(cornerRadius: 12))
                     .contentShape(.rect(cornerRadius: 12))
@@ -91,8 +92,10 @@ struct SwipeRow<Content: View>: View {
         .padding(.horizontal, 2)
     }
 
+    private static var spring: Animation { .spring(response: 0.38, dampingFraction: 0.72) }
+
     private func close() {
-        withAnimation(.snappy(duration: 0.22)) { offset = 0 }
+        withAnimation(Self.spring) { offset = 0 }
         if openRow == id { openRow = nil }
     }
 
@@ -151,17 +154,24 @@ struct SwipeRow<Content: View>: View {
         }
     }
 
-    /// Follow the fingers, with resistance past the buttons.
+    /// Follow the fingers at a calmer rate than the raw deltas, with rubber-band
+    /// resistance past the buttons. Crossing the full-swipe point ticks the trackpad.
     private func move(by delta: CGFloat) {
-        let limitLeading = leading.isEmpty ? 0 : leadingWidth * 1.6
-        let limitTrailing = trailing.isEmpty ? 0 : trailingWidth * 1.25
+        let limitLeading = leading.isEmpty ? 0 : leadingWidth * 1.8
+        let limitTrailing = trailing.isEmpty ? 0 : trailingWidth * 1.4
         let beyond = offset > leadingWidth || offset < -trailingWidth
-        offset = min(max(offset + (beyond ? delta * 0.4 : delta), -limitTrailing), limitLeading)
+        let wasPastFull = offset > leadingWidth * Self.fullSwipe
+        offset = min(max(offset + delta * (beyond ? 0.22 : 0.55), -limitTrailing), limitLeading)
+        if !leading.isEmpty, wasPastFull != (offset > leadingWidth * Self.fullSwipe) {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
     }
 
+    private static var fullSwipe: CGFloat { 1.35 }
+
     private func settle() {
-        withAnimation(.snappy(duration: 0.25)) {
-            if let first = leading.first, offset > leadingWidth * 1.35 {
+        withAnimation(Self.spring) {
+            if let first = leading.first, offset > leadingWidth * Self.fullSwipe {
                 offset = 0
                 openRow = nil
                 first.action()
