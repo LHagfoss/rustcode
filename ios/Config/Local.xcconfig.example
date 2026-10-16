@@ -1,0 +1,11 @@
+// Copy to Config/Local.xcconfig (ignored by git) and fill in.
+//
+// DEVELOPMENT_TEAM is the 10-character team ID of your Apple ID's personal team.
+// Xcode shows it under Settings > Accounts; it is also the value Xcode writes when
+// you pick a team in the Signing & Capabilities tab.
+//
+// Bundle identifiers are global. If com.lhagfoss.rustcode is taken for your team,
+// use your own, for example com.yourname.rustcode.
+
+DEVELOPMENT_TEAM = ABCDE12345
+// PRODUCT_BUNDLE_IDENTIFIER = com.yourname.rustcode

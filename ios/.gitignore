@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+*.xcresult
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Personal signing settings (team ID, bundle identifier)
+Config/Local.xcconfig

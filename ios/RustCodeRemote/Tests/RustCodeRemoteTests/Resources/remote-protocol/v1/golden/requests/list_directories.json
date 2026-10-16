@@ -1,0 +1,7 @@
+{
+  "protocol_version": 1,
+  "request_id": "req-folders",
+  "operation": {
+    "type": "list_directories"
+  }
+}

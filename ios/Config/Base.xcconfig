@@ -1,0 +1,11 @@
+// Settings shared by every checkout. Committed.
+//
+// Signing values that belong to one person go in Config/Local.xcconfig, which is
+// ignored by git. Copy Config/Local.xcconfig.example to get started, or just pick
+// your team in Xcode under Signing & Capabilities.
+
+PRODUCT_BUNDLE_IDENTIFIER = com.lhagfoss.rustcode
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Automatic
+
+#include? "Local.xcconfig"

@@ -1,0 +1,53 @@
+import RustCodeRemote
+import SwiftUI
+import UIKit
+
+@main
+struct RustCodeApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var store = RemoteStore(
+        client: LiveRemoteClient(codec: WireCodec()),
+        demoClient: {
+            DemoRemoteClient(
+                includeQuestionChain: LaunchOptions.current.demoSessionID == DemoRemoteClient.questionsSessionID,
+                unconfirmedCreations: LaunchOptions.current.leavesFirstCreateUnconfirmed ? 1 : 0,
+                includeSummaryPresentation: LaunchOptions.current.showsSummaryDemo
+            )
+        },
+        credentials: KeychainCredentialStore(),
+        locateHost: { await NearbyHostDiscovery.locate(gatewayID: $0) }
+    )
+
+    private let options = LaunchOptions(arguments: ProcessInfo.processInfo.arguments)
+
+    var body: some Scene {
+        WindowGroup {
+            RootView(presentsAttentionOnLaunch: options.presentsAttention)
+                .environment(store)
+                .task { await start() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                Task { await store.suspend() }
+            case .active:
+                store.resume()
+            default:
+                break
+            }
+        }
+    }
+
+    private func start() async {
+        guard options.startsDemo else {
+            store.bootstrap()
+            return
+        }
+        await store.startDemo(deviceName: UIDevice.current.name)
+        guard let sessionID = options.demoSessionID else { return }
+        for _ in 0..<200 where store.sessions.isEmpty {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        store.select(sessionID)
+    }
+}

@@ -1,0 +1,6 @@
+{
+  "type": "authenticate",
+  "protocol_version": 1,
+  "device_id": "0011223344556677",
+  "token": "ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"
+}

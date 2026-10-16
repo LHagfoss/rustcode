@@ -1,0 +1,20 @@
+{
+  "kind": "event",
+  "protocol_version": 1,
+  "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+  "registration_epoch": 3,
+  "sequence": 414,
+  "generation": 1,
+  "event": {
+    "type": "text_delta",
+    "text": "The failure comes from ",
+    "timing": {
+      "turn_id": "turn:48213:12",
+      "started_at": "2026-10-09T18:41:00+02:00",
+      "elapsed_work_ms": 12000
+    },
+    "thought_time_ms": 4000,
+    "thought_tokens": 800,
+    "thought_tokens_estimated": true
+  }
+}

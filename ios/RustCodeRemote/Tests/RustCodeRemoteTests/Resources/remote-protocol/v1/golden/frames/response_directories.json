@@ -1,0 +1,17 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-folders",
+  "result": {
+    "type": "directories",
+    "path": "/Users/example",
+    "parent": "/Users",
+    "directories": [
+      {
+        "name": "projects",
+        "path": "/Users/example/projects"
+      }
+    ],
+    "truncated": false
+  }
+}

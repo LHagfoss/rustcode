@@ -1,0 +1,17 @@
+{
+  "kind": "event",
+  "protocol_version": 1,
+  "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+  "registration_epoch": 3,
+  "sequence": 415,
+  "generation": 1,
+  "event": {
+    "type": "tool_started",
+    "tool": {
+      "id": "call_Jq3",
+      "name": "view_file",
+      "detail": "src/parser.rs (lines 1-80)",
+      "state": "running"
+    }
+  }
+}

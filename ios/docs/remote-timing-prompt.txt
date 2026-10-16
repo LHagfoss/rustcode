@@ -1,0 +1,44 @@
+Work in ~/code/rustcode. Extend remote protocol v1 so the iOS RustCode Remote app
+can show thinking duration, total turn work time, completion state, and when a
+turn ended. Create a PR using the repository's normal workflow.
+
+Confirmed source findings:
+- rustcode/core/rustcode-core/src/lib.rs: ChatMessage already persists optional
+  response_time_ms, thought_time_ms and completed_at.
+- rustcode/engine/src/remote/projection.rs: project_messages exports content,
+  role, tool and timestamp, but drops those duration fields.
+- rustcode/engine/src/remote/protocol.rs: RemoteTurn only describes an active
+  turn. TurnFinished/TurnCancelled contain only an optional turn_id.
+- rustcode/engine/src/app/state.rs: current_turn_started_at and exclude_user_wait
+  define work time across harness resumes, excluding time waiting on approvals
+  or questions. Preserve that behavior.
+- rustcode/tui/src/ui/assistant_render.rs displays thought duration;
+  rustcode/tui/src/ui/tool_transcript.rs displays the "Worked for" duration.
+
+Requirements:
+1. Export the existing optional assistant response_time_ms, thought_time_ms and completed_at
+   on RemoteMessage in both snapshot transcript and get_history. Preserve the
+   distinction between assistant/phase timing and total turn work time.
+2. Expose authoritative active and completed turn metadata: stable turn_id,
+   actual start/end RFC3339 timestamps, elapsed work milliseconds, and terminal
+   outcome (completed, cancelled, failed). Include it in live events, snapshots
+   and history so reconnecting or attaching after completion does not lose the
+   footer. Correlate assistant messages to the turn. Do not infer completion
+   from message.timestamp or compute work duration from wall-clock subtraction.
+3. Supply live thought timing if available. Document whether thought_time_ms
+   covers one assistant segment or multiple thinking blocks; do not label
+   several separate blocks with a duplicated aggregate duration.
+4. Make additions optional and backward compatible with older v1 clients and
+   stored sessions. Unknown timing stays absent; never invent zero durations.
+   Retain bounded snapshot/history payloads and existing replay sequencing.
+5. Update schemas, golden frames, protocol documentation and contract tests.
+   Cover live completion, cancellation/failure, reconnect/resume, late attach,
+   history, multiple tool/thinking phases, harness resumes, excluded user waits,
+   and old frames lacking metadata. Export finalized timing before clearing the
+   engine's active turn identity/state.
+
+Return the PR and concrete JSON examples for live and historical metadata,
+including how each field maps to an iOS "Thought for 4s" label and
+"Completed at 18:42 · Worked for 32s" footer. The app repo can then run
+Scripts/sync-protocol.sh against the merged contract and add the Swift decoding,
+reducer and display changes. Do not change the iOS repo in this task.
