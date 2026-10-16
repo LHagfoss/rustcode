@@ -261,6 +261,8 @@ async fn run_remote_command(
             println!("{}", remote::format_status(Some(&status)));
         }
         RemoteCommands::SessionOwner { session_id } => {
+            // Detached: nobody can answer a credential-store password prompt.
+            rustcode::provider_auth::disable_credential_prompts();
             hydrate_shell_provider_keys();
             AppRuntime::run_detached_session(&config_dir, session_id).await?;
         }

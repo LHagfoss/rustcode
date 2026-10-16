@@ -5053,14 +5053,19 @@ async fn stream_request_with_timeouts(
             result = tokio::time::timeout(
                 // Long enough to answer an operating system password prompt
                 // for the credential store; 30 seconds failed the turn while
-                // the prompt was still open.
-                std::time::Duration::from_secs(120),
+                // the prompt was still open. A detached owner cannot show the
+                // prompt and fails within seconds instead (#2021).
+                crate::provider_auth::credential_resolution_timeout(),
                 crate::provider_auth::resolve_profile_credential(profile),
             ) => match result {
                 Err(_) => return Err(StreamFailure {
                     kind: StreamFailureKind::ProviderError,
                     status: None,
-                    detail: Some("credential resolution timed out before the provider request was sent; if the operating system asked for a password to unlock the credential store, answer it and retry".to_owned()),
+                    detail: Some(if crate::provider_auth::credential_prompts_allowed() {
+                        "credential resolution timed out before the provider request was sent; if the operating system asked for a password to unlock the credential store, answer it and retry"
+                    } else {
+                        "credential resolution timed out before the provider request was sent; this background session cannot answer an operating system password prompt, so open `rustcode` in a terminal once or sign in again with /login, then retry"
+                    }.to_owned()),
                     bytes_received: 0,
                     events_received: 0,
                     partial_event_bytes: 0,
