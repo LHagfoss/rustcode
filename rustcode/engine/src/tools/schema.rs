@@ -1975,10 +1975,11 @@ pub(super) fn schema_for_agent_tool(name: &str) -> Value {
 
 /// Regression budget for the invariant prompt prefix. Tool schemas are sent
 /// separately for ApiNative requests and are intentionally not counted here.
+/// Raised from 4,700 bytes / 1,000 tokens for the visualization hint (#2088).
 #[cfg(test)]
-pub(crate) const BASE_PROMPT_MAX_BYTES: usize = 4_700;
+pub(crate) const BASE_PROMPT_MAX_BYTES: usize = 5_000;
 #[cfg(test)]
-pub(crate) const BASE_PROMPT_MAX_TOKENS: usize = 1_000;
+pub(crate) const BASE_PROMPT_MAX_TOKENS: usize = 1_120;
 
 /// Append the resolved execution policy after the cached, profile-independent
 /// prompt so model switches cannot retain another profile's mutation limit.
@@ -2030,6 +2031,13 @@ Before each batch of tool calls, write one short plain sentence saying what you 
 One line, no headings or lists, and never one per call. Skip it only when the batch simply continues what the previous note already said.\n",
     );
 }
+
+/// Short guidance for `rustcode-viz` blocks; the full format lives in
+/// `docs/visualizations.md` and the TUI renderer validates every payload.
+pub(crate) const VISUALIZATION_PROMPT_HINT: &str = "# Visualizations\n\
+When a chart, table, or tree beats prose, add a ```rustcode-viz fence with one JSON object: \
+{\"version\":1,\"type\":\"bar_chart\",\"title\":\"..\",\"summary\":\"..\",\"items\":[{\"label\":\"..\",\"value\":1}]}; \
+\"table\" takes columns, rows (arrays), optional sort_by {column,descending}; \"tree\" takes nodes [{label,note,children}]. Max 30 bars, 50 rows, 120 nodes.\n\n";
 
 pub(crate) fn tool_system_prompt_for_policy(
     policy: ToolSchemaPolicy,
@@ -2084,6 +2092,14 @@ For local machine state check the shell first, never `list_skills` first. \
 - Repeated reads, no-ops, and failed attempts are advisory loop signals, not a hard stop. Avoid endlessly repeating an identical call, but continue when needed with a different `view_file` range, `grep`, edit, or test. Use cached replay content when supplied; if a replayed read is incomplete or unavailable, choose another useful inspection. An edit that reports \"already applied\" changed nothing on disk, so do not re-issue that identical edit without new evidence.
 - Use `todo_write` only for complex 3+ step work, not routine edits, git, or simple questions; update it at milestones.\n\n"
     );
+
+    // Visualization hint (#2088). Only the root agent writes user-facing
+    // replies, and compact prompts are for small models where every token
+    // counts. Clients without a native renderer show the block as a readable
+    // JSON code fence, so the hint is safe for every frontend.
+    if policy.profile != ToolSchemaProfile::ReadOnlySubagent && !policy.compact_text_prompt {
+        p.push_str(VISUALIZATION_PROMPT_HINT);
+    }
 
     // Gate on the same condition as the agent tool list below: promising a
     // delegation workflow with zero callable subagent tools made the model

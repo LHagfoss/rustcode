@@ -4752,3 +4752,28 @@ fn a_harness_notice_does_not_unbind_a_discovery_result() {
     let after = select(&messages);
     assert_eq!(after.selected_names, bound.selected_names);
 }
+
+#[test]
+fn visualization_hint_reaches_root_prompts_only() {
+    use crate::config::{AgentMode, ToolProtocol};
+    let hint = super::schema::VISUALIZATION_PROMPT_HINT;
+    assert!(crate::network::compaction::estimate_tokens(hint) < 130);
+    for protocol in [
+        ToolProtocol::ApiNative,
+        ToolProtocol::Json,
+        ToolProtocol::Native,
+    ] {
+        for mode in [AgentMode::Build, AgentMode::Plan] {
+            assert!(super::tool_system_prompt(false, protocol, mode).contains(hint));
+        }
+        let subagent =
+            tool_system_prompt_for_policy(ToolSchemaPolicy::subagent(), protocol, AgentMode::Build);
+        assert!(!subagent.contains("rustcode-viz"));
+        let compact = tool_system_prompt_for_policy(
+            ToolSchemaPolicy::root_for_mode_with_compact_prompt(false, AgentMode::Build, true),
+            protocol,
+            AgentMode::Build,
+        );
+        assert!(!compact.contains("rustcode-viz"));
+    }
+}

@@ -529,6 +529,64 @@ pub(super) fn render_assistant_message_with_cache<'a>(
                             j += 1;
                         }
 
+                        // `rustcode-viz` blocks render as native widgets only
+                        // once the closing fence has arrived. While the fence
+                        // is open in a live stream a one-row placeholder
+                        // stands in for the body, so a partial payload is
+                        // never parsed, drawn, or committed to scrollback.
+                        if super::visualization::is_viz_info(&current_lang) {
+                            let closed = j < processed_lines.len();
+                            let viz_lines = if closed {
+                                super::visualization::render_visualization(
+                                    &code_text,
+                                    box_width,
+                                    show_picker,
+                                )
+                            } else if is_generating {
+                                Ok(vec![super::visualization::streaming_placeholder(
+                                    j - i - 1,
+                                    show_picker,
+                                )])
+                            } else {
+                                Err("incomplete block".to_owned())
+                            };
+                            match viz_lines {
+                                Ok(viz_lines) => {
+                                    // Copy the canonical fence so pasting it
+                                    // reproduces the same widget.
+                                    if closed {
+                                        let source = format!(
+                                            "{}\n{code_text}\n{}",
+                                            processed_lines[i].1, processed_lines[j].1
+                                        );
+                                        copy_registry.push((lines.len(), source));
+                                    }
+                                    for line in viz_lines {
+                                        push_assistant_content_line(
+                                            lines,
+                                            line,
+                                            &mut emitted_assistant_gutter,
+                                            show_picker,
+                                        );
+                                    }
+                                    // Resume at the closing fence (or the
+                                    // end of an open stream).
+                                    i = j;
+                                    fence_open = next_fence;
+                                    continue;
+                                }
+                                Err(reason) => {
+                                    push_assistant_content_line(
+                                        lines,
+                                        super::visualization::fallback_note(&reason, show_picker),
+                                        &mut emitted_assistant_gutter,
+                                        show_picker,
+                                    );
+                                    current_lang = "json".to_owned();
+                                }
+                            }
+                        }
+
                         if !code_text.is_empty() {
                             let _copied_recently =
                                 last_copy_text.as_ref().is_some_and(|(text, at)| {
