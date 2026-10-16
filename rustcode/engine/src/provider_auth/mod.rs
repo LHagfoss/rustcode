@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 pub(crate) use rate_limits::rate_limit_header_pairs;
 pub use rate_limits::{ProviderRateLimits, RateLimitWindow};
-pub use store::{CredentialStore, NativeCredentialStore};
+pub use store::{
+    CredentialStore, NativeCredentialStore, credential_prompts_allowed, disable_credential_prompts,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -164,6 +166,18 @@ fn default_true() -> bool {
 pub(crate) fn config_dir() -> Result<std::path::PathBuf> {
     crate::config::get_config_dir()
         .ok_or_else(|| anyhow!("could not locate RustCode config directory"))
+}
+
+/// How long a provider request waits for its credential. An interactive
+/// process allows time to answer an operating system password prompt; one
+/// that cannot show prompts only waits out a refresh or a lock held by
+/// another process.
+pub fn credential_resolution_timeout() -> std::time::Duration {
+    credential_timeout(credential_prompts_allowed())
+}
+
+fn credential_timeout(prompts_allowed: bool) -> std::time::Duration {
+    std::time::Duration::from_secs(if prompts_allowed { 120 } else { 20 })
 }
 
 pub async fn resolve_profile_credential(profile: &ModelProfile) -> Result<Option<String>> {
@@ -1204,6 +1218,17 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    // #2021: a process that cannot answer a credential prompt must not wait
+    // the two minutes an interactive one allows for it.
+    #[test]
+    fn credential_resolution_fails_fast_without_prompts() {
+        assert_eq!(
+            credential_timeout(true),
+            std::time::Duration::from_secs(120)
+        );
+        assert!(credential_timeout(false) <= std::time::Duration::from_secs(30));
+    }
 
     #[test]
     fn login_mode_flags_are_taken_from_any_position() {

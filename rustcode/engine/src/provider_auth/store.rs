@@ -169,6 +169,45 @@ impl CredentialStore for NativeCredentialStore {
     }
 }
 
+/// Whether this process may wait on an operating system credential prompt.
+static PROMPTS_ALLOWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// For a process with no terminal or window to answer a credential-store
+/// password prompt, such as a detached `remote session-owner`. A keychain
+/// read then succeeds if it needs no prompt and fails at once otherwise,
+/// instead of waiting on a dialog nobody sees.
+pub fn disable_credential_prompts() {
+    PROMPTS_ALLOWED.store(false, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "Security", kind = "framework")]
+        unsafe extern "C" {
+            fn SecKeychainSetUserInteractionAllowed(state: u8) -> i32;
+        }
+        // SAFETY: takes a plain boolean and only changes this process's
+        // keychain UI policy.
+        unsafe {
+            SecKeychainSetUserInteractionAllowed(0);
+        }
+    }
+}
+
+pub fn credential_prompts_allowed() -> bool {
+    PROMPTS_ALLOWED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn keychain_read_error(error: &keyring::Error, prompts_allowed: bool) -> anyhow::Error {
+    match error {
+        keyring::Error::NoEntry => anyhow!("credential is missing; sign in again with /login"),
+        _ if !prompts_allowed => anyhow!(
+            "the credential is still in the operating system credential store, which needs a password prompt this background session cannot show; open `rustcode` in a terminal once (it moves the credential out of the keychain) or sign in again with /login, then retry"
+        ),
+        _ => {
+            anyhow!("credential is missing or the operating system credential store is unavailable")
+        }
+    }
+}
+
 fn keychain_get(key: &str) -> Result<String> {
     cached_secret(
         SecretCache::global(),
@@ -177,11 +216,9 @@ fn keychain_get(key: &str) -> Result<String> {
         || {
             let entry = keyring::Entry::new(KEYRING_SERVICE, key)
                 .map_err(|_| anyhow!("could not open the operating system credential store"))?;
-            entry.get_password().map_err(|_| {
-                anyhow!(
-                    "credential is missing or the operating system credential store is unavailable"
-                )
-            })
+            entry
+                .get_password()
+                .map_err(|error| keychain_read_error(&error, credential_prompts_allowed()))
         },
     )
 }
@@ -329,6 +366,26 @@ mod credential_file_tests {
             let mode = fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    // #2021: a detached owner's keychain read fails at once with a message
+    // the app can act on, rather than a generic "unavailable".
+    #[test]
+    fn keychain_errors_without_prompts_tell_the_user_how_to_recover() {
+        let refused = keyring::Error::PlatformFailure("interaction not allowed".into());
+        let detached = keychain_read_error(&refused, false).to_string();
+        assert!(detached.contains("cannot show"), "{detached}");
+        assert!(detached.contains("/login"), "{detached}");
+        assert!(
+            !keychain_read_error(&refused, true)
+                .to_string()
+                .contains("cannot show")
+        );
+        assert!(
+            keychain_read_error(&keyring::Error::NoEntry, false)
+                .to_string()
+                .contains("missing")
+        );
     }
 }
 
