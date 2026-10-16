@@ -2,8 +2,8 @@ use super::*;
 use crate::app::ChatMessage;
 use rustcode_session::SessionStore;
 pub use rustcode_session::{
-    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionScope, SessionWorkspace,
-    WorkspaceDescriptor, WorkspaceManager, WorkspaceRequest,
+    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionScope, SessionSearchHit,
+    SessionWorkspace, WorkspaceDescriptor, WorkspaceManager, WorkspaceRequest,
 };
 use sha2::Digest;
 use std::collections::HashMap;
@@ -625,6 +625,18 @@ pub fn list_sessions_in_scope(limit: usize, scope: &SessionScope) -> (Vec<Sessio
         || (Vec::new(), false),
         |session_store| session_store.list_sessions_in_scope(limit, scope),
     )
+}
+
+/// Sessions under `scope` whose user or assistant messages contain `query`
+/// (case-insensitive), newest first, at most `limit`.
+pub fn search_sessions(
+    query: &str,
+    limit: usize,
+    scope: &SessionScope,
+) -> Vec<rustcode_session::SessionSearchHit> {
+    store().map_or_else(Vec::new, |session_store| {
+        session_store.search_sessions(query, limit, scope)
+    })
 }
 
 /// One page of sessions in stable cursor order. `scope` is the store's shared

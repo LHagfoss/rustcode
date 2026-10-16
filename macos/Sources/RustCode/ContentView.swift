@@ -286,7 +286,9 @@ extension SessionSidebar {
                    isSelected: session.id == model.selectedSession,
                    isPinned: model.pinnedSessions.contains(session.id),
                    needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
-                   isRunning: model.busy && model.turnSession == session.id) {
+                   isRunning: model.busy && model.turnSession == session.id,
+                   searchSnippet: model.searchSnippet(for: session),
+                   searchQuery: model.sessionFilter.trimmingCharacters(in: .whitespaces)) {
             guard session.id != model.selectedSession else { return }
             Task { await model.select(session) }
         }
@@ -417,6 +419,9 @@ private struct SessionRow: View {
     var isPinned = false
     let needsAnswer: Bool
     let isRunning: Bool
+    /// Set for a chat found by its contents: the text around the match.
+    var searchSnippet: String?
+    var searchQuery = ""
     let action: () -> Void
     @State private var isHovered = false
 
@@ -426,19 +431,26 @@ private struct SessionRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.title ?? "New chat")
                         .lineLimit(1)
-                    HStack(spacing: 4) {
-                        if showsProject, !session.projectName.isEmpty {
-                            Label(session.projectName, systemImage: "folder")
-                                .labelStyle(.titleAndIcon)
-                                .lineLimit(1)
-                            if session.updatedAt != nil { Text("·") }
+                    if let searchSnippet {
+                        Text(highlighted(searchSnippet))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    } else {
+                        HStack(spacing: 4) {
+                            if showsProject, !session.projectName.isEmpty {
+                                Label(session.projectName, systemImage: "folder")
+                                    .labelStyle(.titleAndIcon)
+                                    .lineLimit(1)
+                                if session.updatedAt != nil { Text("·") }
+                            }
+                            if let updated = session.updatedAt {
+                                Text(updated, format: .relative(presentation: .named))
+                            }
                         }
-                        if let updated = session.updatedAt {
-                            Text(updated, format: .relative(presentation: .named))
-                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
                 if needsAnswer {
@@ -457,6 +469,19 @@ private struct SessionRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+    }
+
+    /// The snippet with every occurrence of the query emphasized.
+    private func highlighted(_ snippet: String) -> AttributedString {
+        var text = AttributedString(snippet)
+        guard !searchQuery.isEmpty else { return text }
+        var rest = text.startIndex..<text.endIndex
+        while let match = text[rest].range(of: searchQuery, options: [.caseInsensitive, .diacriticInsensitive]) {
+            text[match].foregroundColor = .primary
+            text[match].inlinePresentationIntent = .stronglyEmphasized
+            rest = match.upperBound..<text.endIndex
+        }
+        return text
     }
 
     private var rowFill: Color {
