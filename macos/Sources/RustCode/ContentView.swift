@@ -630,6 +630,7 @@ private struct ChatView: View {
                 Text(projectName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
+            if let usage = model.transcript.usage { UsageCapsule(usage: usage) }
             if let session = model.sessions.first(where: { $0.id == model.selectedSession }) {
                 ToolbarCluster {
                     ClusterButton(systemImage: "magnifyingglass", help: "Find in chat (⌘F)", isOn: model.showsFind) {

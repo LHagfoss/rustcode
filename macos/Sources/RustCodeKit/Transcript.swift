@@ -42,6 +42,9 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
 /// they continue, and tool updates change the card of their call in place.
 public struct Transcript: Equatable, Sendable {
     public private(set) var items: [TranscriptItem] = []
+    /// The session's latest context and token usage; it travels with the
+    /// transcript so each chat keeps its own while another is shown.
+    public private(set) var usage: SessionUsage?
     private var nextId = 0
 
     public init() {}
@@ -59,6 +62,7 @@ public struct Transcript: Equatable, Sendable {
 
     public mutating func removeAll() {
         items.removeAll()
+        usage = nil
     }
 
     /// A prompt the user sent. The engine echoes user messages only when it
@@ -112,6 +116,8 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.tool(ToolItem(callId: id, title: title ?? "Tool", status: status, output: output)))
             }
+        case .usage(let usage):
+            self.usage = usage
         case .title, .configOptions, .availableCommands, .unknown:
             break
         }
