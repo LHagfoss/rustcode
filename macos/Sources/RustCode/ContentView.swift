@@ -74,7 +74,7 @@ private struct SessionSidebar: View {
             // Room for the traffic lights, then the bar's own buttons.
             HStack(spacing: 2) {
                 Spacer()
-                ChromeButton(systemImage: "sidebar.left", help: "Hide sidebar (⌃⌘S)") { model.toggleSidebar() }
+                ChromeButton(systemImage: "sidebar.left", help: "Hide sidebar (⌘B)") { model.toggleSidebar() }
                 ChromeButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
             }
             .padding(.leading, 80)
@@ -110,7 +110,7 @@ private struct SessionSidebar: View {
             .padding(.top, 8)
 
             HStack {
-                Text("Chats")
+                Text(model.showsArchived ? "Archived" : "Chats")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -141,12 +141,33 @@ private struct SessionSidebar: View {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
                 } else if model.visibleSessions.isEmpty {
-                    Text(model.sessions.isEmpty ? "No chats in this project yet." : "No matching chats.")
+                    Text(model.showsArchived ? "No archived chats." : model.sessions.isEmpty ? "No chats in this project yet." : "No matching chats.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             }
 
+            if !model.archivedSessions.isEmpty || model.showsArchived {
+                Button { withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() } } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: model.showsArchived ? "chevron.left" : "archivebox")
+                            .frame(width: 16)
+                        Text(model.showsArchived ? "Back to Chats" : "Archived")
+                        Spacer(minLength: 0)
+                        if !model.showsArchived {
+                            Text("\(model.archivedSessions.count)").foregroundStyle(.tertiary).monospacedDigit()
+                        }
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 30)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.top, 4)
+            }
             if let release = updater.available {
                 Button { Task { await updater.install() } } label: {
                     HStack(spacing: 8) {
@@ -205,6 +226,9 @@ extension SessionSidebar {
                                        tint: .brand) { model.togglePin(session) }],
                  trailing: [
                     SwipeAction(title: "Rename", systemImage: "pencil", tint: .secondary) { model.renamingSession = session },
+                    SwipeAction(title: model.archivedSessions.contains(session.id) ? "Unarchive" : "Archive",
+                                systemImage: model.archivedSessions.contains(session.id) ? "tray.and.arrow.up.fill" : "archivebox.fill",
+                                tint: .orange) { model.toggleArchive(session) },
                     SwipeAction(title: "Trash", systemImage: "trash.fill", tint: .red) { Task { await model.trash(session) } },
                  ]) {
         SessionRow(session: session,
@@ -243,6 +267,10 @@ private struct SessionMenu: View {
             }
         }
         Divider()
+        Button(model.archivedSessions.contains(session.id) ? "Unarchive" : "Archive",
+               systemImage: model.archivedSessions.contains(session.id) ? "tray.and.arrow.up" : "archivebox") {
+            model.toggleArchive(session)
+        }
         Button("Move to Trash", systemImage: "trash", role: .destructive) { Task { await model.trash(session) } }
     }
 }
@@ -381,7 +409,7 @@ private struct ChatView: View {
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
-    private var title: String { selected?.title ?? "RustCode" }
+    private var title: String { model.selectedSession == nil ? "New Chat" : selected?.title ?? "RustCode" }
 
     /// A chat from another project shows that project, not the open one.
     private var projectName: String {
@@ -482,12 +510,8 @@ private struct ChatView: View {
                         proxy.scrollTo(suggestions[index].id)
                     }
                 }
-                .background {
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(.regularMaterial)
-                        .shadow(color: .black.opacity(0.28), radius: 20, y: 8)
-                }
                 .clipShape(.rect(cornerRadius: 20))
+                .glassSurface(in: .rect(cornerRadius: 20))
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28)
                 .padding(.bottom, composerHeight + 16 + 8)
@@ -515,12 +539,7 @@ private struct ChatView: View {
                     }
                     .padding(6)
                     .frame(width: panel == .model ? 340 : 260, alignment: .leading)
-                    .background {
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(.regularMaterial)
-                            .shadow(color: .black.opacity(0.28), radius: 20, y: 8)
-                    }
-                    .clipShape(.rect(cornerRadius: 20))
+                    .glassSurface(in: .rect(cornerRadius: 20))
                     if panel == .add { Spacer(minLength: 0) }
                 }
                 .frame(maxWidth: 760)
@@ -539,7 +558,7 @@ private struct ChatView: View {
         HStack(spacing: 10) {
             if !model.showsSidebar {
                 HStack(spacing: 2) {
-                    ChromeButton(systemImage: "sidebar.left", help: "Show sidebar (⌃⌘S)") { model.toggleSidebar() }
+                    ChromeButton(systemImage: "sidebar.left", help: "Show sidebar (⌘B)") { model.toggleSidebar() }
                     ChromeButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
                 }
                 .padding(.leading, 70)
@@ -739,7 +758,7 @@ private struct Composer: View {
             }
         }
         .padding(10)
-        .floatingSurface(in: .rect(cornerRadius: 22))
+        .glassSurface(in: .rect(cornerRadius: 22), interactive: true)
         // A click anywhere on the composer but its buttons puts the cursor in it.
         .contentShape(.rect(cornerRadius: 22))
         .onTapGesture { focused = true }

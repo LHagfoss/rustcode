@@ -51,7 +51,7 @@ struct RustCodeApp: App {
             }
             CommandGroup(before: .sidebar) {
                 Button(model.showsSidebar ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
-                    .keyboardShortcut("s", modifiers: [.command, .control])
+                    .keyboardShortcut("b", modifiers: .command)
             }
         }
     }
@@ -95,6 +95,9 @@ final class DesktopModel: ObservableObject {
     @Published private(set) var sessionsLoaded = false
     /// Chats pinned to the top of the sidebar, kept on this Mac.
     @Published private(set) var pinnedSessions = Set(UserDefaults.standard.stringArray(forKey: "pinnedSessions") ?? [])
+    /// Chats hidden from the list without deleting them, kept on this Mac.
+    @Published private(set) var archivedSessions = Set(UserDefaults.standard.stringArray(forKey: "archivedSessions") ?? [])
+    @Published var showsArchived = false
     /// The chat whose title the rename sheet is editing.
     @Published var renamingSession: SessionSummary?
     /// Set by /history to put the cursor in the chat search.
@@ -165,7 +168,8 @@ final class DesktopModel: ObservableObject {
             capabilities = try AgentInfo(initializeResult: result)
             try await process.connection.notify("initialized", params: [:])
             await refreshSessions()
-            if selectedSession == nil { await newSession() }
+            restoreLastConfig()
+            if models.choices.isEmpty { await fetchModelOptions() }
         } catch { self.error = String(describing: error) }
     }
 
@@ -198,8 +202,9 @@ final class DesktopModel: ObservableObject {
 
     var visibleSessions: [SessionSummary] {
         let filter = sessionFilter.trimmingCharacters(in: .whitespaces)
-        guard !filter.isEmpty else { return sessions }
-        return sessions.filter {
+        let shown = sessions.filter { archivedSessions.contains($0.id) == showsArchived }
+        guard !filter.isEmpty else { return shown }
+        return shown.filter {
             "\($0.title ?? "New chat") \($0.projectName)".range(of: filter, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
     }
@@ -265,6 +270,18 @@ final class DesktopModel: ObservableObject {
     }
 
     // MARK: - Chat actions
+
+    func toggleArchive(_ session: SessionSummary) {
+        if archivedSessions.contains(session.id) {
+            archivedSessions.remove(session.id)
+        } else {
+            archivedSessions.insert(session.id)
+            pinnedSessions.remove(session.id)
+            UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
+            if selectedSession == session.id { Task { await newSession() } }
+        }
+        UserDefaults.standard.set(Array(archivedSessions), forKey: "archivedSessions")
+    }
 
     func togglePin(_ session: SessionSummary) {
         if pinnedSessions.contains(session.id) { pinnedSessions.remove(session.id) } else { pinnedSessions.insert(session.id) }
@@ -419,18 +436,34 @@ final class DesktopModel: ObservableObject {
         await start()
     }
 
+    /// A new chat starts as an empty draft. The engine session is created when
+    /// the first message is sent, so opening and leaving it leaves nothing behind.
     func newSession() async {
-        guard let connection = engine?.connection else { return }
+        stashSelectedSession()
+        selectedSession = nil
+        transcript.removeAll()
+        draftCommand = nil
+        composerPanel = nil
+    }
+
+    /// Create the engine session for a draft, keeping the model picked for it.
+    private func createSession() async -> String? {
+        guard let connection = engine?.connection else { return nil }
+        let wanted = selectedModel
         do {
             let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
             guard let id = result["sessionId"]?.stringValue else { throw ACPProtocolError.malformed("session/new has no sessionId") }
-            stashSelectedSession()
             selectedSession = id
-            transcript.removeAll()
             applyConfig(result["configOptions"])
+            if let wanted, wanted != selectedModel, models.choices.contains(where: { $0.id == wanted }) {
+                await setModel(wanted)
+            }
             stashSelectedSession()
-            await refreshSessions()
-        } catch { self.error = String(describing: error) }
+            return id
+        } catch {
+            self.error = String(describing: error)
+            return nil
+        }
     }
 
     func refreshSessions() async {
@@ -485,7 +518,7 @@ final class DesktopModel: ObservableObject {
     }
 
     func submit() async {
-        guard let connection = engine?.connection, let id = selectedSession else { return }
+        guard engine?.connection != nil else { return }
         if let chip = draftCommand {
             draft = draft.isEmpty ? chip.name : chip.name + " " + draft
             draftCommand = nil
@@ -500,6 +533,12 @@ final class DesktopModel: ObservableObject {
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
         draft = ""
         attachments = []
+        let created = selectedSession == nil
+        guard let connection = engine?.connection,
+              let id = selectedSession == nil ? await createSession() : selectedSession else {
+            draft = typed
+            return
+        }
         if text == typed, SlashCommand.invoked(by: typed, in: commands)?.action == .execute {
             transcript.appendCommand(typed)
         } else {
@@ -514,6 +553,7 @@ final class DesktopModel: ObservableObject {
             permissionQueue.removeAll { $0.sessionId == id }
         }
         do {
+            if created { await refreshSessions() }
             _ = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: text))
             await refreshSessions()
         } catch { self.error = String(describing: error) }
@@ -562,7 +602,11 @@ final class DesktopModel: ObservableObject {
     }
 
     func setModel(_ model: String) async {
-        guard let connection = engine?.connection, let session = selectedSession else { return }
+        guard let session = selectedSession else {
+            selectedModel = model   // applied when the draft becomes a session
+            return
+        }
+        guard let connection = engine?.connection else { return }
         do {
             _ = try await connection.request(ACPMethod.sessionSetConfigOption, params: ACPRequests.setModel(sessionId: session, value: model), timeout: .seconds(15))
             selectedModel = model
@@ -584,6 +628,30 @@ final class DesktopModel: ObservableObject {
 
     private func applyConfig(_ value: JSONValue?) {
         guard let value else { return }
+        models = ModelOptions(configOptions: value)
+        selectedModel = models.current
+        UserDefaults.standard.set(try? JSONEncoder().encode(value), forKey: "lastConfigOptions")
+    }
+
+    /// With no saved model list, open a throwaway session to read one and close
+    /// it again; a session without messages is not listed.
+    private func fetchModelOptions() async {
+        guard let connection = engine?.connection else { return }
+        do {
+            let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
+            applyConfig(result["configOptions"])
+            if let id = result["sessionId"]?.stringValue, capabilities?.closeSession == true {
+                _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(id), timeout: .seconds(10))
+            }
+        } catch { self.error = String(describing: error) }
+    }
+
+    /// A draft has no session yet, so its model picker uses the options the
+    /// engine last sent.
+    private func restoreLastConfig() {
+        guard models.choices.isEmpty,
+              let data = UserDefaults.standard.data(forKey: "lastConfigOptions"),
+              let value = try? JSONDecoder().decode(JSONValue.self, from: data) else { return }
         models = ModelOptions(configOptions: value)
         selectedModel = models.current
     }

@@ -37,6 +37,21 @@ extension View {
         }
     }
 
+    /// Liquid Glass on macOS 26 and later, the floating material before that.
+    /// The SDK check keeps the package building with Xcode releases older than 26.
+    @ViewBuilder
+    func glassSurface(in shape: some Shape, interactive: Bool = false) -> some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) {
+            glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            floatingSurface(in: shape)
+        }
+        #else
+        floatingSurface(in: shape)
+        #endif
+    }
+
     /// A card in the transcript: a quiet fill with an optional coloured hairline.
     func card(cornerRadius: CGFloat = 14, outline: Color? = nil) -> some View {
         padding(12)
