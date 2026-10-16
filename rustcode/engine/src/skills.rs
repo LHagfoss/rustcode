@@ -415,8 +415,28 @@ pub(crate) fn loaded_skills_since_latest_user(history: &[crate::app::ChatMessage
     let Some(latest_user) = history.iter().rposition(|message| message.role == "user") else {
         return Vec::new();
     };
+    loaded_skills_in(&history[latest_user + 1..])
+}
 
-    history[latest_user + 1..]
+/// Return the skills whose full body is still in the model's context: loaded
+/// in the active or the previous user turn. Those two turns are always sent,
+/// even when request scoping drops older tool results, and compaction removes
+/// a load from history altogether, so an older load is not counted (#1970).
+pub(crate) fn loaded_skills_in_context(history: &[crate::app::ChatMessage]) -> Vec<String> {
+    let mut users = history
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.role == "user")
+        .map(|(index, _)| index);
+    let Some(latest_user) = users.next_back() else {
+        return Vec::new();
+    };
+    let start = users.next_back().unwrap_or(latest_user);
+    loaded_skills_in(&history[start + 1..])
+}
+
+fn loaded_skills_in(messages: &[crate::app::ChatMessage]) -> Vec<String> {
+    messages
         .iter()
         .filter_map(|message| {
             let result = message.tool_result.as_ref()?;
@@ -1117,6 +1137,35 @@ mod tests {
         let loaded_skills = loaded_skills_since_latest_user(&history);
         assert!(loaded_skills.is_empty());
         assert!(skill_routing_hint("use solidtime", &skills, &loaded_skills).is_some());
+    }
+
+    // Session 01a130ea (#1970): the worklog skill was loaded in turn 1 and
+    // loaded again, in full, in turn 2.
+    #[test]
+    fn a_load_from_the_previous_turn_is_still_in_context() {
+        let loaded = |name: &str| {
+            crate::app::ChatMessage::new(
+                "tool",
+                format!("use_skill: <skill_content name=\"{name}\">\ninstructions"),
+            )
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "use_skill".to_string(),
+                success: true,
+                ..Default::default()
+            })
+        };
+        let mut history = vec![
+            crate::app::ChatMessage::new("user", "log my hours"),
+            loaded("worklog"),
+            crate::app::ChatMessage::new("user", "now check the active timer"),
+        ];
+        assert_eq!(loaded_skills_in_context(&history), vec!["worklog"]);
+
+        // Two user turns later the old tool result may be dropped from the
+        // request, so the skill must be loaded in full again.
+        history.push(crate::app::ChatMessage::new("user", "and the clients"));
+        assert!(loaded_skills_in_context(&history).is_empty());
+        assert!(loaded_skills_in_context(&[]).is_empty());
     }
 
     #[test]

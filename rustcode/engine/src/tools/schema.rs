@@ -500,7 +500,12 @@ pub(super) fn find_mcp_tool_schema(
         .map(|(_, _, _, _, schema)| schema)
 }
 
-pub(crate) fn mcp_tool_read_only_hint(name: &str) -> bool {
+/// Whether an MCP tool is a read. The standard `readOnlyHint` annotation
+/// decides when the server sets it; a `destructiveHint: true` marks a
+/// mutation. Servers that annotate nothing fall back to a conservative name
+/// heuristic (#1970), so `list_clients` or `solidtime_get_active_timer` do not
+/// count against the per-response side-effect limit.
+pub(crate) fn mcp_tool_is_read_only(name: &str) -> bool {
     let registry_handle = crate::mcp::get_mcp_registry();
     let Ok(registry) = registry_handle.lock() else {
         return false;
@@ -516,15 +521,55 @@ pub(crate) fn mcp_tool_read_only_hint(name: &str) -> bool {
                 let canonical = mcp_canonical_name_for_clients(&client.name, raw, &clients);
                 let matches_name =
                     name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients));
-                matches_name
-                    && tool
-                        .get("annotations")
-                        .and_then(|annotations| annotations.get("readOnlyHint"))
-                        .and_then(Value::as_bool)
-                        == Some(true)
+                matches_name && mcp_annotations_mark_read_only(raw, tool.get("annotations"))
             })
         })
     })
+}
+
+/// Read classification for one MCP tool from its raw name and annotations.
+pub(crate) fn mcp_annotations_mark_read_only(raw_name: &str, annotations: Option<&Value>) -> bool {
+    let hint = |key: &str| {
+        annotations
+            .and_then(|annotations| annotations.get(key))
+            .and_then(Value::as_bool)
+    };
+    if let Some(read_only) = hint("readOnlyHint") {
+        return read_only;
+    }
+    if hint("destructiveHint") == Some(true) {
+        return false;
+    }
+    mcp_name_suggests_read_only(raw_name)
+}
+
+/// Conservative read heuristic for unannotated MCP tools: the name starts with
+/// a lookup verb (`list_`, `get_`, `search_`, `find_`, `read_`, `show_`),
+/// directly or after a `<server>_` prefix, and no word in it names a change.
+pub(crate) fn mcp_name_suggests_read_only(raw_name: &str) -> bool {
+    const READ_VERBS: &[&str] = &["list", "get", "search", "find", "read", "show"];
+    const CHANGE_WORDS: &[&str] = &[
+        "accept", "add", "apply", "approve", "archive", "assign", "cancel", "clear", "close",
+        "commit", "connect", "create", "delete", "deploy", "destroy", "disable", "edit", "enable",
+        "exec", "execute", "import", "insert", "invite", "kill", "lock", "login", "logout", "mark",
+        "merge", "modify", "move", "patch", "pause", "post", "publish", "push", "put", "register",
+        "reject", "remove", "rename", "replace", "reset", "restart", "restore", "resume", "revoke",
+        "run", "save", "send", "set", "start", "stop", "submit", "sync", "toggle", "transfer",
+        "trigger", "unlock", "update", "upload", "upsert", "write",
+    ];
+    let lower = raw_name.to_ascii_lowercase();
+    let words = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words.iter().any(|word| CHANGE_WORDS.contains(word)) {
+        return false;
+    }
+    match words.as_slice() {
+        [verb, ..] if READ_VERBS.contains(verb) => true,
+        [_server, verb, _, ..] => READ_VERBS.contains(verb),
+        _ => false,
+    }
 }
 
 pub(crate) const MAX_MCP_NATIVE_SCHEMAS: usize = 16;
@@ -2392,5 +2437,64 @@ mod schema_budget_tests {
                 tool.name
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod mcp_read_classification_tests {
+    use super::{mcp_annotations_mark_read_only, mcp_name_suggests_read_only};
+    use serde_json::json;
+
+    // Session 01a130ea (#1970): five unannotated worklog lookups in one
+    // response were held over the workspace-change limit.
+    #[test]
+    fn unannotated_lookups_are_reads() {
+        for name in [
+            "solidtime_list_clients",
+            "solidtime_get_active_timer",
+            "solidtime_list_entries",
+            "list_clients",
+            "get_active_timer",
+            "search_issues",
+            "find_user",
+            "read_page",
+            "show-config",
+        ] {
+            assert!(mcp_name_suggests_read_only(name), "{name}");
+            assert!(mcp_annotations_mark_read_only(name, None), "{name}");
+        }
+    }
+
+    #[test]
+    fn unannotated_mutations_and_unknown_verbs_stay_conservative() {
+        for name in [
+            "solidtime_start_timer",
+            "solidtime_create_entry",
+            "delete_list_items",
+            "get_or_create_issue",
+            "search_and_replace",
+            "worklog_check_gaps",
+            "whoami",
+            "solidtime_list",
+            "listClients",
+        ] {
+            assert!(!mcp_name_suggests_read_only(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn explicit_annotations_override_the_name_heuristic() {
+        let not_read_only = json!({"readOnlyHint": false});
+        assert!(!mcp_annotations_mark_read_only(
+            "list_clients",
+            Some(&not_read_only)
+        ));
+        let destructive = json!({"destructiveHint": true});
+        assert!(!mcp_annotations_mark_read_only(
+            "get_and_purge",
+            Some(&destructive)
+        ));
+        let read_only = json!({"readOnlyHint": true});
+        assert!(mcp_annotations_mark_read_only("whoami", Some(&read_only)));
     }
 }

@@ -6,7 +6,7 @@ use crate::tools::{ToolCall, ToolSafety};
 /// Whether equivalent successful calls may execute again within one logical
 /// user turn. Unknown tools are conservative because MCP calls can perform
 /// external side effects; MCP tools may opt into repeatable reads with the
-/// standard `readOnlyHint` annotation.
+/// standard `readOnlyHint` annotation (or, unannotated, a lookup-verb name).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolReplayPolicy {
     Repeatable,
@@ -33,7 +33,7 @@ pub(crate) fn tool_replay_policy(call: &ToolCall) -> ToolReplayPolicy {
         ToolSafety::WorkspaceMutation | ToolSafety::ProcessControl | ToolSafety::Delegation => {
             ToolReplayPolicy::OncePerUserTurn
         }
-        ToolSafety::Unknown => crate::tools::mcp_tool_read_only_hint(&call.name)
+        ToolSafety::Unknown => crate::tools::mcp_tool_is_read_only(&call.name)
             .then_some(ToolReplayPolicy::Repeatable)
             .unwrap_or(ToolReplayPolicy::OncePerUserTurn),
     }

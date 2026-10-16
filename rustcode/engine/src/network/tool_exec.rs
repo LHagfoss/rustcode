@@ -1201,7 +1201,7 @@ async fn execute_tool_batch_validated(
                 let requested = args_clone.get("name").and_then(|value| value.as_str());
                 let loaded = {
                     let s = state_clone.lock().await;
-                    crate::skills::loaded_skills_since_latest_user(&s.history)
+                    crate::skills::loaded_skills_in_context(&s.history)
                 };
                 requested.and_then(|requested| {
                     loaded
@@ -1301,7 +1301,7 @@ async fn execute_tool_batch_validated(
             let (execution, diff_opt, user_wait) = if let Some(skill_name) = already_loaded_skill {
                 (
                     crate::tools::ToolExecutionOutput::success(format!(
-                        "Skill `{skill_name}` is already loaded and active above. Proceed with the actual task using its instructions; do not call `use_skill` again for this request."
+                        "Skill `{skill_name}` is already loaded: its full instructions are in the earlier `use_skill` result above and still apply. Proceed with the actual task using them; do not call `use_skill` for it again."
                     )),
                     None,
                     std::time::Duration::ZERO,
@@ -1493,7 +1493,7 @@ async fn execute_tool_batch_validated(
                 )
                 .is_none())
                 || (crate::tools::tool_safety(name) == crate::tools::ToolSafety::Unknown
-                    && !crate::tools::mcp_tool_read_only_hint(name));
+                    && !crate::tools::mcp_tool_is_read_only(name));
             if unknown_mutation {
                 crate::workspace_intelligence::invalidate(&root);
             }
