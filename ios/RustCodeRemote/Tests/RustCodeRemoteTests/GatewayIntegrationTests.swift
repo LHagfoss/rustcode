@@ -34,6 +34,14 @@ struct GatewayIntegrationTests {
                 // Without this the background service would pick a LAN address on its own.
                 config = (config ?? "version = 1\n") + "\n[remote]\nbind = \"\(bind)\"\n"
             }
+            // Devices may only use folders inside home or a configured root: allow this
+            // directory, where the tests make their workspaces.
+            let roots = "roots = [\"\(configuration.path)\"]\n"
+            if let current = config, current.contains("[remote]\n") {
+                config = current.replacingOccurrences(of: "[remote]\n", with: "[remote]\n" + roots)
+            } else {
+                config = (config ?? "version = 1\n") + "\n[remote]\n" + roots
+            }
             if let config {
                 try config.write(to: configuration.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             }

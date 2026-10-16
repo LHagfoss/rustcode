@@ -256,7 +256,14 @@ day they were made.
 ## Sessions started from a device
 
 A paired device can browse the host's directories and start a new session in
-one (`list_directories`, `create_session`). No terminal is involved: the
+one (`list_directories`, `create_session`). It sees and may use only folders
+inside your home folder and the `roots` listed under `[remote]` in
+`config.toml` (see [configuration](configuration.md#remote-gateway-address));
+a folder elsewhere, one that does not exist, or a file is refused with
+`invalid_request` and a message that says which, and nothing is started. The
+device attaches to the new session as soon as it has registered. It is listed
+for every device at once; in the Mac app, `/resume` and `rustcode sessions` it
+appears after its first exchange, like any other session. No terminal is involved: the
 gateway starts a **session owner**, a `rustcode` process without a terminal
 that runs in that directory, owns the session and registers it like `/remote`
 does. It keeps running after the device disconnects and across gateway
@@ -265,11 +272,20 @@ restarts, and ends when it is killed or the machine restarts.
 - Each owner writes to `remote/owners/<session id>.log`: its start, its
   registration and the reason whenever it gives up. The request's receipt is
   `remote/created/<hash>.json`.
-- An owner has 20 seconds to register. One that exits first, or does not make
-  it, is stopped by the gateway, and the device gets an `internal` error with
-  receipt `rejected` that names the session, the reason, the owner's last
-  output and its log. Nothing is left behind, so the device may ask again,
-  with the same request ID or a new one.
+- The device always gets an answer within 15 seconds of asking, well inside
+  the app's own 20-second limit, including any time spent waiting for another
+  session to start.
+- An owner that exits before registering is reported at once: the device gets
+  an `internal` error with receipt `rejected` that names the session, the
+  reason, the owner's last output and its log. Nothing is left behind, so the
+  device may ask again, with the same request ID or a new one.
+- An owner that is still starting after 15 seconds (a slow login shell, say)
+  is not stopped yet: the device gets `owner_unavailable` with receipt
+  `unknown`, naming the session, and asks again with the same request ID.
+  The gateway keeps waiting for that owner for up to 60 seconds; once it
+  registers, the receipt holds the session and the retry is answered with it.
+  An owner that has not registered by then is stopped and the receipt
+  withdrawn, so the next attempt starts afresh.
 - A session has at most one owner process. A retry that finds the owner of an
   earlier attempt still running (after a gateway restart, say) waits for that
   one instead of starting another; if it still does not register, the answer
@@ -364,7 +380,8 @@ delays the terminal or another device.
 | Frames queued for one device | 64; responses that overflow close that device with `slow_consumer` |
 | Requests one connection may have waiting on terminals | 16; more are refused with `rate_limited` |
 | Wait for a terminal's answer | 30 s, then `owner_unavailable` |
-| Wait for a new session's owner to register | 20 s, then the owner is stopped and the request fails with `internal` |
+| Answer to `create_session` or `resume_session` | within 15 s of the request; an owner still starting then gets `owner_unavailable` |
+| Wait for a new session's owner to register | 60 s, then the owner is stopped and its receipt withdrawn |
 | Interval at which the listen address is resolved again | 5 s |
 | Replay kept per session | 4 MiB of events |
 | Mutation receipts per registration | 1024; more mutations are refused with `receipt_capacity` |
@@ -380,6 +397,10 @@ gateway.
 - The terminal owns execution. Closing it ends the session's availability. A
   session started or reopened from a device is owned by its session owner
   process instead.
+- A device starts sessions only in folders inside the home folder or a
+  configured `[remote] roots` entry, and cannot create folders.
+- A session started from a device shows up in the Mac app and the terminal's
+  session lists only after its first exchange.
 - No push notifications.
 - Pairing details show the challenge's lifetime but do not count it down.
 - Access is per host: a paired device sees every session open in a terminal.

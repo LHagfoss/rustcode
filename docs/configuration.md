@@ -141,6 +141,17 @@ project file cannot choose the interface your sessions are exposed on. A
 gateway you start yourself with `rustcode remote serve --bind …` takes its
 address from the command line and ignores this section.
 
+A paired device can browse folders and start sessions only inside your home
+folder. To allow other places, such as a second disk, list them as `roots`:
+
+```toml
+[remote]
+roots = ["/Volumes/Work", "/opt/projects"]   # absolute or ~/…; missing ones are ignored
+```
+
+The gateway reads `roots` on every request, so a change needs no restart. Like
+the rest of the section it is read from the user configuration only.
+
 ## Project configuration
 
 Create a project-local override with:
