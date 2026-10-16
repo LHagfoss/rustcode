@@ -1044,14 +1044,27 @@ phase_verify_release() {
         return
     fi
 
-    # Poll until the GitHub release exists.
+    local expected_assets=(
+        "rustcode-linux-x86_64.tar.gz"
+        "rustcode-macos-aarch64.tar.gz"
+        "rustcode-macos-aarch64-swift-app.zip"
+        "rustcode-ios-unsigned.xcarchive.zip"
+        "rustcode-ios-simulator.zip"
+        "rustcode-windows-x86_64.zip"
+        "SHA256SUMS"
+    )
+
+    # Poll until the GitHub release exists and lists every expected asset:
+    # the release can be visible a moment before its asset list is complete.
     local release_info=""
     local max_attempts=30
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
         # Use supported fields: tagName, name, url, assets.
         release_info="$(gh release view "v$VERSION" --json tagName,name,url,assets 2>/dev/null || true)"
-        if [[ -n "$release_info" ]]; then
+        if [[ -n "$release_info" ]] &&
+            jq -e --args '[.assets[].name] as $names | all($ARGS.positional[]; IN($names[]))' \
+                "${expected_assets[@]}" >/dev/null 2>&1 <<<"$release_info"; then
             break
         fi
         attempt=$((attempt + 1))
@@ -1080,15 +1093,6 @@ phase_verify_release() {
     info "  Assets:   $asset_count"
 
     # Verify expected artifacts.
-    local expected_assets=(
-        "rustcode-linux-x86_64.tar.gz"
-        "rustcode-macos-aarch64.tar.gz"
-        "rustcode-macos-aarch64-swift-app.zip"
-        "rustcode-ios-unsigned.xcarchive.zip"
-        "rustcode-ios-simulator.zip"
-        "rustcode-windows-x86_64.zip"
-        "SHA256SUMS"
-    )
     local asset_names
     asset_names="$(echo "$release_info" | jq -r '.assets[].name')"
 
