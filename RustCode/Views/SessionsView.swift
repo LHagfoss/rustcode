@@ -223,6 +223,23 @@ private struct SessionSidebar: View {
         }
     }
 
+    /// Saved sessions on the host that are not live. The host searches them too; filtering
+    /// here as well keeps the list consistent while its answer is on the way.
+    private var recent: [SavedSession] {
+        guard store.supportsSavedSessions else { return [] }
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return store.recentSessions }
+        return store.recentSessions.filter { session in
+            [session.displayTitle, session.workspace ?? "", session.id].contains { $0.localizedStandardContains(query) }
+        }
+    }
+
+    /// What the saved-session listing depends on; a change lists again.
+    private struct SavedListing: Equatable {
+        var query: String
+        var available: Bool
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
@@ -249,6 +266,7 @@ private struct SessionSidebar: View {
             .padding(.top, 8)
 
             List {
+                Section {
                 ForEach(sessions) { session in
                     Button {
                         store.select(session.id)
@@ -297,18 +315,51 @@ private struct SessionSidebar: View {
                         }
                     }
                 }
+                } header: {
+                    if !recent.isEmpty, !sessions.isEmpty {
+                        sectionHeader("Open")
+                    }
+                }
+
+                if !recent.isEmpty {
+                    Section {
+                        ForEach(recent) { session in
+                            recentRow(session)
+                        }
+                        if store.isLoadingSavedSessions {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                        }
+                    } header: {
+                        sectionHeader("Recent")
+                    }
+                }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.interactively)
             .refreshable {
                 await store.refreshSessions()
+                await store.loadSavedSessions(query: query)
+            }
+            .task(id: SavedListing(
+                query: query.trimmingCharacters(in: .whitespaces),
+                available: store.connection == .connected && store.supportsSavedSessions
+            )) {
+                guard store.connection == .connected, store.supportsSavedSessions else { return }
+                // Typing refines the search; wait for a pause before asking the host.
+                if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
+                }
+                await store.loadSavedSessions(query: query)
             }
             .overlay {
                 // Not hit-testable, so the empty list underneath can still be pulled to refresh.
-                if store.sessions.isEmpty {
+                if store.sessions.isEmpty, recent.isEmpty, query.isEmpty {
                     emptyState.allowsHitTesting(false)
-                } else if sessions.isEmpty {
+                } else if sessions.isEmpty, recent.isEmpty, !store.isLoadingSavedSessions {
                     ContentUnavailableView.search(text: query)
                 }
             }
@@ -344,6 +395,51 @@ private struct SessionSidebar: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ConnectionStatusBar()
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(nil)
+            .padding(.horizontal, 12)
+            .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 4, trailing: 12))
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func recentRow(_ session: SavedSession) -> some View {
+        Button {
+            Task {
+                if await store.openSavedSession(session.id) { didSelect() }
+            }
+        } label: {
+            SavedSessionRow(session: session, isOpening: store.reopeningSessionID == session.id)
+                .foregroundStyle(.primary)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(!session.canOpen || store.reopeningSessionID != nil || store.connection != .connected)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12))
+        .contextMenu {
+            Button("Copy Title", systemImage: "doc.on.doc") {
+                Clipboard.copy(session.displayTitle)
+            }
+            if let workspace = session.workspace {
+                Button("Copy Workspace Path", systemImage: "folder") {
+                    Clipboard.copy(workspace)
+                }
+            }
+        }
+        .onAppear {
+            // Continue the listing as its end scrolls into view.
+            if session.id == store.recentSessions.last?.id, store.hasMoreSavedSessions {
+                Task { await store.loadMoreSavedSessions() }
+            }
         }
     }
 
@@ -438,6 +534,71 @@ private struct SessionRow: View {
             case .waitingForUser: "waiting for you"
             case .idle: "idle"
             }
+        }
+    }
+}
+
+/// A session saved on the host but not live: tapping it reopens it on the host.
+private struct SavedSessionRow: View {
+    let session: SavedSession
+    let isOpening: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(session.displayTitle)
+                    .font(.body.weight(.medium))
+                    .lineLimit(2)
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                HStack(spacing: 8) {
+                    Text("\(session.messageCount) \(session.messageCount == 1 ? "message" : "messages")")
+                    Spacer(minLength: 8)
+                    if let updatedAt = session.updatedAt {
+                        TimelineView(.everyMinute) { context in
+                            Text(LastActivePresentation.label(for: updatedAt, now: context.date))
+                                .monospacedDigit()
+                        }
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if isOpening {
+                ProgressView().controlSize(.small)
+            } else if session.state == .open {
+                Image(systemName: "terminal").foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .opacity(session.canOpen || isOpening ? 1 : 0.6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(session.displayTitle), \(status)\(session.updatedAt.map { ", last active \(LastActivePresentation.label(for: $0))" } ?? "")")
+        .accessibilityHint(session.canOpen ? "Reopens this session on your Mac." : "")
+    }
+
+    private var detail: String {
+        switch session.state {
+        case .open: "Open in a terminal on your Mac"
+        case .saved, .shared, .unknown:
+            if let workspace = session.workspace, !workspace.isEmpty {
+                workspace
+            } else {
+                "No folder recorded · resume it in a terminal"
+            }
+        }
+    }
+
+    private var status: String {
+        if isOpening { return "opening" }
+        switch session.state {
+        case .open: return "open in a terminal"
+        case .saved where session.canOpen: return "saved"
+        default: return "cannot be opened from here"
         }
     }
 }

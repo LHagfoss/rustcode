@@ -30,6 +30,7 @@ public actor LiveRemoteClient: RemoteClient {
     private var outstandingMutations: Set<RequestID> = []
     private var receivedOnly: Set<RequestID> = []
     private var sessionsContinuation: SessionsContinuation?
+    private var capabilities: Set<String> = []
     private var updateContinuations: [SessionRef: UpdatesContinuation] = [:]
     /// Sessions whose events cannot be trusted until the snapshot the host announced arrives.
     private var awaitingSnapshot: Set<SessionRef> = []
@@ -146,6 +147,22 @@ public actor LiveRemoteClient: RemoteClient {
         defer { mutations.remove(requestID) }
         let reply = try await request(.createSession(path: directory), id: requestID)
         guard case .sessionCreated(let session) = reply else { throw Self.unexpected(reply) }
+        return session
+    }
+
+    public func hostCapabilities() async -> Set<String> { capabilities }
+
+    public func listSavedSessions(cursor: String?, limit: Int, query: String?) async throws -> SavedSessionPage {
+        let reply = try await request(.listSavedSessions(cursor: cursor, limit: limit, query: query))
+        guard case .savedSessions(let page) = reply else { throw Self.unexpected(reply) }
+        return page
+    }
+
+    public func resumeSession(_ sessionID: String, requestID: RequestID) async throws -> SessionSummary {
+        mutations.insert(requestID)
+        defer { mutations.remove(requestID) }
+        let reply = try await request(.resumeSession(sessionID: sessionID), id: requestID)
+        guard case .sessionResumed(let session) = reply else { throw Self.unexpected(reply) }
         return session
     }
 
@@ -362,7 +379,8 @@ public actor LiveRemoteClient: RemoteClient {
             if case .attached(.snapshot(let snapshot), _) = reply {
                 replaySnapshotIDs[snapshot.session] = snapshot.snapshotID
             }
-            if case .sessions(let sessions) = reply {
+            if case .sessions(let sessions, let capabilities) = reply {
+                self.capabilities = capabilities
                 sessionsContinuation?.yield(sessions)
             }
             if case .receipt(.received) = reply, mutations.contains(id) {
@@ -440,6 +458,7 @@ public actor LiveRemoteClient: RemoteClient {
         }
         sessionsContinuation?.finish(throwing: error)
         sessionsContinuation = nil
+        capabilities = []
         for continuation in updateContinuations.values {
             continuation.finish(throwing: error)
         }

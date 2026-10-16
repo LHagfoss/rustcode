@@ -290,11 +290,12 @@ import Testing
     }
 
     @Test func sessionListsMap() throws {
-        guard case .reply(_, .sessions(let sessions)) = try decodeGolden("response_sessions"),
+        guard case .reply(_, .sessions(let sessions, let capabilities)) = try decodeGolden("response_sessions"),
               case .sessionsChanged(let pushed) = try decodeGolden("sessions") else {
             Issue.record("expected session lists")
             return
         }
+        #expect(capabilities == [HostCapability.savedSessions])
         let first = try #require(sessions.first)
         #expect(first.ref == session)
         #expect(first.title == "Fix the failing parser tests")

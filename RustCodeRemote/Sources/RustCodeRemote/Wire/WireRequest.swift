@@ -54,6 +54,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
     case resolveApproval(ResolveApproval)
     case getRequestStatus(GetRequestStatus)
     case requestShare(RequestShare)
+    case listSavedSessions(ListSavedSessions)
+    case resumeSession(ResumeSession)
     case unknown(type: String, JSONValue)
 
     /// Every `operation.type` this build knows.
@@ -61,7 +63,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
         "upload_image", "list_directories", "create_session", "list_sessions", "subscribe_sessions", "attach_session", "detach_session", "get_history",
         "get_content", "submit_prompt", "steer", "queue", "cancel_turn", "answer_question",
         "resolve_approval", "get_request_status", "set_session_settings", "execute_command", "cancel_question",
-        "request_share",
+        "request_share", "list_saved_sessions", "resume_session",
     ]
 
     public struct DirectoryPath: Codable, Equatable, Sendable { public var path: String? }
@@ -147,6 +149,22 @@ public enum WireOperation: Codable, Equatable, Sendable {
         }
     }
 
+    /// One page of the host's saved sessions.
+    public struct ListSavedSessions: Codable, Equatable, Sendable {
+        public var cursor: String?
+        public var limit: UInt32?
+        public var query: String?
+    }
+
+    /// Reopens a saved session that nothing holds.
+    public struct ResumeSession: Codable, Equatable, Sendable {
+        public var sessionID: String
+
+        enum CodingKeys: String, CodingKey {
+            case sessionID = "session_id"
+        }
+    }
+
     public var type: String {
         switch self {
         case .uploadImage: "upload_image"
@@ -169,6 +187,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case .resolveApproval: "resolve_approval"
         case .getRequestStatus: "get_request_status"
         case .requestShare: "request_share"
+        case .listSavedSessions: "list_saved_sessions"
+        case .resumeSession: "resume_session"
         case .unknown(let type, _): type
         }
     }
@@ -196,6 +216,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case "resolve_approval": self = .resolveApproval(try ResolveApproval(from: decoder))
         case "get_request_status": self = .getRequestStatus(try GetRequestStatus(from: decoder))
         case "request_share": self = .requestShare(try RequestShare(from: decoder))
+        case "list_saved_sessions": self = .listSavedSessions(try ListSavedSessions(from: decoder))
+        case "resume_session": self = .resumeSession(try ResumeSession(from: decoder))
         default: self = .unknown(type: type, try JSONValue(from: decoder))
         }
     }
@@ -217,6 +239,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case .resolveApproval(let payload): payload
         case .getRequestStatus(let payload): payload
         case .requestShare(let payload): payload
+        case .listSavedSessions(let payload): payload
+        case .resumeSession(let payload): payload
         case .unknown(_, let raw): raw
         }
         if case .unknown(_, let raw) = self {

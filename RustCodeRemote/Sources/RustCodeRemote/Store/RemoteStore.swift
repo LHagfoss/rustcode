@@ -48,6 +48,24 @@ public final class RemoteStore {
     public private(set) var isUploadingImages = false
     public var supportsImageUpload: Bool { attached?.capabilities.contains("upload_image") == true }
     private var hostGeneration: UInt64 = 0
+    /// Optional host-wide operations the host offers, as it listed them with its sessions.
+    public private(set) var hostCapabilities: Set<String> = []
+    /// True when the host can list every saved session and reopen one.
+    public var supportsSavedSessions: Bool { hostCapabilities.contains(HostCapability.savedSessions) }
+    /// Saved sessions loaded so far for `savedSessionsQuery`, newest first.
+    public private(set) var savedSessions: [SavedSession] = []
+    public private(set) var savedSessionsQuery = ""
+    public private(set) var isLoadingSavedSessions = false
+    /// The saved session being reopened, while the host starts it.
+    public private(set) var reopeningSessionID: String?
+    public var hasMoreSavedSessions: Bool { savedSessionsCursor != nil }
+    @ObservationIgnored private var savedSessionsCursor: String?
+    /// Bumped on every new listing, so a late page of an older query is dropped.
+    @ObservationIgnored private var savedSessionsGeneration: UInt64 = 0
+    /// Request IDs of reopen attempts whose outcome is not known, so asking again cannot
+    /// start the session twice.
+    @ObservationIgnored private var reopenRequests: [String: RequestID] = [:]
+    public static let savedSessionsPageSize = 30
     /// The create request the host has not confirmed yet, in flight or left uncertain.
     public private(set) var pendingCreation: PendingSessionCreation?
     /// Advances whenever a creation is started, abandoned or cancelled, so a late answer to
@@ -303,6 +321,101 @@ public final class RemoteStore {
             // The host's own words say more than a generic notice can; keep them verbatim.
             let message = (error as? RemoteError)?.errorDescription ?? error.localizedDescription
             pendingCreation?.hostMessage = message
+            notice = "The Mac has not confirmed the session: \(message)"
+        }
+        return false
+    }
+
+    // MARK: Saved sessions
+
+    /// Saved sessions that are not in the live list: the ones the phone can reopen, or that
+    /// the Mac holds without sharing them.
+    public var recentSessions: [SavedSession] {
+        let live = Set(sessions.map(\.id))
+        return savedSessions.filter { $0.state != .shared && !live.contains($0.id) }
+    }
+
+    /// Lists the host's saved sessions from the newest, for `query` (empty for all). Does
+    /// nothing on a host without the capability.
+    public func loadSavedSessions(query: String = "") async {
+        guard connection == .connected, supportsSavedSessions else { return }
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        savedSessionsGeneration &+= 1
+        savedSessionsQuery = query
+        savedSessionsCursor = nil
+        await fetchSavedSessions(after: nil, query: query, generation: savedSessionsGeneration, replacing: true)
+    }
+
+    /// Appends the next page of the current listing, if there is one.
+    public func loadMoreSavedSessions() async {
+        guard connection == .connected, supportsSavedSessions, !isLoadingSavedSessions,
+              let cursor = savedSessionsCursor else { return }
+        await fetchSavedSessions(after: cursor, query: savedSessionsQuery, generation: savedSessionsGeneration, replacing: false)
+    }
+
+    private func fetchSavedSessions(after cursor: String?, query: String, generation: UInt64, replacing: Bool) async {
+        let host = hostGeneration
+        isLoadingSavedSessions = true
+        defer { if generation == savedSessionsGeneration { isLoadingSavedSessions = false } }
+        do {
+            let page = try await client.listSavedSessions(
+                cursor: cursor,
+                limit: Self.savedSessionsPageSize,
+                query: query.isEmpty ? nil : query
+            )
+            guard host == hostGeneration, generation == savedSessionsGeneration else { return }
+            if replacing {
+                savedSessions = page.sessions
+            } else {
+                let known = Set(savedSessions.map(\.id))
+                savedSessions += page.sessions.filter { !known.contains($0.id) }
+            }
+            savedSessionsCursor = page.nextCursor
+        } catch {
+            guard host == hostGeneration, generation == savedSessionsGeneration else { return }
+            // The live list still works; say why the saved ones are missing.
+            notice = "Couldn't load saved sessions: \((error as? RemoteError)?.errorDescription ?? error.localizedDescription)"
+        }
+    }
+
+    /// Reopens a saved session on the host and opens it here once it is shared. Asking again
+    /// after an unconfirmed attempt reuses its request, so the host never starts it twice.
+    @discardableResult
+    public func openSavedSession(_ sessionID: String) async -> Bool {
+        guard connection == .connected, supportsSavedSessions, reopeningSessionID == nil else { return false }
+        if sessions.contains(where: { $0.id == sessionID }) {
+            select(sessionID)
+            return true
+        }
+        let requestID = reopenRequests[sessionID] ?? RequestID()
+        reopenRequests[sessionID] = requestID
+        let host = hostGeneration
+        reopeningSessionID = sessionID
+        defer { if host == hostGeneration { reopeningSessionID = nil } }
+        do {
+            let session = try await client.resumeSession(sessionID, requestID: requestID)
+            guard host == hostGeneration else { return false }
+            reopenRequests[sessionID] = nil
+            if let index = savedSessions.firstIndex(where: { $0.id == sessionID }) {
+                savedSessions[index].state = .shared
+            }
+            if !sessions.contains(where: { $0.id == session.id }) { sessions.insert(session, at: 0) }
+            select(session.id)
+            return true
+        } catch RemoteError.rejected(let rejection) {
+            guard host == hostGeneration else { return false }
+            reopenRequests[sessionID] = nil
+            if rejection == .busy {
+                if let index = savedSessions.firstIndex(where: { $0.id == sessionID }) {
+                    savedSessions[index].state = .open
+                }
+                notice = "That session is open in a terminal on \(self.host?.name ?? "your Mac"). Continue it there, or share it with /remote."
+            } else {
+                notice = RemoteError.rejected(rejection).localizedDescription
+            }
+        } catch {
+            guard host == hostGeneration else { return false }
+            let message = (error as? RemoteError)?.errorDescription ?? error.localizedDescription
             notice = "The Mac has not confirmed the session: \(message)"
         }
         return false
@@ -651,6 +764,14 @@ public final class RemoteStore {
         host = nil
         pendingCreation = nil
         isDemo = false
+        hostCapabilities = []
+        savedSessions = []
+        savedSessionsQuery = ""
+        savedSessionsCursor = nil
+        savedSessionsGeneration &+= 1
+        isLoadingSavedSessions = false
+        reopeningSessionID = nil
+        reopenRequests.removeAll()
         sessions = []
         selectedSessionID = nil
         attached = nil
@@ -693,6 +814,8 @@ public final class RemoteStore {
                     }
                 }
                 let lists = try await client.subscribeSessions()
+                try Task.checkCancellation()
+                hostCapabilities = await client.hostCapabilities()
                 try Task.checkCancellation()
                 connection = .connected
                 reconnect.registerSuccess()

@@ -156,6 +156,15 @@ public struct WireCodec: RemoteCodec {
         case .requestShare(let sessionID):
             // The session is not shared yet, so it has no registration to scope to.
             return WireRequest(requestID: requestID.rawValue, operation: .requestShare(.init(sessionID: sessionID)))
+        case .listSavedSessions(let cursor, let limit, let query):
+            return WireRequest(requestID: requestID.rawValue, operation: .listSavedSessions(.init(
+                cursor: cursor,
+                limit: limit.map { UInt32(clamping: $0) },
+                query: query
+            )))
+        case .resumeSession(let sessionID):
+            // Not shared yet, so there is no registration to scope to.
+            return WireRequest(requestID: requestID.rawValue, operation: .resumeSession(.init(sessionID: sessionID)))
         }
     }
 
@@ -290,8 +299,12 @@ public struct WireCodec: RemoteCodec {
         case .directories(let listing): return .directories(listing)
         case .sessionCreated(let created):
             return receipt == .applied ? .sessionCreated(summary(created.session)) : .receipt(receipt == .received ? .received : .unknown)
+        case .sessionResumed(let resumed):
+            return receipt == .applied ? .sessionResumed(summary(resumed.session)) : .receipt(receipt == .received ? .received : .unknown)
+        case .savedSessions(let page):
+            return .savedSessions(SavedSessionPage(sessions: page.sessions.map(savedSession), nextCursor: page.nextCursor))
         case .sessions(let sessions):
-            return .sessions(sessions.sessions.map(summary))
+            return .sessions(sessions.sessions.map(summary), capabilities: Set(sessions.capabilities ?? []))
         case .attached(let attached):
             // With or without `resync`, a snapshot replaces whatever the client held.
             return .attached(
@@ -482,6 +495,23 @@ public struct WireCodec: RemoteCodec {
             health: info.health.known == .live ? .healthy : .degraded,
             turnCount: info.turnCount,
             lastActiveAt: info.lastActiveAt.flatMap(TimingPresentation.date)
+        )
+    }
+
+    static func savedSession(_ wire: WireSavedSession) -> SavedSession {
+        let state: SavedSessionState = switch wire.state.known {
+        case .saved: .saved
+        case .shared: .shared
+        case .open: .open
+        case nil: .unknown
+        }
+        return SavedSession(
+            id: wire.sessionID,
+            title: wire.title,
+            workspace: wire.workspace,
+            updatedAt: wire.updatedAt.flatMap(TimingPresentation.date),
+            messageCount: Int(clamping: wire.messageCount),
+            state: state
         )
     }
 

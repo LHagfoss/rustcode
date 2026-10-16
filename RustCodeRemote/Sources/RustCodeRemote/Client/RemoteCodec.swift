@@ -33,6 +33,10 @@ public enum RemoteCommand: Sendable, Equatable {
     /// Asks the live terminal of an unshared session to share it. Answered by
     /// `.shareRequestSent`; the outcome comes from `getRequestStatus` on the same request.
     case requestShare(sessionID: String)
+    /// One page of the host's saved sessions. Needs `HostCapability.savedSessions`.
+    case listSavedSessions(cursor: String?, limit: Int?, query: String?)
+    /// Reopens a saved session. Answered by `.sessionResumed` once it is shared.
+    case resumeSession(sessionID: String)
 
     public var isHandshake: Bool {
         switch self {
@@ -115,7 +119,11 @@ public enum HandshakeReply: Sendable, Equatable {
 /// What the host answers to one command.
 public enum RemoteReply: Sendable, Equatable {
     case handshake(HandshakeReply)
-    case sessions([SessionSummary])
+    /// The live list, and the host-wide operations the host offers.
+    case sessions([SessionSummary], capabilities: Set<String> = [])
+    case savedSessions(SavedSessionPage)
+    /// A saved session is shared again and can be attached.
+    case sessionResumed(SessionSummary)
     case imageUploaded(ImageUploadProgress)
     case directories(DirectoryListing)
     case sessionCreated(SessionSummary)

@@ -24,6 +24,8 @@ public actor DemoRemoteClient: RemoteClient {
     private var imageReplies: [RequestID: (SessionRef, ImageUploadChunk, ImageUploadProgress)] = [:]
     private var imageOffsets: [String: UInt64] = [:]
     private var createdSessions: [RequestID: SessionSummary] = [:]
+    /// Sessions saved on the demo host that nothing holds, newest first.
+    private var archived: [SavedSession] = DemoRemoteClient.archivedSeed()
 
     public static let approvalSessionID = "demo-backoff"
     public static let questionSessionID = "demo-store"
@@ -141,6 +143,57 @@ public actor DemoRemoteClient: RemoteClient {
         state.capabilities = ["cancel_question", "execute_command", "upload_image"]
         sessions[ref.sessionID] = Session(summary: summary, state: state)
         order.insert(ref.sessionID, at: 0)
+        createdSessions[requestID] = summary
+        listContinuation?.yield(summaries)
+        return summary
+    }
+
+    public func hostCapabilities() async -> Set<String> {
+        isConnected ? [HostCapability.savedSessions] : []
+    }
+
+    public func listSavedSessions(cursor: String?, limit: Int, query: String?) async throws -> SavedSessionPage {
+        guard isConnected else { throw RemoteError.notConnected }
+        let live = summaries.map {
+            SavedSession(id: $0.id, title: $0.title, workspace: $0.workspace, updatedAt: $0.lastActiveAt,
+                         messageCount: sessions[$0.id]?.state.items.count ?? 0, state: .shared)
+        }
+        let query = query?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        let all = (live + archived).filter { session in
+            query.isEmpty || [session.title, session.workspace ?? "", session.id].contains { $0.lowercased().contains(query) }
+        }
+        let start = cursor.flatMap { cursor in all.firstIndex { $0.id == cursor }.map { $0 + 1 } } ?? 0
+        let page = Array(all.dropFirst(start).prefix(max(1, limit)))
+        let more = start + page.count < all.count
+        return SavedSessionPage(sessions: page, nextCursor: more ? page.last?.id : nil)
+    }
+
+    public func resumeSession(_ sessionID: String, requestID: RequestID) async throws -> SessionSummary {
+        guard isConnected else { throw RemoteError.notConnected }
+        if let created = createdSessions[requestID] { return created }
+        if let live = sessions[sessionID] { return live.summary }
+        guard let index = archived.firstIndex(where: { $0.id == sessionID }) else {
+            throw RemoteError.rejected(.other(code: "not_found", message: "No saved session has this identifier."))
+        }
+        let saved = archived[index]
+        guard saved.canOpen else {
+            throw RemoteError.rejected(.busy)
+        }
+        _ = await pause(6)
+        let ref = SessionRef(sessionID: sessionID, registrationEpoch: 1)
+        let items = [
+            TranscriptItem(id: "\(sessionID)-1", .user(saved.title)),
+            TranscriptItem(id: "\(sessionID)-2", .assistant(AssistantText(text: "Done. This session was reopened from the Mac's saved sessions."))),
+        ]
+        let summary = SessionSummary(ref: ref, title: saved.title, workspace: saved.workspace ?? "/Users/demo",
+                                     model: "demo-model", turnCount: 1, lastActiveAt: saved.updatedAt)
+        var state = SessionSnapshot(session: ref, items: items, sequence: UInt64(items.count))
+        state.settings = sessions[Self.idleSessionID]?.state.settings
+        state.commands = Self.commandCatalog
+        state.capabilities = ["cancel_question", "execute_command", "upload_image"]
+        sessions[sessionID] = Session(summary: summary, state: state)
+        order.insert(sessionID, at: 0)
+        archived.remove(at: index)
         createdSessions[requestID] = summary
         listContinuation?.yield(summaries)
         return summary
@@ -659,6 +712,18 @@ public actor DemoRemoteClient: RemoteClient {
         }
         if !current.isEmpty { chunks.append(current) }
         return chunks
+    }
+
+    private static func archivedSeed() -> [SavedSession] {
+        let now = Date()
+        return [
+            SavedSession(id: "demo-saved-parser", title: "Fix the flaky parser test", workspace: "~/code/rustcode",
+                         updatedAt: now.addingTimeInterval(-3 * 3600), messageCount: 24),
+            SavedSession(id: "demo-saved-terminal", title: "Profile slow startup", workspace: "~/code/rustcode",
+                         updatedAt: now.addingTimeInterval(-26 * 3600), messageCount: 57, state: .open),
+            SavedSession(id: "demo-saved-docs", title: "Write the pairing guide", workspace: "~/code/docs",
+                         updatedAt: now.addingTimeInterval(-4 * 86400), messageCount: 12),
+        ]
     }
 
     private static func seed() -> [Session] {

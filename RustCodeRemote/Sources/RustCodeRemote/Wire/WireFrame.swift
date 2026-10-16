@@ -60,6 +60,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
     case imageUploaded(ImageUploadProgress)
     case directories(DirectoryListing)
     case sessionCreated(SessionCreated)
+    case sessionResumed(SessionCreated)
+    case savedSessions(SavedSessions)
     case attached(Attached)
     case resumed(Resumed)
     case detached
@@ -81,7 +83,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
     public static let knownTypes: Set<String> = [
         "image_uploaded", "directories", "session_created", "error", "sessions", "attached", "resumed", "detached", "history", "content",
         "session_settings_updated", "prompt_accepted", "turn_cancelled", "question_answered", "question_cancelled", "command_executed", "approval_resolved", "request_status",
-        "share_request_sent", "share_accepted", "share_denied",
+        "share_request_sent", "share_accepted", "share_denied", "session_resumed", "saved_sessions",
     ]
 
     public struct SessionCreated: Codable, Equatable, Sendable { public var session: WireSessionInfo }
@@ -91,12 +93,26 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         public var instanceID: String?
         public var sessions: [WireSessionInfo]
         public var subscribed: Bool
+        /// Optional host-wide operations, such as `saved_sessions`. Absent from older hosts.
+        public var capabilities: [String]? = nil
 
         enum CodingKeys: String, CodingKey {
             case gatewayID = "gateway_id"
             case instanceID = "instance_id"
             case sessions
             case subscribed
+            case capabilities
+        }
+    }
+
+    /// One page of `list_saved_sessions`.
+    public struct SavedSessions: Codable, Equatable, Sendable {
+        public var sessions: [WireSavedSession]
+        public var nextCursor: String?
+
+        enum CodingKeys: String, CodingKey {
+            case sessions
+            case nextCursor = "next_cursor"
         }
     }
 
@@ -197,6 +213,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .imageUploaded: "image_uploaded"
         case .directories: "directories"
         case .sessionCreated: "session_created"
+        case .sessionResumed: "session_resumed"
+        case .savedSessions: "saved_sessions"
         case .attached: "attached"
         case .resumed: "resumed"
         case .detached: "detached"
@@ -225,6 +243,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case "image_uploaded": self = .imageUploaded(try ImageUploadProgress(from: decoder))
         case "directories": self = .directories(try DirectoryListing(from: decoder))
         case "session_created": self = .sessionCreated(try SessionCreated(from: decoder))
+        case "session_resumed": self = .sessionResumed(try SessionCreated(from: decoder))
+        case "saved_sessions": self = .savedSessions(try SavedSessions(from: decoder))
         case "attached": self = .attached(try Attached(from: decoder))
         case "resumed": self = .resumed(try Resumed(from: decoder))
         case "detached": self = .detached
@@ -252,6 +272,8 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .imageUploaded(let payload): payload
         case .directories(let payload): payload
         case .sessionCreated(let payload): payload
+        case .sessionResumed(let payload): payload
+        case .savedSessions(let payload): payload
         case .attached(let payload): payload
         case .resumed(let payload): payload
         case .detached: nil
@@ -572,6 +594,31 @@ public struct WireSessionInfo: Codable, Equatable, Sendable {
         case turnCount = "turn_count"
         case lastActiveAt = "last_active_at"
     }
+}
+
+/// One session saved on the host, as `list_saved_sessions` reports it.
+public struct WireSavedSession: Codable, Equatable, Sendable {
+    public var sessionID: String
+    public var title: String
+    public var workspace: String?
+    public var updatedAt: String?
+    public var messageCount: UInt64
+    public var state: WireOpen<WireSavedSessionState>
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case title
+        case workspace
+        case updatedAt = "updated_at"
+        case messageCount = "message_count"
+        case state
+    }
+}
+
+public enum WireSavedSessionState: String, Sendable, Equatable, CaseIterable {
+    case saved
+    case shared
+    case open
 }
 
 public enum WireSessionActivity: String, Sendable, Equatable, CaseIterable {

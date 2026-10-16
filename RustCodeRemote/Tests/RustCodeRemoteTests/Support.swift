@@ -85,6 +85,8 @@ struct LineCodec: RemoteCodec {
         case .resolveApproval: "approve"
         case .getRequestStatus(_, let target): "status:\(target)"
         case .requestShare: "share"
+        case .listSavedSessions(let cursor, _, let query): "saved:\(cursor ?? "-"):\(query ?? "-")"
+        case .resumeSession(let sessionID): "resume:\(sessionID)"
         }
         return "\(requestID)|\(operation)"
     }
@@ -136,6 +138,7 @@ struct LineCodec: RemoteCodec {
             ConnectionIdentity(gatewayID: gateway.isEmpty ? "gateway" : gateway, instanceID: "instance-1")
         ))
         case ("sessions", let count): .sessions(sessions(count))
+        case ("sessions-saved", let count): .sessions(sessions(count), capabilities: [HostCapability.savedSessions])
         case ("attached", _): .attached(
             .snapshot(SessionSnapshot(session: Self.session, sequence: 10)),
             origin: ReplayOrigin(gatewayID: "gw-1", instanceID: "inst-1")

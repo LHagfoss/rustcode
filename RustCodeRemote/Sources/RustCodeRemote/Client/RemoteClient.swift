@@ -47,6 +47,14 @@ public protocol RemoteClient: Sendable {
     func browseDirectories(path: String?) async throws -> DirectoryListing
     func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary
 
+    /// Optional host-wide operations the host listed with its sessions, such as
+    /// `HostCapability.savedSessions`. Empty until the session list has been received.
+    func hostCapabilities() async -> Set<String>
+    /// One page of the sessions saved on the host, shared or not, newest first.
+    func listSavedSessions(cursor: String?, limit: Int, query: String?) async throws -> SavedSessionPage
+    /// Reopens a saved session that nothing holds and returns it once it is shared.
+    func resumeSession(_ sessionID: String, requestID: RequestID) async throws -> SessionSummary
+
     func refreshSessions() async throws
 
     /// - Parameter resumeAfter: the last sequence already applied for this exact registration,
@@ -98,6 +106,9 @@ public extension RemoteClient {
     func uploadImage(_ chunk: ImageUploadChunk, in session: SessionRef, requestID: RequestID) async throws -> ImageUploadProgress { throw RemoteError.rejected(.unsupportedOperation) }
     func browseDirectories(path: String?) async throws -> DirectoryListing { throw RemoteError.rejected(.unsupportedOperation) }
     func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary { throw RemoteError.rejected(.unsupportedOperation) }
+    func hostCapabilities() async -> Set<String> { [] }
+    func listSavedSessions(cursor: String?, limit: Int, query: String?) async throws -> SavedSessionPage { throw RemoteError.rejected(.unsupportedOperation) }
+    func resumeSession(_ sessionID: String, requestID: RequestID) async throws -> SessionSummary { throw RemoteError.rejected(.unsupportedOperation) }
     func receiptUpdates() async -> AsyncStream<RequestReceipt> { AsyncStream { $0.finish() } }
     func executeCommand(_ command: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt { RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation)) }
     func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt { RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation)) }
