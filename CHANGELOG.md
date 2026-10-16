@@ -1,3 +1,13 @@
+## [v0.73.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.73.0) - 2026-10-16
+
+### Features
+- Each chat remembers its model and reasoning effort: reopening a chat in the macOS app, resuming in the TUI, or attaching from a device no longer resets effort to Off ([#2066](https://github.com/LHagfoss/rustcode/pull/2066)).
+- `rustcode defaults` shows and sets the model and effort new sessions start with; macOS Settings › New Chats uses it, and new chats start from those defaults ([#2066](https://github.com/LHagfoss/rustcode/pull/2066)).
+- macOS app: queue messages while a turn runs, shown above the composer with edit and remove, sent in order when the turn ends ([#2068](https://github.com/LHagfoss/rustcode/pull/2068)).
+- TUI: clearer steering and queue preview with headers, numbering and spacing ([#2068](https://github.com/LHagfoss/rustcode/pull/2068)).
+- macOS app: checks for updates every minute while running, and downloads updates in seconds instead of stalling ([#2061](https://github.com/LHagfoss/rustcode/pull/2061), [#2065](https://github.com/LHagfoss/rustcode/pull/2065)).
+- macOS app: toolbar spacing, glass All/Project toggle, slimmer search, new Settings icon, and chat titles hide image markers ([#2062](https://github.com/LHagfoss/rustcode/pull/2062)).
+- Release builds reuse caches and release PRs skip redundant checks ([#2060](https://github.com/LHagfoss/rustcode/pull/2060)).
 ## [v0.72.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.72.0) - 2026-10-16
 
 ### Features
