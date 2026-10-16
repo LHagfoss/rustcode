@@ -1,3 +1,10 @@
+## [v0.74.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.74.1) - 2026-10-16
+
+### Fixes
+- macOS app: Markdown tables fit the reply width and wrap long cells instead of scrolling sideways ([#2083](https://github.com/LHagfoss/rustcode/pull/2083)).
+- macOS app: "Working…" stays until the first visible reply text, Shift+Enter (or Option+Enter) inserts a newline, and chat rows show the model on the left and the time on the right ([#2083](https://github.com/LHagfoss/rustcode/pull/2083), [#2085](https://github.com/LHagfoss/rustcode/pull/2085)).
+- macOS app: a sidebar row no longer stays highlighted after its context menu closes or it is pinned ([#2084](https://github.com/LHagfoss/rustcode/pull/2084)).
+- ACP `session/list` reports each chat's model, including chats that never changed it ([#2085](https://github.com/LHagfoss/rustcode/pull/2085)).
 ## [v0.74.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.74.0) - 2026-10-16
 
 ### Features
