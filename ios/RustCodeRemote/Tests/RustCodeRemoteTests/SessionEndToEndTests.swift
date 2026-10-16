@@ -167,6 +167,14 @@ struct SessionEndToEndTests {
         #expect(home.path == FileManager.default.homeDirectoryForCurrentUser.path)
         let folders = try await client.browseDirectories(path: gateway.configuration.path)
         #expect(folders.directories.contains { $0.name == "Project with spaces" })
+        // A folder outside home and the configured roots is refused, with the reason.
+        do {
+            _ = try await client.createSession(directory: "/usr", requestID: RequestID())
+            Issue.record("A folder outside the allowed roots was accepted")
+        } catch RemoteError.rejected(.other(let code, let message)) {
+            #expect(code == "invalid_request")
+            #expect(message?.contains("outside your home folder") == true)
+        }
         let createID = RequestID()
         let session = try await client.createSession(directory: workspace.path, requestID: createID)
         let actualDirectory = try FileManager.default.attributesOfItem(atPath: session.workspace)[.systemFileNumber] as? NSNumber

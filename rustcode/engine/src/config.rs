@@ -169,6 +169,11 @@ pub struct RemoteConfig {
     /// config may set this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefer_interface: Option<String>,
+    /// Folders besides the home directory that a paired device may browse
+    /// and start sessions in. Absolute or `~/…`; missing ones are ignored.
+    /// Only the user config may set this.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<String>,
 }
 
 /// Loop-guard budgets, configurable under `[loop_guard]` in config.toml.

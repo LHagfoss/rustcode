@@ -1731,4 +1731,4 @@ impl FrameRouter for SessionHub {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

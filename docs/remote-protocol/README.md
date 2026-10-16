@@ -601,7 +601,11 @@ The latter returns `session_created { session }`. It starts a detached session
 owner with the same runtime, tools, questions, approvals, and turn cancellation
 as the TUI. Closing the app or restarting the gateway does not stop that owner.
 Folder listings omit dot-folders, cap their count and encoded size, and report
-`truncated`; direct absolute and `~/` paths remain accepted.
+`truncated`; direct absolute and `~/` paths remain accepted. Both operations
+accept only existing directories inside the host user's home folder or a
+`roots` entry under `[remote]` in the host's `config.toml`; anything else is
+refused with `invalid_request` and a message saying why, and nothing is
+started. A listing's `parent` is absent when it would lead outside them.
 
 Creation is a host-wide mutation: no session envelope is required. Its durable
 receipt is scoped to the authenticated device and request ID. After a timeout,
@@ -609,14 +613,24 @@ reuse the same ID or query `get_request_status`; never generate a new ID merely
 because confirmation has not arrived. Session owners hold a private per-session
 lease, so concurrent launch/reconnect attempts cannot create duplicate owners.
 
-A new owner has 20 seconds to register. When it exits first or does not make
-it, the gateway stops it, withdraws the receipt and answers with error
-`internal` and receipt `rejected`: the session was not created, and the message
-names the session, the reason, the owner's last output and its log on the host.
-That outcome is final for the attempt, so the client may ask again with the
-same or a new request ID. `owner_unavailable` with receipt `unknown` remains
-the answer when the outcome is not known, for example when an owner from an
-earlier attempt is running but has not registered with this gateway yet.
+The gateway answers every `create_session` and `resume_session` within 15
+seconds of receiving it, waiting for other starts included, so clients with a
+20-second request timeout always see the answer. A start that cannot even
+begin in that time is refused with `busy` and nothing recorded. When the owner
+exits before registering, the gateway withdraws the receipt and answers with
+error `internal` and receipt `rejected`: the session was not created, and the
+message names the session, the reason, the owner's last output and its log on
+the host. That outcome is final for the attempt, so the client may ask again
+with the same or a new request ID.
+
+An owner that is still starting at the deadline is answered with
+`owner_unavailable` and receipt `unknown`; the client asks again with the same
+request ID (or `get_request_status`). The gateway keeps the owner for up to 60
+seconds from its launch: once it registers, the receipt holds the result and a
+retry returns it; when it has not registered by then it is stopped and the
+receipt withdrawn, and a retry then starts a new attempt. A retry that finds
+the owner of an earlier attempt gone without registering answers `internal`
+with receipt `rejected`.
 
 The gateway preserves pairing credentials when upgrading. Existing terminal-owned
 sessions keep running and reconnect, but retain their owner's older capabilities

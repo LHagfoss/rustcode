@@ -19,7 +19,10 @@ use std::{
 };
 
 /// How long a new owner may take to register before it is stopped.
-const OWNER_START_TIMEOUT: Duration = Duration::from_secs(20);
+const OWNER_START_TIMEOUT: Duration = Duration::from_secs(60);
+/// Every session start is answered within this long of its arrival. The app
+/// gives up on a request after 20 s; an answer after that is never seen.
+const ANSWER_DEADLINE: Duration = Duration::from_secs(15);
 const OWNER_LEASE: &str = "remote session";
 
 /// The owner of a new session could not be started, and nothing is left of
@@ -109,32 +112,100 @@ fn log_tail(log: &Path) -> Option<String> {
     (!tail.is_empty()).then(|| tail.chars().take(600).collect())
 }
 
-pub fn resolve_directory(path: Option<&str>) -> Result<PathBuf> {
-    ensure!(
-        path.is_none_or(|value| value.len() <= 4096),
-        "directory path is too long"
-    );
-    let home = std::env::var_os("HOME")
+fn home_directory() -> Result<PathBuf> {
+    std::env::var_os("HOME")
         .map(PathBuf::from)
-        .context("home directory unavailable")?;
-    let path = match path.map(str::trim).filter(|v| !v.is_empty()) {
-        None | Some("~") | Some("~/") => home,
-        Some(value) if value.starts_with("~/") => home.join(&value[2..]),
-        Some(value) => {
-            let path = PathBuf::from(value);
-            ensure!(path.is_absolute(), "choose an absolute directory path");
-            path
+        .filter(|home| home.is_absolute())
+        .context("home directory unavailable")
+}
+
+/// `~` and `~/…` relative to `home`; anything else as written.
+fn expand_home(home: &Path, value: &str) -> PathBuf {
+    match value {
+        "~" | "~/" => home.to_path_buf(),
+        _ => match value.strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(value),
+        },
+    }
+}
+
+/// The folders a device may browse and start sessions in: the home
+/// directory and the `[remote] roots` of the user configuration, each by its
+/// real path. A root that does not exist, or is not absolute, is skipped.
+/// Read on every request, so editing `config.toml` needs no gateway restart.
+pub fn allowed_roots(config: &Path) -> Result<Vec<PathBuf>> {
+    #[derive(Deserialize, Default)]
+    struct UserConfig {
+        #[serde(default)]
+        remote: crate::config::RemoteConfig,
+    }
+    let home = home_directory()?;
+    let mut roots = vec![home.canonicalize().unwrap_or_else(|_| home.clone())];
+    let configured = std::fs::read_to_string(config.join(crate::config::CONFIG_TOML_FILE))
+        .ok()
+        .and_then(|text| toml::from_str::<UserConfig>(&text).ok())
+        .map(|file| file.remote.roots)
+        .unwrap_or_default();
+    for root in configured {
+        let root = expand_home(&home, root.trim());
+        if root.is_absolute()
+            && let Ok(root) = root.canonicalize()
+            && root.is_dir()
+            && !roots.contains(&root)
+        {
+            roots.push(root);
         }
+    }
+    Ok(roots)
+}
+
+/// The real path of the folder a device named (home when it named none),
+/// which must exist, be a directory, and lie inside one of `roots`.
+pub fn resolve_directory(path: Option<&str>, roots: &[PathBuf]) -> Result<PathBuf> {
+    if path.is_some_and(|value| value.len() > 4096) {
+        return Err(refused(
+            RemoteErrorCode::InvalidRequest,
+            "the folder path is too long",
+        ));
+    }
+    let home = home_directory()?;
+    let named = match path.map(str::trim).filter(|v| !v.is_empty()) {
+        None => home,
+        Some(value) => expand_home(&home, value),
     };
-    let path = path
-        .canonicalize()
-        .context("directory does not exist or is inaccessible")?;
-    ensure!(path.is_dir(), "choose a directory, not a file");
+    if !named.is_absolute() {
+        return Err(refused(
+            RemoteErrorCode::InvalidRequest,
+            "choose an absolute folder path",
+        ));
+    }
+    let path = named.canonicalize().map_err(|_| {
+        refused(
+            RemoteErrorCode::InvalidRequest,
+            format!("{} does not exist or cannot be read", named.display()),
+        )
+    })?;
+    if !path.is_dir() {
+        return Err(refused(
+            RemoteErrorCode::InvalidRequest,
+            format!("{} is a file; choose a folder", path.display()),
+        ));
+    }
+    if !roots.iter().any(|root| path.starts_with(root)) {
+        return Err(refused(
+            RemoteErrorCode::InvalidRequest,
+            format!(
+                "{} is outside your home folder; choose a folder inside it, or add one to `roots` under `[remote]` in config.toml on the host",
+                path.display()
+            ),
+        ));
+    }
     Ok(path)
 }
 
-pub fn list_directories(path: Option<&str>) -> Result<RemoteResult> {
-    let path = resolve_directory(path)?;
+pub fn list_directories(path: Option<&str>, roots: &[PathBuf]) -> Result<RemoteResult> {
+    let path = resolve_directory(path, roots)?;
     let mut directories = Vec::new();
     let mut truncated = false;
     let mut bytes = 0usize;
@@ -161,7 +232,11 @@ pub fn list_directories(path: Option<&str>) -> Result<RemoteResult> {
     }
     directories.sort_by_key(|entry| entry.name.to_lowercase());
     Ok(RemoteResult::Directories {
-        parent: path.parent().map(|v| v.to_string_lossy().into_owned()),
+        // Never offer a way up out of the folders a device may use.
+        parent: path
+            .parent()
+            .filter(|parent| roots.iter().any(|root| parent.starts_with(root)))
+            .map(|v| v.to_string_lossy().into_owned()),
         path: path.to_string_lossy().into_owned(),
         directories,
         truncated,
@@ -396,22 +471,42 @@ impl WorkspaceRouter {
         Ok(Some(stored))
     }
 
+    /// Wait for the right to start a session. Starts are decided one at a
+    /// time, but a start that cannot even begin by `answer_by` is turned down
+    /// instead of answered after the device has stopped listening.
+    async fn start_turn(
+        gate: &tokio::sync::Mutex<()>,
+        answer_by: tokio::time::Instant,
+    ) -> Result<tokio::sync::MutexGuard<'_, ()>> {
+        tokio::time::timeout_at(answer_by, gate.lock())
+            .await
+            .map_err(|_| {
+                refused(
+                    RemoteErrorCode::Busy,
+                    "another session is being started on the host; try again in a moment",
+                )
+            })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn create(
-        hub: &SessionHub,
+        hub: &Arc<SessionHub>,
         config: &Path,
         program: &Path,
+        gate: &tokio::sync::Mutex<()>,
         device: &str,
         request: &RemoteRequest,
         path: Option<&str>,
-        timeout: Duration,
+        timing: StartTiming,
     ) -> Result<RemoteResponse> {
+        let turn = Self::start_turn(gate, timing.answer_by).await?;
         let receipt = Self::receipt_path(config, device, &request.request_id);
         ensure_private_directory(receipt.parent().unwrap(), "remote session creation")?;
         let previous = Self::prior(&receipt, request)?;
         if let Some(response) = previous.as_ref().and_then(|stored| stored.response.clone()) {
             return Ok(response);
         }
-        let directory = resolve_directory(path)?;
+        let directory = resolve_directory(path, &allowed_roots(config)?)?;
         // A home directory works but tracks hundreds of thousands of files:
         // flag it in the session log so the next slow-turn report starts with
         // the workspace root, not the network (#1954).
@@ -435,22 +530,28 @@ impl WorkspaceRouter {
             publish_private_json(&receipt, &creation)?;
             creation
         };
-        Self::launch(hub, config, program, &receipt, creation, directory, timeout).await
+        Self::launch(
+            hub, config, program, turn, &receipt, creation, directory, timing,
+        )
+        .await
     }
 
     /// Open a saved session from a device: start a session owner on it in
     /// its recorded workspace, exactly as `create` does for a new one, and
     /// answer once it has registered. A session that is already shared is
     /// answered at once; one that a terminal holds is refused.
+    #[allow(clippy::too_many_arguments)]
     async fn resume(
-        hub: &SessionHub,
+        hub: &Arc<SessionHub>,
         config: &Path,
         program: &Path,
+        gate: &tokio::sync::Mutex<()>,
         device: &str,
         request: &RemoteRequest,
         session_id: &str,
-        timeout: Duration,
+        timing: StartTiming,
     ) -> Result<RemoteResponse> {
+        let turn = Self::start_turn(gate, timing.answer_by).await?;
         let receipt = Self::receipt_path(config, device, &request.request_id);
         ensure_private_directory(receipt.parent().unwrap(), "remote session creation")?;
         let previous = Self::prior(&receipt, request)?;
@@ -502,41 +603,38 @@ impl WorkspaceRouter {
             publish_private_json(&receipt, &creation)?;
             creation
         };
-        Self::launch(hub, config, program, &receipt, creation, directory, timeout).await
+        Self::launch(
+            hub, config, program, turn, &receipt, creation, directory, timing,
+        )
+        .await
     }
 
     /// Start the owner of `creation.session_id` in `directory` unless one is
-    /// already running, and wait for it to register with the hub.
+    /// already running, and wait for it to register with the hub. The device
+    /// is answered by `timing.answer_by` whatever happens; an owner that is
+    /// still starting then is watched on, up to `timing.start_limit`.
+    #[allow(clippy::too_many_arguments)]
     async fn launch(
-        hub: &SessionHub,
+        hub: &Arc<SessionHub>,
         config: &Path,
         program: &Path,
+        turn: tokio::sync::MutexGuard<'_, ()>,
         receipt: &Path,
-        mut creation: Creation,
+        creation: Creation,
         directory: PathBuf,
-        timeout: Duration,
+        timing: StartTiming,
     ) -> Result<RemoteResponse> {
         let session_id = creation.session_id.clone();
         let owners = config.join("remote").join("owners");
         ensure_private_directory(&owners, "remote session owners")?;
-        let log_path = owners.join(format!("{session_id}.log"));
-        let verb = match creation.request.operation {
-            RemoteOperation::ResumeSession { .. } => "resumed",
-            _ => "created",
-        };
-        // Nothing is left of a failed start, so the same request may run again.
-        let failed = |reason: String| -> anyhow::Error {
-            note_in_log(&log_path, &reason);
-            let _ = remove_if_exists(receipt);
-            let output = match log_tail(&log_path) {
-                Some(tail) => format!("its last output: {tail}"),
-                None => "it wrote nothing".to_owned(),
-            };
-            OwnerStartFailed(format!(
-                "session {session_id} was not {verb}: {reason}; {output} (owner log {})",
-                log_path.display()
-            ))
-            .into()
+        let start = OwnerStart {
+            verb: match creation.request.operation {
+                RemoteOperation::ResumeSession { .. } => "resumed",
+                _ => "created",
+            },
+            log_path: owners.join(format!("{session_id}.log")),
+            receipt: receipt.to_path_buf(),
+            session_id: session_id.clone(),
         };
         // A retry finds the owner of an earlier attempt by its lease and
         // waits for that one: a session never has two owner processes.
@@ -547,7 +645,7 @@ impl WorkspaceRouter {
                 .append(true)
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW)
-                .open(&log_path)?;
+                .open(&start.log_path)?;
             let mut command = tokio::process::Command::new(program);
             command
                 .args(["remote", "session-owner", "--session-id", &session_id])
@@ -566,38 +664,67 @@ impl WorkspaceRouter {
                 });
             }
             child = Some(command.spawn().map_err(|error| {
-                failed(format!("the session owner could not be launched ({error})"))
+                start.failed(format!("the session owner could not be launched ({error})"))
             })?);
         }
+        // The decision is made; waiting for registration does not hold up
+        // other starts.
+        drop(turn);
         let started = Instant::now();
+        let mut polls: u32 = 0;
         let session = loop {
             if let Some(info) = hub.session_info(&session_id) {
                 break info;
             }
-            if let Some(owner) = child.as_mut()
-                && let Ok(Some(status)) = owner.try_wait()
+            match child.as_mut() {
+                Some(owner) => {
+                    if let Ok(Some(status)) = owner.try_wait() {
+                        return Err(start.failed(format!(
+                            "the session owner exited before registering ({status})"
+                        )));
+                    }
+                }
+                // The owner of an earlier attempt: gone without registering
+                // means that attempt failed. Probe its lease once a second.
+                None => {
+                    if polls % 20 == 19 && !owner_alive(&owners, &session_id) {
+                        return Err(start.failed(
+                            "the owner of an earlier attempt stopped without registering"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+            if started.elapsed() >= timing.start_limit
+                && let Some(owner) = child
             {
-                return Err(failed(format!(
-                    "the session owner exited before registering ({status})"
-                )));
+                return Err(start.stop(owner, timing.start_limit).await);
             }
-            if started.elapsed() >= timeout {
-                let Some(mut owner) = child else {
-                    anyhow::bail!(
-                        "session {session_id} is still starting: its owner process is alive but has not registered with this gateway; retry with the same request identifier to check it (receipt {}, owner log {})",
-                        receipt.display(),
-                        log_path.display()
-                    );
-                };
-                // An owner that registers this late is gone with its
-                // connection: the hub closes the session it opened.
-                let _ = owner.start_kill();
-                let _ = owner.wait().await;
-                return Err(failed(format!(
-                    "the session owner did not register with the gateway within {} s and was stopped",
-                    timeout.as_secs_f32()
-                )));
+            if tokio::time::Instant::now() >= timing.answer_by {
+                // Still starting. Keep the owner and its receipt; the device
+                // learns the session from a retry or `get_request_status`.
+                if let Some(owner) = child {
+                    let hub = hub.clone();
+                    let creation = Creation {
+                        request: creation.request.clone(),
+                        session_id: session_id.clone(),
+                        response: None,
+                    };
+                    let start = start.clone();
+                    tokio::spawn(async move {
+                        start
+                            .watch(hub, owner, creation, started, timing.start_limit)
+                            .await;
+                    });
+                }
+                anyhow::bail!(
+                    "session {session_id} is still starting: its owner has not registered with the gateway yet; ask again with the same request to check it (the host waits up to {} s; receipt {}, owner log {})",
+                    timing.start_limit.as_secs(),
+                    receipt.display(),
+                    start.log_path.display()
+                );
             }
+            polls = polls.wrapping_add(1);
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
         if let Some(mut owner) = child {
@@ -606,14 +733,151 @@ impl WorkspaceRouter {
                 let _ = owner.wait().await;
             });
         }
-        let response = RemoteResponse::new(
-            creation.request.request_id.clone(),
-            launched(&creation.request, session),
-        )
-        .with_receipt(ReceiptState::Applied);
-        creation.response = Some(response.clone());
-        publish_private_json(receipt, &creation)?;
-        Ok(response)
+        record_launched(receipt, creation, session)
+    }
+
+    /// The answer to a session start that did not succeed. A refusal or a
+    /// failed start is final and leaves nothing behind; anything else with a
+    /// receipt on disk may still turn into a session, so it is `unknown`.
+    fn start_error(
+        config: &Path,
+        device: &str,
+        request_id: &str,
+        error: &anyhow::Error,
+    ) -> RemoteResponse {
+        let failed = error.downcast_ref::<OwnerStartFailed>().is_some();
+        let refusal = error.downcast_ref::<Refused>().map(|refused| refused.0);
+        let uncertain =
+            !failed && refusal.is_none() && Self::receipt_path(config, device, request_id).exists();
+        let mut response = RemoteResponse::error(
+            request_id.to_owned(),
+            RemoteError::new(
+                if failed {
+                    RemoteErrorCode::Internal
+                } else if let Some(code) = refusal {
+                    code
+                } else if uncertain {
+                    RemoteErrorCode::OwnerUnavailable
+                } else {
+                    RemoteErrorCode::InvalidRequest
+                },
+                format!("{error:#}"),
+            ),
+        );
+        response.receipt = Some(if uncertain {
+            ReceiptState::Unknown
+        } else {
+            ReceiptState::Rejected
+        });
+        response
+    }
+}
+
+/// When a session start must be answered, and how long its owner may take.
+#[derive(Clone, Copy)]
+struct StartTiming {
+    answer_by: tokio::time::Instant,
+    start_limit: Duration,
+}
+
+impl StartTiming {
+    fn from_now(answer_within: Duration, start_limit: Duration) -> Self {
+        Self {
+            answer_by: tokio::time::Instant::now() + answer_within,
+            start_limit,
+        }
+    }
+}
+
+/// Record that the owner of `creation` registered, and the answer.
+fn record_launched(
+    receipt: &Path,
+    mut creation: Creation,
+    session: RemoteSessionInfo,
+) -> Result<RemoteResponse> {
+    let response = RemoteResponse::new(
+        creation.request.request_id.clone(),
+        launched(&creation.request, session),
+    )
+    .with_receipt(ReceiptState::Applied);
+    creation.response = Some(response.clone());
+    publish_private_json(receipt, &creation)?;
+    Ok(response)
+}
+
+/// One owner being started: where its outcome is written down.
+#[derive(Clone)]
+struct OwnerStart {
+    session_id: String,
+    verb: &'static str,
+    log_path: PathBuf,
+    receipt: PathBuf,
+}
+
+impl OwnerStart {
+    /// Nothing is left of a failed start, so the same request may run again.
+    fn failed(&self, reason: String) -> anyhow::Error {
+        note_in_log(&self.log_path, &reason);
+        let _ = remove_if_exists(&self.receipt);
+        let output = match log_tail(&self.log_path) {
+            Some(tail) => format!("its last output: {tail}"),
+            None => "it wrote nothing".to_owned(),
+        };
+        OwnerStartFailed(format!(
+            "session {} was not {}: {reason}; {output} (owner log {})",
+            self.session_id,
+            self.verb,
+            self.log_path.display()
+        ))
+        .into()
+    }
+
+    /// Stop an owner that did not register within `limit`. One that
+    /// registers this late is gone with its connection: the hub closes the
+    /// session it opened.
+    async fn stop(&self, mut owner: tokio::process::Child, limit: Duration) -> anyhow::Error {
+        let _ = owner.start_kill();
+        let _ = owner.wait().await;
+        self.failed(format!(
+            "the session owner did not register with the gateway within {} s and was stopped",
+            limit.as_secs_f32()
+        ))
+    }
+
+    /// Follow an owner the device was already answered about: record its
+    /// session in the receipt once it registers, or stop it and withdraw
+    /// the receipt when it exits or runs out of time.
+    async fn watch(
+        self,
+        hub: Arc<SessionHub>,
+        mut owner: tokio::process::Child,
+        creation: Creation,
+        started: Instant,
+        limit: Duration,
+    ) {
+        loop {
+            if let Some(session) = hub.session_info(&self.session_id) {
+                // A retry may have recorded it already; the answer is the same.
+                let _ = record_launched(&self.receipt, creation, session);
+                note_in_log(
+                    &self.log_path,
+                    "the owner registered after the device was told it was still starting",
+                );
+                let _ = owner.wait().await;
+                return;
+            }
+            if let Ok(Some(status)) = owner.try_wait() {
+                let _ = self.failed(format!(
+                    "the session owner exited before registering ({status})"
+                ));
+                return;
+            }
+            if started.elapsed() >= limit {
+                let _ = self.stop(owner, limit).await;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 fn send(sink: &FrameSink, response: RemoteResponse) {
@@ -635,19 +899,25 @@ impl FrameRouter for WorkspaceRouter {
         match &request.operation {
             RemoteOperation::ListDirectories { path } => {
                 let path = path.clone();
+                let config = self.config.clone();
                 let sink = sink.clone();
                 tokio::spawn(async move {
-                    let result =
-                        tokio::task::spawn_blocking(move || list_directories(path.as_deref()))
-                            .await;
+                    let result = tokio::task::spawn_blocking(move || {
+                        list_directories(path.as_deref(), &allowed_roots(&config)?)
+                    })
+                    .await;
                     let response = match result {
                         Ok(Ok(result)) => RemoteResponse::new(request.request_id, result),
-                        error => RemoteResponse::error(
+                        Ok(Err(error)) => RemoteResponse::error(
                             request.request_id,
                             RemoteError::new(
                                 RemoteErrorCode::InvalidRequest,
-                                format!("Cannot browse this directory: {error:?}"),
+                                format!("Cannot browse this folder: {error:#}"),
                             ),
+                        ),
+                        Err(error) => RemoteResponse::error(
+                            request.request_id,
+                            RemoteError::new(RemoteErrorCode::Internal, error.to_string()),
                         ),
                     };
                     send(&sink, response);
@@ -726,65 +996,64 @@ impl FrameRouter for WorkspaceRouter {
                 let gate = self.creation.clone();
                 let sink = sink.clone();
                 let device = device.device_id.clone();
+                // The deadline runs from the request's arrival, waiting for
+                // other starts included.
+                let timing = StartTiming::from_now(ANSWER_DEADLINE, OWNER_START_TIMEOUT);
                 tokio::spawn(async move {
-                    let _guard = gate.lock().await;
-                    let outcome = match &request.operation {
-                        RemoteOperation::ResumeSession { session_id } => {
-                            Self::resume(
-                                &hub,
-                                &config,
-                                &program,
-                                &device,
-                                &request,
-                                session_id,
-                                OWNER_START_TIMEOUT,
-                            )
-                            .await
-                        }
-                        RemoteOperation::CreateSession { path } => {
-                            Self::create(
-                                &hub,
-                                &config,
-                                &program,
-                                &device,
-                                &request,
-                                path.as_deref(),
-                                OWNER_START_TIMEOUT,
-                            )
-                            .await
-                        }
-                        _ => unreachable!("only session starts are routed here"),
+                    let request_id = request.request_id.clone();
+                    // The start runs in its own task so that even a panic in
+                    // it is answered.
+                    let work = {
+                        let (config, device) = (config.clone(), device.clone());
+                        tokio::spawn(async move {
+                            match &request.operation {
+                                RemoteOperation::ResumeSession { session_id } => {
+                                    Self::resume(
+                                        &hub, &config, &program, &gate, &device, &request,
+                                        session_id, timing,
+                                    )
+                                    .await
+                                }
+                                RemoteOperation::CreateSession { path } => {
+                                    Self::create(
+                                        &hub,
+                                        &config,
+                                        &program,
+                                        &gate,
+                                        &device,
+                                        &request,
+                                        path.as_deref(),
+                                        timing,
+                                    )
+                                    .await
+                                }
+                                _ => unreachable!("only session starts are routed here"),
+                            }
+                        })
                     };
-                    let response = outcome.unwrap_or_else(|error| {
-                        // A failed start is a decided outcome, not a
-                        // lost one: the device is free to ask again.
-                        let failed = error.downcast_ref::<OwnerStartFailed>().is_some();
-                        let refusal = error.downcast_ref::<Refused>().map(|refused| refused.0);
-                        let uncertain = !failed
-                            && refusal.is_none()
-                            && Self::receipt_path(&config, &device, &request.request_id).exists();
-                        let mut response = RemoteResponse::error(
-                            request.request_id.clone(),
-                            RemoteError::new(
-                                if failed {
-                                    RemoteErrorCode::Internal
-                                } else if let Some(code) = refusal {
-                                    code
-                                } else if uncertain {
-                                    RemoteErrorCode::OwnerUnavailable
-                                } else {
-                                    RemoteErrorCode::InvalidRequest
-                                },
-                                format!("{error:#}"),
-                            ),
-                        );
-                        response.receipt = Some(if uncertain {
-                            ReceiptState::Unknown
-                        } else {
-                            ReceiptState::Rejected
-                        });
-                        response
-                    });
+                    let response = match work.await {
+                        Ok(Ok(response)) => response,
+                        // A failed start is a decided outcome, not a lost
+                        // one: the device is free to ask again.
+                        Ok(Err(error)) => Self::start_error(&config, &device, &request_id, &error),
+                        Err(error) => {
+                            let unknown =
+                                Self::receipt_path(&config, &device, &request_id).exists();
+                            let mut response = RemoteResponse::error(
+                                request_id,
+                                RemoteError::new(
+                                    RemoteErrorCode::Internal,
+                                    format!("the host failed while starting the session: {error}"),
+                                ),
+                            );
+                            response.receipt = Some(if unknown {
+                                ReceiptState::Unknown
+                            } else {
+                                ReceiptState::Rejected
+                            });
+                            response
+                        }
+                    };
                     send(&sink, response);
                 });
             }
@@ -836,11 +1105,23 @@ mod tests {
         std::fs::create_dir(root.path().join("b")).unwrap();
         std::fs::create_dir(root.path().join("A")).unwrap();
         std::fs::write(root.path().join("file"), "").unwrap();
-        let RemoteResult::Directories { directories, .. } =
-            list_directories(root.path().to_str()).unwrap()
+        let roots = vec![root.path().canonicalize().unwrap()];
+        let RemoteResult::Directories {
+            directories,
+            parent,
+            ..
+        } = list_directories(root.path().to_str(), &roots).unwrap()
         else {
             panic!()
         };
+        // The root's own parent is not offered: a device cannot climb out.
+        assert_eq!(parent, None);
+        let RemoteResult::Directories { parent, .. } =
+            list_directories(root.path().join("b").to_str(), &roots).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(parent.as_deref(), roots[0].to_str());
         assert_eq!(
             directories
                 .iter()
@@ -848,8 +1129,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["A", "b"]
         );
-        assert!(resolve_directory(Some("relative")).is_err());
-        assert!(resolve_directory(root.path().join("file").to_str()).is_err());
+        assert!(resolve_directory(Some("relative"), &roots).is_err());
+        assert!(resolve_directory(root.path().join("file").to_str(), &roots).is_err());
     }
     #[test]
     fn mobile_creation_uses_the_normal_chronological_session_identity() {
@@ -906,10 +1187,11 @@ mod tests {
                 &hub,
                 config.path(),
                 Path::new("/never/launch"),
+                &tokio::sync::Mutex::new(()),
                 "phone",
                 &request,
                 Some("/directory/no/longer/present"),
-                OWNER_START_TIMEOUT,
+                timing(OWNER_START_TIMEOUT),
             )
             .await
             .unwrap(),
@@ -920,6 +1202,20 @@ mod tests {
             WorkspaceRouter::receipt_path(config.path(), "other-phone", &request.request_id)
         );
     }
+    /// Generous answer deadline, so only `start_limit` decides a test.
+    fn timing(start_limit: Duration) -> StartTiming {
+        StartTiming::from_now(Duration::from_secs(30), start_limit)
+    }
+
+    /// Let devices use `root`, as `[remote] roots` in the user config does.
+    fn allow(config: &Path, root: &Path) {
+        std::fs::write(
+            config.join(crate::config::CONFIG_TOML_FILE),
+            format!("[remote]\nroots = [{:?}]\n", root.to_str().unwrap()),
+        )
+        .unwrap();
+    }
+
     fn creation_request(id: &str, directory: &Path) -> RemoteRequest {
         RemoteRequest {
             authenticated_device_id: None,
@@ -951,15 +1247,17 @@ mod tests {
         let config = tempfile::tempdir().unwrap();
         let directory = stand_in_owner("echo 'provider key missing' >&2\nexit 3\n");
         let request = creation_request("create-1", directory.path());
+        allow(config.path(), directory.path());
         let hub = SessionHub::start(Default::default());
         let error = WorkspaceRouter::create(
             &hub,
             config.path(),
             Path::new("/bin/sh"),
+            &tokio::sync::Mutex::new(()),
             "phone",
             &request,
             directory.path().to_str(),
-            Duration::from_secs(30),
+            timing(Duration::from_secs(30)),
         )
         .await
         .unwrap_err();
@@ -987,16 +1285,18 @@ mod tests {
         let config = tempfile::tempdir().unwrap();
         let directory = stand_in_owner("echo $$ > owner-$$.pid\nexec sleep 600\n");
         let request = creation_request("create-1", directory.path());
+        allow(config.path(), directory.path());
         let hub = SessionHub::start(Default::default());
         for _ in 0..3 {
             let error = WorkspaceRouter::create(
                 &hub,
                 config.path(),
                 Path::new("/bin/sh"),
+                &tokio::sync::Mutex::new(()),
                 "phone",
                 &request,
                 directory.path().to_str(),
-                Duration::from_millis(400),
+                timing(Duration::from_millis(400)),
             )
             .await
             .unwrap_err();
@@ -1023,6 +1323,7 @@ mod tests {
         let config = tempfile::tempdir().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let request = creation_request("create-1", directory.path());
+        allow(config.path(), directory.path());
         let session_id = rustcode_session::next_session_id();
         let receipt = WorkspaceRouter::receipt_path(config.path(), "phone", "create-1");
         ensure_private_directory(receipt.parent().unwrap(), "test").unwrap();
@@ -1037,8 +1338,7 @@ mod tests {
         .unwrap();
         // An owner from an earlier attempt holds the session's lease.
         let owners = config.path().join("remote/owners");
-        let _lease =
-            lock_private_file(&owners, &format!("{session_id}.lock"), OWNER_LEASE).unwrap();
+        let lease = lock_private_file(&owners, &format!("{session_id}.lock"), OWNER_LEASE).unwrap();
         let lifecycle = crate::remote_gateway::lifecycle::RemoteLifecycle::new(config.path());
         assert_eq!(live_owner_sessions(&lifecycle), vec![session_id.clone()]);
         let hub = SessionHub::start(Default::default());
@@ -1047,22 +1347,365 @@ mod tests {
             &hub,
             config.path(),
             Path::new("/never/launch"),
+            &tokio::sync::Mutex::new(()),
             "phone",
             &request,
             directory.path().to_str(),
-            Duration::from_millis(200),
+            StartTiming::from_now(Duration::from_millis(200), Duration::from_secs(30)),
         )
         .await
         .unwrap_err();
         assert!(error.downcast_ref::<OwnerStartFailed>().is_none());
         let message = error.to_string();
         assert!(message.contains(&session_id), "{message}");
-        assert!(
-            message.contains("alive but has not registered"),
-            "{message}"
-        );
+        assert!(message.contains("still starting"), "{message}");
         assert!(message.contains("created/"), "{message}");
         assert!(receipt.exists());
+
+        // When that owner goes away without registering, the retry says so
+        // and withdraws the attempt instead of waiting out its deadline.
+        let retry = {
+            let (hub, config, request) =
+                (hub.clone(), config.path().to_path_buf(), request.clone());
+            let path = directory.path().to_str().unwrap().to_owned();
+            tokio::spawn(async move {
+                WorkspaceRouter::create(
+                    &hub,
+                    &config,
+                    Path::new("/never/launch"),
+                    &tokio::sync::Mutex::new(()),
+                    "phone",
+                    &request,
+                    Some(&path),
+                    timing(Duration::from_secs(30)),
+                )
+                .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(lease);
+        let error = retry.await.unwrap().unwrap_err();
+        assert!(
+            error.downcast_ref::<OwnerStartFailed>().is_some(),
+            "{error}"
+        );
+        assert!(error.to_string().contains("earlier attempt"), "{error}");
+        assert!(!receipt.exists());
+    }
+
+    /// A stand-in owner that records its pid and arguments, then waits to
+    /// be registered (or stopped) by the test.
+    const WAITING_OWNER: &str = "echo $$ > owner.pid\necho \"$@\" > started.args\nexec sleep 600\n";
+
+    /// The session id the stand-in owner in `directory` was started for.
+    async fn started_session(directory: &Path) -> String {
+        let args = directory.join("started.args");
+        for _ in 0..200 {
+            if let Ok(args) = std::fs::read_to_string(&args)
+                && let Some(id) = args.split_whitespace().last()
+            {
+                return id.to_owned();
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the owner was never started");
+    }
+
+    fn stop_owner(directory: &Path) {
+        if let Ok(pid) = std::fs::read_to_string(directory.join("owner.pid")) {
+            // SAFETY: SIGKILL to the stand-in owner this test started.
+            unsafe { libc::kill(pid.trim().parse().unwrap(), libc::SIGKILL) };
+        }
+    }
+
+    /// What the owner socket does when the owner of `session_id` registers.
+    fn register(hub: &Arc<SessionHub>, session_id: &str) -> super::super::hub::OwnerRegistration {
+        hub.register_owner(
+            SessionRegistration {
+                session_id: session_id.to_owned(),
+                registration_epoch: 1,
+            },
+            super::super::hub::tests::snapshot(session_id, 1, 0),
+        )
+        .unwrap()
+    }
+
+    fn stored(config: &Path, request_id: &str) -> Option<Creation> {
+        read_private_json(
+            &WorkspaceRouter::receipt_path(config, "phone", request_id),
+            64 * 1024,
+        )
+        .ok()
+    }
+
+    #[tokio::test]
+    async fn a_device_starts_a_session_in_a_folder_inside_its_roots() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = stand_in_owner(WAITING_OWNER);
+        allow(config.path(), directory.path());
+        let request = creation_request("create-1", directory.path());
+        let hub = SessionHub::start(Default::default());
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let creating = {
+            let (hub, gate, config, request) = (
+                hub.clone(),
+                gate.clone(),
+                config.path().to_path_buf(),
+                request.clone(),
+            );
+            let path = directory.path().to_str().unwrap().to_owned();
+            tokio::spawn(async move {
+                WorkspaceRouter::create(
+                    &hub,
+                    &config,
+                    Path::new("/bin/sh"),
+                    &gate,
+                    "phone",
+                    &request,
+                    Some(&path),
+                    timing(Duration::from_secs(30)),
+                )
+                .await
+            })
+        };
+        let session_id = started_session(directory.path()).await;
+        let _registration = register(&hub, &session_id);
+        let response = creating.await.unwrap().unwrap();
+        stop_owner(directory.path());
+        assert_eq!(response.receipt, Some(ReceiptState::Applied));
+        let RemoteResult::SessionCreated { session } = &response.result else {
+            panic!("{response:?}")
+        };
+        assert_eq!(session.session_id, session_id);
+        assert!(rustcode_session::valid_session_id(&session_id));
+        // In the list every device sees, and the answer is kept for a retry.
+        assert!(
+            hub.summary()
+                .iter()
+                .any(|listed| listed.session_id == session_id)
+        );
+        assert_eq!(
+            stored(config.path(), "create-1").and_then(|stored| stored.response),
+            Some(response)
+        );
+    }
+
+    #[test]
+    fn devices_may_only_use_folders_inside_home_or_a_configured_root() {
+        let config = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("file"), "").unwrap();
+        std::fs::write(
+            config.path().join(crate::config::CONFIG_TOML_FILE),
+            format!(
+                "model = \"anything\"\n[remote]\nroots = [{:?}, \"relative/root\", \"/no/such/root\"]\n",
+                root.path().to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        let roots = allowed_roots(config.path()).unwrap();
+        let home = home_directory().unwrap().canonicalize().unwrap();
+        assert_eq!(roots, vec![home, root.path().canonicalize().unwrap()]);
+        assert!(resolve_directory(root.path().to_str(), &roots).is_ok());
+        for (path, says) in [
+            (elsewhere.path().to_path_buf(), "outside your home folder"),
+            (root.path().join("missing"), "does not exist"),
+            (root.path().join("file"), "is a file"),
+            (PathBuf::from("relative"), "absolute"),
+        ] {
+            let error = resolve_directory(path.to_str(), &roots).unwrap_err();
+            assert_eq!(refusal(error), RemoteErrorCode::InvalidRequest);
+            let message = resolve_directory(path.to_str(), &roots)
+                .unwrap_err()
+                .to_string();
+            assert!(message.contains(says), "{message}");
+        }
+        // Without a configuration only home is allowed.
+        let bare = tempfile::tempdir().unwrap();
+        assert_eq!(allowed_roots(bare.path()).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_folder_outside_the_roots_is_refused_and_nothing_is_started() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = stand_in_owner(WAITING_OWNER);
+        let request = creation_request("create-1", directory.path());
+        let hub = SessionHub::start(Default::default());
+        let error = WorkspaceRouter::create(
+            &hub,
+            config.path(),
+            Path::new("/bin/sh"),
+            &tokio::sync::Mutex::new(()),
+            "phone",
+            &request,
+            directory.path().to_str(),
+            timing(Duration::from_secs(30)),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("outside your home folder"));
+        let response = WorkspaceRouter::start_error(config.path(), "phone", "create-1", &error);
+        assert_eq!(response.receipt, Some(ReceiptState::Rejected));
+        let RemoteResult::Error(error) = &response.result else {
+            panic!("{response:?}")
+        };
+        assert_eq!(error.code, RemoteErrorCode::InvalidRequest);
+        assert!(stored(config.path(), "create-1").is_none());
+        assert!(!directory.path().join("started.args").exists());
+        assert!(!config.path().join("remote/owners").exists());
+    }
+
+    #[tokio::test]
+    async fn a_failed_owner_is_answered_with_a_final_internal_error() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = stand_in_owner("echo 'no provider key' >&2\nexit 3\n");
+        allow(config.path(), directory.path());
+        let request = creation_request("create-1", directory.path());
+        let hub = SessionHub::start(Default::default());
+        let error = WorkspaceRouter::create(
+            &hub,
+            config.path(),
+            Path::new("/bin/sh"),
+            &tokio::sync::Mutex::new(()),
+            "phone",
+            &request,
+            directory.path().to_str(),
+            timing(Duration::from_secs(30)),
+        )
+        .await
+        .unwrap_err();
+        let response = WorkspaceRouter::start_error(config.path(), "phone", "create-1", &error);
+        assert_eq!(response.receipt, Some(ReceiptState::Rejected));
+        let RemoteResult::Error(error) = &response.result else {
+            panic!("{response:?}")
+        };
+        assert_eq!(error.code, RemoteErrorCode::Internal);
+        assert!(
+            error.message.contains("no provider key"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn an_owner_still_starting_is_answered_in_time_then_stopped_at_the_limit() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = stand_in_owner(WAITING_OWNER);
+        allow(config.path(), directory.path());
+        let request = creation_request("create-1", directory.path());
+        let hub = SessionHub::start(Default::default());
+        let asked = Instant::now();
+        let error = WorkspaceRouter::create(
+            &hub,
+            config.path(),
+            Path::new("/bin/sh"),
+            &tokio::sync::Mutex::new(()),
+            "phone",
+            &request,
+            directory.path().to_str(),
+            StartTiming::from_now(Duration::from_millis(300), Duration::from_millis(1500)),
+        )
+        .await
+        .unwrap_err();
+        assert!(asked.elapsed() < Duration::from_secs(1));
+        assert!(error.to_string().contains("still starting"), "{error}");
+        let response = WorkspaceRouter::start_error(config.path(), "phone", "create-1", &error);
+        assert_eq!(response.receipt, Some(ReceiptState::Unknown));
+        let RemoteResult::Error(error) = &response.result else {
+            panic!("{response:?}")
+        };
+        assert_eq!(error.code, RemoteErrorCode::OwnerUnavailable);
+        // Still running and still on record, for a retry to find.
+        let pid = std::fs::read_to_string(directory.path().join("owner.pid")).unwrap();
+        assert!(alive(&pid));
+        assert!(stored(config.path(), "create-1").is_some());
+        // At the start limit it is stopped and the attempt withdrawn.
+        for _ in 0..100 {
+            if !alive(&pid) && stored(config.path(), "create-1").is_none() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the late owner was neither stopped nor withdrawn");
+    }
+
+    #[tokio::test]
+    async fn an_owner_that_registers_after_the_answer_is_found_by_a_retry() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = stand_in_owner(WAITING_OWNER);
+        allow(config.path(), directory.path());
+        let request = creation_request("create-1", directory.path());
+        let hub = SessionHub::start(Default::default());
+        let gate = tokio::sync::Mutex::new(());
+        let error = WorkspaceRouter::create(
+            &hub,
+            config.path(),
+            Path::new("/bin/sh"),
+            &gate,
+            "phone",
+            &request,
+            directory.path().to_str(),
+            StartTiming::from_now(Duration::from_millis(300), Duration::from_secs(30)),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("still starting"), "{error}");
+        let session_id = started_session(directory.path()).await;
+        let _registration = register(&hub, &session_id);
+        // The gateway records it without being asked.
+        let mut recorded = None;
+        for _ in 0..100 {
+            recorded = stored(config.path(), "create-1").and_then(|stored| stored.response);
+            if recorded.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let recorded = recorded.expect("the late registration was recorded");
+        let again = WorkspaceRouter::create(
+            &hub,
+            config.path(),
+            Path::new("/never/launch"),
+            &gate,
+            "phone",
+            &request,
+            directory.path().to_str(),
+            timing(Duration::from_secs(30)),
+        )
+        .await
+        .unwrap();
+        stop_owner(directory.path());
+        assert_eq!(again, recorded);
+        assert!(matches!(
+            &again.result,
+            RemoteResult::SessionCreated { session } if session.session_id == session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_start_that_cannot_begin_in_time_is_refused_as_busy() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        allow(config.path(), directory.path());
+        let request = creation_request("create-1", directory.path());
+        let hub = SessionHub::start(Default::default());
+        let gate = tokio::sync::Mutex::new(());
+        let _another_start = gate.lock().await;
+        let error = WorkspaceRouter::create(
+            &hub,
+            config.path(),
+            Path::new("/never/launch"),
+            &gate,
+            "phone",
+            &request,
+            directory.path().to_str(),
+            StartTiming::from_now(Duration::from_millis(100), Duration::from_secs(30)),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refusal(error), RemoteErrorCode::Busy);
+        assert!(stored(config.path(), "create-1").is_none());
     }
 
     /// Saved sessions in a fresh store under `config`, oldest first, each
@@ -1254,10 +1897,11 @@ mod tests {
             &hub,
             config.path(),
             Path::new("/bin/sh"),
+            &tokio::sync::Mutex::new(()),
             "phone",
             &request,
             &ids[0],
-            Duration::from_secs(30),
+            timing(Duration::from_secs(30)),
         )
         .await
         .unwrap_err();
@@ -1300,10 +1944,11 @@ mod tests {
                 &hub,
                 config.path(),
                 Path::new("/never/launch"),
+                &tokio::sync::Mutex::new(()),
                 "phone",
                 &resume_request(&format!("resume-{id}"), id),
                 id,
-                Duration::from_millis(200),
+                timing(Duration::from_millis(200)),
             )
             .await
             .unwrap_err();
@@ -1352,7 +1997,8 @@ mod tests {
         for n in 0..520 {
             std::fs::create_dir(root.path().join(format!("{n:04}{}", "a".repeat(220)))).unwrap();
         }
-        let result = list_directories(root.path().to_str()).unwrap();
+        let roots = vec![root.path().canonicalize().unwrap()];
+        let result = list_directories(root.path().to_str(), &roots).unwrap();
         assert!(matches!(
             &result,
             RemoteResult::Directories {
