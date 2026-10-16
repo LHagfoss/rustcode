@@ -1368,6 +1368,47 @@ impl AppState {
             crate::config::load_session_yolo(&self.active_session_id).unwrap_or(self.config.yolo);
     }
 
+    /// Remember the active model profile and its reasoning effort for this
+    /// session, so reopening or resuming it does not fall back to defaults.
+    pub fn record_session_model(&self) {
+        if let Some(profile) = self.active_model_profile() {
+            crate::config::save_session_model(
+                &self.active_session_id,
+                rustcode_session::SessionModel {
+                    profile: profile.name,
+                    reasoning_effort: profile.reasoning_effort,
+                },
+            );
+        }
+    }
+
+    /// Continue with the model profile and effort recorded for the active
+    /// session. A session that never set them, or whose profile no longer
+    /// exists, keeps the configured defaults.
+    pub fn restore_session_model(&mut self) {
+        let Some(saved) = crate::config::load_session_model(&self.active_session_id) else {
+            return;
+        };
+        self.apply_session_model(&saved);
+    }
+
+    pub(crate) fn apply_session_model(&mut self, saved: &rustcode_session::SessionModel) -> bool {
+        let Some(profile) = self
+            .config
+            .models
+            .iter_mut()
+            .find(|profile| profile.name == saved.profile)
+        else {
+            return false;
+        };
+        profile.reasoning_effort = saved.reasoning_effort.clone();
+        self.model_name = profile.model.clone();
+        self.api_base_url = profile.url.clone();
+        let name = profile.name.clone();
+        self.config.default.set_big(name);
+        true
+    }
+
     /// YOLO is a session-only override; keep the user's saved restricted mode intact.
     pub fn effective_sandbox_mode(&self) -> crate::config::SandboxMode {
         self.config.sandbox_mode.effective(self.auto_confirm)

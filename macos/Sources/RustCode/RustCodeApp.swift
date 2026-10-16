@@ -115,6 +115,8 @@ final class DesktopModel: ObservableObject {
     /// engine blocks until each one is answered, so none may be dropped.
     @Published var permissionQueue: [PermissionRequest] = []
     @Published var models = ModelOptions.empty
+    /// The model and effort new chats start with, shared with the terminal UI.
+    @Published private(set) var modelDefaults: ModelDefaults?
     @Published var selectedModel: String?
     /// The engine binary in use and where it was found, shown in Settings.
     @Published private(set) var engineLocation: EngineLocation?
@@ -173,7 +175,8 @@ final class DesktopModel: ObservableObject {
             // Show the last known options at once, then read current ones: the
             // models and their effort levels change with config and engine.
             restoreLastConfig()
-            if selectedSession == nil { await fetchModelOptions() }
+            await loadModelDefaults()
+            if selectedSession == nil, modelDefaults == nil { await fetchModelOptions() }
         } catch { self.error = String(describing: error) }
     }
 
@@ -295,19 +298,7 @@ final class DesktopModel: ObservableObject {
     /// The chat's folder in the session store, from `rustcode sessions path`,
     /// accepted only when it is that session's folder inside the store.
     func sessionDirectory(_ session: SessionSummary) async -> URL? {
-        guard let engine = engineLocation?.url else { return nil }
-        let output: String? = await Task.detached {
-            let process = Process()
-            process.executableURL = engine
-            process.arguments = ["sessions", "path", session.id]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            guard (try? process.run()) != nil else { return nil }
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        }.value
+        let output = await runEngine(["sessions", "path", session.id]).map { String(decoding: $0, as: UTF8.self) }
         guard let path = output?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return nil }
         let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         guard url.lastPathComponent == session.id, url.path.contains("/rustcode/sessions/") else { return nil }
@@ -484,6 +475,53 @@ final class DesktopModel: ObservableObject {
         transcript.removeAll()
         draftCommand = nil
         composerPanel = nil
+        startDraftFromDefaults()
+    }
+
+    /// A new chat starts with the default model and effort, not the last chat's.
+    private func startDraftFromDefaults() {
+        guard selectedSession == nil, let modelDefaults else { return }
+        models = modelDefaults.options
+        selectedModel = modelDefaults.model
+    }
+
+    func loadModelDefaults() async {
+        guard let output = await runEngine(["defaults"]), let defaults = try? ModelDefaults(json: output) else { return }
+        modelDefaults = defaults
+        startDraftFromDefaults()
+    }
+
+    /// Make a model and/or effort the default for new chats.
+    func setModelDefaults(model: String? = nil, effort: String? = nil) async {
+        var arguments = ["defaults"]
+        if let model { arguments += ["--model", model] }
+        if let effort { arguments += ["--effort", effort] }
+        guard let output = await runEngine(arguments), let defaults = try? ModelDefaults(json: output) else {
+            error = "Could not save the default model."
+            return
+        }
+        modelDefaults = defaults
+        startDraftFromDefaults()
+    }
+
+    /// Run the engine binary with `arguments` and return its output, or nil
+    /// when it fails.
+    private func runEngine(_ arguments: [String]) async -> Data? {
+        guard let engine = engineLocation?.url else { return nil }
+        let directory = workspace
+        return await Task.detached {
+            let process = Process()
+            process.executableURL = engine
+            process.arguments = arguments
+            process.currentDirectoryURL = directory
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return process.terminationStatus == 0 ? data : nil
+        }.value
     }
 
     /// Create the engine session for a draft, keeping the model picked for it.
@@ -656,6 +694,12 @@ final class DesktopModel: ObservableObject {
     func setModel(_ model: String) async {
         guard let session = selectedSession else {
             selectedModel = model   // applied when the draft becomes a session
+            if let modelDefaults {
+                models.efforts = modelDefaults.efforts(for: model)
+                if !models.efforts.contains(where: { $0.id == models.effort }) {
+                    models.effort = models.efforts.isEmpty ? nil : "default"
+                }
+            }
             return
         }
         guard let connection = engine?.connection else { return }

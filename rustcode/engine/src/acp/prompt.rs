@@ -169,7 +169,6 @@ const MAX_ENCODED_IMAGE_LEN: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
 #[derive(Debug)]
 pub(crate) struct PromptInput {
     pub(crate) text: String,
-    pub(crate) has_images: bool,
 }
 
 pub(crate) fn prompt_input(prompt: &[ContentBlock]) -> Result<PromptInput, String> {
@@ -185,7 +184,6 @@ fn prompt_input_with(
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     let mut text = String::new();
-    let mut has_images = false;
     for block in prompt {
         match block {
             ContentBlock::Text(block) => text.push_str(&block.text),
@@ -214,12 +212,11 @@ fn prompt_input_with(
                 }
                 text.push_str(&format!("![image](file://{})", path.display()));
                 text.push('\n');
-                has_images = true;
             }
             _ => {}
         }
     }
-    Ok(PromptInput { text, has_images })
+    Ok(PromptInput { text })
 }
 
 pub(crate) async fn run_prompt(
@@ -636,7 +633,6 @@ mod tests {
             Ok(PathBuf::from(format!("/a/{}.{extension}", saved.len())))
         })
         .unwrap();
-        assert!(input.has_images);
         assert_eq!(
             input.text,
             "compare\n![image](file:///a/1.png)\nwith\n![image](file:///a/2.jpg)\n\
@@ -650,7 +646,6 @@ mod tests {
         let prompt = vec![ContentBlock::Text(TextContent::new("hi"))];
         let input = prompt_input_with(&prompt, |_, _| unreachable!()).unwrap();
         assert_eq!(input.text, "hi");
-        assert!(!input.has_images);
     }
 
     #[test]

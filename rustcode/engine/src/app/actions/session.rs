@@ -734,6 +734,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
 
     s.history.replace(loaded);
     reset_active_session_state(s);
+    s.restore_session_model();
     crate::app::subagent_persistence::restore(s);
     // Adopt the recorded workspace when resuming across directories, like
     // the desktop "Choose project folder" flow. An explicit `--resume <id>`

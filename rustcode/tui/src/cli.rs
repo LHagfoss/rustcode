@@ -103,6 +103,17 @@ pub enum Commands {
         disable: bool,
     },
 
+    /// Show or set the model profile and reasoning effort new sessions start
+    /// with, as JSON
+    Defaults {
+        /// Model profile name to make the default
+        #[arg(long)]
+        model: Option<String>,
+        /// Reasoning effort for the default profile ("default" clears it)
+        #[arg(long)]
+        effort: Option<String>,
+    },
+
     /// Check environment prerequisites (config, binaries, skills)
     Doctor {
         /// Create missing config/skill directories where possible
