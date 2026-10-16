@@ -110,8 +110,17 @@ fn session_info(
             serde_json::json!(timestamp.to_rfc3339()),
         );
     }
-    if let Some(model) = crate::config::load_session_model(&session_id) {
-        extra.insert("model".into(), serde_json::json!(model.profile));
+    // The profile recorded for the chat, else the one its settings log last
+    // saw: chats that never changed model only have the latter.
+    if let Some(model) = crate::config::load_session_model(&session_id)
+        .map(|model| model.profile)
+        .or_else(|| {
+            crate::config::load_session_settings(&session_id)
+                .map(|settings| settings.active_profile)
+                .filter(|profile| !profile.is_empty())
+        })
+    {
+        extra.insert("model".into(), serde_json::json!(model));
     }
     if let Ok(modified) = std::fs::metadata(&meta.path).and_then(|metadata| metadata.modified()) {
         let timestamp: chrono::DateTime<chrono::Utc> = modified.into();
@@ -297,6 +306,7 @@ fn new_session_state(cwd: &std::path::Path) -> crate::app::AppState {
     let state = crate::app::AppState::new_with_workspace_session(cwd, Some(&session_id));
     if !session_id.is_empty() {
         crate::config::record_session_settings(&session_id, &state.config);
+        state.record_session_model();
     }
     state
 }
