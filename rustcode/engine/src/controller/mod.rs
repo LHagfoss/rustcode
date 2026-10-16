@@ -4,6 +4,7 @@ mod apply;
 mod attachments;
 mod config;
 mod context;
+mod context_breakdown;
 mod events;
 mod input;
 mod native_commands;
@@ -13,7 +14,7 @@ mod tasks;
 mod tasks_panel;
 mod transcript;
 mod worker;
-pub(crate) use worker::{native_status_report, native_usage_report};
+pub(crate) use worker::{apply_provider_auth_result, native_status_report, native_usage_report};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -69,6 +70,11 @@ pub use config::{
 pub use context::{
     SkillInfo, discover_skills, estimate_message_tokens, estimate_tokens, tool_system_prompt,
     visualization_prompt_hint,
+};
+pub use context_breakdown::{
+    CONTEXT_CATEGORY_LABELS, ConfiguredContextGuards, ContextBreakdown, ContextBreakdownInput,
+    ContextUsage, ContextUsageSource, context_breakdown, context_report_markdown,
+    format_token_count,
 };
 pub use events::{
     ApprovalChoice, ControllerError, ControllerEvent, ControllerUpdate, TurnUpdate,

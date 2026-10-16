@@ -136,6 +136,11 @@ pub async fn apply_session_mutation(
             }))
         }
         RemoteOperation::ExecuteCommand { command } => {
+            ensure_session(state, registration).await?;
+            if let Some(result) = execute_io_command(state, &reqwest::Client::new(), command).await
+            {
+                return result.map(SessionMutation::done);
+            }
             let mut state = state.lock().await;
             if state.active_session_id != registration.session_id {
                 return Err(stale_session());
@@ -308,7 +313,7 @@ pub(crate) fn command_catalog() -> Vec<super::protocol::RemoteCommandInfo> {
         .iter()
         .map(|command| {
             let action = match command.name {
-                "/new" => "new_session",
+                "/new" | "/clear" => "new_session",
                 "/model" | "/models" => "model_picker",
                 "/history" | "/resume" | "/exit" | "/quit" => "session_picker",
                 "/copy" => "copy_response",
@@ -316,7 +321,8 @@ pub(crate) fn command_catalog() -> Vec<super::protocol::RemoteCommandInfo> {
                 | "/context" | "/tasks" | "/ps" | "/mcp" | "/effort" | "/change_title"
                 | "/cancel" | "/pwd" | "/skills" | "/tools" | "/archive" | "/memory"
                 | "/prompts" | "/stop" | "/thinking" | "/yolo" | "/verbosity" | "/pi"
-                | "/delegate" | "/session" => "execute",
+                | "/delegate" | "/session" | "/changelog" | "/sandbox" | "/agents"
+                | "/workspace" | "/diff" | "/quota" => "execute",
                 _ => "terminal",
             };
             let arguments = matches!(
@@ -329,6 +335,9 @@ pub(crate) fn command_catalog() -> Vec<super::protocol::RemoteCommandInfo> {
                     | "/yolo"
                     | "/verbosity"
                     | "/delegate"
+                    | "/context"
+                    | "/sandbox"
+                    | "/workspace"
             );
             super::protocol::RemoteCommandInfo {
                 name: command.name.into(),
@@ -416,46 +425,53 @@ pub(crate) fn execute_command(
         ),
         "/context" if arguments.is_empty() => (
             "Context",
-            state
-                .active_model_profile()
-                .map(|profile| {
-                    format!(
-                        "Model: {}\nContext window: {} tokens",
-                        profile.name,
-                        profile.context_budget().context_window
-                    )
-                })
-                .unwrap_or_else(|| "No active model profile.".into()),
+            crate::controller::context_report_markdown(
+                &crate::controller::ContextBreakdown::from_state(state),
+                state
+                    .active_model_profile()
+                    .map(|profile| profile.name)
+                    .as_deref(),
+            ),
         ),
-        "/tasks" | "/ps" if arguments.is_empty() => {
-            let tasks = crate::tools::background_task_snapshots(&state.active_session_id);
+        "/context" => {
+            let tokens = crate::app::actions::parse_token_count(arguments).ok_or_else(|| {
+                error(
+                    RemoteErrorCode::InvalidRequest,
+                    "Usage: /context <tokens>, e.g. /context 262144 or /context 256k",
+                )
+            })?;
+            require_idle(state)?;
+            let default_name = state.config.default.big().to_string();
+            let profile = state
+                .config
+                .models
+                .iter_mut()
+                .find(|model| model.name == default_name)
+                .ok_or_else(|| {
+                    error(
+                        RemoteErrorCode::InvalidRequest,
+                        "No active profile to set the context window on.",
+                    )
+                })?;
+            profile.context_window = Some(tokens);
+            crate::config::save_entire_config(&state.config);
             (
-                "Tasks",
-                if tasks.is_empty() {
-                    "No tasks are running.".into()
-                } else {
-                    tasks
-                        .iter()
-                        .map(|task| format!("- {}: {}", task.id, task.command))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                },
+                "Context",
+                format!("Set the context window for profile `{default_name}` to {tokens} tokens."),
             )
         }
-        "/mcp" if arguments.is_empty() => (
-            "MCP servers",
-            if state.config.mcp_servers.is_empty() {
-                "No MCP servers configured.".into()
-            } else {
-                state
-                    .config
-                    .mcp_servers
-                    .iter()
-                    .map(|server| format!("- {}", server.name))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            },
-        ),
+        "/tasks" | "/ps" if arguments.is_empty() => {
+            ("Tasks", tasks_report(&state.active_session_id))
+        }
+        "/mcp" if arguments.is_empty() => ("MCP servers", mcp_report(state)),
+        "/changelog" if arguments.is_empty() => {
+            ("Changelog", crate::app::actions::build_latest_changelog())
+        }
+        "/sandbox" => ("OS sandbox", sandbox_command(state, arguments)?),
+        "/agents" if arguments.is_empty() => ("Subagents", agents_report(state)),
+        "/workspace" if arguments.is_empty() || arguments == "status" => {
+            ("Workspace", workspace_report(state))
+        }
         "/pwd" if arguments.is_empty() => (
             "Workspace",
             state
@@ -709,30 +725,249 @@ pub(crate) fn execute_command(
         }
     };
     // Shared reports use plain line breaks; preserve their rows in Markdown.
-    let output = if matches!(
-        command.as_str(),
-        "/status" | "/usage" | "/perf" | "/context" | "/effort"
-    ) {
+    let output = if matches!(command.as_str(), "/status" | "/usage" | "/perf" | "/effort") {
         output.replace('\n', "  \n")
     } else {
         output
     };
-    // A result must fit the transport and receipt cache. Informational reports
-    // may grow with configured catalogs, task output, or provider metadata.
-    let output = if output.len() > 32 * 1024 {
-        let mut end = 32 * 1024;
+    Ok(command_result(command, title, output))
+}
+
+/// A command reply bounded to fit the transport and receipt cache.
+/// Informational reports may grow with configured catalogs, task output,
+/// provider metadata or a workspace diff.
+fn command_result(command: String, title: &str, output: String) -> RemoteResult {
+    const LIMIT: usize = 32 * 1024;
+    let output = if output.len() > LIMIT {
+        let mut end = LIMIT;
         while !output.is_char_boundary(end) {
             end -= 1;
         }
-        format!("{}\n… output truncated", &output[..end])
+        let kept = &output[..end];
+        // Close a code fence the cut left open so the notice renders as text.
+        let open_fence = kept
+            .lines()
+            .filter(|line| line.trim_start().starts_with("```"))
+            .count()
+            % 2
+            == 1;
+        format!(
+            "{kept}{}\n… output truncated",
+            if open_fence { "\n```" } else { "" }
+        )
     } else {
         output
     };
-    Ok(RemoteResult::CommandExecuted {
+    RemoteResult::CommandExecuted {
         command,
         title: title.into(),
         output,
-    })
+    }
+}
+
+/// Host commands that wait on I/O and so run without holding the state lock:
+/// `/diff` reads the workspace's Git state, `/quota` asks the provider.
+/// Returns `None` for every other input.
+pub(crate) async fn execute_io_command(
+    state: &Arc<Mutex<AppState>>,
+    client: &reqwest::Client,
+    input: &str,
+) -> Option<Result<RemoteResult, RemoteError>> {
+    let input = input.trim();
+    let (name, arguments) = input
+        .split_once(char::is_whitespace)
+        .map_or((input, ""), |(name, args)| (name, args.trim()));
+    let command = name.to_ascii_lowercase();
+    match command.as_str() {
+        "/diff" | "/quota" if !arguments.is_empty() => Some(Err(error(
+            RemoteErrorCode::UnsupportedOperation,
+            "this command takes no arguments",
+        ))),
+        "/diff" => {
+            let root = {
+                let state = state.lock().await;
+                state.effective_workspace_root()
+            };
+            let Some(root) = root.or_else(|| std::env::current_dir().ok()) else {
+                return Some(Err(error(
+                    RemoteErrorCode::InvalidRequest,
+                    "No workspace selected.",
+                )));
+            };
+            let output = crate::app::actions::inspect_workspace(&root)
+                .await
+                .unwrap_or_else(|error| error);
+            Some(Ok(command_result(command, "Git diff", output)))
+        }
+        "/quota" => {
+            let (url, key) = {
+                let state = state.lock().await;
+                crate::app::actions::quota_request(&state)
+            };
+            let output = crate::app::actions::fetch_quota_report(client, &url, key).await;
+            Some(Ok(command_result(
+                command,
+                "Model quota",
+                output.replace('\n', "  \n"),
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn duration_label(duration: std::time::Duration) -> String {
+    rustcode_core::status::format_elapsed_compact(duration.as_secs())
+}
+
+/// Running tasks with their elapsed time, then what finished this session.
+fn tasks_report(session_id: &str) -> String {
+    use crate::controller::TaskRowState;
+    let rows = crate::controller::tasks_panel_rows(session_id);
+    if rows.is_empty() {
+        return "No tasks are running.".into();
+    }
+    rows.iter()
+        .map(|row| {
+            let state = match &row.state {
+                TaskRowState::Running { started_at } => {
+                    format!("running · {}", duration_label(started_at.elapsed()))
+                }
+                TaskRowState::Finished { outcome, ran_for } => {
+                    format!("{} · ran {}", outcome.label(), duration_label(*ran_for))
+                }
+            };
+            format!(
+                "- `{}` {} — {state}",
+                row.id,
+                row.label(80).replace('`', "'")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every configured or connected MCP server and how it stands.
+fn mcp_report(state: &AppState) -> String {
+    let statuses = crate::tools::mcp_server_status_labels();
+    if statuses.is_empty() {
+        if state.config.mcp_servers.is_empty() {
+            return "No MCP servers configured.".into();
+        }
+        return state
+            .config
+            .mcp_servers
+            .iter()
+            .map(|server| format!("- **{}**", server.name))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    statuses
+        .into_iter()
+        .map(|(name, label)| format!("- **{name}** — {label}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Show the OS sandbox mode, or set it while idle as `/sandbox <mode>`.
+fn sandbox_command(state: &mut AppState, arguments: &str) -> Result<String, RemoteError> {
+    use crate::config::SandboxMode;
+    let current = state.effective_sandbox_mode();
+    if arguments.is_empty() {
+        let modes = SandboxMode::ALL
+            .iter()
+            .map(|mode| {
+                let marker = if *mode == current { " (current)" } else { "" };
+                format!(
+                    "- `/sandbox {}`{marker} — {}",
+                    mode.as_str(),
+                    mode.description()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Ok(format!(
+            "OS sandbox mode: **{}** ({})\n\n{modes}\n\n`trusted` is the default and YOLO override: tools run with RustCode process permissions (no OS sandbox) and the shell approval policy still applies. This is a user-level setting; a project config file cannot change it.",
+            current.description(),
+            current.effective_description()
+        ));
+    }
+    let selected = SandboxMode::ALL
+        .into_iter()
+        .find(|candidate| {
+            candidate.as_str() == arguments
+                || (arguments == "unrestricted" && candidate.is_trusted())
+        })
+        .ok_or_else(|| {
+            RemoteError::new(
+                RemoteErrorCode::InvalidRequest,
+                format!(
+                    "Invalid option `{arguments}`. Use {}.",
+                    SandboxMode::ALL
+                        .iter()
+                        .map(|candidate| candidate.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+        })?;
+    require_idle(state)?;
+    state.config.sandbox_mode = selected;
+    crate::config::save_entire_config(&state.config);
+    let note = if selected.is_trusted() {
+        " Commands run with RustCode process permissions; shell approval policy still applies separately."
+    } else {
+        ""
+    };
+    Ok(format!(
+        "OS sandbox mode set to {} ({}).{note}",
+        selected.as_str(),
+        selected.effective_description()
+    ))
+}
+
+/// The session's subagents with their state, model and task.
+fn agents_report(state: &AppState) -> String {
+    if state.subagents.is_empty() {
+        return "No subagents in this session.".into();
+    }
+    state
+        .subagents
+        .iter()
+        .map(|agent| {
+            let indent = "  ".repeat(agent.depth.min(4) as usize);
+            let model = agent
+                .model
+                .as_deref()
+                .map(|model| format!(" · `{model}`"))
+                .unwrap_or_default();
+            let task = agent.task.lines().next().unwrap_or_default();
+            let task: String = task.chars().take(120).collect();
+            format!(
+                "{indent}- **{}** #{} — {:?}{model}: {task}",
+                agent.name, agent.id, agent.status
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The effective workspace and, for a task worktree, its handoff.
+fn workspace_report(state: &AppState) -> String {
+    let root = state
+        .effective_workspace_root()
+        .map(|path| format!("Workspace: `{}`", path.display()))
+        .unwrap_or_else(|| "No workspace selected.".into());
+    let Some(path) = state.workspace_root.as_deref() else {
+        return root;
+    };
+    let Some(manager) = crate::config::workspace_manager() else {
+        return root;
+    };
+    match manager.handoff_for_workspace_path(path) {
+        Ok(Some(handoff)) => format!("{root}\n\n{handoff}"),
+        Ok(None) => format!("{root}\n\nNo isolated task worktree is active."),
+        Err(error) => format!("{root}\n\nUnable to inspect the workspace: {error}"),
+    }
 }
 
 /// Answer a read that only the owner can serve (`get_history`,
@@ -944,6 +1179,193 @@ mod tests {
         assert!(catalog.iter().all(|c| c.insertion.starts_with(&c.name)));
         let unique: std::collections::HashSet<_> = catalog.iter().map(|c| &c.name).collect();
         assert_eq!(unique.len(), catalog.len());
+    }
+
+    #[test]
+    fn catalog_runs_parity_commands_on_the_host_and_maps_clear_to_a_new_chat() {
+        let catalog = command_catalog();
+        let action = |name: &str| {
+            catalog
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap()
+                .action
+                .clone()
+        };
+        assert_eq!(action("/clear"), "new_session");
+        for name in [
+            "/diff",
+            "/changelog",
+            "/sandbox",
+            "/quota",
+            "/agents",
+            "/workspace",
+        ] {
+            assert_eq!(action(name), "execute", "{name}");
+        }
+        let context = catalog.iter().find(|c| c.name == "/context").unwrap();
+        assert_eq!(context.insertion, "/context ");
+    }
+
+    fn output(result: Result<RemoteResult, RemoteError>) -> String {
+        match result.unwrap() {
+            RemoteResult::CommandExecuted { output, .. } => output,
+            other => panic!("expected command output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn context_reports_the_breakdown_and_sets_the_window() {
+        let mut state = shared_state();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "x".repeat(800)));
+        let report = output(execute_command(&mut state, "/context"));
+        assert!(
+            report.contains("| Category | Tokens | % of window |"),
+            "{report}"
+        );
+        assert!(report.contains("| User messages |"));
+        assert!(report.contains("| Free |"));
+        // Table rows keep plain line breaks: a Markdown hard break would end
+        // the table.
+        assert!(!report.contains("|  \n"));
+
+        let name = state.config.default.big().to_string();
+        if state.config.models.iter().any(|model| model.name == name) {
+            let set = output(execute_command(&mut state, "/context 128k"));
+            assert!(set.contains("131072"), "{set}");
+            let profile = state.config.models.iter().find(|m| m.name == name).unwrap();
+            assert_eq!(profile.context_window, Some(131_072));
+        }
+        assert_eq!(
+            execute_command(&mut state, "/context lots")
+                .unwrap_err()
+                .code,
+            RemoteErrorCode::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn status_tasks_mcp_and_session_reports_carry_details() {
+        let mut state = shared_state();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "hi"));
+        state
+            .history
+            .push(crate::app::ChatMessage::new("assistant", "hello"));
+        state.current_token_usage = Some(crate::app::TokenUsage {
+            prompt_tokens: 12,
+            completion_tokens: 3,
+            total_tokens: 15,
+            ..Default::default()
+        });
+        let status = output(execute_command(&mut state, "/status"));
+        assert!(status.contains("Messages: 1 user · 1 assistant · 0 tool calls"));
+        assert!(status.contains("Last turn: 12 prompt + 3 completion = 15 tokens"));
+        assert!(!output(execute_command(&mut state, "/tasks")).is_empty());
+        assert!(!output(execute_command(&mut state, "/mcp")).is_empty());
+        assert!(output(execute_command(&mut state, "/changelog")).contains("## ["));
+        assert!(output(execute_command(&mut state, "/agents")).contains("No subagents"));
+        state.subagents.push(crate::app::SubAgent {
+            id: 7,
+            name: "scout".into(),
+            task: "Find the bug\nmore detail".into(),
+            model: Some("small".into()),
+            history: Default::default(),
+            status: crate::app::SubAgentStatus::Running,
+            active_turn: true,
+            parent_id: None,
+            write_access: false,
+            allowed_paths: Vec::new(),
+            verification_command: None,
+            workspace_root: None,
+            review_manifest: None,
+            depth: 0,
+            root_id: None,
+            context_inheritance: Default::default(),
+            agent_type: Default::default(),
+            mailbox: Default::default(),
+            created_at_ms: 0,
+            queued_at_ms: 0,
+            started_at_ms: None,
+            finished_at_ms: None,
+            completion: None,
+            performance: Default::default(),
+        });
+        let agents = output(execute_command(&mut state, "/agents"));
+        assert!(
+            agents.contains("**scout** #7 — Running · `small`: Find the bug"),
+            "{agents}"
+        );
+        assert!(!agents.contains("more detail"));
+        assert!(output(execute_command(&mut state, "/workspace")).starts_with("Workspace: `"));
+        assert_eq!(
+            execute_command(&mut state, "/workspace create abc")
+                .unwrap_err()
+                .code,
+            RemoteErrorCode::UnsupportedOperation
+        );
+    }
+
+    #[test]
+    fn sandbox_shows_modes_and_rejects_unknown_ones() {
+        let mut state = shared_state();
+        let shown = output(execute_command(&mut state, "/sandbox"));
+        for mode in crate::config::SandboxMode::ALL {
+            assert!(shown.contains(&format!("`/sandbox {}`", mode.as_str())));
+        }
+        assert!(shown.contains("(current)"));
+        let error = execute_command(&mut state, "/sandbox nonsense").unwrap_err();
+        assert_eq!(error.code, RemoteErrorCode::InvalidRequest);
+        assert!(error.message.contains("Invalid option `nonsense`"));
+    }
+
+    #[test]
+    fn a_truncated_reply_closes_its_open_code_fence() {
+        let long = format!("```diff\n{}", "+line\n".repeat(10_000));
+        let RemoteResult::CommandExecuted { output, .. } =
+            command_result("/diff".into(), "Git diff", long)
+        else {
+            unreachable!()
+        };
+        assert!(output.len() < 33 * 1024);
+        assert!(
+            output.ends_with("```\n… output truncated"),
+            "{}",
+            &output[output.len() - 40..]
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_reads_the_workspace_without_the_state_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = shared_state();
+        state.workspace_root = Some(directory.path().to_path_buf());
+        let state = Arc::new(Mutex::new(state));
+        let client = reqwest::Client::new();
+        let RemoteResult::CommandExecuted { title, output, .. } =
+            execute_io_command(&state, &client, "/diff")
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(title, "Git diff");
+        assert!(output.contains("not a Git repository"), "{output}");
+        assert!(
+            execute_io_command(&state, &client, "/diff --stat")
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(
+            execute_io_command(&state, &client, "/status")
+                .await
+                .is_none()
+        );
     }
 
     #[test]

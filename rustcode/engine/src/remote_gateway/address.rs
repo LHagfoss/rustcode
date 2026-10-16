@@ -156,6 +156,11 @@ impl fmt::Display for AdvertisedAddress {
 pub struct ListenPlan {
     pub bind: IpAddr,
     pub advertise: AdvertisedHost,
+    /// The bind was `auto`: it follows the machine's addresses.
+    pub automatic_bind: bool,
+    /// The advertised host was given (`--advertise`, `[remote] advertise`)
+    /// rather than derived from the bind; it never moves on its own.
+    pub fixed_advertise: bool,
 }
 
 /// Resolve `--bind` and `--advertise`.
@@ -184,7 +189,8 @@ pub fn plan_listen_with_preference(
     candidates: &[Candidate],
     prefer_interface: Option<&str>,
 ) -> Result<ListenPlan, AddressError> {
-    let bind: IpAddr = if bind.trim() == "auto" {
+    let automatic_bind = bind.trim() == "auto";
+    let bind: IpAddr = if automatic_bind {
         automatic_address_with_preference(candidates, prefer_interface)
     } else {
         bind.trim()
@@ -195,12 +201,16 @@ pub fn plan_listen_with_preference(
         return Ok(ListenPlan {
             bind,
             advertise: AdvertisedHost::parse(advertise)?,
+            automatic_bind,
+            fixed_advertise: true,
         });
     }
     if !bind.is_unspecified() {
         return Ok(ListenPlan {
             bind,
             advertise: AdvertisedHost::from_ip(bind)?,
+            automatic_bind,
+            fixed_advertise: false,
         });
     }
     // An IPv4 wildcard cannot accept IPv6 peers; `::` is usually dual-stack.
@@ -213,6 +223,8 @@ pub fn plan_listen_with_preference(
         [only] => Ok(ListenPlan {
             bind,
             advertise: AdvertisedHost::from_ip(only.address)?,
+            automatic_bind,
+            fixed_advertise: false,
         }),
         _ => Err(AddressError::AdvertiseRequired {
             candidates: reachable,

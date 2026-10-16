@@ -51,7 +51,7 @@ pub(crate) use schema::{
 #[cfg(test)]
 pub(crate) use schema::install_native_schema_test_gate;
 
-pub(crate) use mcp_discovery::append_mcp_catalogue;
+pub(crate) use mcp_discovery::{append_mcp_catalogue, mcp_server_status_labels};
 
 use schema::{AGENT_TOOL_SPECS, schema_for_agent_tool, schema_for_tool};
 

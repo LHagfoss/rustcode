@@ -647,87 +647,11 @@ pub(in crate::ui) fn render_theme_picker_modal(
     );
 }
 
-#[derive(Debug, Clone)]
-pub struct ContextBreakdown {
-    pub context_window: usize,
-    pub current_usage: super::super::context_usage::ContextUsage,
-    pub configured_guards: Option<ConfiguredContextGuards>,
-    pub user_tokens: usize,
-    pub assistant_tokens: usize,
-    pub tool_tokens: usize,
-    pub system_prompt_tokens: usize,
-    pub system_tools_tokens: usize,
-    pub skills_tokens: usize,
-    pub subagent_tokens: usize,
-    pub remaining_tokens: usize,
-}
+pub use rustcode::controller::ContextBreakdown;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConfiguredContextGuards {
-    pub output_tokens: u32,
-    pub thinking_tokens: u32,
-    pub tool_tokens: u32,
-    pub safety_tokens: u32,
-    pub provider_framing_tokens: u32,
-}
-
+/// The engine's breakdown for the context in view: the root conversation or
+/// the selected subagent's.
 pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
-    let context_window = state.active_context_window() as usize;
-    let current_usage = super::super::context_usage::context_usage(state);
-    let configured_guards = state.active_model_profile().and_then(|profile| {
-        if let Some(selected_id) = state.selected_subagent_id() {
-            let selected_model = state
-                .subagents()
-                .iter()
-                .find(|agent| agent.id == selected_id)?
-                .model
-                .as_deref()?;
-            if !selected_model.eq_ignore_ascii_case(&profile.model)
-                && !selected_model.eq_ignore_ascii_case(&profile.name)
-            {
-                return None;
-            }
-        }
-        let budget = profile.context_budget();
-        if budget.context_window != state.active_context_window() {
-            return None;
-        }
-        Some(ConfiguredContextGuards {
-            output_tokens: budget.max_output_tokens,
-            thinking_tokens: budget.thinking_reserve,
-            tool_tokens: budget.tool_reserve,
-            safety_tokens: budget.safety_reserve,
-            provider_framing_tokens: budget.provider_overhead_margin,
-        })
-    });
-
-    let mut user_tokens = 0;
-    let mut assistant_tokens = 0;
-    let mut tool_tokens = 0;
-
-    for msg in state.active_history() {
-        match msg.role.as_str() {
-            "user" => {
-                user_tokens += rustcode::controller::estimate_tokens(&msg.content);
-            }
-            "assistant" => {
-                assistant_tokens += rustcode::controller::estimate_tokens(&msg.content);
-                if !msg.tool_calls.is_empty() {
-                    if let Ok(tc_str) = serde_json::to_string(&msg.tool_calls) {
-                        tool_tokens += rustcode::controller::estimate_tokens(&tc_str);
-                    }
-                }
-            }
-            "tool" => {
-                tool_tokens += rustcode::controller::estimate_tokens(&msg.content);
-                if let Some(ref id) = msg.tool_call_id {
-                    tool_tokens += rustcode::controller::estimate_tokens(id);
-                }
-            }
-            _ => {}
-        }
-    }
-
     let protocol = state
         .config()
         .models
@@ -735,30 +659,13 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         .find(|m| m.url == state.api_base_url())
         .and_then(|m| m.tool_protocol)
         .unwrap_or(state.config().tool_protocol);
-    let agent_mode = state.agent_mode();
-    let mut tools_prompt =
-        rustcode::controller::tool_system_prompt(state.delegation_active(), protocol, agent_mode);
-    // The TUI renders visualizations, so its requests carry the hint too.
-    tools_prompt.push_str(rustcode::controller::visualization_prompt_hint());
-    let full_system_prompt_tokens = rustcode::controller::estimate_tokens(&tools_prompt);
-
-    let skills = rustcode::controller::discover_skills();
-    let skills_str = skills
-        .iter()
-        .map(|s| format!("{} {}", s.name, s.description))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let skills_tokens = if skills.is_empty() {
-        0
-    } else {
-        rustcode::controller::estimate_tokens(&skills_str)
-    };
-
-    let system_tools_tokens = full_system_prompt_tokens.saturating_sub(skills_tokens) / 2;
-    let system_prompt_tokens = full_system_prompt_tokens
-        .saturating_sub(system_tools_tokens)
-        .saturating_sub(skills_tokens);
-
+    let selected_subagent_model = state.selected_subagent_id().map(|selected_id| {
+        state
+            .subagents()
+            .iter()
+            .find(|agent| agent.id == selected_id)
+            .and_then(|agent| agent.model.as_deref())
+    });
     let subagent_tokens: usize = if state.selected_subagent_id().is_none() {
         state
             .subagents()
@@ -768,32 +675,23 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     } else {
         0
     };
-
-    let remaining_tokens = context_window.saturating_sub(current_usage.used_tokens as usize);
-
-    ContextBreakdown {
-        context_window,
-        current_usage,
-        configured_guards,
-        user_tokens,
-        assistant_tokens,
-        tool_tokens,
-        system_prompt_tokens,
-        system_tools_tokens,
-        skills_tokens,
+    rustcode::controller::context_breakdown(rustcode::controller::ContextBreakdownInput {
+        context_window: state.active_context_window(),
+        current_usage: super::super::context_usage::context_usage(state),
+        active_profile: state.active_model_profile(),
+        selected_subagent_model,
+        history: state.active_history(),
+        tool_protocol: protocol,
+        delegation_active: state.delegation_active(),
+        agent_mode: state.agent_mode(),
         subagent_tokens,
-        remaining_tokens,
-    }
+        // The TUI renders visualizations, so its root requests carry the hint.
+        renders_visualizations: true,
+    })
 }
 
 pub(super) fn format_token_count(tokens: usize) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.1}M", tokens as f64 / 1_000_000.0)
-    } else if tokens >= 1_000 {
-        format!("{:.1}k", tokens as f64 / 1_000.0)
-    } else {
-        tokens.to_string()
-    }
+    rustcode::controller::format_token_count(tokens)
 }
 
 pub(in crate::ui) fn render_context_modal(

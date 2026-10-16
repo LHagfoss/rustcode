@@ -320,6 +320,12 @@ pub fn format_revocation(revocation: &Revocation) -> String {
 }
 
 pub fn format_status(status: Option<&GatewayStatus>) -> String {
+    format_status_for(status, None)
+}
+
+/// [`format_status`], with `this_session` (the terminal asking) marked in
+/// the session list.
+pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&str>) -> String {
     let Some(status) = status else {
         return "Remote gateway: stopped".to_string();
     };
@@ -340,17 +346,34 @@ pub fn format_status(status: Option<&GatewayStatus>) -> String {
         None if status.pairing_open => "challenge open".to_string(),
         None => "closed".to_string(),
     };
+    let bind_mode = match status.automatic_bind {
+        Some(true) => "  (auto: follows address changes)",
+        Some(false) => "  (fixed bind)",
+        None => "",
+    };
+    let advertise_mode = match status.fixed_advertise {
+        Some(true) => "  (fixed --advertise)",
+        _ => "",
+    };
     let mut lines = vec![
         format!("Remote gateway: running (pid {})", status.pid),
-        format!("  listening on   {}", status.listen_address),
-        format!("  advertised as  {}", status.advertised_address),
+        format!("  listening on   {}{bind_mode}", status.listen_address),
+        format!(
+            "  advertised as  {}{advertise_mode}",
+            status.advertised_address
+        ),
     ];
     if !status.candidates.is_empty() {
         lines.push("  addresses now".to_string());
         lines.extend(status.candidates.iter().map(|line| format!("    {line}")));
     }
-    if let Some(warning) = stale_address_warning(status) {
+    for (warning, recovery) in stale_address_warnings(status) {
         lines.push(format!("  warning        {warning}"));
+        let mut recovery = recovery.into_iter();
+        if let Some(first) = recovery.next() {
+            lines.push(format!("  recover        {first}"));
+        }
+        lines.extend(recovery.map(|line| format!("                 {line}")));
     }
     lines.extend([
         format!("  gateway id     {}", status.gateway_id),
@@ -391,8 +414,13 @@ pub fn format_status(status: Option<&GatewayStatus>) -> String {
                 } else {
                     format!("attached: {}", session.attached_devices.join(", "))
                 };
+                let mark = if this_session == Some(session.session_id.as_str()) {
+                    "  [this terminal]"
+                } else {
+                    ""
+                };
                 lines.push(format!(
-                    "    {}  {}  ({attached})",
+                    "    {}  {}  ({attached}){mark}",
                     session.session_id, session.title
                 ));
             }
@@ -420,28 +448,102 @@ pub fn format_status(status: Option<&GatewayStatus>) -> String {
     lines.join("\n")
 }
 
-/// The listener sits on an address this machine no longer has: nothing can
-/// reach it until it moves. A wildcard or loopback bind cannot go stale.
-fn stale_address_warning(status: &GatewayStatus) -> Option<String> {
-    let listen = status
-        .listen_address
-        .parse::<std::net::SocketAddr>()
-        .ok()?
-        .ip();
-    if listen.is_loopback() || listen.is_unspecified() || status.candidates.is_empty() {
-        return None;
+/// Addresses in `status` that this machine no longer has, each with what to
+/// run about it. The listener on such an address is unreachable until it
+/// moves; an advertised address there sends devices nowhere. A wildcard or
+/// loopback address cannot go stale.
+fn stale_address_warnings(status: &GatewayStatus) -> Vec<(String, Vec<String>)> {
+    if status.candidates.is_empty() {
+        return Vec::new();
     }
-    let present = status.candidates.iter().any(|line| {
-        line.split_whitespace()
-            .next()
-            .and_then(|address| address.parse::<std::net::IpAddr>().ok())
-            == Some(listen)
-    });
-    (!present).then(|| {
-        format!(
-            "{listen} is no longer an address of this machine; with automatic selection the gateway moves within seconds, an explicit --bind has to be changed by hand"
-        )
-    })
+    let current: Vec<std::net::IpAddr> = status
+        .candidates
+        .iter()
+        .filter_map(|line| line.split_whitespace().next()?.parse().ok())
+        .collect();
+    let stale = |address: &str| {
+        let ip = address.parse::<std::net::SocketAddr>().ok()?.ip();
+        (!ip.is_loopback() && !ip.is_unspecified() && !current.contains(&ip)).then_some(ip)
+    };
+    // The address to suggest by hand: the first IPv4 one, as `auto` would.
+    let suggestion = current
+        .iter()
+        .find(|ip| ip.is_ipv4())
+        .or(current.first())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "<address>".to_owned());
+    let mut warnings = Vec::new();
+    let listen = stale(&status.listen_address);
+    if let Some(listen) = listen {
+        if status.automatic_bind == Some(true) {
+            warnings.push((
+                format!(
+                    "{listen} is no longer an address of this machine; the bind is auto, so the gateway moves to a current address within seconds"
+                ),
+                vec![
+                    "if it stays here: `rustcode remote stop`, then `/remote` or `rustcode remote serve`"
+                        .to_owned(),
+                ],
+            ));
+        } else {
+            // `None`: a gateway that does not say how it binds.
+            let why = if status.automatic_bind == Some(false) {
+                " and the bind is fixed: no device can reach the gateway"
+            } else {
+                "; an auto bind moves within seconds, a fixed one stays unreachable"
+            };
+            warnings.push((
+                format!("{listen} is no longer an address of this machine{why}"),
+                vec![
+                    "`rustcode remote stop && rustcode remote serve --bind auto` (follows address changes from now on)".to_owned(),
+                    format!("or `--bind {suggestion}` for the address it has now; a `[remote] bind` in config.toml needs the same change"),
+                ],
+            ));
+        }
+    }
+    if status.fixed_advertise != Some(false)
+        && let Some(advertised) = stale(&status.advertised_address)
+        && Some(advertised) != listen
+    {
+        warnings.push((
+            format!(
+                "devices are told to dial {advertised}, which is no longer an address of this machine"
+            ),
+            vec![
+                format!(
+                    "`rustcode remote stop && rustcode remote serve --advertise <stable name or {suggestion}>`"
+                ),
+                "a `[remote] advertise` in config.toml needs the same change".to_owned(),
+            ],
+        ));
+    }
+    warnings
+}
+
+/// `/remote status`: the terminal's own sharing state (`header`), then the
+/// running gateway's full status, asked for on its own task so the terminal
+/// never waits on the control socket. The panel is only updated while it is
+/// still the one this request opened.
+pub async fn show_gateway_status(
+    state: Arc<tokio::sync::Mutex<crate::app::AppState>>,
+    title: &'static str,
+    header: String,
+    config_directory: std::path::PathBuf,
+    this_session: Option<String>,
+) {
+    let generation = state.lock().await.show_command_panel_request(
+        title,
+        format!("{header}\n\nAsking the gateway for its status…"),
+    );
+    let detail = match RemoteLifecycle::new(config_directory).status().await {
+        Ok(status) => format_status_for(status.as_ref(), this_session.as_deref()),
+        Err(error) => format!("Remote gateway status is not available: {error:#}"),
+    };
+    state.lock().await.update_command_panel_if_current(
+        title,
+        generation,
+        format!("{header}\n\n{detail}"),
+    );
 }
 
 #[cfg(test)]
@@ -549,12 +651,17 @@ mod tests {
             unregistered_owners: vec!["session-1".into()],
             log_path: Some("/config/remote/gateway.log".into()),
             owner_log_directory: Some("/config/remote/owners".into()),
+            automatic_bind: Some(false),
+            fixed_advertise: Some(false),
         };
         let text = format_status(Some(&status));
         for expected in [
             "listening on   192.168.31.237:17879",
             "192.168.31.185  (en0)",
-            "192.168.31.237 is no longer an address of this machine",
+            "192.168.31.237 is no longer an address of this machine and the bind is fixed",
+            "recover        `rustcode remote stop && rustcode remote serve --bind auto`",
+            "or `--bind 192.168.31.185` for the address it has now",
+            "listening on   192.168.31.237:17879  (fixed bind)",
             "aa  phone  (connected)",
             "bb  tablet",
             "challenge open (87 s left, 4 wrong codes allowed)",
@@ -581,6 +688,94 @@ mod tests {
         });
         let old: GatewayStatus = serde_json::from_value(old).unwrap();
         assert!(format_status(Some(&old)).contains("pairing        closed"));
+    }
+
+    fn running(listen: &str, advertised: &str, candidates: &[&str]) -> GatewayStatus {
+        let mut status: GatewayStatus = serde_json::from_value(serde_json::json!({
+            "pid": 7, "process_start_time": 1, "instance_id": "i", "gateway_id": "g",
+            "uptime_seconds": 3, "listen_address": listen,
+            "advertised_address": advertised, "paired_devices": 0,
+            "connections": [], "pairing_open": false,
+        }))
+        .unwrap();
+        status.candidates = candidates.iter().map(|line| line.to_string()).collect();
+        status
+    }
+
+    #[test]
+    fn a_stale_address_names_the_command_that_recovers_it() {
+        // An auto bind moves by itself; the status says so instead of asking
+        // for a restart.
+        let mut status = running(
+            "192.168.1.20:17879",
+            "192.168.1.20:17879",
+            &["192.168.1.31  (en0)", "fe80::1  (en0)"],
+        );
+        status.automatic_bind = Some(true);
+        status.fixed_advertise = Some(false);
+        let text = format_status(Some(&status));
+        assert!(text.contains("(auto: follows address changes)"), "{text}");
+        assert!(
+            text.contains("the bind is auto, so the gateway moves"),
+            "{text}"
+        );
+        assert!(!text.contains("--bind"), "{text}");
+        assert_eq!(text.matches("warning").count(), 1, "{text}");
+
+        // A gateway that does not report its bind mode gets both readings.
+        status.automatic_bind = None;
+        let text = format_status(Some(&status));
+        assert!(text.contains("an auto bind moves within seconds"), "{text}");
+        assert!(text.contains("--bind 192.168.1.31"), "{text}");
+
+        // A wildcard bind cannot go stale, but a fixed advertised IP can.
+        let mut status = running("0.0.0.0:17879", "10.0.0.5:17879", &["192.168.1.31  (en0)"]);
+        status.automatic_bind = Some(false);
+        status.fixed_advertise = Some(true);
+        let text = format_status(Some(&status));
+        assert!(text.contains("(fixed --advertise)"), "{text}");
+        assert!(
+            text.contains("devices are told to dial 10.0.0.5, which is no longer"),
+            "{text}"
+        );
+        assert!(
+            text.contains("--advertise <stable name or 192.168.1.31>"),
+            "{text}"
+        );
+        // A derived advertise follows the plan; a name is never checked.
+        status.fixed_advertise = Some(false);
+        assert!(!format_status(Some(&status)).contains("warning"));
+        status.fixed_advertise = Some(true);
+        status.advertised_address = "mac.netbird.cloud:17879".into();
+        assert!(!format_status(Some(&status)).contains("warning"));
+        // Loopback and an empty address list are never stale.
+        let local = running(
+            "127.0.0.1:17879",
+            "127.0.0.1:17879",
+            &["192.168.1.31  (en0)"],
+        );
+        assert!(!format_status(Some(&local)).contains("warning"));
+        let offline = running("192.168.1.20:17879", "192.168.1.20:17879", &[]);
+        assert!(!format_status(Some(&offline)).contains("warning"));
+    }
+
+    #[test]
+    fn the_asking_terminal_finds_its_own_session_marked() {
+        use crate::remote_gateway::hub::SessionSummary;
+        let mut status = running("127.0.0.1:1", "127.0.0.1:1", &[]);
+        let session = |id: &str, attached: &[&str]| SessionSummary {
+            session_id: id.to_owned(),
+            title: format!("title {id}"),
+            attached_devices: attached.iter().map(|name| name.to_string()).collect(),
+        };
+        status.sessions = Some(vec![session("s1", &["phone"]), session("s2", &[])]);
+        let text = format_status_for(Some(&status), Some("s2"));
+        assert!(text.contains("s1  title s1  (attached: phone)\n"), "{text}");
+        assert!(
+            text.contains("s2  title s2  (no device attached)  [this terminal]"),
+            "{text}"
+        );
+        assert!(!format_status(Some(&status)).contains("[this terminal]"));
     }
 
     #[test]

@@ -272,7 +272,12 @@ impl RemoteBridge {
                 }
                 report
             }
-            SharingCommand::Status => self.status(),
+            SharingCommand::Status => {
+                if self.show_gateway_status(app_state).await {
+                    return;
+                }
+                self.status()
+            }
             SharingCommand::Off => self.switch_off().await,
         };
         app_state
@@ -341,6 +346,29 @@ impl RemoteBridge {
                 PANEL_TITLE,
                 self.status(),
                 directory,
+            ));
+            return true;
+        }
+        let _ = app_state;
+        false
+    }
+
+    /// `/remote status`: this terminal's sharing state at once, followed by
+    /// the gateway's addresses, devices, sessions and logs as soon as its
+    /// control socket answers, on its own task like the pairing details.
+    async fn show_gateway_status(&self, app_state: &Arc<Mutex<AppState>>) -> bool {
+        #[cfg(unix)]
+        if let Some(directory) = self.connector.gateway_directory() {
+            let session_id = self
+                .share
+                .as_ref()
+                .map(|share| share.publisher.registration().session_id.clone());
+            tokio::spawn(rustcode::remote_gateway::command::show_gateway_status(
+                Arc::clone(app_state),
+                PANEL_TITLE,
+                self.session_status(),
+                directory,
+                session_id,
             ));
             return true;
         }
@@ -541,6 +569,18 @@ impl RemoteBridge {
     }
 
     fn status(&self) -> String {
+        let status = self.session_status();
+        if self.share.is_none() {
+            return status;
+        }
+        format!(
+            "{status}\n/remote status shows the gateway's addresses, paired devices, pairing state and logs."
+        )
+    }
+
+    /// Whether and how this terminal's session is shared, without the
+    /// gateway's own detail.
+    fn session_status(&self) -> String {
         let Some(share) = self.share.as_ref() else {
             return "This session is private. Run /remote to turn remote access on for every session."
                 .to_owned();
@@ -579,8 +619,7 @@ impl RemoteBridge {
              Epoch  {}\n\
              {gateway}\n\
              Published  {} updates{}\n\
-             Run /remote off to turn remote access off for every session.\n\
-             `rustcode remote status` shows the gateway's addresses, paired devices, pairing state and logs.",
+             Run /remote off to turn remote access off for every session.",
             registration.session_id,
             registration.registration_epoch,
             share.publisher.sequence(),
@@ -1476,6 +1515,23 @@ mod tests {
         runtime.run_remote_iteration().await;
         let status = panel(&runtime).await;
         assert!(status.contains("Attached devices  none"), "{status}");
+        assert!(!status.contains("code:"), "status shows no pairing secret");
+        // The gateway's own detail follows from its control socket: where it
+        // listens, the sessions with this terminal's marked, and the logs.
+        let status = panel_until(&mut runtime, |report| report.contains("gateway log")).await;
+        assert!(status.contains("Attached devices  none"), "{status}");
+        assert!(
+            status.contains(&format!("listening on   {address}  (fixed bind)")),
+            "{status}"
+        );
+        assert!(
+            status.contains(&format!("{session_id}  ")) && status.contains("[this terminal]"),
+            "{status}"
+        );
+        assert!(
+            status.contains(&lifecycle.log_path().display().to_string()),
+            "{status}"
+        );
         assert!(!status.contains("code:"), "status shows no pairing secret");
 
         // Remote access is on for the machine now: a session the terminal
