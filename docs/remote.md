@@ -103,9 +103,20 @@ service name, port, protocol version and the gateway's identifier, never
 pairing material. The identifier lets a paired device recognise this host at
 a new address and reconnect there with the token it already holds.
 
-`rustcode remote status` lists the machine's current addresses next to the
-listen and advertised address, and warns when the listener sits on an address
-the machine no longer has.
+`rustcode remote status` and `/remote status` list the machine's current
+addresses next to the listen and advertised address, and say whether the bind
+is `auto` (follows address changes) or fixed and whether the advertised host
+was given with `--advertise`. When the listener sits on an address the machine
+no longer has, or a fixed advertised IP is gone, they warn and print the
+command that recovers it:
+
+```text
+  warning        192.168.31.237 is no longer an address of this machine and the bind is fixed: no device can reach the gateway
+  recover        `rustcode remote stop && rustcode remote serve --bind auto` (follows address changes from now on)
+                 or `--bind 192.168.31.185` for the address it has now; a `[remote] bind` in config.toml needs the same change
+```
+
+With an `auto` bind the warning only says the gateway is about to move.
 
 To choose another address by hand: `rustcode remote stop`, then
 `rustcode remote serve` with an explicit `--bind`. Sessions that were shared
@@ -118,7 +129,7 @@ paired.
 | --- | --- |
 | `/remote` (`/remote on`) | Switch remote access on for this machine. Finds the running gateway or starts one and shares the session on screen; every other terminal shares its session within a couple of seconds, and so does every terminal started later. While no device is paired it shows the gateway address, a QR code and a manual pairing code; afterwards it shows the status. |
 | `/remote pair` | Same, and always shows a fresh pairing challenge, to add another device. |
-| `/remote status` | Whether this session is shared, the gateway address, the devices attached to this session and the devices connected to the gateway. Names only, never a credential. |
+| `/remote status` | Whether this session is shared, the gateway address, the devices attached to this session and the devices connected to the gateway, followed by everything `rustcode remote status` shows (addresses, paired devices, pairing state, shared sessions with this terminal's marked, log paths) once the gateway answers. Names only, never a credential. |
 | `/remote off` | Switch remote access off for this machine: the gateway stops, every session disappears from every device, and nothing is shared until `/remote` is run again. Pairings are kept; running turns are not affected. |
 
 The switch is remembered across restarts. While it is on, each interactive
@@ -172,7 +183,7 @@ remote access on is the short moment before it has registered.
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address and code. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time and expiry. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
-| `rustcode remote status` | The running gateway: listen and advertised address, the machine's current addresses, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
+| `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
 
 One gateway runs per configuration directory. A second `remote serve` is

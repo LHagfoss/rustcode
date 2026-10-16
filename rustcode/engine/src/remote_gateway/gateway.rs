@@ -168,6 +168,10 @@ pub(super) struct Shared {
     pub(super) router: Arc<dyn FrameRouter>,
     sessions: Option<Arc<SessionHub>>,
     host_name: Option<String>,
+    /// How the listen plan was asked for; it does not change while the
+    /// gateway runs, only the addresses it resolves to do.
+    automatic_bind: bool,
+    fixed_advertise: bool,
     pub(super) shutdown: CancellationToken,
     store: DeviceStore,
     state: Mutex<State>,
@@ -590,6 +594,8 @@ impl Gateway {
             router: config.router,
             sessions: config.sessions,
             host_name: host_name(),
+            automatic_bind: config.plan.automatic_bind,
+            fixed_advertise: config.plan.fixed_advertise,
             shutdown: CancellationToken::new(),
             store,
             state: Mutex::new(State {
@@ -834,6 +840,8 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         unregistered_owners,
         log_path: Some(shared.lifecycle.log_path()),
         owner_log_directory: Some(shared.lifecycle.owners_directory()),
+        automatic_bind: Some(shared.automatic_bind),
+        fixed_advertise: Some(shared.fixed_advertise),
     }
 }
 
