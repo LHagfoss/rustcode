@@ -736,8 +736,10 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         .and_then(|m| m.tool_protocol)
         .unwrap_or(state.config().tool_protocol);
     let agent_mode = state.agent_mode();
-    let tools_prompt =
+    let mut tools_prompt =
         rustcode::controller::tool_system_prompt(state.delegation_active(), protocol, agent_mode);
+    // The TUI renders visualizations, so its requests carry the hint too.
+    tools_prompt.push_str(rustcode::controller::visualization_prompt_hint());
     let full_system_prompt_tokens = rustcode::controller::estimate_tokens(&tools_prompt);
 
     let skills = rustcode::controller::discover_skills();

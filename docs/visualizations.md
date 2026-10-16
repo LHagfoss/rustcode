@@ -1,8 +1,10 @@
 # Visualizations in chat
 
 The agent can put a small, structured visualization in a reply. The terminal
-UI draws it with native ratatui widgets; every other client shows it as an
-ordinary JSON code block. This is the MVP of
+UI draws it with native ratatui widgets. Only frontends that can draw it are
+told about the format (see [Teaching the agent](#teaching-the-agent)); any
+other client that receives one shows an ordinary JSON code block. This is
+the MVP of
 [#2088](https://github.com/LHagfoss/rustcode/issues/2088).
 
 ## Format
@@ -29,7 +31,7 @@ Shared fields:
 ### Why a fence
 
 - It stays in ordinary assistant text. Providers, stored sessions, `/copy`,
-  export, ACP and the macOS/iOS clients see no new message shape. Old
+  export, ACP and other clients see no new message shape. Old
   sessions render as before, and a session holding a visualization still
   opens in an older build, where it shows as a code block.
 - The block's edges are explicit and versioned, so the renderer never has to
@@ -129,12 +131,29 @@ Selecting rendered rows with the mouse copies their text.
 
 ## Teaching the agent
 
-The root agent's system prompt includes a short `# Visualizations` section
-(about 120 tokens). It is left out of subagent prompts, which are not shown
-to the user directly, and out of compact prompts for small models. The hint
-goes to every frontend: clients without a renderer show a readable JSON code
-block, which is an acceptable fallback, and keeping one prompt avoids
-splitting the prompt cache by frontend.
+The agent learns the format from a short `# Visualizations` section (about
+120 tokens) that is appended to the system prompt **only when the frontend
+renders the blocks**. `AppState::renders_visualizations` holds that
+decision. It is set once, when the frontend creates the session state, so the
+prompt and its cached prefix do not change during a session. The default is
+`false`.
+
+| Frontend                          | Hint | How it is decided                                   |
+| --------------------------------- | ---- | --------------------------------------------------- |
+| TUI (local)                       | yes  | Set at startup                                      |
+| ACP client advertising support    | yes  | `clientCapabilities._meta.rustcode.visualizations >= 1` at `initialize` |
+| Any other ACP client              | no   | Capability absent, malformed, or `0`                |
+| Remote gateway, iOS, Rust desktop, remote TUI | no | Default                                |
+
+The engine announces the same version in its own `initialize` response
+(`agentCapabilities._meta.rustcode.visualizations = 1`), so a client can tell
+whether the agent knows the format.
+
+The hint is also left out of subagent prompts, which are not shown to the
+user directly, and out of compact prompts for small models. It is appended
+after the cached base prompt, so frontends without the capability send
+exactly the same prompt as before. If a model writes a block anyway, a client
+without a renderer shows it as a JSON code fence.
 
 ### Example
 

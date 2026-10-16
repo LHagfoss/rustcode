@@ -258,6 +258,10 @@ pub struct AppState {
     pub active_session_id: String,
     /// Whether the current logical turn may set the title of a new session.
     pub session_title_tool_available: bool,
+    /// Whether the frontend draws `rustcode-viz` blocks natively (#2088).
+    /// Set once when the frontend creates the session state, so the system
+    /// prompt (and its cached prefix) stays the same for the whole session.
+    pub renders_visualizations: bool,
 
     pub show_mcp_config: bool,
     pub mcp_picker_index: usize,
@@ -1556,6 +1560,7 @@ impl AppState {
             show_session_modal: false,
             stats_usage_history: std::collections::BTreeMap::new(),
             session_title_tool_available: false,
+            renders_visualizations: false,
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,
