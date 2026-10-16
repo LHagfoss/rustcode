@@ -567,6 +567,19 @@ pub struct SessionMetadata {
     /// set, so the user's configured default applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yolo: Option<bool>,
+    /// Model profile and reasoning effort as last set for this session;
+    /// absent until set, so the configured defaults apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<SessionModel>,
+}
+
+/// The model profile a session uses and its reasoning effort (`None` leaves
+/// it to the provider, shown as "default").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionModel {
+    pub profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 impl SessionMetadata {
@@ -577,6 +590,7 @@ impl SessionMetadata {
             created_at_ms,
             migrated_from,
             yolo: None,
+            model: None,
         }
     }
 }
@@ -1166,6 +1180,35 @@ impl SessionStore {
     /// Record the session's YOLO setting in its metadata, so a process that
     /// later owns the session starts with the same approval behavior.
     pub fn save_session_yolo(&self, session_id: &str, enabled: bool) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            let changed = metadata.yolo != Some(enabled);
+            metadata.yolo = Some(enabled);
+            changed
+        })
+    }
+
+    /// Record the session's model profile and reasoning effort, so reopening
+    /// or resuming it continues with the same settings.
+    pub fn save_session_model(&self, session_id: &str, model: SessionModel) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            let changed = metadata.model.as_ref() != Some(&model);
+            metadata.model = Some(model);
+            changed
+        })
+    }
+
+    /// The session's recorded model profile and effort, if they were ever set.
+    pub fn load_session_model(&self, session_id: &str) -> Option<SessionModel> {
+        self.load_session_metadata(session_id)?.model
+    }
+
+    /// Apply `update` to the session's metadata and write it atomically when
+    /// `update` reports a change.
+    fn update_session_metadata(
+        &self,
+        session_id: &str,
+        update: impl FnOnce(&mut SessionMetadata) -> bool,
+    ) -> std::io::Result<()> {
         if !valid_session_id(session_id) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -1180,10 +1223,9 @@ impl SessionStore {
                 None,
             )
         });
-        if metadata.yolo == Some(enabled) {
+        if !update(&mut metadata) {
             return Ok(());
         }
-        metadata.yolo = Some(enabled);
         let path = directory.join(SESSION_METADATA_FILE);
         let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
         let contents = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
@@ -2151,6 +2193,36 @@ mod tests {
         store.save_session_yolo(fresh, true).expect("record yolo");
         assert_eq!(store.load_session_yolo(fresh), Some(true));
         assert!(store.save_session_yolo("../escape", true).is_err());
+    }
+
+    #[test]
+    fn model_and_effort_are_recorded_beside_yolo() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "018d6b28-0000-7000-8000-000000000004";
+
+        assert_eq!(store.load_session_model(id), None);
+        let model = SessionModel {
+            profile: "deep".into(),
+            reasoning_effort: Some("high".into()),
+        };
+        store
+            .save_session_model(id, model.clone())
+            .expect("record model");
+        store.save_session_yolo(id, true).expect("record yolo");
+        assert_eq!(store.load_session_model(id), Some(model));
+        assert_eq!(store.load_session_yolo(id), Some(true));
+        assert!(
+            store
+                .save_session_model(
+                    "../escape",
+                    SessionModel {
+                        profile: "x".into(),
+                        reasoning_effort: None,
+                    }
+                )
+                .is_err()
+        );
     }
 
     #[test]

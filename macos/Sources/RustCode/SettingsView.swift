@@ -171,7 +171,6 @@ struct PillButtonStyle: ButtonStyle {
 
 private struct GeneralSettings: View {
     @ObservedObject var model: DesktopModel
-    @State private var showsModels = false
     @AppStorage(AppearanceSetting.key) private var appearance = ""
 
     var body: some View {
@@ -187,36 +186,41 @@ private struct GeneralSettings: View {
             }
             .onChange(of: appearance) { _, value in AppearanceSetting.apply(value) }
 
-            SettingsGroup(title: "Chat", footer: "The model applies to the current chat.") {
+            SettingsGroup(title: "Chat") {
                 SettingsRow(title: "Project", subtitle: model.workspace.path.abbreviatingHome) {
                     Button("Choose…") { model.chooseWorkspace() }.buttonStyle(PillButtonStyle())
                 }
-                if !model.models.choices.isEmpty {
-                    RowDivider()
-                    Button { withAnimation(.snappy(duration: 0.2)) { showsModels.toggle() } } label: {
-                        SettingsRow(title: "Model") {
-                            HStack(spacing: 6) {
-                                Text(model.models.choices.first { $0.id == model.selectedModel }?.name ?? "Choose")
-                                    .foregroundStyle(.secondary)
-                                Image(systemName: "chevron.down")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                                    .rotationEffect(.degrees(showsModels ? 180 : 0))
-                            }
+            }
+
+            if let defaults = model.modelDefaults {
+                SettingsGroup(title: "New Chats",
+                              footer: "New chats start with this model and effort; each chat keeps its own once changed. The terminal UI uses the same defaults.") {
+                    SettingsRow(title: "Model") {
+                        Picker("Model", selection: Binding(get: { defaults.model },
+                                                           set: { value in Task { await model.setModelDefaults(model: value) } })) {
+                            ForEach(defaults.models, id: \.name) { profile in Text(profile.name).tag(profile.name) }
                         }
-                        .contentShape(.rect)
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .fixedSize()
                     }
-                    .buttonStyle(.plain)
-                    if showsModels {
-                        ModelListPanel(model: model, maxHeight: 220) {
-                            withAnimation(.snappy(duration: 0.2)) { showsModels = false }
+                    let efforts = defaults.efforts(for: defaults.model)
+                    if !efforts.isEmpty {
+                        RowDivider()
+                        SettingsRow(title: "Reasoning effort") {
+                            Picker("Reasoning effort", selection: Binding(get: { defaults.effort },
+                                                                          set: { value in Task { await model.setModelDefaults(effort: value) } })) {
+                                ForEach(efforts) { effort in Text(effort.name).tag(effort.id) }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .fixedSize()
                         }
-                        .padding([.horizontal, .bottom], 8)
-                        .transition(.opacity)
                     }
                 }
             }
         }
+        .task { await model.loadModelDefaults() }
     }
 }
 

@@ -15,6 +15,7 @@ pub mod discord_rpc;
 pub mod doctor;
 pub mod mcp;
 mod memory;
+pub mod model_defaults;
 pub mod network;
 mod notifications;
 mod platform;

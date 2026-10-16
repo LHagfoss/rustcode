@@ -252,6 +252,7 @@ pub(crate) fn build_loaded_app_state(
     history: Vec<crate::app::ChatMessage>,
 ) -> crate::app::AppState {
     let mut state = crate::app::AppState::new_with_workspace_session(cwd, Some(session_id));
+    state.restore_session_model();
     state.task_working_directory = Some(cwd.to_path_buf());
     state.workspace_root = Some(cwd.to_path_buf());
     // Reattach the session's recorded task worktree so resume reuses its
@@ -1068,6 +1069,33 @@ mod tests {
         assert!(capabilities["sessionCapabilities"]["list"].is_object());
         assert!(capabilities["sessionCapabilities"]["close"].is_object());
         assert_eq!(capabilities["promptCapabilities"]["image"], true);
+    }
+
+    #[test]
+    fn a_saved_session_model_restores_profile_and_effort() {
+        let mut state = crate::app::AppState::new();
+        state.config.models = vec![crate::config::ModelProfile {
+            name: "deep".into(),
+            model: "deep-1".into(),
+            url: "http://localhost:1/v1".into(),
+            ..Default::default()
+        }];
+        let missing = rustcode_session::SessionModel {
+            profile: "gone".into(),
+            reasoning_effort: Some("high".into()),
+        };
+        assert!(!state.apply_session_model(&missing));
+        let saved = rustcode_session::SessionModel {
+            profile: "deep".into(),
+            reasoning_effort: Some("high".into()),
+        };
+        assert!(state.apply_session_model(&saved));
+        assert_eq!(state.model_name, "deep-1");
+        assert_eq!(state.config.default.big(), "deep");
+        assert_eq!(
+            state.config.models[0].reasoning_effort.as_deref(),
+            Some("high")
+        );
     }
 
     #[test]
