@@ -69,6 +69,7 @@ pub use config::{
 };
 pub use context::{
     SkillInfo, discover_skills, estimate_message_tokens, estimate_tokens, tool_system_prompt,
+    visualization_prompt_hint,
 };
 pub use context_breakdown::{
     CONTEXT_CATEGORY_LABELS, ConfiguredContextGuards, ContextBreakdown, ContextBreakdownInput,

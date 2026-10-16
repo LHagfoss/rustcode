@@ -132,3 +132,8 @@ replaced before it could be read is shown again after the one that replaced it.
 Errors, compaction boundaries, workspace changes and subagent activity stay in
 the transcript, where they can be scrolled back to. `?` on an empty composer
 opens the help panel.
+
+## Visualizations
+
+Assistant replies can carry a `rustcode-viz` fenced block (bar chart, table,
+or tree) that the TUI draws natively; see [visualizations.md](visualizations.md).

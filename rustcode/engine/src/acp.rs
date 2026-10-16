@@ -43,6 +43,26 @@ fn valid_acp_session_id(session_id: &str) -> bool {
     rustcode_session::valid_session_id(session_id)
 }
 
+/// Version of the `_meta.rustcode.visualizations` capability (#2088). A
+/// client that sends at least this value in its initialize
+/// `clientCapabilities._meta.rustcode.visualizations` renders `rustcode-viz`
+/// blocks, so its sessions get the visualization prompt hint.
+const VISUALIZATIONS_CAPABILITY_VERSION: u64 = 1;
+
+/// Whether an ACP client advertised native `rustcode-viz` rendering. Absent,
+/// malformed, or older values mean no: the client would only see JSON.
+fn client_renders_visualizations(
+    capabilities: &agent_client_protocol::schema::v1::ClientCapabilities,
+) -> bool {
+    capabilities
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("rustcode"))
+        .and_then(|rustcode| rustcode.get("visualizations"))
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|version| version >= VISUALIZATIONS_CAPABILITY_VERSION)
+}
+
 fn server_capabilities() -> AgentCapabilities {
     AgentCapabilities::new()
         .load_session(true)
@@ -52,6 +72,10 @@ fn server_capabilities() -> AgentCapabilities {
                 .list(SessionListCapabilities::new())
                 .close(SessionCloseCapabilities::new()),
         )
+        .meta(serde_json::Map::from_iter([(
+            "rustcode".to_owned(),
+            serde_json::json!({ "visualizations": VISUALIZATIONS_CAPABILITY_VERSION }),
+        )]))
 }
 
 fn session_id_is_active(sessions: &HashMap<String, AcpSession>, session_id: &str) -> bool {
@@ -382,7 +406,8 @@ async fn acp_load_session(
                 agent_client_protocol::Error::invalid_params().data("session is already active")
             );
         }
-        let state = build_loaded_app_state(&session_id, &cwd, history.clone());
+        let mut state = build_loaded_app_state(&session_id, &cwd, history.clone());
+        state.renders_visualizations = server.renders_visualizations.load(Ordering::Relaxed);
         let config_options = build_session_config_options(&state);
         let loaded_usage = usage::usage_update(&state);
         let state = Arc::new(Mutex::new(state));
@@ -648,6 +673,9 @@ struct AcpServer {
     client: Arc<reqwest::Client>,
     auto_approve: bool,
     task_routes: TaskRoutes,
+    /// Set from the client's initialize capabilities; read when each session
+    /// state is created so its prompt never changes mid-session.
+    renders_visualizations: Arc<AtomicBool>,
 }
 
 impl AcpServer {
@@ -676,6 +704,7 @@ impl AcpServer {
             client: Arc::new(client),
             auto_approve,
             task_routes,
+            renders_visualizations: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -706,6 +735,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .name("rustcode")
         .on_receive_request(
             async |request: InitializeRequest, responder, _connection| {
+                server.renders_visualizations.store(
+                    client_renders_visualizations(&request.client_capabilities),
+                    Ordering::Relaxed,
+                );
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(server_capabilities()),
@@ -719,6 +752,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 async move |request: NewSessionRequest, responder, _connection| {
                     let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
                     let mut state = new_session_state(&cwd);
+                    state.renders_visualizations =
+                        server.renders_visualizations.load(Ordering::Relaxed);
                     let session_id = state.active_session_id.clone();
                     state.raw_cli_mode = false;
                     state.task_working_directory = Some(cwd.clone());
@@ -1101,6 +1136,41 @@ mod tests {
         assert!(capabilities["sessionCapabilities"]["list"].is_object());
         assert!(capabilities["sessionCapabilities"]["close"].is_object());
         assert_eq!(capabilities["promptCapabilities"]["image"], true);
+        assert_eq!(
+            capabilities["_meta"]["rustcode"]["visualizations"],
+            VISUALIZATIONS_CAPABILITY_VERSION
+        );
+    }
+
+    #[test]
+    fn visualization_support_comes_only_from_the_client_capability() {
+        let parse = |value: serde_json::Value| {
+            client_renders_visualizations(
+                &serde_json::from_value::<agent_client_protocol::schema::v1::ClientCapabilities>(
+                    value,
+                )
+                .unwrap(),
+            )
+        };
+        assert!(parse(
+            serde_json::json!({"_meta": {"rustcode": {"visualizations": 1}}})
+        ));
+        assert!(parse(
+            serde_json::json!({"_meta": {"rustcode": {"visualizations": 3}}})
+        ));
+        assert!(!parse(serde_json::json!({})));
+        assert!(!parse(serde_json::json!({"_meta": {"rustcode": {}}})));
+        assert!(!parse(
+            serde_json::json!({"_meta": {"rustcode": {"visualizations": 0}}})
+        ));
+        assert!(!parse(
+            serde_json::json!({"_meta": {"rustcode": {"visualizations": "yes"}}})
+        ));
+        assert!(!parse(
+            serde_json::json!({"_meta": {"other": {"visualizations": 1}}})
+        ));
+        // A fresh or loaded ACP session never renders unless the server says so.
+        assert!(!crate::app::AppState::new().renders_visualizations);
     }
 
     #[test]
@@ -1161,6 +1231,7 @@ mod tests {
             client: Arc::new(reqwest::Client::new()),
             auto_approve: false,
             task_routes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            renders_visualizations: Arc::new(AtomicBool::new(false)),
         };
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));

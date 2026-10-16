@@ -1452,6 +1452,11 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             .map(|profile| profile.tool_scheduling_policy())
             .unwrap_or_default();
         crate::tools::append_tool_response_policy(&mut system_prompt, tool_scheduling_policy);
+        crate::tools::schema::append_visualization_hint(
+            &mut system_prompt,
+            schema_policy,
+            s.renders_visualizations,
+        );
         // Built only from the MCP registry, config and startup failures, so
         // the cached prompt prefix holds until the server set changes.
         crate::tools::append_mcp_catalogue(&mut system_prompt, schema_policy);

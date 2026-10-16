@@ -685,6 +685,8 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         delegation_active: state.delegation_active(),
         agent_mode: state.agent_mode(),
         subagent_tokens,
+        // The TUI renders visualizations, so its root requests carry the hint.
+        renders_visualizations: true,
     })
 }
 

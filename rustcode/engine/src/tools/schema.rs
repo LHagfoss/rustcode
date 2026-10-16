@@ -2031,6 +2031,30 @@ One line, no headings or lists, and never one per call. Skip it only when the ba
     );
 }
 
+/// Short guidance for `rustcode-viz` blocks; the full format lives in
+/// `docs/visualizations.md` and the TUI renderer validates every payload.
+pub(crate) const VISUALIZATION_PROMPT_HINT: &str = "# Visualizations\n\
+When a chart, table, or tree beats prose, add a ```rustcode-viz fence with one JSON object: \
+{\"version\":1,\"type\":\"bar_chart\",\"title\":\"..\",\"summary\":\"..\",\"items\":[{\"label\":\"..\",\"value\":1}]}; \
+\"table\" takes columns, rows (arrays), optional sort_by {column,descending}; \"tree\" takes nodes [{label,note,children}]. Max 30 bars, 50 rows, 120 nodes.\n\n";
+
+/// Append the visualization hint when the frontend renders `rustcode-viz`
+/// blocks. Only the root agent writes user-facing replies, and compact prompts
+/// are for small models where every token counts. Frontends that cannot draw
+/// the blocks never get the hint, so they never see the JSON fences.
+pub(crate) fn append_visualization_hint(
+    prompt: &mut String,
+    policy: ToolSchemaPolicy,
+    renders_visualizations: bool,
+) {
+    if renders_visualizations
+        && policy.profile != ToolSchemaProfile::ReadOnlySubagent
+        && !policy.compact_text_prompt
+    {
+        prompt.push_str(VISUALIZATION_PROMPT_HINT);
+    }
+}
+
 pub(crate) fn tool_system_prompt_for_policy(
     policy: ToolSchemaPolicy,
     protocol: crate::config::ToolProtocol,

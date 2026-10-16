@@ -19,6 +19,7 @@ mod selection;
 mod status_render;
 mod terminal_runtime;
 mod transcript;
+mod visualization;
 
 pub(crate) const RUSTCODE_WORDMARK: &str = include_str!("rustcode_wordmark.txt");
 pub(crate) const RUSTCODE_WORDMARK_SPLIT: usize = 22;

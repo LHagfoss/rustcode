@@ -80,6 +80,9 @@ pub struct ContextBreakdownInput<'a> {
     pub agent_mode: AgentMode,
     /// Tokens held by subagent transcripts, counted only for the root view.
     pub subagent_tokens: usize,
+    /// The frontend renders `rustcode-viz` blocks, so root requests carry
+    /// the visualization hint (#2088).
+    pub renders_visualizations: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +155,7 @@ impl ContextBreakdown {
             delegation_active: state.delegation_active,
             agent_mode: state.agent_mode,
             subagent_tokens,
+            renders_visualizations: state.renders_visualizations,
         })
     }
 
@@ -224,11 +228,15 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
         }
     }
 
-    let tools_prompt = super::tool_system_prompt(
+    let mut tools_prompt = super::tool_system_prompt(
         input.delegation_active,
         input.tool_protocol,
         input.agent_mode,
     );
+    // Subagent prompts never carry the hint.
+    if input.renders_visualizations && input.selected_subagent_model.is_none() {
+        tools_prompt.push_str(super::visualization_prompt_hint());
+    }
     let full_system_prompt_tokens = super::estimate_tokens(&tools_prompt);
     let skills = super::discover_skills();
     let skills_tokens = if skills.is_empty() {

@@ -4752,3 +4752,35 @@ fn a_harness_notice_does_not_unbind_a_discovery_result() {
     let after = select(&messages);
     assert_eq!(after.selected_names, bound.selected_names);
 }
+
+#[test]
+fn visualization_hint_needs_a_rendering_frontend_and_a_root_prompt() {
+    use super::schema::{VISUALIZATION_PROMPT_HINT as HINT, append_visualization_hint};
+    use crate::config::{AgentMode, ToolProtocol};
+    assert!(crate::network::compaction::estimate_tokens(HINT) < 130);
+    let with = |policy: ToolSchemaPolicy, renders: bool| {
+        let mut prompt = String::new();
+        append_visualization_hint(&mut prompt, policy, renders);
+        prompt
+    };
+    for mode in [AgentMode::Build, AgentMode::Plan] {
+        let root = ToolSchemaPolicy::root_for_mode(false, mode);
+        assert_eq!(with(root, true), HINT);
+        assert_eq!(with(root, false), "");
+    }
+    assert_eq!(with(ToolSchemaPolicy::subagent(), true), "");
+    let compact =
+        ToolSchemaPolicy::root_for_mode_with_compact_prompt(false, AgentMode::Build, true);
+    assert_eq!(with(compact, true), "");
+    // The cached base prompt never carries it, so frontends that cannot
+    // render share the same prefix as before.
+    for protocol in [
+        ToolProtocol::ApiNative,
+        ToolProtocol::Json,
+        ToolProtocol::Native,
+    ] {
+        assert!(
+            !super::tool_system_prompt(false, protocol, AgentMode::Build).contains("rustcode-viz")
+        );
+    }
+}
