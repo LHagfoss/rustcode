@@ -141,6 +141,11 @@ public struct SessionSummary: Identifiable, Equatable, Sendable {
     public var cwd: String
     public var title: String?
     public var updatedAt: Date?
+    /// The model profile the chat last used, when the engine recorded one.
+    public var model: String?
+
+    /// `provider/model` reads as just the model.
+    public var modelName: String? { model.map { $0.split(separator: "/").last.map(String.init) ?? $0 } }
 
     /// The cursor for the next page, when the list has more.
     public static func nextCursor(from result: JSONValue) -> String? {
@@ -163,7 +168,8 @@ public struct SessionSummary: Identifiable, Equatable, Sendable {
                 id: id,
                 cwd: entry["cwd"]?.stringValue ?? "",
                 title: entry["title"]?.stringValue.map(ImageMarkers.title),
-                updatedAt: stamp.flatMap { formatter.date(from: $0) ?? plain.date(from: $0) })
+                updatedAt: stamp.flatMap { formatter.date(from: $0) ?? plain.date(from: $0) },
+                model: entry["_meta"]?["model"]?.stringValue)
         }
     }
 }

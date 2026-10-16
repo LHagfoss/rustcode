@@ -437,15 +437,22 @@ private struct SessionRow: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     } else {
+                        // Where and with which model on the left, when on the right.
                         HStack(spacing: 4) {
                             if showsProject, !session.projectName.isEmpty {
                                 Label(session.projectName, systemImage: "folder")
                                     .labelStyle(.titleAndIcon)
                                     .lineLimit(1)
-                                if session.updatedAt != nil { Text("·") }
+                                if session.modelName != nil { Text("·") }
                             }
+                            if let model = session.modelName {
+                                Text(model).lineLimit(1).truncationMode(.middle)
+                            }
+                            Spacer(minLength: 6)
                             if let updated = session.updatedAt {
                                 Text(updated, format: .relative(presentation: .named))
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
                             }
                         }
                         .font(.caption)
@@ -680,8 +687,15 @@ private struct ChatView: View {
 
     private let bottomAnchor = "bottom"
 
+    /// Visible reply text is streaming. Whitespace or a `<think>` section the
+    /// model sends before its first words still counts as waiting, so
+    /// "Working" stays up until then.
     private var isAgentWriting: Bool {
-        if case .assistant = model.transcript.items.last?.content { return true }
+        if case .assistant(let text) = model.transcript.items.last?.content {
+            return AssistantBlock.parse(text, isStreaming: true).contains {
+                if case .markdown(let shown) = $0 { !shown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } else { false }
+            }
+        }
         return false
     }
 }
@@ -811,7 +825,11 @@ private struct Composer: View {
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
                 .onKeyPress(.return, phases: .down) { press in
-                    if press.modifiers.contains(.shift) { return .ignored }
+                    // ⇧⏎ (and ⌥⏎) start a new line at the cursor.
+                    if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
+                        NSApp.sendAction(#selector(NSText.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
+                        return .handled
+                    }
                     // ⏎ on a suggestion takes it: a command that wants arguments
                     // waits for them, any other runs at once.
                     let suggestions = model.commandSuggestions
