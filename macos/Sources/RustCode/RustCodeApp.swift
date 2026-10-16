@@ -18,7 +18,7 @@ struct RustCodeApp: App {
             ContentView(model: model)
                 .frame(minWidth: 850, minHeight: 620)
                 .task { await model.start() }
-                .task { await model.updater.checkOnLaunch() }
+                .task { model.updater.startPolling() }
                 .onDisappear { model.stop() }
         }
         .windowStyle(.hiddenTitleBar)

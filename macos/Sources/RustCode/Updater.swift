@@ -24,7 +24,12 @@ final class Updater: ObservableObject {
     let currentVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
         .flatMap(AppVersion.init)
 
-    private static let lastCheckKey = "lastUpdateCheck"
+    /// The `releases/latest` ETag from this run. An unchanged answer is a 304,
+    /// which GitHub does not count against the unauthenticated rate limit, so
+    /// polling every minute stays far below it.
+    private var etag: String?
+    private var polling: Task<Void, Never>?
+    static let pollInterval: Duration = .seconds(60)
 
     /// A newer release, once a check found one.
     var available: AppRelease? {
@@ -41,23 +46,36 @@ final class Updater: ObservableObject {
             && FileManager.default.isWritableFile(atPath: bundle.deletingLastPathComponent().path)
     }
 
-    /// At most once a day, quietly: a failure leaves the state idle.
-    func checkOnLaunch() async {
-        let last = UserDefaults.standard.double(forKey: Self.lastCheckKey)
-        guard Date().timeIntervalSince1970 - last > 24 * 60 * 60 else { return }
-        await check(quietly: true)
+    /// Check now and then every minute while the app runs, quietly: a failed
+    /// poll leaves what is shown alone.
+    func startPolling() {
+        guard polling == nil else { return }
+        polling = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.check(quietly: true)
+                try? await Task.sleep(for: Self.pollInterval)
+            }
+        }
     }
 
     func check(quietly: Bool = false) async {
         if case .downloading = state { return }
         if case .installing = state { return }
-        state = .checking
+        // A background poll must not hide the sidebar's update row while it runs.
+        if !quietly { state = .checking }
         do {
             var request = URLRequest(url: AppRelease.latestURL)
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            // A user's check asks afresh, so "up to date" is always confirmed.
+            if quietly, let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError("GitHub did not answer the update check.") }
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastCheckKey)
+            let http = response as? HTTPURLResponse
+            if http?.statusCode == 304 { return }
+            guard http?.statusCode == 200 else { throw UpdateError("GitHub did not answer the update check.") }
+            etag = http?.value(forHTTPHeaderField: "ETag")
+            if case .downloading = state { return }
+            if case .installing = state { return }
             guard let release = AppRelease(githubJSON: data) else {
                 state = .upToDate
                 return
@@ -68,7 +86,7 @@ final class Updater: ObservableObject {
                 state = .available(release)
             }
         } catch {
-            state = quietly ? .idle : .failed(Self.message(error))
+            if !quietly { state = .failed(Self.message(error)) }
         }
     }
 
