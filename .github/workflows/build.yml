@@ -6,7 +6,23 @@ name: Build
 on:
     push:
         tags: ["v*"]
+        # Builds on main only warm the Rust and sccache caches: GitHub scopes
+        # caches by ref, and a tag build can restore main's but never another
+        # tag's, so without these every release compiled from scratch. Path
+        # filters do not apply to tag pushes.
+        branches: [main]
+        paths:
+            - .github/workflows/build.yml
+            - Cargo.toml
+            - Cargo.lock
+            - rustcode/**
+            - "!rustcode/**/*.md"
     workflow_dispatch:
+
+concurrency:
+    group: build-${{ github.ref }}
+    # A newer merge supersedes a cache warm-up; never cancel a release.
+    cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 env:
     CARGO_TERM_COLOR: always
