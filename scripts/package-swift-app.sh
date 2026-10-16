@@ -24,13 +24,23 @@ mkdir -p "$OUTPUT"
 STAGING="$OUTPUT/.RustCode.app.$$"
 trap 'rm -rf "$STAGING"' EXIT
 rm -rf "$STAGING"
-mkdir -p "$STAGING/Contents/MacOS" "$STAGING/Contents/Helpers"
+mkdir -p "$STAGING/Contents/MacOS" "$STAGING/Contents/Helpers" "$STAGING/Contents/Resources"
 (
     cd "$ROOT/macos"
     swift build --configuration release
     cp .build/release/RustCode "$STAGING/Contents/MacOS/RustCode"
 )
 install -m 755 "$ENGINE" "$STAGING/Contents/Helpers/rustcode"
+# Compile the Icon Composer source (Liquid Glass on macOS 26) with Xcode 26 or
+# later; older toolchains fall back to the committed flat AppIcon.icns.
+if ! xcrun actool "$ROOT/macos/Resources/AppIcon.icon" --compile "$STAGING/Contents/Resources" \
+    --app-icon AppIcon --platform macosx --minimum-deployment-target 14.0 \
+    --output-partial-info-plist "$OUTPUT/.icon-info.plist.$$" >/dev/null 2>&1 \
+    || [[ ! -f "$STAGING/Contents/Resources/AppIcon.icns" ]]; then
+    rm -f "$STAGING/Contents/Resources/Assets.car"
+    cp "$ROOT/macos/Resources/AppIcon.icns" "$STAGING/Contents/Resources/AppIcon.icns"
+fi
+rm -f "$OUTPUT/.icon-info.plist.$$"
 cat > "$STAGING/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -38,6 +48,8 @@ cat > "$STAGING/Contents/Info.plist" <<EOF
 <key>CFBundleDevelopmentRegion</key><string>en</string>
 <key>CFBundleDisplayName</key><string>RustCode</string>
 <key>CFBundleExecutable</key><string>RustCode</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleIconName</key><string>AppIcon</string>
 <key>CFBundleIdentifier</key><string>com.lhagfoss.rustcode.desktop</string>
 <key>CFBundleName</key><string>RustCode</string>
 <key>CFBundlePackageType</key><string>APPL</string>
