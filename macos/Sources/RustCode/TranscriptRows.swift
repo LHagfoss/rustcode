@@ -222,17 +222,29 @@ private struct ThinkingBlock: View {
 
 private struct ToolRow: View {
     let tool: ToolItem
-    @State private var isExpanded = false
+    /// Nil until the user toggles it: an edit opens on its diff, anything
+    /// else starts closed.
+    @State private var expanded: Bool?
+    @Environment(\.projectRoot) private var projectRoot
 
-    private var hasDetail: Bool { tool.input != nil || tool.output != nil }
+    private var hasDetail: Bool { tool.input != nil || tool.output != nil || !tool.changes.isEmpty }
+    private var isExpanded: Binding<Bool> {
+        Binding(get: { expanded ?? !tool.changes.isEmpty }, set: { expanded = $0 })
+    }
 
     var body: some View {
         Group {
             if hasDetail {
-                DisclosureGroup(isExpanded: $isExpanded) {
+                DisclosureGroup(isExpanded: isExpanded) {
                     VStack(alignment: .leading, spacing: 10) {
-                        if let input = tool.input { detail("Input", input) }
-                        if let output = tool.output { detail("Output", output) }
+                        if tool.changes.isEmpty {
+                            if let input = tool.input { detail("Input", input) }
+                            if let output = tool.output { detail("Output", output) }
+                        } else {
+                            ForEach(tool.changes) { change in
+                                FileChangeView(change: change, showsHeader: tool.changes.count > 1)
+                            }
+                        }
                     }
                     .padding(.top, 10)
                 } label: {
@@ -247,7 +259,19 @@ private struct ToolRow: View {
         .contextMenu {
             if let input = tool.input { Button("Copy Input", systemImage: "arrow.down.doc") { Clipboard.copy(input) } }
             if let output = tool.output { Button("Copy Output", systemImage: "arrow.up.doc") { Clipboard.copy(output) } }
+            if tool.changes.count == 1, let change = tool.changes.first {
+                Divider()
+                FileActions(path: change.path).menuItems
+            }
         }
+    }
+
+    /// An edit of one file names it relative to the project.
+    private var detailLine: String? {
+        if tool.changes.count == 1, let change = tool.changes.first {
+            return change.displayPath(relativeTo: projectRoot)
+        }
+        return tool.detail
     }
 
     private var label: some View {
@@ -258,13 +282,19 @@ private struct ToolRow: View {
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let detail = tool.detail {
+                if let detail = detailLine {
                     Text(detail)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+            }
+            if !tool.changes.isEmpty {
+                Spacer(minLength: 8)
+                DiffCount(
+                    added: tool.changes.reduce(0) { $0 + $1.added },
+                    removed: tool.changes.reduce(0) { $0 + $1.removed })
             }
         }
     }
@@ -296,6 +326,193 @@ private struct ToolRow: View {
             .frame(maxHeight: 240)
             .fixedSize(horizontal: false, vertical: true)
             .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
+        }
+    }
+}
+
+/// `+N −M` for the lines an edit added and removed.
+private struct DiffCount: View {
+    let added: Int
+    let removed: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if added > 0 || removed == 0 { Text("+\(added)").foregroundStyle(.green) }
+            if removed > 0 { Text("\u{2212}\(removed)").foregroundStyle(.red) }
+        }
+        .font(.caption.monospacedDigit().weight(.medium))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(added) lines added, \(removed) removed")
+    }
+}
+
+/// Reveal or open the file an edit changed.
+private struct FileActions {
+    let path: String
+
+    private var url: URL { URL(fileURLWithPath: path) }
+    private var exists: Bool { FileManager.default.fileExists(atPath: path) }
+
+    /// A deleted file reveals the folder it was in.
+    func reveal() {
+        if exists {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url.deletingLastPathComponent())
+        }
+    }
+
+    func open() { NSWorkspace.shared.open(url) }
+
+    @ViewBuilder
+    var menuItems: some View {
+        Button("Reveal in Finder", systemImage: "folder") { reveal() }
+        Button("Open", systemImage: "arrow.up.forward.app") { open() }.disabled(!exists)
+        Button("Copy Path", systemImage: "doc.on.doc") { Clipboard.copy(path) }
+    }
+
+    var buttons: some View {
+        HStack(spacing: 2) {
+            Button("Reveal in Finder", systemImage: "folder") { reveal() }
+                .help("Reveal in Finder")
+            Button("Open", systemImage: "arrow.up.forward.app") { open() }
+                .help("Open")
+                .disabled(!exists)
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+    }
+}
+
+/// One file's changes as a unified diff: removed lines red, added lines
+/// green, numbered in the old and new file. A long diff shows its head until
+/// "Show all".
+private struct FileChangeView: View {
+    let change: FileChange
+    /// Whether to name the file above its diff (the card names a lone file).
+    var showsHeader: Bool
+    @State private var showsAll = false
+    @Environment(\.projectRoot) private var projectRoot
+
+    /// Rows shown before "Show all", and the most ever drawn.
+    private static let previewRows = 12
+    private static let maxRows = 2_000
+
+    private var isLong: Bool { change.rows.count > Self.previewRows + 3 }
+
+    private var visibleRows: ArraySlice<DiffRow> {
+        change.rows.prefix(isLong && !showsAll ? Self.previewRows : Self.maxRows)
+    }
+
+    private var numberWidth: CGFloat {
+        let largest = change.rows.reduce(0) { result, row in
+            guard case .line(let line) = row else { return result }
+            return max(result, line.oldNumber ?? 0, line.newNumber ?? 0)
+        }
+        return CGFloat(max(String(largest).count, 2)) * 7.5
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if showsHeader {
+                    Image(systemName: change.isNewFile ? "doc.badge.plus" : "doc.text")
+                        .foregroundStyle(.secondary)
+                    Text(change.displayPath(relativeTo: projectRoot))
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    DiffCount(added: change.added, removed: change.removed)
+                }
+                Spacer(minLength: 8)
+                FileActions(path: change.path).buttons
+            }
+            ScrollView(.horizontal) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(visibleRows.enumerated()), id: \.offset) { _, row in
+                        rowView(row)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
+            .clipShape(.rect(cornerRadius: 8))
+            footer
+        }
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        let hidden = change.rows.count - visibleRows.count
+        if isLong, !showsAll {
+            Button("Show all \(change.rows.count) lines") {
+                withAnimation(.snappy(duration: 0.2)) { showsAll = true }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+        } else if showsAll {
+            HStack(spacing: 10) {
+                if hidden > 0 {
+                    Text("\(hidden) more lines not shown").foregroundStyle(.secondary)
+                }
+                Button("Show less") {
+                    withAnimation(.snappy(duration: 0.2)) { showsAll = false }
+                }
+                .buttonStyle(.link)
+            }
+            .font(.caption)
+        }
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: DiffRow) -> some View {
+        switch row {
+        case .gap(let count):
+            Text(count.map { "\u{22EF} \($0) unchanged line\($0 == 1 ? "" : "s")" } ?? "\u{22EF}")
+                .font(.caption.monospaced())
+                .foregroundStyle(.tertiary)
+                .padding(.leading, numberWidth * 2 + 28)
+                .padding(.vertical, 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .line(let line):
+            HStack(spacing: 0) {
+                number(line.oldNumber)
+                number(line.newNumber)
+                Text(sign(line.kind))
+                    .foregroundStyle(tint(line.kind) ?? .secondary)
+                    .frame(width: 16)
+                Text(line.text.isEmpty ? " " : line.text)
+                    .textSelection(.enabled)
+                    .fixedSize()
+                    .padding(.trailing, 10)
+            }
+            .font(.system(.caption, design: .monospaced))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(tint(line.kind).map { $0.opacity(0.13) } ?? .clear)
+        }
+    }
+
+    private func number(_ value: Int?) -> some View {
+        Text(value.map(String.init) ?? "")
+            .foregroundStyle(.tertiary)
+            .frame(width: numberWidth, alignment: .trailing)
+            .padding(.trailing, 6)
+    }
+
+    private func sign(_ kind: DiffLine.Kind) -> String {
+        switch kind {
+        case .added: "+"
+        case .removed: "\u{2212}"
+        case .context: " "
+        }
+    }
+
+    private func tint(_ kind: DiffLine.Kind) -> Color? {
+        switch kind {
+        case .added: .green
+        case .removed: .red
+        case .context: nil
         }
     }
 }
@@ -341,4 +558,6 @@ struct MessageActions {
 
 extension EnvironmentValues {
     @Entry var messageActions: MessageActions? = nil
+    /// The open chat's project directory, for paths shown relative to it.
+    @Entry var projectRoot: String? = nil
 }

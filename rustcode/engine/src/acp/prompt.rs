@@ -298,7 +298,7 @@ pub(crate) async fn run_prompt(
     let task_manager = crate::tools::background_task_manager();
     let mut turn_tasks = BackgroundTurnTasks::new(task_manager, &session_id, &known_task_ids);
     let (events, mut receiver) = crate::network::AgentUiEventSender::channel();
-    let mut event_stream = AcpEventStream::new();
+    let mut event_stream = AcpEventStream::new().with_cwd(cwd.clone());
     let mut context = run_prompt_turn(
         &client,
         &state,

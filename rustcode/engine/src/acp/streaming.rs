@@ -7,6 +7,8 @@ pub(crate) struct AcpEventStream {
     streamed_prose: String,
     pending: String,
     in_thought: bool,
+    /// The session directory, for edit paths a receipt does not resolve.
+    cwd: Option<std::path::PathBuf>,
 }
 
 impl AcpEventStream {
@@ -15,7 +17,13 @@ impl AcpEventStream {
             streamed_prose: String::new(),
             pending: String::new(),
             in_thought: false,
+            cwd: None,
         }
+    }
+
+    pub fn with_cwd(mut self, cwd: std::path::PathBuf) -> Self {
+        self.cwd = Some(cwd);
+        self
     }
 
     fn text_update(text: String) -> SessionUpdate {
@@ -122,19 +130,29 @@ impl AcpEventStream {
                 } else {
                     ToolCallStatus::Failed
                 };
+                let diffs = super::edit_diff::edit_diff_content(
+                    &result.tool_name,
+                    status == ToolCallStatus::Completed,
+                    &result.content,
+                    result.diff.as_deref(),
+                    &result.metadata.changed_paths,
+                    self.cwd.as_deref(),
+                );
                 let mut updates = self.flush();
+                let mut fields = ToolCallUpdateFields::new().status(status);
+                if !diffs.is_empty() {
+                    fields = fields.content(diffs);
+                }
                 updates.push(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                     id,
-                    ToolCallUpdateFields::new()
-                        .status(status)
-                        .raw_output(serde_json::json!({
-                            "content": result.content,
-                            "exitCode": result.metadata.exit_code,
-                            "changedPaths": result.metadata.changed_paths,
-                            "truncated": result.metadata.truncated,
-                            "completeness": result.metadata.completeness.as_str(),
-                            "commandStatus": result.metadata.command_status,
-                        })),
+                    fields.raw_output(serde_json::json!({
+                        "content": result.content,
+                        "exitCode": result.metadata.exit_code,
+                        "changedPaths": result.metadata.changed_paths,
+                        "truncated": result.metadata.truncated,
+                        "completeness": result.metadata.completeness.as_str(),
+                        "commandStatus": result.metadata.command_status,
+                    })),
                 )));
                 updates
             }

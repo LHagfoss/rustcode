@@ -507,6 +507,7 @@ private struct ChatView: View {
             }
         }
         .environment(\.findQuery, model.showsFind ? model.findQuery : "")
+        .environment(\.projectRoot, selected.map(\.cwd).flatMap { $0.isEmpty ? nil : $0 } ?? model.workspace.path)
         .environment(\.messageActions, MessageActions(
             edit: { model.edit($0) },
             retry: { text in Task { await model.retry(text) } }))
