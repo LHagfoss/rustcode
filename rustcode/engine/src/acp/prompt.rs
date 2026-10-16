@@ -271,9 +271,12 @@ pub(crate) async fn run_prompt(
     // Slash commands answer in the transcript and never reach the model or
     // provider history, as for the remote client. `/goal` is the exception:
     // it becomes the turn's prompt.
-    let command = {
+    let (command, context_meta) = {
         let mut state = state.lock().await;
-        super::commands::classify(&mut state, &text)
+        let command = super::commands::classify(&mut state, &text);
+        let context_meta = (command.is_some() && super::commands::is_context_report(&text))
+            .then(|| super::usage::context_reply_meta(&state));
+        (command, context_meta)
     };
     let agent_text = |text: String| {
         SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
@@ -310,7 +313,13 @@ pub(crate) async fn run_prompt(
             // A command such as `/compact` can change the context, so the
             // usage follows its reply.
             let usage = super::usage::usage_update(&*state.lock().await);
-            send_updates(&connection, &session_id, vec![agent_text(reply), usage])?;
+            let reply = match (agent_text(reply), context_meta) {
+                (SessionUpdate::AgentMessageChunk(chunk), Some(meta)) => {
+                    SessionUpdate::AgentMessageChunk(chunk.meta(meta))
+                }
+                (reply, _) => reply,
+            };
+            send_updates(&connection, &session_id, vec![reply, usage])?;
             return Ok(if turn.cancel_token().is_cancelled() {
                 StopReason::Cancelled
             } else {

@@ -20,6 +20,8 @@ public struct SessionUsage: Equatable, Sendable {
     /// Cumulative cost, when the agent reports one.
     public var cost: Double?
     public var currency: String?
+    /// The engine's `/context` breakdown, when it sends one.
+    public var context: ContextBreakdown?
 
     public init(
         used: Int, size: Int, estimated: Bool = false, inputTokens: Int? = nil, outputTokens: Int? = nil,
@@ -45,6 +47,7 @@ public struct SessionUsage: Equatable, Sendable {
             inputTokens = meta?["inputTokens"]?.intValue
             outputTokens = meta?["outputTokens"]?.intValue
             cachedTokens = meta?["cachedTokens"]?.intValue
+            context = ContextBreakdown(json: meta?["context"])
         }
         if let amount = update["cost"]?["amount"]?.doubleValue {
             cost = amount
