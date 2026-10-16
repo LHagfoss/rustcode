@@ -690,6 +690,7 @@ pub fn select_picker_model(s: &mut AppState) {
         s.model_name = profile.model.clone();
         s.config.default.set_big(profile.name.clone());
         crate::config::save_entire_config(&s.config);
+        s.record_session_model();
         s.set_transient_notice(format!("Switched to model profile '{}'", profile.name));
     }
 }

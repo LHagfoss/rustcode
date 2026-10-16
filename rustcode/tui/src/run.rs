@@ -548,6 +548,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Some(crate::cli::Commands::Defaults { model, effort }) = cli_args.command.as_ref() {
+        let workspace = std::env::current_dir()?;
+        let (_, _, mut config) = rustcode::config::load_config_for_workspace(&workspace);
+        if let Err(error) =
+            rustcode::model_defaults::save(&mut config, model.as_deref(), effort.as_deref())
+        {
+            eprintln!("rustcode defaults: {error}");
+            std::process::exit(1);
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&rustcode::model_defaults::report(&config))?
+        );
+        return Ok(());
+    }
+
     if let Some(crate::cli::Commands::Discord {
         setup,
         status: _status,

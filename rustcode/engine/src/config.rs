@@ -1905,7 +1905,7 @@ pub fn save_entire_config(config: &AppConfig) {
 }
 
 /// Save the complete configuration and report failures to interactive callers.
-fn save_entire_config_result(config: &AppConfig) -> Result<(), String> {
+pub(crate) fn save_entire_config_result(config: &AppConfig) -> Result<(), String> {
     save_entire_config_for_workspace_result(config, None)
 }
 

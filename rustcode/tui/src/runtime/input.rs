@@ -1143,6 +1143,7 @@ pub(super) async fn handle_app_event(
                                     profile.reasoning_effort = value;
                                 }
                                 rustcode::controller::save_config(&s.config);
+                                s.record_session_model();
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {

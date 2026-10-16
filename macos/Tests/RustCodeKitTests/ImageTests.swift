@@ -57,3 +57,20 @@ final class ImageTests: XCTestCase {
         XCTAssertEqual(MarkdownBlock.parse("![x](javascript:alert)"), [.paragraph("![x](javascript:alert)")])
     }
 }
+
+final class ModelDefaultsTests: XCTestCase {
+    func testDefaultsBecomeNewChatOptions() throws {
+        let json = Data("""
+        {"model":"deep","effort":"high","models":[
+          {"name":"fast","model":"fast-1","efforts":["default"]},
+          {"name":"deep","model":"deep-1","efforts":["default","low","high"]}]}
+        """.utf8)
+        let defaults = try ModelDefaults(json: json)
+        let options = defaults.options
+        XCTAssertEqual(options.current, "deep")
+        XCTAssertEqual(options.effort, "high")
+        XCTAssertEqual(options.efforts.map(\.name), ["Off", "Low", "High"])
+        XCTAssertEqual(options.choices.map(\.id), ["fast", "deep"])
+        XCTAssertTrue(defaults.efforts(for: "fast").isEmpty)
+    }
+}

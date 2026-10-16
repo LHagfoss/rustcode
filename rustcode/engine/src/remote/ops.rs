@@ -292,6 +292,7 @@ pub(crate) fn set_settings(
     state.api_base_url = url;
     state.config.default.set_big(model.to_owned());
     state.request_redraw();
+    state.record_session_model();
     crate::config::record_session_settings_for_profile(
         &state.active_session_id,
         &state.config,

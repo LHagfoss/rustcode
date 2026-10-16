@@ -599,6 +599,7 @@ async fn handle_enter_inner(
                         profile.reasoning_effort = value.clone();
                     }
                     crate::config::save_entire_config(&s.config);
+                    s.record_session_model();
                     let label = match value {
                         Some(ref e) => format!("Reasoning effort set to '{e}'."),
                         None => "Reasoning effort cleared (default).".to_string(),
@@ -940,6 +941,7 @@ async fn handle_enter_inner(
                         s.model_name = model;
                         s.config.default.set_big(name.clone());
                         crate::config::save_entire_config(&s.config);
+                        s.record_session_model();
                         s.show_command_panel(
                             "Model",
                             format!("Switched to model profile '{}'", name),

@@ -152,8 +152,11 @@ async fn controller_worker(
                     );
                     continue;
                 }
-                if let Some(profile_name) = crate::config::load_session_settings(&session_id)
-                    .map(|settings| settings.active_profile)
+                let restored = crate::config::load_session_model(&session_id)
+                    .is_some_and(|saved| state.apply_session_model(&saved));
+                if !restored
+                    && let Some(profile_name) = crate::config::load_session_settings(&session_id)
+                        .map(|settings| settings.active_profile)
                 {
                     restore_session_profile(&mut state, &profile_name);
                 }
@@ -349,6 +352,7 @@ async fn controller_worker(
                     state.model_name = model_name;
                     state.api_base_url = api_base_url;
                     state.config.default.set_big(profile_name.clone());
+                    state.record_session_model();
                     crate::config::record_session_settings_for_profile(
                         &state.active_session_id,
                         &state.config,
