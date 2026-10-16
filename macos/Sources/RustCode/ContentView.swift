@@ -22,6 +22,7 @@ struct ContentView: View {
         .tint(.brand)
         .background(WindowChrome())
         .sheet(isPresented: $model.showsSettings) { SettingsView(model: model) }
+        .sheet(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
     }
 }
 
@@ -118,21 +119,23 @@ private struct SessionSidebar: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(model.visibleSessions) { session in
-                        SessionRow(session: session,
-                                   showsProject: model.showsAllProjects,
-                                   isSelected: session.id == model.selectedSession,
-                                   needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
-                                   isRunning: model.busy && model.turnSession == session.id) {
-                            guard session.id != model.selectedSession else { return }
-                            Task { await model.select(session) }
-                        }
+            // A native List, so a two-finger swipe on a row reveals its actions.
+            List {
+                let pinned = model.visibleSessions.filter { model.pinnedSessions.contains($0.id) }
+                if !pinned.isEmpty {
+                    Section {
+                        ForEach(pinned) { row($0) }
+                    } header: {
+                        Label("Pinned", systemImage: "pin.fill").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     }
                 }
-                .padding(.horizontal, 10)
+                Section {
+                    ForEach(model.visibleSessions.filter { !model.pinnedSessions.contains($0.id) }) { row($0) }
+                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 1)
             .overlay {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
@@ -192,6 +195,114 @@ private struct SessionSidebar: View {
     }
 }
 
+extension SessionSidebar {
+    @ViewBuilder
+    func row(_ session: SessionSummary) -> some View {
+        SessionRow(session: session,
+                   showsProject: model.showsAllProjects,
+                   isSelected: session.id == model.selectedSession,
+                   isPinned: model.pinnedSessions.contains(session.id),
+                   needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
+                   isRunning: model.busy && model.turnSession == session.id) {
+            guard session.id != model.selectedSession else { return }
+            Task { await model.select(session) }
+        }
+        .listRowInsets(EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button { model.togglePin(session) } label: {
+                Label(model.pinnedSessions.contains(session.id) ? "Unpin" : "Pin",
+                      systemImage: model.pinnedSessions.contains(session.id) ? "pin.slash" : "pin")
+            }
+            .tint(.brandFill)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) { Task { await model.trash(session) } } label: {
+                Label("Trash", systemImage: "trash")
+            }
+            Button { model.renamingSession = session } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            .tint(.gray)
+        }
+        .contextMenu { SessionMenu(model: model, session: session) }
+    }
+}
+
+/// Right-click on a chat in the sidebar.
+private struct SessionMenu: View {
+    @ObservedObject var model: DesktopModel
+    let session: SessionSummary
+
+    var body: some View {
+        Button("Open", systemImage: "bubble.left") { Task { await model.select(session) } }
+        Button("Rename…", systemImage: "pencil") { model.renamingSession = session }
+        Button(model.pinnedSessions.contains(session.id) ? "Unpin" : "Pin", systemImage: "pin") { model.togglePin(session) }
+        Divider()
+        Button("Copy Title", systemImage: "doc.on.doc") { Clipboard.copy(session.title ?? "New chat") }
+        Button("Copy Session ID", systemImage: "number") { Clipboard.copy(session.id) }
+        Button("Show in Finder", systemImage: "folder") { Task { await model.revealInFinder(session) } }
+        if !session.cwd.isEmpty {
+            Button("Open Project in Finder", systemImage: "folder.badge.gearshape") {
+                NSWorkspace.shared.open(URL(fileURLWithPath: session.cwd, isDirectory: true))
+            }
+            Button("Search Chats in \(session.projectName)", systemImage: "line.3.horizontal.decrease") {
+                model.sessionFilter = session.projectName
+            }
+        }
+        Divider()
+        Button("Move to Trash", systemImage: "trash", role: .destructive) { Task { await model.trash(session) } }
+    }
+}
+
+/// Edits a chat's title.
+struct RenameSheet: View {
+    @ObservedObject var model: DesktopModel
+    let session: SessionSummary
+    @State private var title: String
+    @FocusState private var focused: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    init(model: DesktopModel, session: SessionSummary) {
+        self.model = model
+        self.session = session
+        _title = State(initialValue: session.title ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rename Chat").font(.headline)
+            TextField("Title", text: $title)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .frame(height: 34)
+                .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 10))
+                .focused($focused)
+                .onSubmit(save)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(PillButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename", action: save)
+                    .buttonStyle(PillButtonStyle(prominent: true))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+        .onAppear { focused = true }
+    }
+
+    private func save() {
+        let title = title
+        dismiss()
+        Task { await model.rename(session, to: title) }
+    }
+}
+
 /// "All" or "Project": which chats the sidebar lists.
 private struct ScopeToggle: View {
     @Binding var showsAll: Bool
@@ -223,6 +334,7 @@ private struct SessionRow: View {
     let session: SessionSummary
     var showsProject = false
     let isSelected: Bool
+    var isPinned = false
     let needsAnswer: Bool
     let isRunning: Bool
     let action: () -> Void
@@ -315,6 +427,9 @@ private struct ChatView: View {
             }
         }
         .environment(\.findQuery, model.showsFind ? model.findQuery : "")
+        .environment(\.messageActions, MessageActions(
+            edit: { model.edit($0) },
+            retry: { text in Task { await model.retry(text) } }))
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 header

@@ -93,6 +93,10 @@ final class DesktopModel: ObservableObject {
     }
     /// False until the first session list arrives, so the sidebar can say it is loading.
     @Published private(set) var sessionsLoaded = false
+    /// Chats pinned to the top of the sidebar, kept on this Mac.
+    @Published private(set) var pinnedSessions = Set(UserDefaults.standard.stringArray(forKey: "pinnedSessions") ?? [])
+    /// The chat whose title the rename sheet is editing.
+    @Published var renamingSession: SessionSummary?
     /// Set by /history to put the cursor in the chat search.
     @Published var focusSessionSearch = false
     /// Filters the sidebar's chats by title.
@@ -258,6 +262,100 @@ final class DesktopModel: ObservableObject {
             if case .assistant(let text) = last?.content { Clipboard.copy(text) }
         case .execute: break
         }
+    }
+
+    // MARK: - Chat actions
+
+    func togglePin(_ session: SessionSummary) {
+        if pinnedSessions.contains(session.id) { pinnedSessions.remove(session.id) } else { pinnedSessions.insert(session.id) }
+        UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
+    }
+
+    /// The chat's folder in the session store, from `rustcode sessions path`,
+    /// accepted only when it is that session's folder inside the store.
+    func sessionDirectory(_ session: SessionSummary) async -> URL? {
+        guard let engine = engineLocation?.url else { return nil }
+        let output: String? = await Task.detached {
+            let process = Process()
+            process.executableURL = engine
+            process.arguments = ["sessions", "path", session.id]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return nil }
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }.value
+        guard let path = output?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        guard url.lastPathComponent == session.id, url.path.contains("/rustcode/sessions/") else { return nil }
+        return url
+    }
+
+    /// Store a new title the way the engine does, in the chat's `title.txt`.
+    func rename(_ session: SessionSummary, to title: String) async {
+        let title = title.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty else { return }
+        guard let directory = await sessionDirectory(session) else {
+            error = "Could not find this chat's folder to rename it."
+            return
+        }
+        do {
+            try title.write(to: directory.appendingPathComponent("title.txt"), atomically: true, encoding: .utf8)
+            await refreshSessions()
+        } catch { self.error = "Could not rename the chat: \(error.localizedDescription)" }
+    }
+
+    /// Move the chat's folder to the Trash, where it can be put back. A chat
+    /// open in the engine is closed first so nothing writes to it afterwards.
+    func trash(_ session: SessionSummary) async {
+        if busy, turnSession == session.id {
+            error = "Stop the running turn before moving this chat to the Trash."
+            return
+        }
+        guard let directory = await sessionDirectory(session) else {
+            error = "Could not find this chat's folder."
+            return
+        }
+        if openSessions[session.id] != nil || selectedSession == session.id,
+           capabilities?.closeSession == true, let connection = engine?.connection {
+            _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(session.id), timeout: .seconds(10))
+        }
+        openSessions[session.id] = nil
+        do {
+            try await NSWorkspace.shared.recycle([directory])
+        } catch {
+            self.error = "Could not move the chat to the Trash: \(error.localizedDescription)"
+            return
+        }
+        pinnedSessions.remove(session.id)
+        UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
+        sessions.removeAll { $0.id == session.id }
+        if selectedSession == session.id {
+            selectedSession = nil
+            transcript.removeAll()
+            await newSession()
+        }
+    }
+
+    func revealInFinder(_ session: SessionSummary) async {
+        guard let directory = await sessionDirectory(session) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([directory])
+    }
+
+    /// Put a message back in the composer to change and send again.
+    func edit(_ text: String) {
+        draftCommand = nil
+        draft = text
+    }
+
+    /// Send a message again as a new prompt.
+    func retry(_ text: String) async {
+        guard !busy else { return }
+        draftCommand = nil
+        draft = text
+        await submit()
     }
 
     func toggleSidebar() {

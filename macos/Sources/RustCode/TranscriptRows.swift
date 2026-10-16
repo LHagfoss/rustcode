@@ -43,6 +43,7 @@ func slashCommandText(_ text: String) -> Text {
 private struct CommandCard: View {
     let input: String
     let output: String
+    @Environment(\.messageActions) private var messageActions
 
     private var title: String? {
         guard output.hasPrefix("**"), let end = output.dropFirst(2).range(of: "**") else { return nil }
@@ -72,6 +73,11 @@ private struct CommandCard: View {
         .card()
         .contextMenu {
             Button("Copy Output", systemImage: "doc.on.doc") { Clipboard.copy(content) }
+            Button("Copy Command", systemImage: "terminal") { Clipboard.copy(input) }
+            if let actions = messageActions {
+                Divider()
+                Button("Run Again", systemImage: "arrow.clockwise") { actions.retry(input) }
+            }
         }
     }
 }
@@ -102,6 +108,7 @@ private struct SummaryCard: View {
 
 private struct UserMessage: View {
     let text: String
+    @Environment(\.messageActions) private var messageActions
     @Environment(\.findQuery) private var findQuery
 
     var body: some View {
@@ -117,7 +124,14 @@ private struct UserMessage: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .background(.fill.tertiary, in: .rect(cornerRadius: 18))
-            .contextMenu { Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) } }
+            .contextMenu {
+                Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }
+                if let actions = messageActions {
+                    Divider()
+                    Button("Edit and Resend", systemImage: "pencil") { actions.edit(text) }
+                    Button("Send Again", systemImage: "arrow.clockwise") { actions.retry(text) }
+                }
+            }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 80)
     }
@@ -126,6 +140,7 @@ private struct UserMessage: View {
 /// Agent text, with `<think>` sections the engine leaves inline folded away.
 private struct AssistantMessage: View {
     let text: String
+    @Environment(\.messageActions) private var messageActions
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -137,6 +152,16 @@ private struct AssistantMessage: View {
                 }
             }
             if let summary { SummaryCard(summary: summary) }
+        }
+        .contextMenu {
+            Button("Copy Reply", systemImage: "doc.on.doc") { Clipboard.copy(AssistantSummary.split(text).prose) }
+            Button("Copy as Markdown", systemImage: "text.document") { Clipboard.copy(text) }
+            if let actions = messageActions {
+                Divider()
+                Button("Quote in Reply", systemImage: "text.quote") {
+                    actions.edit(AssistantSummary.split(text).prose.split(separator: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n\n")
+                }
+            }
         }
     }
 }
@@ -275,4 +300,14 @@ struct WorkingIndicator: View {
             Text("Working…").font(.callout).foregroundStyle(.secondary)
         }
     }
+}
+
+/// What a message's context menu can ask the chat to do.
+struct MessageActions {
+    var edit: (String) -> Void
+    var retry: (String) -> Void
+}
+
+extension EnvironmentValues {
+    @Entry var messageActions: MessageActions? = nil
 }
