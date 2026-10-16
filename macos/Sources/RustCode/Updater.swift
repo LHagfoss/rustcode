@@ -83,7 +83,7 @@ final class Updater: ObservableObject {
             let work = FileManager.default.temporaryDirectory
                 .appendingPathComponent("rustcode-update-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-            let zip = try await download(release.appURL, to: work.appendingPathComponent(AppRelease.appAssetName)) { progress in
+            let zip = try await Self.download(release.appURL, to: work.appendingPathComponent(AppRelease.appAssetName)) { progress in
                 Task { @MainActor in
                     if case .downloading = self.state { self.state = .downloading(release, progress) }
                 }
@@ -101,28 +101,35 @@ final class Updater: ObservableObject {
         }
     }
 
-    private func download(_ url: URL, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
-        let (bytes, response) = try await URLSession.shared.bytes(from: url)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError("The download failed.") }
-        let expected = response.expectedContentLength
-        FileManager.default.createFile(atPath: destination.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: destination)
-        defer { try? handle.close() }
-        var buffer = Data()
-        buffer.reserveCapacity(1 << 20)
-        var written: Int64 = 0
-        for try await byte in bytes {
-            buffer.append(byte)
-            if buffer.count >= 1 << 20 {
-                try handle.write(contentsOf: buffer)
-                written += Int64(buffer.count)
-                buffer.removeAll(keepingCapacity: true)
-                if expected > 0 { progress(Double(written) / Double(expected)) }
+    /// A download task writes the file off the main actor; reading the body
+    /// byte by byte here made a 16 MB update crawl and starved the UI.
+    private nonisolated static func download(_ url: URL, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            var observation: NSKeyValueObservation?
+            let task = URLSession.shared.downloadTask(with: url) { location, response, error in
+                observation?.invalidate()
+                do {
+                    if let error { throw error }
+                    guard let location, (response as? HTTPURLResponse)?.statusCode == 200 else {
+                        throw UpdateError("The download failed.")
+                    }
+                    try? FileManager.default.removeItem(at: destination)
+                    try FileManager.default.moveItem(at: location, to: destination)
+                    progress(1)
+                    continuation.resume(returning: destination)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
+            var reported = -1
+            observation = task.progress.observe(\.fractionCompleted) { value, _ in
+                let percent = Int(value.fractionCompleted * 100)
+                guard percent != reported else { return }
+                reported = percent
+                progress(value.fractionCompleted)
+            }
+            task.resume()
         }
-        try handle.write(contentsOf: buffer)
-        progress(1)
-        return destination
     }
 
     private func verify(_ zip: URL, against release: AppRelease) async throws {
