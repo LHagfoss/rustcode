@@ -110,6 +110,9 @@ fn session_info(
             serde_json::json!(timestamp.to_rfc3339()),
         );
     }
+    if let Some(model) = crate::config::load_session_model(&session_id) {
+        extra.insert("model".into(), serde_json::json!(model.profile));
+    }
     if let Ok(modified) = std::fs::metadata(&meta.path).and_then(|metadata| metadata.modified()) {
         let timestamp: chrono::DateTime<chrono::Utc> = modified.into();
         info = info.updated_at(timestamp.to_rfc3339());

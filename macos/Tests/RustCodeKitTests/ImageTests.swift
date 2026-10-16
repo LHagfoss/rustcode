@@ -82,3 +82,14 @@ final class NotificationTextTests: XCTestCase {
         XCTAssertEqual(notificationSnippet(String(repeating: "a", count: 200), limit: 10), "aaaaaaaaa…")
     }
 }
+
+final class SessionModelTests: XCTestCase {
+    func testSessionListReadsTheRecordedModel() {
+        let result: JSONValue = ["sessions": [
+            ["sessionId": "a", "cwd": "/w", "_meta": ["model": "chatgpt/gpt-6-luna"]],
+            ["sessionId": "b", "cwd": "/w"],
+        ]]
+        let sessions = SessionSummary.list(from: result)
+        XCTAssertEqual(sessions.map(\.modelName), ["gpt-6-luna", nil])
+    }
+}
