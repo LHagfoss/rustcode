@@ -107,6 +107,8 @@ final class DesktopModel: ObservableObject {
     /// Files and folders added with + or by dropping them on the composer. The
     /// engine takes text prompts, so they are sent as paths for the agent to read.
     @Published var attachments: [URL] = []
+    /// Images pasted, dropped or attached; sent as ACP image blocks.
+    @Published var images: [ImageAttachment] = []
     @Published var busy = false
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
@@ -366,7 +368,9 @@ final class DesktopModel: ObservableObject {
     /// Put a message back in the composer to change and send again.
     func edit(_ text: String) {
         draftCommand = nil
-        draft = text
+        let message = ImageMarkers.split(text)
+        draft = message.text
+        images = message.images.compactMap { try? ImageAttachment.load($0) }
     }
 
     /// Send a message again as a new prompt.
@@ -391,8 +395,42 @@ final class DesktopModel: ObservableObject {
         if panel.runModal() == .OK { attach(panel.urls) }
     }
 
+    func chooseImages() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.image]
+        panel.prompt = "Attach"
+        if panel.runModal() == .OK { attach(panel.urls) }
+    }
+
+    /// Image files become images; other files and folders are sent as paths.
     func attach(_ urls: [URL]) {
-        for url in urls where !attachments.contains(url) { attachments.append(url) }
+        for url in urls {
+            do {
+                if let image = try ImageAttachment.load(url) {
+                    images.append(image)
+                    continue
+                }
+            } catch {
+                self.error = "Could not attach \(url.lastPathComponent): \(error.localizedDescription)"
+                continue
+            }
+            if !attachments.contains(url) { attachments.append(url) }
+        }
+    }
+
+    /// ⌘V with images on the pasteboard attaches them. False leaves the paste
+    /// to the text field.
+    func pasteImages(from pasteboard: NSPasteboard = .general) -> Bool {
+        do {
+            let pasted = try ImageAttachment.fromPasteboard(pasteboard)
+            images += pasted
+            return !pasted.isEmpty
+        } catch {
+            self.error = error.localizedDescription
+            return true
+        }
     }
 
     /// The typed message followed by the attached paths, relative to the project
@@ -530,25 +568,33 @@ final class DesktopModel: ObservableObject {
             draftCommand = nil
         }
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !typed.isEmpty || !attachments.isEmpty, !busy else { return }
+        guard !typed.isEmpty || !attachments.isEmpty || !images.isEmpty, !busy else { return }
+        if !images.isEmpty, capabilities?.promptImages != true {
+            error = "This RustCode engine cannot take images. Update RustCode to attach them."
+            return
+        }
         if let command = SlashCommand.invoked(by: typed, in: commands), command.action != .execute {
             draft = ""
             await perform(command)
             return
         }
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
+        let sentImages = images
         draft = ""
         attachments = []
+        images = []
         let created = selectedSession == nil
         guard let connection = engine?.connection,
               let id = selectedSession == nil ? await createSession() : selectedSession else {
             draft = typed
+            images = sentImages
             return
         }
-        if text == typed, SlashCommand.invoked(by: typed, in: commands)?.action == .execute {
+        if text == typed, sentImages.isEmpty, SlashCommand.invoked(by: typed, in: commands)?.action == .execute {
             transcript.appendCommand(typed)
         } else {
-            transcript.appendUser(text)
+            let markers = sentImages.compactMap { $0.writePreview() }.map(ImageMarkers.marker)
+            transcript.appendUser(([text] + markers).filter { !$0.isEmpty }.joined(separator: "\n"))
         }
         busy = true
         turnSession = id
@@ -560,7 +606,7 @@ final class DesktopModel: ObservableObject {
         }
         do {
             if created { await refreshSessions() }
-            _ = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: text))
+            _ = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: text, images: sentImages))
             await refreshSessions()
         } catch { self.error = String(describing: error) }
     }

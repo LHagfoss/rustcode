@@ -26,6 +26,8 @@ public struct AgentInfo: Equatable, Sendable {
     public var loadSession: Bool
     public var listSessions: Bool
     public var closeSession: Bool
+    /// The engine takes image blocks in `session/prompt`.
+    public var promptImages: Bool
 
     public init(initializeResult result: JSONValue) throws {
         guard let version = result["protocolVersion"]?.intValue else {
@@ -39,6 +41,7 @@ public struct AgentInfo: Equatable, Sendable {
         loadSession = capabilities?["loadSession"]?.boolValue ?? false
         listSessions = capabilities?["sessionCapabilities"]?["list"] != nil
         closeSession = capabilities?["sessionCapabilities"]?["close"] != nil
+        promptImages = capabilities?["promptCapabilities"]?["image"]?.boolValue ?? false
     }
 }
 
@@ -88,8 +91,11 @@ public enum ACPRequests {
         return .object(params)
     }
 
-    public static func prompt(sessionId: String, text: String) -> JSONValue {
-        ["sessionId": .string(sessionId), "prompt": [["type": "text", "text": .string(text)]]]
+    /// The text block, then one image block per attachment in order.
+    public static func prompt(sessionId: String, text: String, images: [ImageAttachment] = []) -> JSONValue {
+        var blocks: [JSONValue] = text.isEmpty && !images.isEmpty ? [] : [["type": "text", "text": .string(text)]]
+        blocks += images.map(\.block)
+        return ["sessionId": .string(sessionId), "prompt": .array(blocks)]
     }
 
     public static func session(_ sessionId: String) -> JSONValue {

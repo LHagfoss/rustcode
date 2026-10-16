@@ -109,6 +109,37 @@ private struct SummaryCard: View {
 private struct UserMessage: View {
     let text: String
     @Environment(\.messageActions) private var messageActions
+
+    var body: some View {
+        let message = ImageMarkers.split(text)
+        VStack(alignment: .trailing, spacing: 6) {
+            if !message.images.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(Array(message.images.enumerated()), id: \.offset) { _, url in
+                        InlineImage(url: url, maxSize: 220)
+                    }
+                }
+                .contextMenu {
+                    if let actions = messageActions {
+                        Button("Edit and Resend", systemImage: "pencil") { actions.edit(text) }
+                        Button("Send Again", systemImage: "arrow.clockwise") { actions.retry(text) }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.leading, 80)
+            }
+            if !message.text.isEmpty || message.images.isEmpty {
+                UserBubble(text: message.text, original: text)
+            }
+        }
+    }
+}
+
+private struct UserBubble: View {
+    let text: String
+    /// The message as sent, image markers included, for edit and resend.
+    let original: String
+    @Environment(\.messageActions) private var messageActions
     @Environment(\.findQuery) private var findQuery
 
     var body: some View {
@@ -128,8 +159,8 @@ private struct UserMessage: View {
                 Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }
                 if let actions = messageActions {
                     Divider()
-                    Button("Edit and Resend", systemImage: "pencil") { actions.edit(text) }
-                    Button("Send Again", systemImage: "arrow.clockwise") { actions.retry(text) }
+                    Button("Edit and Resend", systemImage: "pencil") { actions.edit(original) }
+                    Button("Send Again", systemImage: "arrow.clockwise") { actions.retry(original) }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)

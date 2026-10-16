@@ -11,6 +11,8 @@ public enum MarkdownBlock: Sendable, Equatable {
     case code(language: String?, text: String)
     case table(headers: [String], rows: [[String]])
     case rule
+    /// A line holding only `![alt](url)` with a `file://` or `http(s)://` URL.
+    case image(alt: String, url: URL)
 
     /// Tolerates text that is still streaming: an unterminated fence is a code block so far.
     public static func parse(_ text: String) -> [MarkdownBlock] {
@@ -68,6 +70,9 @@ public enum MarkdownBlock: Sendable, Equatable {
                 blocks.append(.rule)
             } else if trimmed.isEmpty {
                 flushParagraph()
+            } else if let image = image(in: trimmed) {
+                flushParagraph()
+                blocks.append(image)
             } else if let heading = heading(in: trimmed) {
                 flushParagraph()
                 blocks.append(heading)
@@ -100,6 +105,18 @@ public enum MarkdownBlock: Sendable, Equatable {
                 options: [.prettyPrinted, .sortedKeys]
               ) else { return nil }
         return String(data: formatted, encoding: .utf8)
+    }
+
+    private static func image(in line: String) -> MarkdownBlock? {
+        guard line.hasPrefix("!["), line.hasSuffix(")"),
+              let altEnd = line.range(of: "]("),
+              !line[line.index(line.startIndex, offsetBy: 2)..<altEnd.lowerBound].contains("]") else { return nil }
+        let target = String(line[altEnd.upperBound..<line.index(before: line.endIndex)])
+        guard !target.contains(where: \.isWhitespace), !target.contains(")"),
+              let url = URL(string: target),
+              ["file", "http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        let alt = String(line[line.index(line.startIndex, offsetBy: 2)..<altEnd.lowerBound])
+        return .image(alt: alt, url: url)
     }
 
     private static func isRule(_ line: String) -> Bool {
