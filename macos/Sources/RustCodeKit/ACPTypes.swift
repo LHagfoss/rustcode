@@ -218,7 +218,7 @@ public enum SessionUpdate: Equatable, Sendable {
     case agentText(String)
     case thoughtText(String)
     case toolCall(id: String, title: String, kind: String?, status: ToolStatus?, input: JSONValue?)
-    case toolCallUpdate(id: String, title: String?, status: ToolStatus?, output: String?)
+    case toolCallUpdate(id: String, title: String?, status: ToolStatus?, output: String?, diffs: [FileDiff] = [])
     case title(String)
     case configOptions(JSONValue)
     case availableCommands([SlashCommand])
@@ -248,7 +248,8 @@ public enum SessionUpdate: Equatable, Sendable {
                 id: update["toolCallId"]?.stringValue ?? "",
                 title: update["title"]?.stringValue,
                 status: update["status"]?.stringValue.flatMap(ToolStatus.init(rawValue:)),
-                output: Self.toolOutput(update))
+                output: Self.toolOutput(update),
+                diffs: FileDiff.parse(content: update["content"]))
         case "session_info_update":
             if let title = update["title"]?.stringValue {
                 self = .title(title)

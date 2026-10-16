@@ -10,6 +10,8 @@ public struct ToolItem: Equatable, Sendable {
     public var output: String?
     /// One line saying what the call acted on, taken from its arguments.
     public var inputDetail: String?
+    /// What the call changed, one entry per edited file.
+    public var changes: [FileChange] = []
 
     public var displayTitle: String { ToolPresentation.title(title) }
     public var detail: String? { inputDetail ?? ToolPresentation.detail(input: nil, output: output) }
@@ -107,14 +109,16 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.tool(ToolItem(callId: id, title: title, kind: kind, status: status, input: rendered, inputDetail: detail)))
             }
-        case .toolCallUpdate(let id, let title, let status, let output):
+        case .toolCallUpdate(let id, let title, let status, let output, let diffs):
+            let changes = FileChange.group(diffs)
             if let index = toolIndex(id), case .tool(var tool) = items[index].content {
                 tool.title = title ?? tool.title
                 tool.status = status ?? tool.status
                 tool.output = output ?? tool.output
+                if !changes.isEmpty { tool.changes = changes }
                 items[index].content = .tool(tool)
             } else {
-                append(.tool(ToolItem(callId: id, title: title ?? "Tool", status: status, output: output)))
+                append(.tool(ToolItem(callId: id, title: title ?? "Tool", status: status, output: output, changes: changes)))
             }
         case .usage(let usage):
             self.usage = usage

@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod edit_diff;
 mod permissions;
 mod prompt;
 mod questions;
@@ -185,7 +186,10 @@ fn acp_list_sessions(
     Ok(ListSessionsResponse::new(sessions).next_cursor(next.map(|id| format!("v1:{id}"))))
 }
 
-fn replay_history_updates(history: &[crate::app::ChatMessage]) -> Vec<SessionUpdate> {
+fn replay_history_updates(
+    history: &[crate::app::ChatMessage],
+    cwd: Option<&std::path::Path>,
+) -> Vec<SessionUpdate> {
     use agent_client_protocol::schema::v1::{
         ContentBlock, ContentChunk, TextContent, ToolCall, ToolCallContent, ToolCallStatus,
         ToolCallUpdate, ToolCallUpdateFields,
@@ -220,6 +224,19 @@ fn replay_history_updates(history: &[crate::app::ChatMessage]) -> Vec<SessionUpd
                         .tool_result
                         .as_ref()
                         .is_some_and(|result| result.success);
+                    let mut content = vec![ToolCallContent::from(ContentBlock::Text(
+                        TextContent::new(message.content.clone()),
+                    ))];
+                    if let Some(result) = message.tool_result.as_ref() {
+                        content.extend(edit_diff::edit_diff_content(
+                            &result.tool_name,
+                            success && !result.pending,
+                            &message.content,
+                            None,
+                            &result.changed_paths,
+                            cwd,
+                        ));
+                    }
                     updates.push(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                         call_id.to_owned(),
                         ToolCallUpdateFields::new()
@@ -228,9 +245,7 @@ fn replay_history_updates(history: &[crate::app::ChatMessage]) -> Vec<SessionUpd
                             } else {
                                 ToolCallStatus::Failed
                             })
-                            .content(vec![ToolCallContent::from(ContentBlock::Text(
-                                TextContent::new(message.content.clone()),
-                            ))])
+                            .content(content)
                             .raw_output(
                                 serde_json::json!({"content": message.content, "success": success}),
                             ),
@@ -397,11 +412,12 @@ async fn acp_load_session(
             },
         );
         drop(sessions);
+        let replay = replay_history_updates(&history, Some(&cwd));
         let _ = crate::config::save_session_workspace(
             &session_id,
             &session_workspace(cwd, request.additional_directories.clone()),
         );
-        for update in replay_history_updates(&history) {
+        for update in replay {
             if let Err(error) =
                 connection.send_notification(SessionNotification::new(session_id.clone(), update))
             {
@@ -1302,12 +1318,15 @@ mod tests {
             success: true,
             ..Default::default()
         });
-        let updates = replay_history_updates(&[
-            crate::app::ChatMessage::new("user", "inspect the file"),
-            assistant,
-            result,
-            crate::app::ChatMessage::new("assistant", "It defines main."),
-        ]);
+        let updates = replay_history_updates(
+            &[
+                crate::app::ChatMessage::new("user", "inspect the file"),
+                assistant,
+                result,
+                crate::app::ChatMessage::new("assistant", "It defines main."),
+            ],
+            None,
+        );
 
         assert!(matches!(
             updates.first(),
@@ -1327,6 +1346,69 @@ mod tests {
             Some(SessionUpdate::AgentMessageChunk(_))
         ));
         assert_eq!(updates.len(), 5);
+    }
+
+    #[test]
+    fn edit_tool_updates_carry_diff_content_live_and_on_replay() {
+        let receipt = "successfully replaced target_content in 'src/a.rs' (resolved path: '/repo/src/a.rs')\n\n```diff\n@@ -1 +1 @@\n-old\n+new\n\n```";
+        let mut stream = AcpEventStream::new().with_cwd(PathBuf::from("/repo"));
+        let live = stream.updates(crate::network::AgentUiEvent::ToolFinished {
+            id: "call-edit".into(),
+            result: crate::network::events::ToolResult {
+                tool_name: "replace_file_content".into(),
+                content: receipt.into(),
+                diff: None,
+                file_preview: None,
+                metadata: crate::network::events::ToolResultMetadata {
+                    success: true,
+                    changed_paths: vec!["src/a.rs".into()],
+                    ..Default::default()
+                },
+            },
+        });
+        let [SessionUpdate::ToolCallUpdate(update)] = live.as_slice() else {
+            panic!("expected one tool update, got {live:?}");
+        };
+        let content = serde_json::to_value(update.fields.content.as_ref().unwrap()).unwrap();
+        assert_eq!(content[0]["type"], "diff");
+        assert_eq!(content[0]["path"], "/repo/src/a.rs");
+        assert_eq!(content[0]["oldText"], "old\n");
+        assert_eq!(content[0]["newText"], "new\n");
+
+        let mut result =
+            crate::app::ChatMessage::new("tool", format!("replace_file_content: {receipt}"));
+        result.tool_call_id = Some("call-edit".into());
+        result.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "replace_file_content".into(),
+            success: true,
+            changed_paths: vec!["src/a.rs".into()],
+            ..Default::default()
+        });
+        let replayed = replay_history_updates(&[result], Some(std::path::Path::new("/repo")));
+        let [SessionUpdate::ToolCallUpdate(update)] = replayed.as_slice() else {
+            panic!("expected one replayed tool update, got {replayed:?}");
+        };
+        let content = serde_json::to_value(update.fields.content.as_ref().unwrap()).unwrap();
+        assert_eq!(content[0]["type"], "content");
+        assert_eq!(content[1]["type"], "diff");
+        assert_eq!(content[1]["newText"], "new\n");
+
+        // A failed edit carries its receipt only.
+        let mut stream = AcpEventStream::new();
+        let failed = stream.updates(crate::network::AgentUiEvent::ToolFinished {
+            id: "call-fail".into(),
+            result: crate::network::events::ToolResult {
+                tool_name: "replace_file_content".into(),
+                content: receipt.into(),
+                diff: None,
+                file_preview: None,
+                metadata: crate::network::events::ToolResultMetadata::default(),
+            },
+        });
+        let [SessionUpdate::ToolCallUpdate(update)] = failed.as_slice() else {
+            panic!("expected one tool update");
+        };
+        assert!(update.fields.content.is_none());
     }
 
     #[test]
