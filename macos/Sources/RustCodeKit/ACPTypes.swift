@@ -222,6 +222,8 @@ public enum SessionUpdate: Equatable, Sendable {
     case title(String)
     case configOptions(JSONValue)
     case availableCommands([SlashCommand])
+    /// Context and token usage (`usage_update`).
+    case usage(SessionUsage)
     case unknown(String)
 
     public init(notificationParams params: JSONValue) {
@@ -258,6 +260,8 @@ public enum SessionUpdate: Equatable, Sendable {
             self = .availableCommands((update["availableCommands"]?.arrayValue ?? []).compactMap(SlashCommand.init(json:)))
         case "config_option_update":
             self = .configOptions(update["configOptions"] ?? .null)
+        case "usage_update":
+            self = SessionUsage(json: update).map(Self.usage) ?? .unknown(kind)
         default:
             self = .unknown(kind)
         }

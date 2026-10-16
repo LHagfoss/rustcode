@@ -74,3 +74,11 @@ final class ModelDefaultsTests: XCTestCase {
         XCTAssertTrue(defaults.efforts(for: "fast").isEmpty)
     }
 }
+
+final class NotificationTextTests: XCTestCase {
+    func testSnippetTakesTheFirstProseLine() {
+        XCTAssertEqual(notificationSnippet("\n```swift\nlet a = 1\n```"), "let a = 1")
+        XCTAssertEqual(notificationSnippet("**Done.** Tests pass.\nMore"), "Done. Tests pass.")
+        XCTAssertEqual(notificationSnippet(String(repeating: "a", count: 200), limit: 10), "aaaaaaaaa…")
+    }
+}

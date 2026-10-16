@@ -6,6 +6,7 @@ mod prompt;
 mod questions;
 mod session;
 mod streaming;
+mod usage;
 
 pub(crate) use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock,
@@ -370,6 +371,7 @@ async fn acp_load_session(
         }
         let state = build_loaded_app_state(&session_id, &cwd, history.clone());
         let config_options = build_session_config_options(&state);
+        let loaded_usage = usage::usage_update(&state);
         let state = Arc::new(Mutex::new(state));
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
         let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
@@ -434,12 +436,13 @@ async fn acp_load_session(
                 return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
             }
         }
-        if let Err(error) = connection.send_notification(SessionNotification::new(
-            session_id.clone(),
-            commands::available_commands_update(),
-        )) {
-            unregister_acp_session(server, &session_id).await;
-            return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+        for update in [commands::available_commands_update(), loaded_usage] {
+            if let Err(error) =
+                connection.send_notification(SessionNotification::new(session_id.clone(), update))
+            {
+                unregister_acp_session(server, &session_id).await;
+                return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+            }
         }
         return Ok(LoadSessionResponse::new().config_options(config_options));
     }

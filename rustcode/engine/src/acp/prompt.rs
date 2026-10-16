@@ -270,16 +270,25 @@ pub(crate) async fn run_prompt(
     }
     // Host slash commands answer in the transcript and never reach the model
     // or provider history, as for the remote client.
-    let command_reply = super::commands::run(&mut *state.lock().await, &text);
-    if let Some(reply) = command_reply {
+    let command_reply = {
+        let mut state = state.lock().await;
+        super::commands::run(&mut state, &text)
+            .map(|reply| (reply, super::usage::usage_update(&state)))
+    };
+    if let Some((reply, usage)) = command_reply {
+        // A host command such as `/compact` or `/clear` can change the
+        // context, so the usage follows its reply.
         send_updates(
             &connection,
             &session_id,
-            vec![SessionUpdate::AgentMessageChunk(
-                agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(
-                    agent_client_protocol::schema::v1::TextContent::new(reply),
-                )),
-            )],
+            vec![
+                SessionUpdate::AgentMessageChunk(
+                    agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(
+                        agent_client_protocol::schema::v1::TextContent::new(reply),
+                    )),
+                ),
+                usage,
+            ],
         )?;
         return Ok(StopReason::EndTurn);
     }
@@ -581,6 +590,10 @@ where
     {
         send_updates(connection, session_id, vec![update])?;
     }
+    // Every run (the turn and each background continuation) ends with the
+    // session's context and token usage, so the client's meter stays current.
+    let usage = super::usage::usage_update(&*state.lock().await);
+    send_updates(connection, session_id, vec![usage])?;
     Ok(context)
 }
 

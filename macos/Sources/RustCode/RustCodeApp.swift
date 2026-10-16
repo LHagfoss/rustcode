@@ -89,6 +89,7 @@ final class DesktopModel: ObservableObject {
         didSet {
             UserDefaults.standard.set(showsAllProjects, forKey: "showsAllProjects")
             Task { await refreshSessions() }
+            scheduleContentSearch()
         }
     }
     /// False until the first session list arrives, so the sidebar can say it is loading.
@@ -102,8 +103,15 @@ final class DesktopModel: ObservableObject {
     @Published var renamingSession: SessionSummary?
     /// Set by /history to put the cursor in the chat search.
     @Published var focusSessionSearch = false
-    /// Filters the sidebar's chats by title.
-    @Published var sessionFilter = ""
+    /// Filters the sidebar's chats by title, and by contents once it has
+    /// `SessionContentSearch.minimumQueryLength` characters.
+    @Published var sessionFilter = "" {
+        didSet { if sessionFilter != oldValue { scheduleContentSearch() } }
+    }
+    /// Chats whose messages contain `contentQuery`, from the engine.
+    @Published private(set) var contentMatches: [SessionContentMatch] = []
+    private var contentQuery: String?
+    private var contentSearchTask: Task<Void, Never>?
     /// Files and folders added with + or by dropping them on the composer. The
     /// engine takes text prompts, so they are sent as paths for the agent to read.
     @Published var attachments: [URL] = []
@@ -113,7 +121,9 @@ final class DesktopModel: ObservableObject {
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
     /// engine blocks until each one is answered, so none may be dropped.
-    @Published var permissionQueue: [PermissionRequest] = []
+    @Published var permissionQueue: [PermissionRequest] = [] {
+        didSet { TurnNotifier.shared.setBadge(permissionQueue.count) }
+    }
     @Published var models = ModelOptions.empty
     /// The model and effort new chats start with, shared with the terminal UI.
     @Published private(set) var modelDefaults: ModelDefaults?
@@ -134,6 +144,26 @@ final class DesktopModel: ObservableObject {
         workspace = savedPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? (launchPath == "/" ? FileManager.default.homeDirectoryForCurrentUser
                 : URL(fileURLWithPath: launchPath, isDirectory: true))
+        TurnNotifier.shared.openSession = { [weak self] id in
+            guard let self, let session = self.sessions.first(where: { $0.id == id }) else { return }
+            Task { await self.select(session) }
+        }
+        TurnNotifier.shared.start()
+    }
+
+    private func chatTitle(_ session: String) -> String {
+        sessions.first { $0.id == session }?.title ?? "RustCode"
+    }
+
+    /// Tell the user a background chat finished, with the start of its reply.
+    private func notifyFinished(_ session: String) {
+        let items = session == selectedSession ? transcript.items : openSessions[session]?.transcript.items ?? []
+        var reply = ""
+        if let last = items.last(where: { if case .assistant = $0.content { true } else { false } }),
+           case .assistant(let text) = last.content {
+            reply = notificationSnippet(text)
+        }
+        TurnNotifier.shared.notify(session: session, title: chatTitle(session), body: reply.isEmpty ? "Finished." : reply)
     }
 
     func start() async {
@@ -211,8 +241,36 @@ final class DesktopModel: ObservableObject {
         let filter = sessionFilter.trimmingCharacters(in: .whitespaces)
         let shown = sessions.filter { archivedSessions.contains($0.id) == showsArchived }
         guard !filter.isEmpty else { return shown }
-        return shown.filter {
-            "\($0.title ?? "New chat") \($0.projectName)".range(of: filter, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        let matches = contentQuery == SessionContentSearch.query(for: sessionFilter) ? contentMatches : []
+        return SessionContentSearch.merge(shown: shown, filter: filter, contentMatches: matches)
+    }
+
+    /// The text around the search match of a chat found only by its contents,
+    /// shown in place of its date.
+    func searchSnippet(for session: SessionSummary) -> String? {
+        let filter = sessionFilter.trimmingCharacters(in: .whitespaces)
+        guard let query = SessionContentSearch.query(for: sessionFilter), query == contentQuery,
+              !SessionContentSearch.titleMatches(session, filter: filter) else { return nil }
+        return contentMatches.first { $0.id == session.id }?.snippet
+    }
+
+    /// Search chat contents for the filter after a short pause in typing.
+    private func scheduleContentSearch() {
+        contentSearchTask?.cancel()
+        guard let query = SessionContentSearch.query(for: sessionFilter) else {
+            contentSearchTask = nil
+            contentQuery = nil
+            contentMatches = []
+            return
+        }
+        let arguments = SessionContentSearch.arguments(query: query, allProjects: showsAllProjects)
+        contentSearchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            let output = await self.runEngine(arguments)
+            guard !Task.isCancelled else { return }
+            self.contentMatches = output.flatMap { try? SessionContentSearch.parse($0) } ?? []
+            self.contentQuery = query
         }
     }
 
@@ -696,6 +754,7 @@ final class DesktopModel: ObservableObject {
         turnSession = nil
         // The turn is over, so the engine no longer waits on its requests.
         permissionQueue.removeAll { $0.sessionId == id }
+        if !stopped { notifyFinished(id) }
         guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else { return }
         removeQueued(next)
         await run(next)
@@ -862,7 +921,13 @@ final class DesktopModel: ObservableObject {
             default: transcript.apply(update)
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
-            if let request = PermissionRequest(rpcId: id, params: params) { permissionQueue.append(request) }
+            if let request = PermissionRequest(rpcId: id, params: params) {
+                permissionQueue.append(request)
+                TurnNotifier.shared.notify(
+                    session: request.sessionId,
+                    title: request.question == nil ? "Approval needed" : "RustCode has a question",
+                    body: "\(chatTitle(request.sessionId)): \(request.question?.text ?? request.title)")
+            }
             else { try? await engine?.connection.respond(id: id, error: .invalidParams(method)) }
         case .request(let id, let method, _):
             try? await engine?.connection.respond(id: id, error: .methodNotFound(method))

@@ -480,6 +480,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some(crate::cli::SessionCommands::List { all }) => {
                 run_sessions_list(*all || cli_args.all);
             }
+            Some(crate::cli::SessionCommands::Search {
+                query,
+                all,
+                limit,
+                json,
+            }) => {
+                run_sessions_search(query, *all || cli_args.all, *limit, *json);
+            }
             Some(crate::cli::SessionCommands::Path { id }) => {
                 match rustcode::config::get_active_session_dir(id) {
                     Some(dir) if dir.is_dir() => println!("{}", dir.display()),
@@ -909,6 +917,44 @@ fn run_sessions_list(show_all: bool) {
     }
     if truncated {
         eprintln!("Showing the {LIMIT} most recent sessions; use --all to see every workspace.");
+    }
+}
+
+/// `rustcode sessions search`: sessions whose messages contain `query`, newest
+/// first. `--json` prints an array the desktop app reads.
+fn run_sessions_search(query: &str, show_all: bool, limit: usize, json: bool) {
+    let scope = if show_all {
+        rustcode::config::SessionScope::All
+    } else {
+        rustcode::config::SessionScope::for_current_dir()
+    };
+    let hits = rustcode::config::search_sessions(query, limit, &scope);
+    if json {
+        let rows: Vec<serde_json::Value> = hits
+            .iter()
+            .map(|hit| {
+                serde_json::json!({
+                    "id": hit.id,
+                    "title": hit.meta.title,
+                    "snippet": hit.snippet,
+                    "matches": hit.match_count,
+                    "when": hit.meta.when,
+                    "cwd": hit.meta.workspace_cwd.as_ref().map(|cwd| cwd.display().to_string()),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::Value::Array(rows));
+        return;
+    }
+    if hits.is_empty() {
+        println!("No saved sessions match `{query}`.");
+        return;
+    }
+    for hit in &hits {
+        println!(
+            "{}  {}  {} match(es)  {}",
+            hit.id, hit.meta.title, hit.match_count, hit.snippet
+        );
     }
 }
 async fn run_interactive(
