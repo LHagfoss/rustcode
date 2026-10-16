@@ -186,6 +186,9 @@ pub(crate) async fn run_prompt(
 ) -> Result<StopReason, agent_client_protocol::Error> {
     let turn = scheduled_turn.begin().await;
     crate::tools::set_active_session_id(Some(session_id.clone()));
+    // Unscoped debug lines follow the session whose turn is running, not the
+    // last session this process created.
+    crate::config::set_active_session_id(&session_id);
     let (workspace_root, sandbox_mode) = {
         let mut state = state.lock().await;
         state.auto_confirm = auto_approve;

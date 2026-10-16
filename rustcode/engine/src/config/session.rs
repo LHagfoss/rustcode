@@ -159,34 +159,15 @@ pub fn flush_history_async() {
     }
 }
 
+/// Point the process-wide debug log at `session_id`. History is never saved
+/// through a process-wide pointer: every writer names its own session, since
+/// one process (an ACP server) can hold several sessions at once.
 pub fn set_active_session_id(session_id: &str) {
-    let mut cache = lock(active_session_cache());
-    *cache = if session_id.is_empty() {
-        None
-    } else {
-        Some(session_id.to_string())
-    };
-    crate::logger::set_active_session_id(cache.as_deref());
-}
-
-fn active_session_cache() -> &'static Mutex<Option<String>> {
-    static CACHE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(None))
+    crate::logger::set_active_session_id(Some(session_id).filter(|id| !id.is_empty()));
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
-}
-
-fn active_session_id() -> Option<String> {
-    let mut cache = lock(active_session_cache());
-    if cache.is_none() {
-        let (_, _, config) = load_config();
-        *cache = config
-            .last_active_session_id
-            .filter(|id| !id.trim().is_empty());
-    }
-    cache.clone()
 }
 
 pub fn session_has_content(history: &[ChatMessage]) -> bool {
@@ -211,12 +192,6 @@ pub fn load_session_meta(path: &Path) -> Option<SessionMeta> {
 
 pub fn session_id_has_content(session_id: &str) -> bool {
     store().is_some_and(|session_store| session_store.session_id_has_content(session_id))
-}
-
-pub fn save_history<H: HistorySnapshot + ?Sized>(history: &H) {
-    if let Some(session_store) = store() {
-        session_store.save_history(active_session_id().as_deref(), history);
-    }
 }
 
 pub fn save_session_history<H: HistorySnapshot + ?Sized>(session_id: &str, history: &H) {
@@ -597,6 +572,19 @@ pub fn create_new_session(config: &mut AppConfig) -> String {
     save_entire_config(config);
     flush_history();
     set_active_session_id(&session_id);
+    session_id
+}
+
+/// Mint a fresh, empty session for a client that holds several sessions at
+/// once (ACP). Unlike [`start_session`] it never reuses the shared
+/// `last_active_session_id`, which another process may be writing to, and it
+/// leaves that pointer and the process-wide log session untouched.
+pub fn create_detached_session() -> String {
+    if get_config_dir().is_none() {
+        return String::new();
+    }
+    let session_id = next_session_id();
+    let _ = ensure_session_dir(&session_id);
     session_id
 }
 

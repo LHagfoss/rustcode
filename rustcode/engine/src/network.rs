@@ -1321,14 +1321,16 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 s.recent_read_calls.clear();
                 s.recent_read_outputs.clear();
                 s.read_file_mtimes.clear();
-                crate::config::save_history(&s.history);
+                crate::config::save_session_history(&live_session_id, &s.history);
             } else {
                 // Deterministic pruning can change the request history without
                 // invoking the summarizer. Persist that rewrite as well, but
                 // keep the read cache: no filesystem state changed. An
                 // untouched history is saved too: this is the write that
                 // persists the messages appended since the previous round.
-                crate::config::save_history(&s.history);
+                // Save under this state's own session, never the process-wide
+                // pointer: an ACP server holds several sessions at once.
+                crate::config::save_session_history(&live_session_id, &s.history);
             }
         } else {
             dbg_log!(
