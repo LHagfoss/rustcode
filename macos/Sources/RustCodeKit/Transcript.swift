@@ -102,7 +102,7 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.tool(ToolItem(callId: id, title: title ?? "Tool", status: status, output: output)))
             }
-        case .title, .configOptions, .unknown:
+        case .title, .configOptions, .availableCommands, .unknown:
             break
         }
     }

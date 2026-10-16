@@ -79,8 +79,13 @@ public enum ACPRequests {
         ["sessionId": .string(id), "cwd": .string(cwd.path), "mcpServers": []]
     }
 
-    public static func listSessions(cwd: URL) -> JSONValue {
-        ["cwd": .string(cwd.path)]
+    /// One page of `session/list`: a project's sessions, or every project's
+    /// when `cwd` is nil.
+    public static func listSessions(cwd: URL?, cursor: String? = nil) -> JSONValue {
+        var params: [String: JSONValue] = [:]
+        if let cwd { params["cwd"] = .string(cwd.path) }
+        if let cursor { params["cursor"] = .string(cursor) }
+        return .object(params)
     }
 
     public static func prompt(sessionId: String, text: String) -> JSONValue {
@@ -126,6 +131,16 @@ public struct SessionSummary: Identifiable, Equatable, Sendable {
     public var cwd: String
     public var title: String?
     public var updatedAt: Date?
+
+    /// The cursor for the next page, when the list has more.
+    public static func nextCursor(from result: JSONValue) -> String? {
+        result["nextCursor"]?.stringValue
+    }
+
+    /// The project folder's name, shown beside sessions from every project.
+    public var projectName: String {
+        cwd.isEmpty ? "" : URL(fileURLWithPath: cwd).lastPathComponent
+    }
 
     public static func list(from result: JSONValue) -> [SessionSummary] {
         let formatter = ISO8601DateFormatter()
@@ -188,6 +203,7 @@ public enum SessionUpdate: Equatable, Sendable {
     case toolCallUpdate(id: String, title: String?, status: ToolStatus?, output: String?)
     case title(String)
     case configOptions(JSONValue)
+    case availableCommands([SlashCommand])
     case unknown(String)
 
     public init(notificationParams params: JSONValue) {
@@ -219,6 +235,8 @@ public enum SessionUpdate: Equatable, Sendable {
             } else {
                 self = .unknown(kind)
             }
+        case "available_commands_update":
+            self = .availableCommands((update["availableCommands"]?.arrayValue ?? []).compactMap(SlashCommand.init(json:)))
         case "config_option_update":
             self = .configOptions(update["configOptions"] ?? .null)
         default:
@@ -322,4 +340,54 @@ public struct PermissionRequest: Identifiable, Equatable, Sendable {
 public enum StopReason: String, Sendable {
     case endTurn = "end_turn", maxTokens = "max_tokens"
     case maxTurnRequests = "max_turn_requests", refusal, cancelled
+}
+
+/// A command the engine advertises with `available_commands_update`. Host
+/// commands run when sent as a prompt; the others are app actions.
+public struct SlashCommand: Identifiable, Equatable, Sendable {
+    public enum Action: String, Sendable {
+        case execute, newSession = "new_session", modelPicker = "model_picker"
+        case sessionPicker = "session_picker", copyResponse = "copy_response"
+    }
+
+    /// With the leading slash, as typed.
+    public var name: String
+    public var description: String
+    public var action: Action
+    public var takesArguments: Bool
+
+    public var id: String { name }
+
+    public init(name: String, description: String, action: Action = .execute, takesArguments: Bool = false) {
+        self.name = name
+        self.description = description
+        self.action = action
+        self.takesArguments = takesArguments
+    }
+
+    init?(json: JSONValue) {
+        guard let name = json["name"]?.stringValue, !name.isEmpty else { return nil }
+        self.name = name.hasPrefix("/") ? name : "/" + name
+        description = json["description"]?.stringValue ?? ""
+        action = json["_meta"]?["rustcode"]?["action"]?.stringValue.flatMap(Action.init(rawValue:)) ?? .execute
+        takesArguments = json["input"]?["hint"] != nil
+    }
+
+    /// What completing the command puts in the composer.
+    public var insertion: String { takesArguments ? name + " " : name }
+
+    /// Commands for a draft still typing its first word, prefix matches first.
+    public static func suggestions(for draft: String, in commands: [SlashCommand]) -> [SlashCommand] {
+        guard draft.hasPrefix("/"), !draft.contains(where: \.isWhitespace) else { return [] }
+        let typed = draft.lowercased()
+        let prefixed = commands.filter { $0.name.lowercased().hasPrefix(typed) }
+        let others = commands.filter { !prefixed.contains($0) && $0.name.lowercased().contains(typed.dropFirst()) && typed.count > 1 }
+        return prefixed + others
+    }
+
+    /// The advertised command a draft invokes, if it is one.
+    public static func invoked(by draft: String, in commands: [SlashCommand]) -> SlashCommand? {
+        let name = draft.trimmingCharacters(in: .whitespaces).split(separator: " ").first.map(String.init)?.lowercased()
+        return commands.first { $0.name.lowercased() == name }
+    }
 }

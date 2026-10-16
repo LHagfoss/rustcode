@@ -216,16 +216,20 @@ pub(crate) async fn run_prompt(
         return Err(agent_client_protocol::Error::internal_error()
             .data("ACP background task completion backlog overflowed; session must be reopened"));
     }
-    let prompt_tokens = text.split_whitespace().collect::<Vec<_>>();
-    if prompt_tokens.first() == Some(&"/memory") && prompt_tokens.len() > 1 {
-        if let Some(message) = crate::memory::command(Some(&cwd), &prompt_tokens[1..]) {
-            state
-                .lock()
-                .await
-                .history
-                .push(crate::app::ChatMessage::new("system", message.clone()));
-            return Ok(StopReason::EndTurn);
-        }
+    // Host slash commands answer in the transcript and never reach the model
+    // or provider history, as for the remote client.
+    let command_reply = super::commands::run(&mut *state.lock().await, &text);
+    if let Some(reply) = command_reply {
+        send_updates(
+            &connection,
+            &session_id,
+            vec![SessionUpdate::AgentMessageChunk(
+                agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(
+                    agent_client_protocol::schema::v1::TextContent::new(reply),
+                )),
+            )],
+        )?;
+        return Ok(StopReason::EndTurn);
     }
     state
         .lock()

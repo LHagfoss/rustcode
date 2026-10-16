@@ -1,3 +1,4 @@
+mod commands;
 mod config;
 mod permissions;
 mod prompt;
@@ -407,6 +408,13 @@ async fn acp_load_session(
                 return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
             }
         }
+        if let Err(error) = connection.send_notification(SessionNotification::new(
+            session_id.clone(),
+            commands::available_commands_update(),
+        )) {
+            unregister_acp_session(server, &session_id).await;
+            return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+        }
         return Ok(LoadSessionResponse::new().config_options(config_options));
     }
 }
@@ -720,8 +728,14 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             terminal_overflow,
                         },
                     );
-                    responder
-                        .respond(NewSessionResponse::new(session_id).config_options(config_options))
+                    responder.respond(
+                        NewSessionResponse::new(session_id.clone()).config_options(config_options),
+                    )?;
+                    // Commands follow the session they belong to, as ACP expects.
+                    _connection.send_notification(SessionNotification::new(
+                        session_id,
+                        commands::available_commands_update(),
+                    ))
                 }
             },
             agent_client_protocol::on_receive_request!(),
