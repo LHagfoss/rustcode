@@ -429,6 +429,21 @@ pub enum SessionCommands {
         #[arg(long)]
         all: bool,
     },
+    /// Find saved sessions whose messages contain a text (case-insensitive),
+    /// scoped to the current workspace by default
+    Search {
+        /// Text to look for in user and assistant messages
+        query: String,
+        /// Search sessions from all workspaces
+        #[arg(long)]
+        all: bool,
+        /// Most sessions to return
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Print the matches as a JSON array
+        #[arg(long)]
+        json: bool,
+    },
     /// Print the on-disk directory of a session (history.json, logs, …)
     Path {
         /// Session id, as shown by `sessions list` or `/session`
@@ -596,6 +611,34 @@ mod tests {
             Some(Commands::Sessions {
                 command: Some(SessionCommands::List { all: true })
             })
+        ));
+    }
+
+    #[test]
+    fn parses_sessions_search() {
+        let cli = Cli::try_parse_from(["rustcode", "sessions", "search", "parser"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Search { query, all: false, limit: 50, json: false })
+            }) if query == "parser"
+        ));
+        let cli = Cli::try_parse_from([
+            "rustcode",
+            "sessions",
+            "search",
+            "two words",
+            "--all",
+            "--limit",
+            "5",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Search { query, all: true, limit: 5, json: true })
+            }) if query == "two words"
         ));
     }
 

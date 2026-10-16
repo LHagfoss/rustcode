@@ -33,7 +33,9 @@ pub fn valid_session_id(session_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+mod search;
 mod workspace;
+pub use search::SessionSearchHit;
 pub use workspace::*;
 
 /// Remove composer paste framing from display titles, including old titles
@@ -618,6 +620,9 @@ struct ChatMessageMetaRef<'a> {
     content: std::borrow::Cow<'a, str>,
     #[serde(borrow, default)]
     timestamp: std::borrow::Cow<'a, str>,
+    /// UI-only idle recap; content search skips it.
+    #[serde(default)]
+    conversation_recap: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -804,6 +809,17 @@ impl SessionStore {
         let read_path = self.session_read_path(path)?;
         let content = read_transcript(&read_path).ok()?;
         let messages: Vec<ChatMessageMetaRef<'_>> = serde_json::from_str(&content).ok()?;
+        self.meta_from_messages(path, workspace_cwd, &messages)
+    }
+
+    /// Meta for a session whose transcript is already parsed, so content
+    /// search builds its row from the same read it searches.
+    fn meta_from_messages(
+        &self,
+        path: &Path,
+        workspace_cwd: Option<PathBuf>,
+        messages: &[ChatMessageMetaRef<'_>],
+    ) -> Option<SessionMeta> {
         let has_user = messages
             .iter()
             .any(|message| message.role == "user" && !message.content.starts_with('/'));
