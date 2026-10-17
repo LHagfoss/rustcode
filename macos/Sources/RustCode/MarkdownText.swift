@@ -156,7 +156,8 @@ struct CodeBlock: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
             HorizontalOverflow {
-                Text(text)
+                Text(CodeStyle.attributed(text.components(separatedBy: "\n"),
+                                          highlighter: language.flatMap(SyntaxHighlighter.init(language:))))
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(12)

@@ -575,7 +575,11 @@ private struct ChatView: View {
                 .frame(maxWidth: .infinity)
             }
             .overlay {
-                if model.transcript.isEmpty, !model.busy { EmptyChat(workspace: model.workspace) }
+                if model.loadingSession != nil, model.loadingSession == model.selectedSession {
+                    ProgressView("Loading chat…").controlSize(.small).foregroundStyle(.secondary)
+                } else if model.transcript.isEmpty, !model.busy {
+                    EmptyChat(workspace: model.workspace)
+                }
             }
             .followsLatest($followsLatest)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ChatScrollInput.shared.chatFrame = $0 }

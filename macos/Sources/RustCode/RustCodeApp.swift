@@ -77,6 +77,9 @@ final class DesktopModel: ObservableObject {
     @Published var composerPanel: ComposerPanel?
     /// The `/context` breakdown shown in its sheet.
     @Published var contextSheet: ContextBreakdown?
+    /// The chat being opened, and its replayed transcript until it is in.
+    @Published private(set) var loadingSession: String?
+    private var replay = Transcript()
     /// A host command's long answer, shown in its sheet.
     @Published var commandResult: CommandResult?
     @Published private(set) var toasts: [Toast] = []
@@ -744,8 +747,22 @@ final class DesktopModel: ObservableObject {
         // the replay is filtered out as belonging to another session.
         selectedSession = session.id
         transcript.removeAll()
+        // The replay builds off screen and shows at once: applied line by
+        // line, every replayed chunk redrew the whole chat.
+        loadingSession = session.id
+        replay = Transcript()
+        defer {
+            if loadingSession == session.id {
+                if selectedSession == session.id { transcript = replay }
+                loadingSession = nil
+            }
+        }
         do {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
+            if loadingSession == session.id {
+                transcript = replay
+                loadingSession = nil
+            }
             // Another session may have been picked while this one loaded.
             guard selectedSession == session.id else {
                 openSessions[session.id] = openSessions[session.id] ?? OpenSession(transcript: Transcript(), models: .empty)
@@ -1085,7 +1102,8 @@ final class DesktopModel: ObservableObject {
             case .contextReport(_, let context):
                 transcript.apply(update)
                 contextSheet = context
-            default: transcript.apply(update)
+            default:
+                if loadingSession == sessionId { replay.apply(update) } else { transcript.apply(update) }
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
             if let request = PermissionRequest(rpcId: id, params: params) {
