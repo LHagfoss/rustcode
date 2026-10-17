@@ -29,11 +29,20 @@ pub(crate) fn context_preflight_checkpoint_notice(
             "[Context checkpoint: the final request was not sent because its estimated prompt ",
             "({prompt} tokens) plus the completion reserve ({completion}) exceeds the ",
             "effective context limit ({limit}). The current turn checkpoint is preserved. ",
-            "Run /compact, start /new, or continue with a narrower request before retrying.]"
+            "Run /compact, start a new chat, or continue with a narrower request before retrying.]"
         ),
         prompt = preflight.total_estimated_prompt,
         completion = preflight.completion_reserve,
         limit = preflight.hard_effective_limit,
+    )
+}
+
+/// Shown once when the oldest messages had to be dropped from a request.
+/// Worded for every frontend: ACP clients such as the macOS app have no
+/// `/new` command, only their own "new chat" action.
+pub(crate) fn context_window_full_notice(dropped: usize) -> String {
+    format!(
+        "context window full: dropped {dropped} oldest message(s) from the request. Start a new chat to continue fresh."
     )
 }
 
@@ -1830,10 +1839,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             let mut s = state.lock().await;
             s.history.push(ChatMessage::new(
                 "system",
-                format!(
-                    "context window full: dropped {} oldest message(s) from the request. Use /new to start fresh.",
-                    dropped
-                ),
+                context_window_full_notice(dropped),
             ));
         }
     }

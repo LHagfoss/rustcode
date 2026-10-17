@@ -288,6 +288,75 @@ pub fn skill_routing_hint(
     ))
 }
 
+/// Everyday verbs, fillers and quantifiers that show up in almost any prompt
+/// and skill description. They say nothing about which skill fits, so two of
+/// them (e.g. "try" + "render", "find" + "one") must not route a skill alone.
+const GENERIC_ROUTING_TERMS: &[&str] = &[
+    "about",
+    "add",
+    "all",
+    "also",
+    "any",
+    "ask",
+    "asks",
+    "check",
+    "could",
+    "did",
+    "does",
+    "each",
+    "every",
+    "everything",
+    "find",
+    "from",
+    "get",
+    "give",
+    "good",
+    "help",
+    "here",
+    "into",
+    "its",
+    "just",
+    "know",
+    "like",
+    "look",
+    "make",
+    "more",
+    "need",
+    "new",
+    "not",
+    "now",
+    "okay",
+    "one",
+    "only",
+    "out",
+    "piece",
+    "render",
+    "see",
+    "show",
+    "some",
+    "something",
+    "that",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "thing",
+    "things",
+    "this",
+    "those",
+    "try",
+    "user",
+    "very",
+    "wants",
+    "was",
+    "way",
+    "will",
+    "work",
+    "would",
+    "your",
+];
+
 /// Small deterministic vocabulary shared by all skills, not application names.
 fn routing_terms(text: &str) -> std::collections::BTreeSet<String> {
     text.to_lowercase()
@@ -304,7 +373,8 @@ fn routing_terms(text: &str) -> std::collections::BTreeSet<String> {
                 | "control" | "want" => return None,
                 value => value,
             };
-            (normalized.len() > 2).then(|| normalized.to_string())
+            (normalized.len() > 2 && !GENERIC_ROUTING_TERMS.contains(&normalized))
+                .then(|| normalized.to_string())
         })
         .collect()
 }
@@ -1241,6 +1311,38 @@ mod tests {
         );
         assert!(select_skills_for_prompt("what is the time", &skills, &[], 3).is_empty());
         assert!(select_skills_for_prompt("play", &skills, &[], 3).is_empty());
+    }
+    #[test]
+    fn description_routing_ignores_generic_verbs_and_fillers() {
+        let mut break_ui = trigger_metadata("break-ui", &[], &[], 0);
+        break_ui.description = "Try to break a piece of UI by feeding it worst-case data — long \
+            names, unbreakable emails, one-letter names, missing fields, huge counts, zero items, \
+            long labels, non-Latin text, emoji, extreme numbers — then render it behind a \
+            \"Demo data / Worst case\" toggle and report everything that broke, with the fix for \
+            each. Use when the user asks to stress-test, break, or find edge cases in a component \
+            or screen, or to \"try the worst case\"."
+            .into();
+        let skills = vec![break_ui];
+        for prompt in [
+            "render visualization blocks in the macos app",
+            "okay do yo uknow how to render these new visualization bloks in the macos app or the wdigets, try so i can see",
+            "Use the vinmonopolet MCP to find any one product with 'riesling' in its name. Reply with just its name.",
+        ] {
+            assert!(
+                select_skills_for_prompt(prompt, &skills, &[], 3).is_empty(),
+                "{prompt:?} should not route to break-ui"
+            );
+        }
+        assert_eq!(
+            select_skills_for_prompt(
+                "stress-test this component with worst-case data",
+                &skills,
+                &[],
+                3
+            )
+            .len(),
+            1
+        );
     }
     #[test]
     fn description_routing_has_bounded_catalog_overhead() {

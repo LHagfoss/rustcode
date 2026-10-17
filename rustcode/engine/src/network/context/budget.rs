@@ -183,5 +183,17 @@ mod tests {
         assert!(notice.contains("Context checkpoint"));
         assert!(notice.contains("/compact"));
         assert!(notice.contains("was not sent"));
+        assert!(
+            !notice.contains("/new"),
+            "ACP clients have no /new command: {notice}"
+        );
+    }
+
+    #[test]
+    fn context_window_full_notice_is_worded_for_every_frontend() {
+        let notice = crate::network::context_window_full_notice(3);
+        assert!(notice.contains("dropped 3 oldest message(s)"));
+        assert!(notice.contains("Start a new chat"));
+        assert!(!notice.contains("/new"));
     }
 }
