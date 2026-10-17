@@ -1,3 +1,9 @@
+## [v0.76.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.76.1) - 2026-10-17
+
+### Fixes
+- macOS: a new chat (⌘N) no longer shows another chat's running turn, and its messages no longer get queued onto that chat (#2102)
+- macOS: the chat keeps following new output unless you scroll up (#2102)
+- macOS: the Latest button no longer blocks scrolling under it and jumps to the true end (#2102)
 ## [v0.76.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.76.0) - 2026-10-17
 
 ### Features
