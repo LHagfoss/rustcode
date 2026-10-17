@@ -12,7 +12,7 @@ final class DiffTests: XCTestCase {
          "rawOutput":{"content":"ok"}}}
         """
         let params = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
-        guard case .toolCallUpdate(_, _, _, let output, let diffs) = SessionUpdate(notificationParams: params) else {
+        guard case .toolCallUpdate(_, _, _, let output, let diffs, _) = SessionUpdate(notificationParams: params) else {
             return XCTFail("expected a tool update")
         }
         XCTAssertEqual(output, "ok")

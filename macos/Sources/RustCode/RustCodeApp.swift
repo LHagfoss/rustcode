@@ -758,12 +758,16 @@ final class DesktopModel: ObservableObject {
             self.error = String(describing: error)
             stopped = true
         }
-        busy = false
-        turnSession = nil
         // The turn is over, so the engine no longer waits on its requests.
         permissionQueue.removeAll { $0.sessionId == id }
         if !stopped { notifyFinished(id) }
-        guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else { return }
+        // A queued message starts at once, so "Working" stays up across the
+        // hand-off instead of blinking off between the two turns.
+        guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else {
+            busy = false
+            turnSession = nil
+            return
+        }
         removeQueued(next)
         await run(next)
     }
@@ -809,6 +813,21 @@ final class DesktopModel: ObservableObject {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let carrier = request.answerOptions.first else { return }
         await reply(to: request, with: ACPRequests.questionText(text, carrier: carrier))
+    }
+
+    static let autoApproveKey = "autoApproveTools"
+
+    /// Tool approvals are answered "allow" without asking. Questions still wait.
+    static var autoApproves: Bool { UserDefaults.standard.bool(forKey: autoApproveKey) }
+
+    /// Turn auto-approve on or off; turning it on also approves every tool
+    /// request already waiting.
+    func setAutoApprove(_ on: Bool) async {
+        UserDefaults.standard.set(on, forKey: Self.autoApproveKey)
+        guard on else { return }
+        for request in permissionQueue {
+            if let option = request.autoApproveOption { await answer(request, with: option) }
+        }
     }
 
     private func reply(to request: PermissionRequest, with result: JSONValue) async {
@@ -934,6 +953,10 @@ final class DesktopModel: ObservableObject {
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
             if let request = PermissionRequest(rpcId: id, params: params) {
                 permissionQueue.append(request)
+                if Self.autoApproves, let option = request.autoApproveOption {
+                    await answer(request, with: option)
+                    return
+                }
                 TurnNotifier.shared.notify(
                     session: request.sessionId,
                     title: request.question == nil ? "Approval needed" : "RustCode has a question",

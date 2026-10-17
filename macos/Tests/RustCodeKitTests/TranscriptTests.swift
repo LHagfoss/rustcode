@@ -25,6 +25,20 @@ final class TranscriptTests: XCTestCase {
         XCTAssertNotNil(tool.input)
     }
 
+    func testRunningToolShowsItsDetailAndStreamsOutputUntilTheResult() {
+        var transcript = Transcript()
+        transcript.apply(.toolCall(id: "t1", title: "run_command", kind: nil, status: .inProgress, input: nil, detail: "cargo test"))
+        transcript.apply(.toolCallUpdate(id: "t1", title: nil, status: nil, output: nil, outputDelta: "Compiling\n"))
+        transcript.apply(.toolCallUpdate(id: "t1", title: nil, status: nil, output: nil, outputDelta: "Running\n"))
+        guard case .tool(let live) = transcript.items[0].content else { return XCTFail("expected a tool card") }
+        XCTAssertEqual(live.detail, "cargo test")
+        XCTAssertEqual(live.output, "Compiling\nRunning\n")
+        transcript.apply(.toolCallUpdate(id: "t1", title: nil, status: .completed, output: "ok"))
+        guard case .tool(let done) = transcript.items[0].content else { return XCTFail("expected a tool card") }
+        XCTAssertEqual(done.output, "ok")
+        XCTAssertEqual(done.detail, "cargo test")
+    }
+
     func testFindMatchesMessagesAndToolOutputIgnoringCase() {
         var transcript = Transcript()
         transcript.appendUser("Fix the Parser")

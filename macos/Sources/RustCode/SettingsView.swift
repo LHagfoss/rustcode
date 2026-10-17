@@ -173,6 +173,7 @@ private struct GeneralSettings: View {
     @ObservedObject var model: DesktopModel
     @AppStorage(AppearanceSetting.key) private var appearance = ""
     @AppStorage(TurnNotifier.enabledKey) private var notifyTurns = true
+    @AppStorage(DesktopModel.autoApproveKey) private var autoApprove = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -197,6 +198,15 @@ private struct GeneralSettings: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .onChange(of: notifyTurns) { _, on in if on { TurnNotifier.shared.start() } }
+                }
+                RowDivider()
+                SettingsRow(title: "Auto-approve tools",
+                            subtitle: "Run commands and edits without asking (YOLO). Questions still wait for you") {
+                    Toggle("Auto-approve tools", isOn: Binding(
+                        get: { autoApprove },
+                        set: { on in Task { await model.setAutoApprove(on) } }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
             }
 

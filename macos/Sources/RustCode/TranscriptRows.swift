@@ -235,7 +235,49 @@ private struct ToolRow: View {
         Binding(get: { expanded ?? !tool.changes.isEmpty }, set: { expanded = $0 })
     }
 
+    private var isRunning: Bool { tool.status == .pending || tool.status == .inProgress }
+
+    /// The last lines a running command printed, so it can be watched without
+    /// opening the card.
+    private var liveTail: String? {
+        guard isRunning, !isExpanded.wrappedValue, let output = tool.output else { return nil }
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+            .suffix(Self.liveTailLines + 1)
+            .drop { $0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let tail = lines.suffix(Self.liveTailLines).joined(separator: "\n")
+            .trimmingCharacters(in: .newlines)
+        return tail.isEmpty ? nil : tail
+    }
+
+    private static let liveTailLines = 6
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            card
+            if let liveTail {
+                Text(liveTail)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(Self.liveTailLines)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 30)
+                    .transition(.opacity)
+            }
+        }
+        .card()
+        .contextMenu {
+            if let input = tool.input { Button("Copy Input", systemImage: "arrow.down.doc") { Clipboard.copy(input) } }
+            if let output = tool.output { Button("Copy Output", systemImage: "arrow.up.doc") { Clipboard.copy(output) } }
+            if tool.changes.count == 1, let change = tool.changes.first {
+                Divider()
+                FileActions(path: change.path).menuItems
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var card: some View {
         Group {
             if hasDetail {
                 DisclosureGroup(isExpanded: isExpanded) {
@@ -256,15 +298,6 @@ private struct ToolRow: View {
                 .disclosureGroupStyle(RowDisclosureStyle())
             } else {
                 label
-            }
-        }
-        .card()
-        .contextMenu {
-            if let input = tool.input { Button("Copy Input", systemImage: "arrow.down.doc") { Clipboard.copy(input) } }
-            if let output = tool.output { Button("Copy Output", systemImage: "arrow.up.doc") { Clipboard.copy(output) } }
-            if tool.changes.count == 1, let change = tool.changes.first {
-                Divider()
-                FileActions(path: change.path).menuItems
             }
         }
     }
