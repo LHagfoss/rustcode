@@ -1,3 +1,10 @@
+## [v0.76.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.76.0) - 2026-10-17
+
+### Features
+- macOS: see what each tool runs and watch a running command's output live, instead of a bare "Run" spinner (#2100)
+- macOS: scrolling up while the model writes no longer jumps back to the bottom; a Latest button returns to the newest message (#2100)
+- macOS: "Working…" stays up for the whole turn, including while a reply streams and between queued turns (#2100)
+- macOS: new Auto-approve tools (YOLO) setting, plus "Approve All from Now On" on permission cards (#2100)
 ## [v0.75.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.75.0) - 2026-10-17
 
 ### Features
