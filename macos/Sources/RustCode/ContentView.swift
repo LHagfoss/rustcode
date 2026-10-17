@@ -24,6 +24,8 @@ struct ContentView: View {
         .sheet(isPresented: $model.showsSettings) { SettingsView(model: model) }
         .sheet(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .sheet(item: $model.contextSheet) { ContextSheet(context: $0) }
+        .sheet(item: $model.commandResult) { CommandResultSheet(result: $0) }
+        .overlay { ToastStack(model: model) }
     }
 }
 
