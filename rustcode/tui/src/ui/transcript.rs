@@ -136,7 +136,10 @@ impl TranscriptModel {
                 self.apply_text_delta(text);
             }
             rustcode::controller::AgentUiEvent::TurnFinished { content, .. } => {
-                if !content.is_empty() {
+                // A stop marker shows in the footer, never as an answer.
+                if !content.is_empty()
+                    && rustcode::controller::stop_marker_notice(content).is_none()
+                {
                     self.replace_live_text(content);
                 }
                 self.commit_live();

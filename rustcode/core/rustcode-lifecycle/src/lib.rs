@@ -246,6 +246,35 @@ pub fn is_turn_cancelled_marker(content: &str) -> bool {
     content.trim() == stop_marker(&StopReason::Cancelled).trim()
 }
 
+/// The short notice a client shows for a [`stop_marker`], or `None` when
+/// `content` is not one. The marker stays in history as turn bookkeeping;
+/// frontends announce it as a toast or footer notice instead of a chat row.
+pub fn stop_marker_notice(content: &str) -> Option<String> {
+    let reason = content
+        .trim()
+        .strip_prefix("[harness: turn stopped — ")?
+        .strip_suffix(']')?;
+    let (kind, detail) = reason.split_once(':').unwrap_or((reason, ""));
+    Some(match kind {
+        "cancelled" => "Stopped by you".to_owned(),
+        "loop_escalation" => "Stopped: the agent was repeating itself".to_owned(),
+        "recovery_failed" => "Stopped: the turn could not recover".to_owned(),
+        "unverified" => "Stopped: completion could not be verified".to_owned(),
+        "unavailable_tool" => "Stopped: a required tool is unavailable".to_owned(),
+        "provider_error" if !detail.is_empty() => format!("Stopped: provider error {detail}"),
+        "provider_error" => "Stopped: provider error".to_owned(),
+        "budget" => format!("Stopped: {} limit reached", detail.replace('_', " ")),
+        "infrastructure_failure" => "Stopped: infrastructure failure".to_owned(),
+        "connect_timeout" | "header_timeout" | "first_event_timeout" | "stream_idle_timeout" => {
+            "Stopped: the provider timed out".to_owned()
+        }
+        "premature_eof" | "response_body_decode" | "malformed_sse" => {
+            "Stopped: the provider connection dropped".to_owned()
+        }
+        _ => format!("Stopped: {}", reason.replace('_', " ")),
+    })
+}
+
 #[cfg(test)]
 mod mapping_tests {
     use super::*;
@@ -312,6 +341,37 @@ mod transcript_tests {
             "error: tool execution cancelled by user"
         ));
         assert!(!is_turn_cancelled_marker(""));
+    }
+
+    #[test]
+    fn stop_markers_read_as_short_notices() {
+        assert_eq!(
+            stop_marker_notice(&stop_marker(&StopReason::Cancelled)).as_deref(),
+            Some("Stopped by you")
+        );
+        assert_eq!(
+            stop_marker_notice(&stop_marker(&StopReason::ProviderError(Some(529)))).as_deref(),
+            Some("Stopped: provider error 529")
+        );
+        assert_eq!(
+            stop_marker_notice(&stop_marker(&StopReason::BudgetExceeded(
+                "tool_rounds".into()
+            )))
+            .as_deref(),
+            Some("Stopped: tool rounds limit reached")
+        );
+        assert_eq!(
+            stop_marker_notice(&stop_marker(&StopReason::TransportFailure(
+                StreamFailureKind::StreamIdleTimeout
+            )))
+            .as_deref(),
+            Some("Stopped: the provider timed out")
+        );
+        assert_eq!(
+            stop_marker_notice("[harness: turn stopped — dependency unavailable]").as_deref(),
+            Some("Stopped: dependency unavailable")
+        );
+        assert_eq!(stop_marker_notice("an ordinary answer"), None);
     }
 }
 
