@@ -241,17 +241,45 @@ fn classify_command(command: &str) -> Option<VerificationKind> {
     } else if normalized.contains("cargo build") || normalized.contains("go build") {
         Some(VerificationKind::Build)
     } else {
-        js_command_kind(&normalized)
+        segment_command_kind(&normalized)
     }
 }
 
-/// JavaScript/TypeScript checks, matched as whole words per shell segment so
-/// `npm install eslint` or `cat .eslintrc` are not mistaken for a lint run.
-fn js_command_kind(normalized: &str) -> Option<VerificationKind> {
+/// Build and test runners across ecosystems, matched as whole words per shell
+/// segment so `npm install eslint` or `cat .eslintrc` are not mistaken for a
+/// lint run, and `swift test` or `make test` count like `cargo test`.
+fn segment_command_kind(normalized: &str) -> Option<VerificationKind> {
     normalized.split(['&', '|', ';', '\n']).find_map(|segment| {
         let words: Vec<&str> = segment.split_whitespace().collect();
         let (first, rest) = words.split_first()?;
         match *first {
+            "swift" => match *rest.first()? {
+                "test" => Some(VerificationKind::Test),
+                "build" => Some(VerificationKind::Build),
+                _ => None,
+            },
+            "go" => match *rest.first()? {
+                "test" => Some(VerificationKind::Test),
+                "build" => Some(VerificationKind::Build),
+                "vet" => Some(VerificationKind::Lint),
+                _ => None,
+            },
+            "dotnet" | "deno" | "mix" => match *rest.first()? {
+                "test" => Some(VerificationKind::Test),
+                "build" | "compile" => Some(VerificationKind::Build),
+                "check" => Some(VerificationKind::Check),
+                "lint" => Some(VerificationKind::Lint),
+                _ => None,
+            },
+            // Actions and targets may follow flags (`xcodebuild -scheme App
+            // test`, `./gradlew :app:test`), so take the strongest one named.
+            "xcodebuild" | "make" | "gmake" | "just" | "gradle" | "./gradlew" | "gradlew"
+            | "mvn" | "./mvnw" | "mvnw" => task_kind(rest),
+            "ctest" | "rspec" | "tox" | "nox" => Some(VerificationKind::Test),
+            "bundle" => match rest {
+                ["exec", "rspec", ..] => Some(VerificationKind::Test),
+                _ => None,
+            },
             "npx" | "bunx" => js_tool_kind(rest.first()?),
             "npm" => match rest {
                 ["run" | "run-script", script, ..] => js_script_kind(script),
@@ -267,6 +295,35 @@ fn js_command_kind(normalized: &str) -> Option<VerificationKind> {
             tool => js_tool_kind(tool),
         }
     })
+}
+
+/// The verification a build tool's task list asks for, test first. Gradle
+/// task paths (`:app:test`) are matched on their last component.
+fn task_kind(tasks: &[&str]) -> Option<VerificationKind> {
+    let names = || {
+        tasks
+            .iter()
+            .map(|task| task.rsplit(':').next().unwrap_or(task))
+    };
+    if names().any(|task| {
+        matches!(
+            task,
+            "test" | "tests" | "test-without-building" | "verify" | "check"
+        )
+    }) {
+        Some(VerificationKind::Test)
+    } else if names().any(|task| matches!(task, "lint" | "clippy")) {
+        Some(VerificationKind::Lint)
+    } else if names().any(|task| {
+        matches!(
+            task,
+            "build" | "build-for-testing" | "assemble" | "compile" | "package" | "all"
+        )
+    }) {
+        Some(VerificationKind::Build)
+    } else {
+        None
+    }
 }
 
 fn js_script_kind(script: &str) -> Option<VerificationKind> {
@@ -586,6 +643,65 @@ mod tests {
         ] {
             assert_eq!(classify_command(command), None, "{command}");
         }
+    }
+
+    #[test]
+    fn build_and_test_runners_across_ecosystems_are_verification() {
+        use super::{VerificationKind as K, classify_command};
+        for (command, kind) in [
+            ("swift build", K::Build),
+            ("swift test", K::Test),
+            ("cd macos && swift test --filter ChatTests", K::Test),
+            (
+                "xcodebuild -scheme App -destination 'platform=macOS' test",
+                K::Test,
+            ),
+            ("xcodebuild -scheme App build", K::Build),
+            ("npm test", K::Test),
+            ("pnpm test", K::Test),
+            ("yarn test", K::Test),
+            ("bun test", K::Test),
+            ("pytest -q", K::Test),
+            ("python -m pytest tests", K::Test),
+            ("go test ./...", K::Test),
+            ("go vet ./...", K::Lint),
+            ("make test", K::Test),
+            ("make check", K::Test),
+            ("make build", K::Build),
+            ("./gradlew :app:test", K::Test),
+            ("gradle build", K::Build),
+            ("mvn -q verify", K::Test),
+            ("dotnet test", K::Test),
+            ("deno check main.ts", K::Check),
+            ("mix test", K::Test),
+            ("ctest --output-on-failure", K::Test),
+            ("bundle exec rspec", K::Test),
+        ] {
+            assert_eq!(classify_command(command), Some(kind), "{command}");
+        }
+        for command in [
+            "swift package resolve",
+            "swift --version",
+            "go mod tidy",
+            "make install",
+            "make",
+            "./gradlew clean",
+            "xcodebuild -list",
+            "dotnet restore",
+            "bundle install",
+        ] {
+            assert_eq!(classify_command(command), None, "{command}");
+        }
+    }
+
+    #[test]
+    fn passing_swift_test_after_an_edit_is_fresh_verification() {
+        let mut ledger = VerificationLedger::default();
+        ledger.record_edit();
+        ledger.record_command("swift build", Some(0));
+        ledger.record_command("swift test", Some(0));
+        assert!(ledger.has_fresh_successful_verification());
+        assert_eq!(ledger.summary(), "test: swift test (exit code 0)");
     }
 
     #[test]
