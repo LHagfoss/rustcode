@@ -15,11 +15,17 @@ struct RustCodeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model)
-                .frame(minWidth: 850, minHeight: 620)
-                .task { await model.start() }
-                .task { model.updater.startPolling() }
-                .onDisappear { model.stop() }
+            Group {
+                if ProcessInfo.processInfo.arguments.contains("--visualization-demo") {
+                    VisualizationDemoView()
+                } else {
+                    ContentView(model: model)
+                        .task { await model.start() }
+                        .task { model.updater.startPolling() }
+                        .onDisappear { model.stop() }
+                }
+            }
+            .frame(minWidth: 850, minHeight: 620)
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
@@ -119,7 +125,11 @@ final class DesktopModel: ObservableObject {
     @Published var attachments: [URL] = []
     /// Images pasted, dropped or attached; sent as ACP image blocks.
     @Published var images: [ImageAttachment] = []
-    @Published var busy = false
+    /// Chats with a prompt turn running. Each chat runs its own turns, so a
+    /// new chat is ready while another one works.
+    @Published private(set) var runningSessions: Set<String> = []
+    /// The shown chat has a turn running. A draft never does.
+    var busy: Bool { selectedSession.map(runningSessions.contains) ?? false }
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
     /// engine blocks until each one is answered, so none may be dropped.
@@ -133,9 +143,6 @@ final class DesktopModel: ObservableObject {
     /// The engine binary in use and where it was found, shown in Settings.
     @Published private(set) var engineLocation: EngineLocation?
     private var engine: EngineProcess?
-    /// The session whose prompt turn is running; Stop cancels this one even
-    /// after the user switches to another session.
-    @Published private(set) var turnSession: String?
     private var inboundTask: Task<Void, Never>?
     private var capabilities: AgentInfo?
 
@@ -179,8 +186,7 @@ final class DesktopModel: ObservableObject {
                     // A late exit of an engine replaced by a project switch
                     // must not touch the state of the one now running.
                     guard let self, let launched, self.engine === launched else { return }
-                    self.busy = false
-                    self.turnSession = nil
+                    self.runningSessions = []
                     guard !exit.requested else { return }
                     // Drop the dead engine so the next `start()` launches a
                     // new one; its waiting requests can no longer be answered.
@@ -388,7 +394,7 @@ final class DesktopModel: ObservableObject {
     /// Move the chat's folder to the Trash, where it can be put back. A chat
     /// open in the engine is closed first so nothing writes to it afterwards.
     func trash(_ session: SessionSummary) async {
-        if busy, turnSession == session.id {
+        if runningSessions.contains(session.id) {
             error = "Stop the running turn before moving this chat to the Trash."
             return
         }
@@ -713,8 +719,7 @@ final class DesktopModel: ObservableObject {
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
         let sentImages = images
         if busy {
-            // A draft has no chat to queue for until its first turn creates one.
-            guard let id = selectedSession ?? turnSession else { return }
+            guard let id = selectedSession else { return }
             queuedPrompts.append(QueuedPrompt(sessionId: id, typed: typed, text: text, images: sentImages))
             draft = ""
             attachments = []
@@ -747,8 +752,7 @@ final class DesktopModel: ObservableObject {
             let shown = ([prompt.text] + markers).filter { !$0.isEmpty }.joined(separator: "\n")
             appendToTranscript(of: id) { $0.appendUser(shown) }
         }
-        busy = true
-        turnSession = id
+        runningSessions.insert(id)
         var stopped = false
         do {
             let result = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: prompt.text, images: prompt.images))
@@ -764,8 +768,7 @@ final class DesktopModel: ObservableObject {
         // A queued message starts at once, so "Working" stays up across the
         // hand-off instead of blinking off between the two turns.
         guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else {
-            busy = false
-            turnSession = nil
+            runningSessions.remove(id)
             return
         }
         removeQueued(next)
@@ -782,7 +785,7 @@ final class DesktopModel: ObservableObject {
     }
 
     func cancel() async {
-        guard let connection = engine?.connection, let id = turnSession ?? selectedSession else { return }
+        guard let connection = engine?.connection, let id = selectedSession, runningSessions.contains(id) else { return }
         do {
             try await connection.notify(ACPMethod.sessionCancel, params: ACPRequests.session(id))
             // ACP: after `session/cancel` the client answers the session's
@@ -883,7 +886,7 @@ final class DesktopModel: ObservableObject {
         selectedSession = nil
         // The engine is being stopped, so its waiting requests die with it.
         permissionQueue = []
-        busy = false
+        runningSessions = []
     }
 
     private func applyConfig(_ value: JSONValue?) {
@@ -925,7 +928,7 @@ final class DesktopModel: ObservableObject {
     private func handle(_ inbound: ACPInbound) async {
         switch inbound {
         case .closed(let reason):
-            busy = false
+            runningSessions = []
             if engine != nil { error = reason }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate
             && params["update"]?["sessionUpdate"]?.stringValue == "available_commands_update":
