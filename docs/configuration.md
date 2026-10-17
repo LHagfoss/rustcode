@@ -122,6 +122,29 @@ byte budget. If a complete server toolset cannot fit either limit, that
 reservation is rejected for the request; the rejection and omitted tool names
 are recorded in `mcp.native_schema_selection`.
 
+### Web search with Parallel
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
+provides web search and page fetching over Streamable HTTP. The anonymous
+endpoint needs no account or API key and uses Fast mode for search, with lower
+rate limits intended for exploration and light use.
+
+```sh
+rustcode mcp add --transport http parallel-search https://search.parallel.ai/mcp \
+  --header "User-Agent: RustCode"
+rustcode mcp list
+```
+
+Start a new session in a workspace without a project `mcp_servers` override,
+then ask, for example:
+
+> Use Parallel to find the current Tokio `JoinSet` documentation, fetch the
+> relevant page, and explain how to cancel all tasks. Include the source URL.
+
+The server exposes `web_search` and `web_fetch`. Search sends the query to
+Parallel; fetching sends the requested URLs. To remove the saved server, run
+`rustcode mcp remove parallel-search`.
+
 ## Remote gateway address
 
 `/remote` starts the [remote gateway](remote.md) when none is running. Where
