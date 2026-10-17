@@ -1,3 +1,15 @@
+## [v0.77.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.77.0) - 2026-10-17
+
+### Features
+- macOS: slash commands answer in native toasts and sheets instead of chat cards (#2107)
+- macOS: toasts for pin, archive, trash, copy and auto-approve, and for other chats finishing or waiting on you; click to open (#2107)
+- macOS: system notifications when a turn fails or the engine stops in the background (#2107)
+- macOS: syntax highlighting in diffs and code blocks, and diff text selectable across lines (#2107)
+- macOS: opening a chat shows its history at once instead of line by line (#2107)
+- engine: ACP approvals offer "Always allow" for commands and count toward user wait time (#2108)
+- engine: skill routing ignores everyday words, so unrelated skills no longer load (#2108)
+- engine: Swift, Xcode, make, gradle, maven and more count as verification (#2108)
+- engine: context notices no longer point ACP clients at /new (#2108)
 ## [v0.76.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.76.2) - 2026-10-17
 
 ### Fixes
