@@ -85,7 +85,7 @@ final class DesktopModel: ObservableObject {
     @Published private(set) var toasts: [Toast] = []
     /// Host commands running per chat: their answer is collected here and
     /// shown natively instead of in the chat.
-    private var runningCommands: [String: RunningCommand] = [:]
+    @Published private var runningCommands: [String: RunningCommand] = [:]
 
     private struct RunningCommand {
         let input: String
@@ -151,7 +151,10 @@ final class DesktopModel: ObservableObject {
     /// new chat is ready while another one works.
     @Published private(set) var runningSessions: Set<String> = []
     /// The shown chat has a turn running. A draft never does.
-    var busy: Bool { selectedSession.map(runningSessions.contains) ?? false }
+    /// The shown chat is running a turn or a host command; a new message queues.
+    var busy: Bool { selectedSession.map { runningSessions.contains($0) || runningCommands[$0] != nil } ?? false }
+    /// The shown chat is running a model turn, which the chat shows as Working.
+    var isTurnRunning: Bool { selectedSession.map(runningSessions.contains) ?? false }
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
     /// engine blocks until each one is answered, so none may be dropped.
@@ -852,20 +855,28 @@ final class DesktopModel: ObservableObject {
         let isCommand = prompt.text == prompt.typed && prompt.images.isEmpty
             && SlashCommand.invoked(by: prompt.typed, in: commands)?.action == .execute
         if isCommand {
-            // Its answer is shown natively, not added to the chat.
+            // Its answer is shown natively, not added to the chat, and most
+            // answer at once: the chat never says Working, and a progress toast
+            // shows only for a command that takes a moment, such as /compact.
             let toast = Toast(style: .progress, systemImage: "terminal", title: "Running \(prompt.typed)")
             runningCommands[id] = RunningCommand(input: prompt.typed, toast: toast.id)
-            showToast(toast)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard let self, self.runningCommands[id]?.toast == toast.id else { return }
+                self.showToast(toast)
+            }
         } else {
             let markers = prompt.images.compactMap { $0.writePreview() }.map(ImageMarkers.marker)
             let shown = ([prompt.text] + markers).filter { !$0.isEmpty }.joined(separator: "\n")
             appendToTranscript(of: id) { $0.appendUser(shown) }
+            runningSessions.insert(id)
         }
-        runningSessions.insert(id)
         var stopped = false
         do {
             let result = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: prompt.text, images: prompt.images))
             stopped = result["stopReason"]?.stringValue == "cancelled"
+            // A command answers before the session list refreshes behind it.
+            if isCommand { finishCommand(in: id) }
             await refreshSessions()
         } catch {
             self.error = String(describing: error)
@@ -934,7 +945,7 @@ final class DesktopModel: ObservableObject {
     }
 
     func cancel() async {
-        guard let connection = engine?.connection, let id = selectedSession, runningSessions.contains(id) else { return }
+        guard let connection = engine?.connection, let id = selectedSession, busy else { return }
         do {
             try await connection.notify(ACPMethod.sessionCancel, params: ACPRequests.session(id))
             // ACP: after `session/cancel` the client answers the session's
@@ -1087,6 +1098,12 @@ final class DesktopModel: ObservableObject {
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate:
             guard let sessionId = params["sessionId"]?.stringValue else { return }
             if captureCommandUpdate(SessionUpdate(notificationParams: params), in: sessionId) { return }
+            if case .notice(let text) = SessionUpdate(notificationParams: params) {
+                showToast(Toast(style: .warning, systemImage: "exclamationmark.octagon.fill", title: text,
+                                message: sessionId == selectedSession ? nil : chatTitle(sessionId),
+                                session: sessionId == selectedSession ? nil : sessionId))
+                return
+            }
             // A session open in the background keeps its transcript current.
             guard sessionId == selectedSession else {
                 if var open = openSessions[sessionId] {

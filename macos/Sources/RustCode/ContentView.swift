@@ -559,14 +559,19 @@ private struct ChatView: View {
                             Color.clear.frame(height: 1).id(bottomAnchor)
                         }
                     } footer: {
-                        if !followsLatest, !model.transcript.isEmpty {
-                            HStack {
-                                Spacer()
-                                LatestButton { jumpToLatest(proxy) }
+                        // No height of its own: the button floats over the
+                        // chat's end, so showing or hiding it never changes how
+                        // far the chat scrolls or moves its end under the reader.
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 0)
+                            .overlay(alignment: .bottomTrailing) {
+                                if !followsLatest, !model.transcript.isEmpty {
+                                    LatestButton { jumpToLatest(proxy) }
+                                        .padding(.bottom, 4)
+                                        .transition(.opacity)
+                                }
                             }
-                            .padding(.bottom, 4)
-                            .transition(.opacity)
-                        }
                     }
                 }
                 .frame(maxWidth: 760)
@@ -772,7 +777,7 @@ private struct ChatView: View {
 
     /// The shown chat has a turn in progress, so its last reply may still grow.
     private var isReplyStreaming: Bool {
-        model.busy
+        model.isTurnRunning
     }
 }
 

@@ -66,4 +66,12 @@ import Testing
                      TranscriptItem(id: "b", .notice("Steering the running turn"))]
         #expect(NoticePresentation.notices(in: items).map(\.id) == ["a", "b"])
     }
+
+    @Test func turnStopMarkersReadAsSentences() {
+        let items = [TranscriptItem(id: "a", .notice("[harness: turn stopped — loop_escalation]")),
+                     TranscriptItem(id: "b", .notice("[harness: turn stopped — provider_error:529]"))]
+        #expect(NoticePresentation.notices(in: items).map(\.text) == [
+            "Stopped: the agent was repeating itself", "Stopped: provider error 529",
+        ])
+    }
 }

@@ -38,6 +38,12 @@ pub fn is_compaction_summary(content: &str) -> bool {
         || content.starts_with(crate::network::compaction::STRUCTURED_MEMORY_MARKER)
 }
 
+/// The short notice for a harness turn-stop marker, or `None` for any other
+/// content. Frontends show it as a footer notice or toast, not a chat row.
+pub fn stop_marker_notice(content: &str) -> Option<String> {
+    crate::network::lifecycle::stop_marker_notice(content)
+}
+
 /// Strip recap framing to the plain text a history cell renders.
 pub fn sanitize_recap_content(content: &str) -> String {
     crate::app::sanitize_recap_content(content)

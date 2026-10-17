@@ -352,20 +352,45 @@ private struct ToolRow: View {
     private func detail(_ title: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            // Lines wrap, so this scrolls on one axis only, and only once the
-            // output is taller than the box; short output never takes the wheel.
-            ScrollView(.vertical) {
-                Text(text)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(maxHeight: 240)
-            .fixedSize(horizontal: false, vertical: true)
-            .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
+            ToolTextBox(text: text)
         }
+    }
+}
+
+/// A tool's input or output. Long text shows its first lines and grows in
+/// place on request: a box that scrolls on its own would put a second
+/// scroller inside the chat and take the wheel from it.
+private struct ToolTextBox: View {
+    let text: String
+    @State private var showsAll = false
+
+    private static let previewLines = 14
+    /// Beyond this the box stops growing; Copy Output has the rest.
+    private static let maxLines = 2_000
+
+    var body: some View {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let limit = showsAll ? Self.maxLines : Self.previewLines
+        let hidden = lines.count - min(lines.count, limit)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(hidden > 0 ? lines.prefix(limit).joined(separator: "\n") : text)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+            if hidden > 0 || showsAll && lines.count > Self.previewLines {
+                Button(showsAll && hidden == 0 ? "Show less" : showsAll ? "\(hidden) more lines — use Copy Output"
+                       : "Show all \(lines.count) lines") {
+                    showsAll.toggle()
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+            }
+        }
+        .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
     }
 }
 

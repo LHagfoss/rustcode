@@ -120,6 +120,18 @@ final class ContextBreakdownTests: XCTestCase {
         XCTAssertEqual(plain, .agentText("hi"))
     }
 
+    func testHarnessNoticesStayOutOfTheTranscript() {
+        let update = SessionUpdate(notificationParams: ["sessionId": "s1", "update": [
+            "sessionUpdate": "agent_message_chunk",
+            "content": ["type": "text", "text": "Stopped: provider error 529"],
+            "_meta": ["rustcode": ["kind": "notice"]],
+        ]])
+        XCTAssertEqual(update, .notice("Stopped: provider error 529"))
+        var transcript = Transcript()
+        transcript.apply(update)
+        XCTAssertTrue(transcript.isEmpty)
+    }
+
     func testSegmentsSkipEmptyCategoriesAndNeverOverfill() {
         let context = ContextBreakdown(json: contextJSON)!
         XCTAssertEqual(context.segments.map(\.category.name), ["User messages", "Tool calls"])

@@ -1813,6 +1813,36 @@ mod tests {
     }
 
     #[test]
+    fn acp_event_stream_sends_stop_markers_as_notices_not_answers() {
+        let mut stream = AcpEventStream::new();
+        let cancelled = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "[harness: turn stopped — cancelled]".to_string(),
+            completed: false,
+            timing: None,
+        });
+        assert!(cancelled.is_empty(), "the stop reason reports a cancel");
+
+        let stopped = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "[harness: turn stopped — loop_escalation]".to_string(),
+            completed: false,
+            timing: None,
+        });
+        let [SessionUpdate::AgentMessageChunk(chunk)] = stopped.as_slice() else {
+            panic!("expected one notice chunk, got {stopped:?}");
+        };
+        assert!(
+            matches!(&chunk.content, ContentBlock::Text(text) if text.text == "Stopped: the agent was repeating itself")
+        );
+        assert_eq!(
+            chunk
+                .meta
+                .as_ref()
+                .and_then(|meta| meta["rustcode"]["kind"].as_str()),
+            Some("notice")
+        );
+    }
+
+    #[test]
     fn acp_event_stream_keeps_final_text_after_an_earlier_tool_round_delta() {
         let mut stream = AcpEventStream::new();
         stream.updates(crate::network::AgentUiEvent::TextDelta {

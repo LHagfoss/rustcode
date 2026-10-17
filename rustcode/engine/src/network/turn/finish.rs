@@ -196,6 +196,11 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     let turn_started_at = s.current_turn_started_at.unwrap_or(prompt_start_time);
     s.response_time = Some(turn_started_at.elapsed());
     if let Some(content) = final_transcript {
+        // A stop marker is turn bookkeeping: history keeps it, and the
+        // terminal announces it in the footer rather than as a chat row.
+        if !had_final_content && let Some(notice) = lifecycle::stop_marker_notice(&content) {
+            s.set_transient_notice(notice);
+        }
         let role = if had_final_content {
             "assistant"
         } else {

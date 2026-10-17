@@ -178,6 +178,18 @@ impl AcpEventStream {
             }
             crate::network::AgentUiEvent::TurnFinished { content, .. } => {
                 let mut updates = self.flush();
+                // A harness stop marker is not part of the answer. The prompt's
+                // stop reason already says the user cancelled; any other stop
+                // goes out as a notice the client can toast.
+                if let Some(notice) = crate::network::lifecycle::stop_marker_notice(&content) {
+                    if !crate::network::lifecycle::is_turn_cancelled_marker(&content) {
+                        updates.push(SessionUpdate::AgentMessageChunk(
+                            ContentChunk::new(ContentBlock::Text(TextContent::new(notice)))
+                                .meta(rustcode_meta(serde_json::json!({"kind": "notice"}))),
+                        ));
+                    }
+                    return updates;
+                }
                 let promoted = rustcode_tool_protocol::text::promote_bare_thought_markers(&content);
                 let prose = rustcode_tool_protocol::text::strip_think_blocks(&promoted);
                 let trimmed_prose = prose.trim();

@@ -252,6 +252,9 @@ public enum SessionUpdate: Equatable, Sendable {
     /// The `/context` reply: its Markdown text and the breakdown it carries.
     case contextReport(text: String, context: ContextBreakdown)
     case thoughtText(String)
+    /// A harness notice, such as why a turn stopped. It is shown as a
+    /// toast, never as part of the conversation.
+    case notice(String)
     /// `detail` is the engine's one line on what the call acts on.
     case toolCall(id: String, title: String, kind: String?, status: ToolStatus?, input: JSONValue?, detail: String? = nil)
     /// `outputDelta` is output a running call printed since the last update;
@@ -276,6 +279,8 @@ public enum SessionUpdate: Equatable, Sendable {
             if meta?["kind"]?.stringValue == "context",
                let context = ContextBreakdown(json: meta?["context"]) {
                 self = .contextReport(text: Self.text(update["content"]), context: context)
+            } else if meta?["kind"]?.stringValue == "notice" {
+                self = .notice(Self.text(update["content"]))
             } else {
                 self = .agentText(Self.text(update["content"]))
             }

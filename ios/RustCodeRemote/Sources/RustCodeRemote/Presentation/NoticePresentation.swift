@@ -21,6 +21,32 @@ public enum NoticePresentation {
         }
     }
 
+    /// The toast text for a notice: a host turn-stop marker such as
+    /// "[harness: turn stopped — loop_escalation]" reads as a short sentence.
+    public static func displayText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("[harness: turn stopped — "), trimmed.hasSuffix("]") else { return text }
+        let reason = String(trimmed.dropFirst("[harness: turn stopped — ".count).dropLast())
+        let parts = reason.split(separator: ":", maxSplits: 1).map(String.init)
+        let kind = parts.first ?? reason
+        let detail = parts.count > 1 ? parts[1] : ""
+        switch kind {
+        case "cancelled": return cancellationText
+        case "loop_escalation": return "Stopped: the agent was repeating itself"
+        case "recovery_failed": return "Stopped: the turn could not recover"
+        case "unverified": return "Stopped: completion could not be verified"
+        case "unavailable_tool": return "Stopped: a required tool is unavailable"
+        case "provider_error": return detail.isEmpty ? "Stopped: provider error" : "Stopped: provider error \(detail)"
+        case "budget": return "Stopped: \(detail.replacingOccurrences(of: "_", with: " ")) limit reached"
+        case "infrastructure_failure": return "Stopped: infrastructure failure"
+        case "connect_timeout", "header_timeout", "first_event_timeout", "stream_idle_timeout":
+            return "Stopped: the provider timed out"
+        case "premature_eof", "response_body_decode", "malformed_sse":
+            return "Stopped: the provider connection dropped"
+        default: return "Stopped: \(reason.replacingOccurrences(of: "_", with: " "))"
+        }
+    }
+
     /// Notices in transcript order. At most one cancellation notice is kept per user turn.
     public static func notices(in items: [TranscriptItem]) -> [Notice] {
         var cancellationShown = false
@@ -34,7 +60,7 @@ public enum NoticePresentation {
                 cancellationShown = true
                 notices.append(Notice(id: item.id, text: cancellationText))
             case .notice(let text):
-                notices.append(Notice(id: item.id, text: text))
+                notices.append(Notice(id: item.id, text: displayText(text)))
             default:
                 break
             }
