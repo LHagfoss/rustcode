@@ -1588,6 +1588,31 @@ pub fn search_web(args: &Value) -> Result<String, String> {
     runtime.block_on(search_web_async(args, &reqwest::Client::new()))
 }
 
+/// The query with a `site:` filter for `domain`, unless it is empty or the
+/// query already has it.
+fn scoped_search_query(query: &str, domain: Option<&str>) -> String {
+    let domain = domain.map(str::trim).unwrap_or_default();
+    let filter = format!("site:{domain}");
+    if domain.is_empty() || query.contains(&filter) {
+        query.to_owned()
+    } else {
+        format!("{query} {filter}")
+    }
+}
+
+/// At most about 300 bytes of a result's text, cut on a character boundary.
+fn clip_snippet(text: &str) -> &str {
+    const LIMIT: usize = 300;
+    if text.len() <= LIMIT {
+        return text;
+    }
+    let mut end = LIMIT;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 pub(crate) async fn search_web_async(
     args: &Value,
     client: &reqwest::Client,
@@ -1598,14 +1623,11 @@ pub(crate) async fn search_web_async(
         .ok_or("missing 'query' argument")?;
     let domain = args.get("domain").and_then(|d| d.as_str());
 
-    let mut search_query = query.to_string();
-    if let Some(dom) = domain {
-        search_query.push_str(&format!(" site:{}", dom));
-    }
+    let search_query = scoped_search_query(query, domain);
 
-    let exa_key = crate::shell_env::env_var("EXA_API_KEY")
-        .unwrap_or_else(|| "9a49efa5-675c-4684-94c0-3f96979aa2ac".to_string());
-    if !exa_key.is_empty() {
+    // Exa only with the user's own key; without one, fall through to Tavily
+    // and DuckDuckGo instead of a request bound to fail.
+    if let Some(exa_key) = crate::shell_env::env_var("EXA_API_KEY").filter(|key| !key.is_empty()) {
         let body = serde_json::json!({
             "query": search_query,
             "numResults": 5,
@@ -1641,7 +1663,7 @@ pub(crate) async fn search_web_async(
                     .unwrap_or("No Title");
                 let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
                 let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                let snippet = if text.len() > 300 { &text[..300] } else { text };
+                let snippet = clip_snippet(text);
 
                 out.push_str(&format!(
                     "{}. {}\n   Snippet: {}\n   Source: {}\n\n",
@@ -1690,13 +1712,14 @@ pub(crate) async fn search_web_async(
                         .and_then(|t| t.as_str())
                         .unwrap_or("No Title");
                     let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                    let content = r.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                    let content =
+                        clip_snippet(r.get("content").and_then(|c| c.as_str()).unwrap_or(""));
 
                     out.push_str(&format!(
                         "{}. {}\n   Snippet: {}\n   Source: {}\n\n",
                         i + 1,
                         title,
-                        content,
+                        content.trim(),
                         url
                     ));
                 }
@@ -1912,9 +1935,33 @@ pub fn forget_memory(args: &Value) -> Result<String, String> {
 mod tests {
     use super::super::mcp_discovery::{DiscoveryArgs, McpServerState, McpServerStatus};
     use super::{
-        LIST_MCP_TOOLS, McpDiscoveryTool, format_mcp_discovery, list_mcp_tools, search_web_async,
+        LIST_MCP_TOOLS, McpDiscoveryTool, clip_snippet, format_mcp_discovery, list_mcp_tools,
+        scoped_search_query, search_web_async,
     };
     use serde_json::{Value, json};
+
+    #[test]
+    fn search_query_adds_a_site_filter_only_when_useful() {
+        assert_eq!(scoped_search_query("rust acp", None), "rust acp");
+        assert_eq!(scoped_search_query("rust acp", Some("  ")), "rust acp");
+        assert_eq!(
+            scoped_search_query("rust acp", Some("docs.rs")),
+            "rust acp site:docs.rs"
+        );
+        assert_eq!(
+            scoped_search_query("rust site:docs.rs", Some("docs.rs")),
+            "rust site:docs.rs"
+        );
+    }
+
+    #[test]
+    fn snippets_are_clipped_on_a_character_boundary() {
+        let text = "ø".repeat(400);
+        let snippet = clip_snippet(&text);
+        assert!(snippet.len() <= 300);
+        assert!(snippet.chars().all(|c| c == 'ø'));
+        assert_eq!(clip_snippet("short"), "short");
+    }
 
     fn tool(server: &str, name: &str, description: &str, schema: Value) -> McpDiscoveryTool {
         McpDiscoveryTool {

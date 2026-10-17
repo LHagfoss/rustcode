@@ -55,6 +55,11 @@ struct RustCodeApp: App {
                 Button("Find Previous") { model.findNext(-1) }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
             }
+            CommandGroup(replacing: .printItem) {
+                Button(model.isSelectedPinned ? "Unpin Chat" : "Pin Chat") { model.togglePinSelected() }
+                    .keyboardShortcut("p", modifiers: .command)
+                    .disabled(model.selectedSession == nil)
+            }
             CommandGroup(before: .sidebar) {
                 Button(model.showsSidebar ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
                     .keyboardShortcut("b", modifiers: .command)
@@ -362,6 +367,17 @@ final class DesktopModel: ObservableObject {
         UserDefaults.standard.set(Array(archivedSessions), forKey: "archivedSessions")
     }
 
+    /// Chats created here that the engine does not list yet.
+    private var startedSessions: [String: SessionSummary] = [:]
+
+    var isSelectedPinned: Bool { selectedSession.map(pinnedSessions.contains) ?? false }
+
+    /// ⌘P: pin or unpin the open chat.
+    func togglePinSelected() {
+        guard let session = sessions.first(where: { $0.id == selectedSession }) else { return }
+        togglePin(session)
+    }
+
     func togglePin(_ session: SessionSummary) {
         if pinnedSessions.contains(session.id) { pinnedSessions.remove(session.id) } else { pinnedSessions.insert(session.id) }
         UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
@@ -416,6 +432,7 @@ final class DesktopModel: ObservableObject {
         pinnedSessions.remove(session.id)
         UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
         sessions.removeAll { $0.id == session.id }
+        startedSessions[session.id] = nil
         if selectedSession == session.id {
             selectedSession = nil
             transcript.removeAll()
@@ -633,7 +650,10 @@ final class DesktopModel: ObservableObject {
                 cursor = SessionSummary.nextCursor(from: result)
                 if cursor == nil { break }
             }
-            sessions = all
+            startedSessions = startedSessions.filter { id, _ in !all.contains { $0.id == id } }
+            sessions = SessionSummary.merging(all, started: Array(startedSessions.values).filter {
+                showsAllProjects || $0.cwd == workspace.path
+            })
             sessionsLoaded = true
         } catch { self.error = String(describing: error) }
     }
@@ -735,7 +755,10 @@ final class DesktopModel: ObservableObject {
             images = sentImages
             return
         }
-        if created { await refreshSessions() }
+        if created {
+            startedSessions[id] = .started(id: id, cwd: workspace.path, prompt: typed, model: selectedModel)
+            await refreshSessions()
+        }
         await run(QueuedPrompt(sessionId: id, typed: typed, text: text, images: sentImages))
     }
 

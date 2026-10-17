@@ -155,7 +155,7 @@ struct CodeBlock: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
-            ScrollView(.horizontal) {
+            HorizontalOverflow {
                 Text(text)
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
