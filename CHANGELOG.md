@@ -1,3 +1,9 @@
+## [v0.77.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.77.1) - 2026-10-17
+
+### Fixes
+- Turn-stop notices such as "turn stopped — cancelled" no longer appear as chat messages: macOS shows them as toasts, the terminal in its footer, and iOS as short sentences (#2111)
+- macOS: the chat no longer scrolls past its end or jumps when the Latest button appears, and tool output no longer adds a second scroller (#2111)
+- macOS: slash commands answer instantly without showing Working (#2111)
 ## [v0.77.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.77.0) - 2026-10-17
 
 ### Features
