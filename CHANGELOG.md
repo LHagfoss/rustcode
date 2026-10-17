@@ -1,3 +1,11 @@
+## [v0.75.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.75.0) - 2026-10-17
+
+### Features
+- macOS app: slash commands match the TUI: `/diff`, `/changelog`, `/sandbox`, `/quota`, `/agents`, `/workspace`, `/compact`, `/recap`, `/summarize`, `/goal`, `/fork`, the login commands, and `/clear` (new chat); `/context` shows the full breakdown and `/context <tokens>` sets the window; `/status`, `/mcp` and `/tasks` give fuller reports. Unknown or terminal-only commands get a reply instead of reaching the model ([#2092](https://github.com/LHagfoss/rustcode/pull/2092)).
+- macOS app: `/context` or a click on the usage capsule opens a native context sheet with a per-category bar, legend and reserves ([#2096](https://github.com/LHagfoss/rustcode/pull/2096)).
+- TUI: the agent can show bar charts, tables and trees in chat with versioned `rustcode-viz` blocks; malformed or oversized blocks show their source ([#2094](https://github.com/LHagfoss/rustcode/pull/2094)).
+- macOS app: native visualization blocks with hover values on charts, sortable tables and collapsible trees ([#2098](https://github.com/LHagfoss/rustcode/pull/2098)).
+- Remote: `/remote status` and `rustcode remote status` show bind mode, addresses, devices, shared sessions and log paths, and name the command that recovers a stale address ([#2091](https://github.com/LHagfoss/rustcode/pull/2091)).
 ## [v0.74.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.74.1) - 2026-10-16
 
 ### Fixes
