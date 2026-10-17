@@ -115,10 +115,24 @@ impl AcpEventStream {
     pub(crate) fn updates(&mut self, event: crate::network::AgentUiEvent) -> Vec<SessionUpdate> {
         match event {
             crate::network::AgentUiEvent::TextDelta { text } => self.process_text_delta(text),
-            crate::network::AgentUiEvent::ToolStarted { name, id, .. } => {
+            crate::network::AgentUiEvent::ToolStarted { name, id, detail } => {
                 let mut updates = self.flush();
-                updates.push(SessionUpdate::ToolCall(
-                    AcpToolCall::new(id, name).status(ToolCallStatus::InProgress),
+                let mut call = AcpToolCall::new(id, name).status(ToolCallStatus::InProgress);
+                // What the call acts on (a command, a path), so a client can
+                // say what is running before it finishes.
+                if let Some(detail) = detail {
+                    call = call.meta(rustcode_meta(serde_json::json!({ "detail": detail })));
+                }
+                updates.push(SessionUpdate::ToolCall(call));
+                updates
+            }
+            crate::network::AgentUiEvent::ToolOutput { id, text } => {
+                // A delta to append, not ACP `content` (which replaces), so
+                // a long command does not resend everything it printed.
+                let mut updates = self.flush();
+                updates.push(SessionUpdate::ToolCallUpdate(
+                    ToolCallUpdate::new(id, ToolCallUpdateFields::new())
+                        .meta(rustcode_meta(serde_json::json!({ "outputDelta": text }))),
                 ));
                 updates
             }
@@ -185,6 +199,10 @@ impl AcpEventStream {
             crate::network::AgentUiEvent::Error { .. } => Vec::new(),
         }
     }
+}
+
+fn rustcode_meta(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    serde_json::Map::from_iter([("rustcode".to_owned(), value)])
 }
 
 pub(crate) fn acp_stop_reason(cancelled: bool, harness_reason: Option<&str>) -> StopReason {

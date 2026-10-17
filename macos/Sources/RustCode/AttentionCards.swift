@@ -25,6 +25,11 @@ struct PermissionCard: View {
                 .background(.fill.quaternary, in: .rect(cornerRadius: 8))
             }
             HStack {
+                if request.autoApproveOption != nil {
+                    Button("Approve All from Now On") { Task { await model.setAutoApprove(true) } }
+                        .buttonStyle(.borderless)
+                        .help("Auto-approve tools from now on. Turn it off in Settings.")
+                }
                 Spacer()
                 ForEach(request.options) { option in
                     if option.kind?.isAllow == true {

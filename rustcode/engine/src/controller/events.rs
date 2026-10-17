@@ -231,6 +231,8 @@ pub(crate) fn from_agent_ui_event(
                 detail,
             })]
         }
+        // The TUI renders live output from the shared state directly.
+        AgentUiEvent::ToolOutput { .. } => Vec::new(),
         AgentUiEvent::ToolFinished { id, result } => {
             vec![ControllerUpdate::Turn(TurnUpdate::ToolFinished {
                 id,

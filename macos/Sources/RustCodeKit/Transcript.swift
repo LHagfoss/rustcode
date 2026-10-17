@@ -96,9 +96,9 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.thinking(text))
             }
-        case .toolCall(let id, let title, let kind, let status, let input):
+        case .toolCall(let id, let title, let kind, let status, let input, let engineDetail):
             let rendered = input.map { $0.prettyPrinted() }
-            let detail = ToolPresentation.detail(input: input, output: nil)
+            let detail = ToolPresentation.detail(input: input, output: nil) ?? engineDetail
             if let index = toolIndex(id), case .tool(var tool) = items[index].content {
                 tool.title = title
                 tool.kind = kind ?? tool.kind
@@ -109,11 +109,12 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.tool(ToolItem(callId: id, title: title, kind: kind, status: status, input: rendered, inputDetail: detail)))
             }
-        case .toolCallUpdate(let id, let title, let status, let output, let diffs):
+        case .toolCallUpdate(let id, let title, let status, let output, let diffs, let outputDelta):
             let changes = FileChange.group(diffs)
             if let index = toolIndex(id), case .tool(var tool) = items[index].content {
                 tool.title = title ?? tool.title
                 tool.status = status ?? tool.status
+                if let outputDelta { tool.output = Self.liveTail((tool.output ?? "") + outputDelta) }
                 tool.output = output ?? tool.output
                 if !changes.isEmpty { tool.changes = changes }
                 items[index].content = .tool(tool)
@@ -127,6 +128,14 @@ public struct Transcript: Equatable, Sendable {
         case .title, .configOptions, .availableCommands, .unknown:
             break
         }
+    }
+
+    /// Live output a running call shows, at most its last 64 KB; the finished
+    /// result replaces it.
+    static func liveTail(_ text: String) -> String {
+        let limit = 64 * 1024
+        guard text.utf8.count > limit else { return text }
+        return String(text.utf8.suffix(limit)) ?? String(text.suffix(limit / 4))
     }
 
     private func toolIndex(_ callId: String) -> Int? {

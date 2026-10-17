@@ -228,8 +228,12 @@ public enum SessionUpdate: Equatable, Sendable {
     /// The `/context` reply: its Markdown text and the breakdown it carries.
     case contextReport(text: String, context: ContextBreakdown)
     case thoughtText(String)
-    case toolCall(id: String, title: String, kind: String?, status: ToolStatus?, input: JSONValue?)
-    case toolCallUpdate(id: String, title: String?, status: ToolStatus?, output: String?, diffs: [FileDiff] = [])
+    /// `detail` is the engine's one line on what the call acts on.
+    case toolCall(id: String, title: String, kind: String?, status: ToolStatus?, input: JSONValue?, detail: String? = nil)
+    /// `outputDelta` is output a running call printed since the last update;
+    /// `output` is the whole result once it is in.
+    case toolCallUpdate(id: String, title: String?, status: ToolStatus?, output: String?, diffs: [FileDiff] = [],
+                        outputDelta: String? = nil)
     case title(String)
     case configOptions(JSONValue)
     case availableCommands([SlashCommand])
@@ -259,14 +263,16 @@ public enum SessionUpdate: Equatable, Sendable {
                 title: update["title"]?.stringValue ?? "Tool",
                 kind: update["kind"]?.stringValue,
                 status: update["status"]?.stringValue.flatMap(ToolStatus.init(rawValue:)),
-                input: update["rawInput"])
+                input: update["rawInput"],
+                detail: update["_meta"]?["rustcode"]?["detail"]?.stringValue)
         case "tool_call_update":
             self = .toolCallUpdate(
                 id: update["toolCallId"]?.stringValue ?? "",
                 title: update["title"]?.stringValue,
                 status: update["status"]?.stringValue.flatMap(ToolStatus.init(rawValue:)),
                 output: Self.toolOutput(update),
-                diffs: FileDiff.parse(content: update["content"]))
+                diffs: FileDiff.parse(content: update["content"]),
+                outputDelta: update["_meta"]?["rustcode"]?["outputDelta"]?.stringValue)
         case "session_info_update":
             if let title = update["title"]?.stringValue {
                 self = .title(title)
@@ -334,6 +340,13 @@ public struct PermissionRequest: Identifiable, Equatable, Sendable {
     public var question: Question?
 
     public var id: String { toolCallId + "#" + (rpcId.intValue.map(String.init) ?? "\(rpcId)") }
+
+    /// The option auto-approve answers with: allow once, else allow always.
+    /// Nil for a question, which always waits for the user.
+    public var autoApproveOption: PermissionOption? {
+        guard question == nil else { return nil }
+        return options.first { $0.kind == .allowOnce } ?? options.first { $0.kind == .allowAlways }
+    }
 
     public init?(rpcId: JSONValue, params: JSONValue) {
         guard let sessionId = params["sessionId"]?.stringValue,

@@ -2032,6 +2032,37 @@ mod tests {
     }
 
     #[test]
+    fn acp_event_stream_carries_tool_detail_and_live_output() {
+        let mut stream = AcpEventStream::new();
+        let started = stream.updates(crate::network::AgentUiEvent::ToolStarted {
+            detail: Some("cargo test".to_string()),
+            name: "run_command".to_string(),
+            id: "call-1".to_string(),
+        });
+        let [SessionUpdate::ToolCall(call)] = started.as_slice() else {
+            panic!("expected one tool call, got {started:?}");
+        };
+        assert_eq!(
+            call.meta.as_ref().unwrap()["rustcode"]["detail"],
+            "cargo test"
+        );
+
+        let output = stream.updates(crate::network::AgentUiEvent::ToolOutput {
+            id: "call-1".to_string(),
+            text: "running 3 tests\n".to_string(),
+        });
+        let [SessionUpdate::ToolCallUpdate(update)] = output.as_slice() else {
+            panic!("expected one tool update, got {output:?}");
+        };
+        assert_eq!(update.tool_call_id.to_string(), "call-1");
+        assert_eq!(update.fields.status, None);
+        assert_eq!(
+            update.meta.as_ref().unwrap()["rustcode"]["outputDelta"],
+            "running 3 tests\n"
+        );
+    }
+
+    #[test]
     fn acp_event_stream_reports_tool_start_and_completion() {
         let mut stream = AcpEventStream::new();
         let started = stream.updates(crate::network::AgentUiEvent::ToolStarted {

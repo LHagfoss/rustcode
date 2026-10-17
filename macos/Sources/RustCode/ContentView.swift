@@ -509,6 +509,9 @@ private struct SessionRow: View {
 private struct ChatView: View {
     @ObservedObject var model: DesktopModel
     @State private var composerHeight: CGFloat = 60
+    /// The chat keeps the newest output in view. Scrolling up hands control to
+    /// the reader and shows the Latest button; scrolling back down follows again.
+    @State private var followsLatest = true
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
@@ -528,7 +531,9 @@ private struct ChatView: View {
                         TranscriptRow(item: item, isCurrentMatch: model.showsFind && item.id == model.currentMatch,
                                       isStreaming: isReplyStreaming && item.id == model.transcript.items.last?.id).id(item.id)
                     }
-                    if model.busy, model.turnSession == model.selectedSession, !isAgentWriting {
+                    // Up for the whole turn, also while a reply streams or the
+                    // model plans its next step, so a live turn always says so.
+                    if isReplyStreaming {
                         WorkingIndicator()
                     }
                     Color.clear.frame(height: 1).id(bottomAnchor)
@@ -541,8 +546,27 @@ private struct ChatView: View {
             .overlay {
                 if model.transcript.isEmpty, !model.busy { EmptyChat(workspace: model.workspace) }
             }
+            .followsLatest($followsLatest)
+            .overlay(alignment: .bottom) {
+                if !followsLatest, !model.transcript.isEmpty {
+                    LatestButton {
+                        followsLatest = true
+                        withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+                    }
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.snappy(duration: 0.2), value: followsLatest)
             .onChange(of: model.transcript) { _, _ in
-                if !model.showsFind { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+                if followsLatest, !model.showsFind { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+            }
+            .onChange(of: isReplyStreaming) { _, _ in
+                if followsLatest, !model.showsFind { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+            }
+            .onChange(of: model.selectedSession) { _, _ in
+                followsLatest = true
+                proxy.scrollTo(bottomAnchor, anchor: .bottom)
             }
             .onChange(of: model.currentMatch) { _, match in
                 guard model.showsFind, let match else { return }
@@ -706,18 +730,62 @@ private struct ChatView: View {
     private var isReplyStreaming: Bool {
         model.busy && model.turnSession == model.selectedSession
     }
+}
 
-    /// Visible reply text is streaming. Whitespace or a `<think>` section the
-    /// model sends before its first words still counts as waiting, so
-    /// "Working" stays up until then.
-    private var isAgentWriting: Bool {
-        if case .assistant(let text) = model.transcript.items.last?.content {
-            return AssistantBlock.parse(text, isStreaming: true).contains {
-                if case .markdown(let shown) = $0 { !shown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } else { false }
-            }
+/// Jumps back to the newest message after the reader scrolled up.
+private struct LatestButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Latest", systemImage: "arrow.down")
+                .font(.callout.weight(.medium))
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background(.regularMaterial, in: .capsule)
+                .overlay(Capsule().strokeBorder(.separator))
+                .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
         }
-        return false
+        .buttonStyle(.plain)
+        .help("Scroll to the latest message")
     }
+}
+
+private extension View {
+    /// Sets `follows` from the reader's own scrolling: off once they scroll up
+    /// from the end, on again when they return to it. Output growing below a
+    /// reader who scrolled away never pulls them back down.
+    @ViewBuilder
+    func followsLatest(_ follows: Binding<Bool>) -> some View {
+        if #available(macOS 15, *) {
+            onScrollGeometryChange(for: ScrollFollowGeometry.self) { geometry in
+                ScrollFollowGeometry(
+                    offset: geometry.contentOffset.y,
+                    containerHeight: geometry.containerSize.height,
+                    distanceFromBottom: geometry.contentSize.height + geometry.contentInsets.bottom
+                        - (geometry.contentOffset.y + geometry.containerSize.height))
+            } action: { old, new in
+                // A window resize moves the end, not the reader.
+                guard old.containerHeight == new.containerHeight else { return }
+                let atEnd = new.distanceFromBottom <= ScrollFollowGeometry.threshold
+                // Only an upward scroll lets go: output growing below never
+                // moves the offset, so it cannot stop or restart following.
+                let scrolledUp = new.offset < old.offset - 1
+                let follow = atEnd || (follows.wrappedValue && !scrolledUp)
+                if follows.wrappedValue != follow { follows.wrappedValue = follow }
+            }
+        } else {
+            self
+        }
+    }
+}
+
+private struct ScrollFollowGeometry: Equatable {
+    /// How close to the end still counts as following the newest message.
+    static let threshold: CGFloat = 24
+    var offset: CGFloat
+    var containerHeight: CGFloat
+    var distanceFromBottom: CGFloat
 }
 
 /// ⌘F: find in the chat. ⏎ and ⌘G go to the next match, ⇧⏎ and ⇧⌘G back, Esc closes.

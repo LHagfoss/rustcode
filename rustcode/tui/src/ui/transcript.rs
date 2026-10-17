@@ -143,6 +143,7 @@ impl TranscriptModel {
             }
             rustcode::controller::AgentUiEvent::Cancelled { .. }
             | rustcode::controller::AgentUiEvent::ToolStarted { .. }
+            | rustcode::controller::AgentUiEvent::ToolOutput { .. }
             | rustcode::controller::AgentUiEvent::ApprovalRequested { .. }
             | rustcode::controller::AgentUiEvent::QuestionRequested { .. }
             | rustcode::controller::AgentUiEvent::ToolFinished { .. } => {}

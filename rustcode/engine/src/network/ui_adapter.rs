@@ -30,6 +30,12 @@ pub enum AgentUiEvent {
         id: String,
         detail: Option<String>,
     },
+    /// Output a running call has printed since its last `ToolOutput`, so a
+    /// client can show a command's progress before it finishes.
+    ToolOutput {
+        id: String,
+        text: String,
+    },
     ApprovalRequested {
         batch_id: String,
         actions: Vec<crate::controller::ApprovalAction>,
@@ -102,6 +108,36 @@ pub(crate) fn tool_display_detail(name: &str, arguments: &serde_json::Value) -> 
 /// to finish.
 pub(crate) fn live_tool_display_detail(call: &crate::app::LiveToolCall) -> Option<String> {
     display_detail(&call.tool_name, &call.action, &call.target)
+}
+
+/// The output `call` printed after the first `sent` bytes, advancing `sent`.
+/// Output the live buffer already dropped is skipped; the final result
+/// carries the complete bounded payload.
+pub(crate) fn live_output_delta(
+    call: &crate::app::LiveToolCall,
+    sent: &mut usize,
+) -> Option<String> {
+    let retained_len = call
+        .output
+        .iter()
+        .map(|chunk| chunk.text.len())
+        .sum::<usize>();
+    let total = call.omitted_output_bytes.saturating_add(retained_len);
+    if total <= *sent {
+        return None;
+    }
+    let unsent = total - *sent;
+    *sent = total;
+    let retained = call
+        .output
+        .iter()
+        .map(|chunk| chunk.text.as_str())
+        .collect::<String>();
+    let mut start = retained.len().saturating_sub(unsent);
+    while !retained.is_char_boundary(start) {
+        start += 1;
+    }
+    Some(retained[start..].to_owned())
 }
 
 fn display_detail(name: &str, action: &str, target: &str) -> Option<String> {
@@ -228,6 +264,7 @@ async fn publish_snapshot(
         last_approval_batch_id,
         previous_question,
         previous_subagents,
+        &mut std::collections::HashMap::new(),
         false,
     )
     .await;
@@ -243,6 +280,7 @@ async fn publish_snapshot_with_mode(
     last_approval_batch_id: &mut Option<String>,
     previous_question: &mut Option<crate::controller::QuestionPrompt>,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
+    streamed_output: &mut std::collections::HashMap<String, usize>,
     suppress_synthetic_background_completion: bool,
 ) {
     let (
@@ -374,6 +412,22 @@ async fn publish_snapshot_with_mode(
                 id: id.clone(),
                 name: call.tool_name.clone(),
                 detail: live_tool_display_detail(call),
+            });
+        }
+    }
+
+    for call in live_tools.iter() {
+        let Some(id) = call.provider_call_id.as_ref() else {
+            continue;
+        };
+        if !started_tools.contains(id) || finished_tools.contains(id) {
+            continue;
+        }
+        let sent = streamed_output.entry(id.clone()).or_default();
+        if let Some(text) = live_output_delta(call, sent) {
+            sender.send(AgentUiEvent::ToolOutput {
+                id: id.clone(),
+                text,
             });
         }
     }
@@ -596,6 +650,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
     let mut last_approval_batch_id = None;
     let mut previous_question = None;
     let mut previous_subagents = std::collections::HashMap::new();
+    let mut streamed_output = std::collections::HashMap::new();
 
     let context = loop {
         tokio::select! {
@@ -615,6 +670,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
                     &mut last_approval_batch_id,
                     &mut previous_question,
                     &mut previous_subagents,
+                    &mut streamed_output,
                     suppress_synthetic_background_completion,
                 ).await;
             } => {}
@@ -631,6 +687,7 @@ async fn drive_turn_with_snapshots<F: std::future::Future<Output = super::TurnCo
         &mut last_approval_batch_id,
         &mut previous_question,
         &mut previous_subagents,
+        &mut streamed_output,
         suppress_synthetic_background_completion,
     )
     .await;

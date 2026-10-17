@@ -43,6 +43,42 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(request?.rejectOption?.id, "question_cancel")
     }
 
+    func testAutoApproveAllowsToolsButNeverAnswersQuestions() {
+        let tool = PermissionRequest(rpcId: .number(3), params: [
+            "sessionId": "s1",
+            "toolCall": ["toolCallId": "c1", "title": "Run cargo test"],
+            "options": [
+                ["optionId": "reject", "name": "Reject", "kind": "reject_once"],
+                ["optionId": "always", "name": "Always", "kind": "allow_always"],
+                ["optionId": "once", "name": "Allow", "kind": "allow_once"],
+            ],
+        ])
+        XCTAssertEqual(tool?.autoApproveOption?.id, "once")
+        let question = PermissionRequest(rpcId: .number(4), params: [
+            "sessionId": "s1",
+            "toolCall": ["toolCallId": "question:q", "title": "Choose", "rawInput": ["question": "Choose"]],
+            "options": [["optionId": "question_option_0", "name": "A", "kind": "allow_once"]],
+            "_meta": ["rustcode": ["kind": "question", "version": 2]],
+        ])
+        XCTAssertNil(question?.autoApproveOption)
+    }
+
+    func testToolUpdatesCarryEngineDetailAndLiveOutput() {
+        let started = SessionUpdate(notificationParams: ["update": [
+            "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "run_command", "status": "in_progress",
+            "_meta": ["rustcode": ["detail": "cargo test"]],
+        ]])
+        guard case .toolCall(_, _, _, _, _, let detail) = started else { return XCTFail("expected a tool call") }
+        XCTAssertEqual(detail, "cargo test")
+        let output = SessionUpdate(notificationParams: ["update": [
+            "sessionUpdate": "tool_call_update", "toolCallId": "c1",
+            "_meta": ["rustcode": ["outputDelta": "running 3 tests\n"]],
+        ]])
+        guard case .toolCallUpdate(_, _, _, let full, _, let delta) = output else { return XCTFail("expected an update") }
+        XCTAssertNil(full)
+        XCTAssertEqual(delta, "running 3 tests\n")
+    }
+
     func testQuestionAnswersCarrySeveralOptionsOrTextInRustcodeMeta() {
         let a = PermissionOption(id: "question_option_0", name: "A", kind: .allowOnce)
         let b = PermissionOption(id: "question_option_1", name: "B", kind: .allowOnce)

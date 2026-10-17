@@ -320,3 +320,38 @@ fn finished_calls_stay_listed_until_their_batch_is_recorded() {
     state.finish_live_tool_call(&lone, true);
     assert!(state.live_tool_calls.is_empty());
 }
+
+#[test]
+fn live_output_delta_sends_only_new_output() {
+    let mut state = AppState::new();
+    let key = state.begin_live_tool_call(
+        Some("call-1"),
+        "run_command",
+        &serde_json::json!({"command": "cargo test"}),
+    );
+    let mut sent = 0;
+    state.append_live_tool_output(&key, b"one\n", false);
+    let call = state.live_tool_calls[0].clone();
+    assert_eq!(
+        crate::network::ui_adapter::live_output_delta(&call, &mut sent).as_deref(),
+        Some("one\n")
+    );
+    assert_eq!(
+        crate::network::ui_adapter::live_output_delta(&call, &mut sent),
+        None
+    );
+
+    state.append_live_tool_output(&key, b"two\n", true);
+    let call = state.live_tool_calls[0].clone();
+    assert_eq!(
+        crate::network::ui_adapter::live_output_delta(&call, &mut sent).as_deref(),
+        Some("two\n")
+    );
+
+    // Output the bounded buffer dropped is skipped, never resent.
+    state.append_live_tool_output(&key, &vec![b'x'; 40 * 1024], false);
+    let call = state.live_tool_calls[0].clone();
+    let delta = crate::network::ui_adapter::live_output_delta(&call, &mut sent).unwrap();
+    assert!(delta.len() < 40 * 1024);
+    assert!(delta.bytes().all(|byte| byte == b'x'));
+}
