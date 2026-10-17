@@ -287,7 +287,7 @@ extension SessionSidebar {
                    isSelected: session.id == model.selectedSession,
                    isPinned: model.pinnedSessions.contains(session.id),
                    needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
-                   isRunning: model.busy && model.turnSession == session.id,
+                   isRunning: model.runningSessions.contains(session.id),
                    searchSnippet: model.searchSnippet(for: session),
                    searchQuery: model.sessionFilter.trimmingCharacters(in: .whitespaces)) {
             guard session.id != model.selectedSession else { return }
@@ -526,17 +526,30 @@ private struct ChatView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(model.transcript.items) { item in
-                        TranscriptRow(item: item, isCurrentMatch: model.showsFind && item.id == model.currentMatch,
-                                      isStreaming: isReplyStreaming && item.id == model.transcript.items.last?.id).id(item.id)
+                // The Latest button is a pinned footer, inside the scroll view,
+                // so the wheel still scrolls the chat while the pointer is on it.
+                LazyVStack(alignment: .leading, spacing: 18, pinnedViews: .sectionFooters) {
+                    Section {
+                        ForEach(model.transcript.items) { item in
+                            TranscriptRow(item: item, isCurrentMatch: model.showsFind && item.id == model.currentMatch,
+                                          isStreaming: isReplyStreaming && item.id == model.transcript.items.last?.id).id(item.id)
+                        }
+                        // Up for the whole turn, also while a reply streams or the
+                        // model plans its next step, so a live turn always says so.
+                        if isReplyStreaming {
+                            WorkingIndicator()
+                        }
+                        Color.clear.frame(height: 1).id(bottomAnchor)
+                    } footer: {
+                        if !followsLatest, !model.transcript.isEmpty {
+                            HStack {
+                                Spacer()
+                                LatestButton { jumpToLatest(proxy) }
+                            }
+                            .padding(.bottom, 4)
+                            .transition(.opacity)
+                        }
                     }
-                    // Up for the whole turn, also while a reply streams or the
-                    // model plans its next step, so a live turn always says so.
-                    if isReplyStreaming {
-                        WorkingIndicator()
-                    }
-                    Color.clear.frame(height: 1).id(bottomAnchor)
                 }
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28)
@@ -547,26 +560,16 @@ private struct ChatView: View {
                 if model.transcript.isEmpty, !model.busy { EmptyChat(workspace: model.workspace) }
             }
             .followsLatest($followsLatest)
-            .overlay(alignment: .bottom) {
-                if !followsLatest, !model.transcript.isEmpty {
-                    LatestButton {
-                        followsLatest = true
-                        withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
-                    }
-                    .padding(.bottom, 12)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
             .animation(.snappy(duration: 0.2), value: followsLatest)
             .onChange(of: model.transcript) { _, _ in
-                if followsLatest, !model.showsFind { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+                if followsLatest, !model.showsFind { scrollToEnd(proxy) }
             }
             .onChange(of: isReplyStreaming) { _, _ in
-                if followsLatest, !model.showsFind { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+                if followsLatest, !model.showsFind { scrollToEnd(proxy) }
             }
             .onChange(of: model.selectedSession) { _, _ in
                 followsLatest = true
-                proxy.scrollTo(bottomAnchor, anchor: .bottom)
+                scrollToEnd(proxy)
             }
             .onChange(of: model.currentMatch) { _, match in
                 guard model.showsFind, let match else { return }
@@ -726,9 +729,24 @@ private struct ChatView: View {
 
     private let bottomAnchor = "bottom"
 
+    /// Rows below the fold get their real height only once laid out, so one
+    /// jump can land short of the end; a second one after layout reaches it.
+    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+        proxy.scrollTo(bottomAnchor, anchor: .bottom)
+        Task { @MainActor in
+            await Task.yield()
+            if followsLatest { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+        }
+    }
+
+    private func jumpToLatest(_ proxy: ScrollViewProxy) {
+        followsLatest = true
+        scrollToEnd(proxy)
+    }
+
     /// The shown chat has a turn in progress, so its last reply may still grow.
     private var isReplyStreaming: Bool {
-        model.busy && model.turnSession == model.selectedSession
+        model.busy
     }
 }
 
@@ -765,17 +783,36 @@ private extension View {
                     distanceFromBottom: geometry.contentSize.height + geometry.contentInsets.bottom
                         - (geometry.contentOffset.y + geometry.containerSize.height))
             } action: { old, new in
-                // A window resize moves the end, not the reader.
-                guard old.containerHeight == new.containerHeight else { return }
+                // Only the reader's own scrolling decides. Output growing, rows
+                // settling their height, a resize or a jump to a find match
+                // move the geometry too, and must neither stop nor restart it.
+                guard UserScrolling.isActive, old.containerHeight == new.containerHeight else { return }
                 let atEnd = new.distanceFromBottom <= ScrollFollowGeometry.threshold
-                // Only an upward scroll lets go: output growing below never
-                // moves the offset, so it cannot stop or restart following.
-                let scrolledUp = new.offset < old.offset - 1
-                let follow = atEnd || (follows.wrappedValue && !scrolledUp)
+                let scrolledUp = new.offset < old.offset - 0.5
+                let follow = atEnd && !scrolledUp ? true : scrolledUp ? false : follows.wrappedValue
                 if follows.wrappedValue != follow { follows.wrappedValue = follow }
             }
+            .onAppear { UserScrolling.start() }
         } else {
             self
+        }
+    }
+}
+
+/// Whether the user is scrolling right now: a wheel or trackpad event, or a
+/// drag of the scroller, in the last moment.
+@MainActor
+private enum UserScrolling {
+    private static var lastInput = Date.distantPast
+    private static var monitor: Any?
+
+    static var isActive: Bool { Date().timeIntervalSince(lastInput) < 0.25 }
+
+    static func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged]) { event in
+            lastInput = Date()
+            return event
         }
     }
 }
