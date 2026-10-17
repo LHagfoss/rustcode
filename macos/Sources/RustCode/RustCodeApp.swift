@@ -77,6 +77,23 @@ final class DesktopModel: ObservableObject {
     @Published var composerPanel: ComposerPanel?
     /// The `/context` breakdown shown in its sheet.
     @Published var contextSheet: ContextBreakdown?
+    /// The chat being opened, and its replayed transcript until it is in.
+    @Published private(set) var loadingSession: String?
+    private var replay = Transcript()
+    /// A host command's long answer, shown in its sheet.
+    @Published var commandResult: CommandResult?
+    @Published private(set) var toasts: [Toast] = []
+    /// Host commands running per chat: their answer is collected here and
+    /// shown natively instead of in the chat.
+    private var runningCommands: [String: RunningCommand] = [:]
+
+    private struct RunningCommand {
+        let input: String
+        var output = ""
+        let toast: UUID
+        /// The answer already opened natively, as `/context` opens its sheet.
+        var answered = false
+    }
     /// Slash commands the engine advertised, and the highlighted suggestion.
     @Published var commands: [SlashCommand] = []
     @Published var commandSelection = 0
@@ -169,7 +186,8 @@ final class DesktopModel: ObservableObject {
         sessions.first { $0.id == session }?.title ?? "RustCode"
     }
 
-    /// Tell the user a background chat finished, with the start of its reply.
+    /// Tell the user a chat they are not looking at finished, with the start
+    /// of its reply: a notification in the background, a toast in front.
     private func notifyFinished(_ session: String) {
         let items = session == selectedSession ? transcript.items : openSessions[session]?.transcript.items ?? []
         var reply = ""
@@ -178,6 +196,42 @@ final class DesktopModel: ObservableObject {
             reply = notificationSnippet(text)
         }
         TurnNotifier.shared.notify(session: session, title: chatTitle(session), body: reply.isEmpty ? "Finished." : reply)
+        if NSApp.isActive, session != selectedSession {
+            showToast(Toast(style: .success, systemImage: "checkmark.circle.fill", title: chatTitle(session),
+                            message: reply.isEmpty ? "Finished." : reply, session: session))
+        }
+    }
+
+    // MARK: - Toasts
+
+    func showToast(_ toast: Toast) {
+        toasts.append(toast)
+        if toasts.count > 4 { toasts.removeFirst(toasts.count - 4) }
+        guard let lifetime = toast.lifetime else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: lifetime)
+            self?.dismissToast(toast.id)
+        }
+    }
+
+    func dismissToast(_ id: UUID) {
+        toasts.removeAll { $0.id == id }
+    }
+
+    /// A click on a toast: its command answer, else the chat it is about.
+    func open(_ toast: Toast) {
+        dismissToast(toast.id)
+        if let result = toast.result {
+            commandResult = result
+        } else if let id = toast.session, id != selectedSession,
+                  let session = sessions.first(where: { $0.id == id }) {
+            Task { await select(session) }
+        }
+    }
+
+    /// A small confirmation of something just done.
+    private func confirm(_ title: String, systemImage: String) {
+        showToast(Toast(style: .success, systemImage: systemImage, title: title))
     }
 
     func start() async {
@@ -201,6 +255,8 @@ final class DesktopModel: ObservableObject {
                     self.capabilities = nil
                     self.permissionQueue = []
                     self.error = "RustCode engine exited (status \(exit.status))."
+                    TurnNotifier.shared.notify(session: "", title: "RustCode stopped",
+                                               body: "The engine exited (status \(exit.status)). Open RustCode to restart it.")
                 }
             }
             launched = process
@@ -348,7 +404,10 @@ final class DesktopModel: ObservableObject {
             focusSessionSearch = true
         case .copyResponse:
             let last = transcript.items.last { if case .assistant = $0.content { true } else { false } }
-            if case .assistant(let text) = last?.content { Clipboard.copy(text) }
+            if case .assistant(let text) = last?.content {
+                Clipboard.copy(text)
+                confirm("Copied the last reply", systemImage: "doc.on.doc.fill")
+            }
         case .execute: break
         }
     }
@@ -358,8 +417,10 @@ final class DesktopModel: ObservableObject {
     func toggleArchive(_ session: SessionSummary) {
         if archivedSessions.contains(session.id) {
             archivedSessions.remove(session.id)
+            confirm("Moved out of the archive", systemImage: "tray.and.arrow.up.fill")
         } else {
             archivedSessions.insert(session.id)
+            confirm("Archived", systemImage: "archivebox.fill")
             pinnedSessions.remove(session.id)
             UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
             if selectedSession == session.id { Task { await newSession() } }
@@ -379,7 +440,13 @@ final class DesktopModel: ObservableObject {
     }
 
     func togglePin(_ session: SessionSummary) {
-        if pinnedSessions.contains(session.id) { pinnedSessions.remove(session.id) } else { pinnedSessions.insert(session.id) }
+        if pinnedSessions.contains(session.id) {
+            pinnedSessions.remove(session.id)
+            confirm("Unpinned", systemImage: "pin.slash.fill")
+        } else {
+            pinnedSessions.insert(session.id)
+            confirm("Pinned", systemImage: "pin.fill")
+        }
         UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
     }
 
@@ -433,6 +500,7 @@ final class DesktopModel: ObservableObject {
         UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
         sessions.removeAll { $0.id == session.id }
         startedSessions[session.id] = nil
+        confirm("Moved to the Trash", systemImage: "trash.fill")
         if selectedSession == session.id {
             selectedSession = nil
             transcript.removeAll()
@@ -679,8 +747,22 @@ final class DesktopModel: ObservableObject {
         // the replay is filtered out as belonging to another session.
         selectedSession = session.id
         transcript.removeAll()
+        // The replay builds off screen and shows at once: applied line by
+        // line, every replayed chunk redrew the whole chat.
+        loadingSession = session.id
+        replay = Transcript()
+        defer {
+            if loadingSession == session.id {
+                if selectedSession == session.id { transcript = replay }
+                loadingSession = nil
+            }
+        }
         do {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
+            if loadingSession == session.id {
+                transcript = replay
+                loadingSession = nil
+            }
             // Another session may have been picked while this one loaded.
             guard selectedSession == session.id else {
                 openSessions[session.id] = openSessions[session.id] ?? OpenSession(transcript: Transcript(), models: .empty)
@@ -767,9 +849,13 @@ final class DesktopModel: ObservableObject {
     private func run(_ prompt: QueuedPrompt) async {
         guard let connection = engine?.connection else { return }
         let id = prompt.sessionId
-        if prompt.text == prompt.typed, prompt.images.isEmpty,
-           SlashCommand.invoked(by: prompt.typed, in: commands)?.action == .execute {
-            appendToTranscript(of: id) { $0.appendCommand(prompt.typed) }
+        let isCommand = prompt.text == prompt.typed && prompt.images.isEmpty
+            && SlashCommand.invoked(by: prompt.typed, in: commands)?.action == .execute
+        if isCommand {
+            // Its answer is shown natively, not added to the chat.
+            let toast = Toast(style: .progress, systemImage: "terminal", title: "Running \(prompt.typed)")
+            runningCommands[id] = RunningCommand(input: prompt.typed, toast: toast.id)
+            showToast(toast)
         } else {
             let markers = prompt.images.compactMap { $0.writePreview() }.map(ImageMarkers.marker)
             let shown = ([prompt.text] + markers).filter { !$0.isEmpty }.joined(separator: "\n")
@@ -784,10 +870,15 @@ final class DesktopModel: ObservableObject {
         } catch {
             self.error = String(describing: error)
             stopped = true
+            TurnNotifier.shared.notify(session: id, title: chatTitle(id), body: "The turn failed: \(error)")
         }
         // The turn is over, so the engine no longer waits on its requests.
         permissionQueue.removeAll { $0.sessionId == id }
-        if !stopped { notifyFinished(id) }
+        if isCommand {
+            finishCommand(in: id)
+        } else if !stopped {
+            notifyFinished(id)
+        }
         // A queued message starts at once, so "Working" stays up across the
         // hand-off instead of blinking off between the two turns.
         guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else {
@@ -796,6 +887,41 @@ final class DesktopModel: ObservableObject {
         }
         removeQueued(next)
         await run(next)
+    }
+
+    /// Show a host command's answer: a toast when it is one short line, its
+    /// sheet when longer, unless it already opened natively.
+    private func finishCommand(in session: String) {
+        guard let command = runningCommands.removeValue(forKey: session) else { return }
+        dismissToast(command.toast)
+        guard !command.answered else { return }
+        let result = CommandResult(input: command.input, output: command.output)
+        if result.content.isEmpty {
+            confirm("\(command.input) done", systemImage: "checkmark.circle.fill")
+        } else if result.isBrief {
+            showToast(Toast(style: .success, systemImage: "terminal", title: result.title, message: result.content))
+        } else if session == selectedSession, NSApp.isActive {
+            commandResult = result
+        } else {
+            showToast(Toast(systemImage: "terminal", title: result.title, message: chatTitle(session), result: result))
+        }
+    }
+
+    /// Route a running host command's answer away from the chat. False when
+    /// the update is not part of one.
+    private func captureCommandUpdate(_ update: SessionUpdate, in session: String) -> Bool {
+        guard var command = runningCommands[session] else { return false }
+        switch update {
+        case .agentText(let text):
+            command.output += text
+        case .contextReport(_, let context):
+            command.answered = true
+            if session == selectedSession { contextSheet = context }
+        default:
+            return false
+        }
+        runningCommands[session] = command
+        return true
     }
 
     /// The selected chat's transcript is live; another open chat's is stashed.
@@ -851,6 +977,7 @@ final class DesktopModel: ObservableObject {
     func setAutoApprove(_ on: Bool) async {
         UserDefaults.standard.set(on, forKey: Self.autoApproveKey)
         guard on else { return }
+        confirm("Tools are approved automatically", systemImage: "checkmark.shield.fill")
         for request in permissionQueue {
             if let option = request.autoApproveOption { await answer(request, with: option) }
         }
@@ -959,6 +1086,7 @@ final class DesktopModel: ObservableObject {
             if case .availableCommands(let list) = SessionUpdate(notificationParams: params) { commands = list }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate:
             guard let sessionId = params["sessionId"]?.stringValue else { return }
+            if captureCommandUpdate(SessionUpdate(notificationParams: params), in: sessionId) { return }
             // A session open in the background keeps its transcript current.
             guard sessionId == selectedSession else {
                 if var open = openSessions[sessionId] {
@@ -974,7 +1102,8 @@ final class DesktopModel: ObservableObject {
             case .contextReport(_, let context):
                 transcript.apply(update)
                 contextSheet = context
-            default: transcript.apply(update)
+            default:
+                if loadingSession == sessionId { replay.apply(update) } else { transcript.apply(update) }
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
             if let request = PermissionRequest(rpcId: id, params: params) {
@@ -982,6 +1111,11 @@ final class DesktopModel: ObservableObject {
                 if Self.autoApproves, let option = request.autoApproveOption {
                     await answer(request, with: option)
                     return
+                }
+                if NSApp.isActive, request.sessionId != selectedSession {
+                    showToast(Toast(style: .warning, systemImage: request.question == nil ? "hand.raised.fill" : "questionmark.bubble.fill",
+                                    title: request.question == nil ? "Approval needed" : "Question waiting",
+                                    message: chatTitle(request.sessionId), session: request.sessionId))
                 }
                 TurnNotifier.shared.notify(
                     session: request.sessionId,

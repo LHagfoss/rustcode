@@ -24,6 +24,8 @@ struct ContentView: View {
         .sheet(isPresented: $model.showsSettings) { SettingsView(model: model) }
         .sheet(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .sheet(item: $model.contextSheet) { ContextSheet(context: $0) }
+        .sheet(item: $model.commandResult) { CommandResultSheet(result: $0) }
+        .overlay { ToastStack(model: model) }
     }
 }
 
@@ -573,7 +575,11 @@ private struct ChatView: View {
                 .frame(maxWidth: .infinity)
             }
             .overlay {
-                if model.transcript.isEmpty, !model.busy { EmptyChat(workspace: model.workspace) }
+                if model.loadingSession != nil, model.loadingSession == model.selectedSession {
+                    ProgressView("Loading chat…").controlSize(.small).foregroundStyle(.secondary)
+                } else if model.transcript.isEmpty, !model.busy {
+                    EmptyChat(workspace: model.workspace)
+                }
             }
             .followsLatest($followsLatest)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ChatScrollInput.shared.chatFrame = $0 }

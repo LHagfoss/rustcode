@@ -43,6 +43,17 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(request?.rejectOption?.id, "question_cancel")
     }
 
+    func testCommandResultSplitsTitleAndPicksToastOrSheet() {
+        let brief = CommandResult(input: "/compact", output: "**Compacted**\n\nSaved 12k tokens.")
+        XCTAssertEqual(brief.title, "Compacted")
+        XCTAssertEqual(brief.content, "Saved 12k tokens.")
+        XCTAssertTrue(brief.isBrief)
+        let long = CommandResult(input: "/status", output: "Model: a\nEffort: high")
+        XCTAssertEqual(long.title, "/status")
+        XCTAssertFalse(long.isBrief)
+        XCTAssertEqual(CommandResult(input: "/x", output: "  ").content, "")
+    }
+
     func testAutoApproveAllowsToolsButNeverAnswersQuestions() {
         let tool = PermissionRequest(rpcId: .number(3), params: [
             "sessionId": "s1",

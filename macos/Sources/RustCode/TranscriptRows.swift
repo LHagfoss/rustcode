@@ -444,14 +444,6 @@ private struct FileChangeView: View {
         change.rows.prefix(isLong && !showsAll ? Self.previewRows : Self.maxRows)
     }
 
-    private var numberWidth: CGFloat {
-        let largest = change.rows.reduce(0) { result, row in
-            guard case .line(let line) = row else { return result }
-            return max(result, line.oldNumber ?? 0, line.newNumber ?? 0)
-        }
-        return CGFloat(max(String(largest).count, 2)) * 7.5
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
@@ -467,14 +459,7 @@ private struct FileChangeView: View {
                 Spacer(minLength: 8)
                 FileActions(path: change.path).buttons
             }
-            HorizontalOverflow {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(visibleRows.enumerated()), id: \.offset) { _, row in
-                        rowView(row)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
+            diff(Array(visibleRows))
             .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
             .clipShape(.rect(cornerRadius: 8))
             footer
@@ -504,39 +489,82 @@ private struct FileChangeView: View {
         }
     }
 
-    @ViewBuilder
-    private func rowView(_ row: DiffRow) -> some View {
-        switch row {
-        case .gap(let count):
-            Text(count.map { "\u{22EF} \($0) unchanged line\($0 == 1 ? "" : "s")" } ?? "\u{22EF}")
-                .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
-                .padding(.leading, numberWidth * 2 + 28)
-                .padding(.vertical, 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .line(let line):
-            HStack(spacing: 0) {
-                number(line.oldNumber)
-                number(line.newNumber)
-                Text(sign(line.kind))
-                    .foregroundStyle(tint(line.kind) ?? .secondary)
-                    .frame(width: 16)
-                Text(line.text.isEmpty ? " " : line.text)
-                    .textSelection(.enabled)
-                    .fixedSize()
-                    .padding(.trailing, 10)
+    /// The code is one text, so a selection runs across lines like in an
+    /// editor; line numbers and signs sit in their own column, and each row's
+    /// colour is a band behind both.
+    private func diff(_ rows: [DiffRow]) -> some View {
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    Text(" ").hidden()
+                        .frame(maxWidth: .infinity)
+                        .background(band(row))
+                }
             }
-            .font(.system(.caption, design: .monospaced))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(tint(line.kind).map { $0.opacity(0.13) } ?? .clear)
+            HStack(alignment: .top, spacing: 6) {
+                Text(gutter(rows)).fixedSize()
+                HorizontalOverflow {
+                    Text(code(rows))
+                        .textSelection(.enabled)
+                        .fixedSize()
+                        .padding(.trailing, 10)
+                }
+            }
+            .padding(.leading, 6)
+        }
+        .font(.system(.caption, design: .monospaced))
+        .padding(.vertical, 4)
+    }
+
+    private func band(_ row: DiffRow) -> Color {
+        guard case .line(let line) = row, let tint = tint(line.kind) else { return .clear }
+        return tint.opacity(0.13)
+    }
+
+    private var digits: Int {
+        change.rows.reduce(2) { result, row in
+            guard case .line(let line) = row else { return result }
+            return max(result, String(line.oldNumber ?? 0).count, String(line.newNumber ?? 0).count)
         }
     }
 
-    private func number(_ value: Int?) -> some View {
-        Text(value.map(String.init) ?? "")
-            .foregroundStyle(.tertiary)
-            .frame(width: numberWidth, alignment: .trailing)
-            .padding(.trailing, 6)
+    private func gutter(_ rows: [DiffRow]) -> AttributedString {
+        func padded(_ value: Int?) -> String {
+            let text = value.map(String.init) ?? ""
+            return String(repeating: " ", count: max(digits - text.count, 0)) + text
+        }
+        var result = AttributedString()
+        for (index, row) in rows.enumerated() {
+            if index > 0 { result += AttributedString("\n") }
+            guard case .line(let line) = row else {
+                result += AttributedString(String(repeating: " ", count: digits * 2 + 3))
+                continue
+            }
+            var numbers = AttributedString(padded(line.oldNumber) + " " + padded(line.newNumber) + " ")
+            numbers.foregroundColor = .secondary.opacity(0.6)
+            var mark = AttributedString(sign(line.kind))
+            mark.foregroundColor = tint(line.kind) ?? .secondary
+            result += numbers + mark
+        }
+        return result
+    }
+
+    private func code(_ rows: [DiffRow]) -> AttributedString {
+        let highlighter = SyntaxHighlighter(path: change.path)
+        var result = AttributedString()
+        var inBlockComment = false
+        for (index, row) in rows.enumerated() {
+            if index > 0 { result += AttributedString("\n") }
+            switch row {
+            case .gap(let count):
+                var gap = AttributedString(count.map { "\u{22EF} \($0) unchanged line\($0 == 1 ? "" : "s")" } ?? "\u{22EF}")
+                gap.foregroundColor = .secondary.opacity(0.6)
+                result += gap
+            case .line(let line):
+                result += CodeStyle.attributed(line.text, highlighter: highlighter, inBlockComment: &inBlockComment)
+            }
+        }
+        return result
     }
 
     private func sign(_ kind: DiffLine.Kind) -> String {
