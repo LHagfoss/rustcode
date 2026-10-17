@@ -147,6 +147,30 @@ public struct SessionSummary: Identifiable, Equatable, Sendable {
     /// The model profile the chat last used, when the engine recorded one.
     public var model: String?
 
+    public init(id: String, cwd: String, title: String? = nil, updatedAt: Date? = nil, model: String? = nil) {
+        self.id = id
+        self.cwd = cwd
+        self.title = title
+        self.updatedAt = updatedAt
+        self.model = model
+    }
+
+    /// The row a chat shows from its first message on. The engine lists a
+    /// session only once it has saved history, which can be minutes into the
+    /// first turn.
+    public static func started(id: String, cwd: String, prompt: String, model: String?) -> SessionSummary {
+        let line = prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        let title = line.count > 80 ? String(line.prefix(79)) + "…" : line
+        return SessionSummary(id: id, cwd: cwd, title: title.isEmpty ? nil : title, updatedAt: Date(), model: model)
+    }
+
+    /// The engine's list, with every started chat it does not list yet on top.
+    public static func merging(_ listed: [SessionSummary], started: [SessionSummary]) -> [SessionSummary] {
+        let known = Set(listed.map(\.id))
+        return started.filter { !known.contains($0.id) }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+            + listed
+    }
+
     /// `provider/model` reads as just the model.
     public var modelName: String? { model.map { $0.split(separator: "/").last.map(String.init) ?? $0 } }
 

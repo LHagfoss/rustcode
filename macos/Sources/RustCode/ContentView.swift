@@ -107,6 +107,10 @@ private struct SessionSidebar: View {
     @FocusState private var searchFocused: Bool
     /// The one chat row whose swipe actions are showing.
     @State var openSwipeRow: String?
+    /// The one chat under the pointer. Kept here, not per row: a row that
+    /// moves out from under a still pointer never hears it leave, which left
+    /// several rows lit at once.
+    @State var hoveredSession: String?
 
     /// The hidden title bar's height, so buttons line up with the traffic lights.
     static let barHeight: CGFloat = 28
@@ -289,7 +293,11 @@ extension SessionSidebar {
                    needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
                    isRunning: model.runningSessions.contains(session.id),
                    searchSnippet: model.searchSnippet(for: session),
-                   searchQuery: model.sessionFilter.trimmingCharacters(in: .whitespaces)) {
+                   searchQuery: model.sessionFilter.trimmingCharacters(in: .whitespaces),
+                   isHovered: hoveredSession == session.id,
+                   onHover: { inside in
+                       if inside { hoveredSession = session.id } else if hoveredSession == session.id { hoveredSession = nil }
+                   }) {
             guard session.id != model.selectedSession else { return }
             Task { await model.select(session) }
         }
@@ -423,8 +431,9 @@ private struct SessionRow: View {
     /// Set for a chat found by its contents: the text around the match.
     var searchSnippet: String?
     var searchQuery = ""
+    var isHovered = false
+    var onHover: (Bool) -> Void = { _ in }
     let action: () -> Void
-    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -477,14 +486,13 @@ private struct SessionRow: View {
         }
         .buttonStyle(.plain)
         .onContinuousHover { phase in
-            if case .active = phase { isHovered = true } else { isHovered = false }
+            if case .active = phase { onHover(true) } else { onHover(false) }
         }
         // A context menu or a pin that moves the row never reports the pointer
-        // leaving, which left a second row looking selected.
-        .onChange(of: isPinned) { _, _ in isHovered = false }
-        .onChange(of: isSelected) { _, _ in isHovered = false }
+        // leaving; the next move over a row lights that one instead.
+        .onChange(of: isPinned) { _, _ in onHover(false) }
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
-            isHovered = false
+            onHover(false)
         }
     }
 
@@ -530,16 +538,24 @@ private struct ChatView: View {
                 // so the wheel still scrolls the chat while the pointer is on it.
                 LazyVStack(alignment: .leading, spacing: 18, pinnedViews: .sectionFooters) {
                     Section {
-                        ForEach(model.transcript.items) { item in
-                            TranscriptRow(item: item, isCurrentMatch: model.showsFind && item.id == model.currentMatch,
-                                          isStreaming: isReplyStreaming && item.id == model.transcript.items.last?.id).id(item.id)
+                        // Rows are laid out eagerly: lazy rows took their real
+                        // height only on screen, so scrolling up made the chat
+                        // jump and the scroller resize under the pointer. Rows
+                        // are equatable, so only the one that changed redraws.
+                        VStack(alignment: .leading, spacing: 18) {
+                            ForEach(model.transcript.items) { item in
+                                TranscriptRow(item: item, isCurrentMatch: model.showsFind && item.id == model.currentMatch,
+                                              isStreaming: isReplyStreaming && item.id == model.transcript.items.last?.id)
+                                    .equatable()
+                                    .id(item.id)
+                            }
+                            // Up for the whole turn, also while a reply streams or the
+                            // model plans its next step, so a live turn always says so.
+                            if isReplyStreaming {
+                                WorkingIndicator()
+                            }
+                            Color.clear.frame(height: 1).id(bottomAnchor)
                         }
-                        // Up for the whole turn, also while a reply streams or the
-                        // model plans its next step, so a live turn always says so.
-                        if isReplyStreaming {
-                            WorkingIndicator()
-                        }
-                        Color.clear.frame(height: 1).id(bottomAnchor)
                     } footer: {
                         if !followsLatest, !model.transcript.isEmpty {
                             HStack {
@@ -560,8 +576,11 @@ private struct ChatView: View {
                 if model.transcript.isEmpty, !model.busy { EmptyChat(workspace: model.workspace) }
             }
             .followsLatest($followsLatest)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ChatScrollInput.shared.chatFrame = $0 }
             .animation(.snappy(duration: 0.2), value: followsLatest)
-            .onChange(of: model.transcript) { _, _ in
+            .onChange(of: model.transcript) { old, new in
+                // Sending a message always brings the chat back to its end.
+                if new.items.count > old.items.count, case .user = new.items.last?.content { followsLatest = true }
                 if followsLatest, !model.showsFind { scrollToEnd(proxy) }
             }
             .onChange(of: isReplyStreaming) { _, _ in
@@ -573,6 +592,7 @@ private struct ChatView: View {
             }
             .onChange(of: model.currentMatch) { _, match in
                 guard model.showsFind, let match else { return }
+                followsLatest = false
                 withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(match, anchor: .center) }
             }
         }
@@ -770,49 +790,82 @@ private struct LatestButton: View {
 }
 
 private extension View {
-    /// Sets `follows` from the reader's own scrolling: off once they scroll up
-    /// from the end, on again when they return to it. Output growing below a
-    /// reader who scrolled away never pulls them back down.
+    /// Sets `follows` the way chat apps do: any scroll up by the reader lets
+    /// go of the end at once, scrolling back down to it holds on again. While
+    /// held, the chat stays anchored to its end as output grows; once let go,
+    /// output growing below never moves what the reader is looking at.
     @ViewBuilder
     func followsLatest(_ follows: Binding<Bool>) -> some View {
         if #available(macOS 15, *) {
-            onScrollGeometryChange(for: ScrollFollowGeometry.self) { geometry in
+            defaultScrollAnchor(follows.wrappedValue ? .bottom : .top, for: .sizeChanges)
+            .onScrollGeometryChange(for: ScrollFollowGeometry.self) { geometry in
                 ScrollFollowGeometry(
                     offset: geometry.contentOffset.y,
                     containerHeight: geometry.containerSize.height,
                     distanceFromBottom: geometry.contentSize.height + geometry.contentInsets.bottom
-                        - (geometry.contentOffset.y + geometry.containerSize.height))
+                        - (geometry.contentOffset.y + geometry.containerSize.height),
+                    canScroll: geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
+                        > geometry.containerSize.height + 1)
             } action: { old, new in
-                // Only the reader's own scrolling decides. Output growing, rows
-                // settling their height, a resize or a jump to a find match
-                // move the geometry too, and must neither stop nor restart it.
-                guard UserScrolling.isActive, old.containerHeight == new.containerHeight else { return }
+                let input = ChatScrollInput.shared
+                input.canScroll = new.canScroll
+                // Only the reader's own input decides: output growing, rows
+                // settling, a resize or a jump to a find match move the
+                // geometry too, and must neither stop nor restart following.
+                guard input.isActive, old.containerHeight == new.containerHeight else { return }
                 let atEnd = new.distanceFromBottom <= ScrollFollowGeometry.threshold
-                let scrolledUp = new.offset < old.offset - 0.5
-                let follow = atEnd && !scrolledUp ? true : scrolledUp ? false : follows.wrappedValue
-                if follows.wrappedValue != follow { follows.wrappedValue = follow }
+                if atEnd, !input.scrolledUpJustNow {
+                    if !follows.wrappedValue { follows.wrappedValue = true }
+                } else if new.offset < old.offset - 0.5, follows.wrappedValue {
+                    // Dragging the scroller up.
+                    follows.wrappedValue = false
+                }
             }
-            .onAppear { UserScrolling.start() }
+            .onAppear {
+                ChatScrollInput.shared.start()
+                ChatScrollInput.shared.onScrollUp = {
+                    if follows.wrappedValue, ChatScrollInput.shared.canScroll { follows.wrappedValue = false }
+                }
+            }
         } else {
             self
         }
     }
 }
 
-/// Whether the user is scrolling right now: a wheel or trackpad event, or a
-/// drag of the scroller, in the last moment.
+/// The reader's own scrolling of the chat: wheel and trackpad events, and
+/// drags of its scroller, over the chat's frame.
 @MainActor
-private enum UserScrolling {
-    private static var lastInput = Date.distantPast
-    private static var monitor: Any?
+private final class ChatScrollInput {
+    static let shared = ChatScrollInput()
+    /// The chat's scroll view in window coordinates, top-left origin.
+    var chatFrame: CGRect = .zero
+    var canScroll = false
+    var onScrollUp: () -> Void = {}
+    private var lastInput = Date.distantPast
+    private var lastScrollUp = Date.distantPast
+    private var monitor: Any?
 
-    static var isActive: Bool { Date().timeIntervalSince(lastInput) < 0.25 }
+    var isActive: Bool { Date().timeIntervalSince(lastInput) < 0.3 }
+    var scrolledUpJustNow: Bool { Date().timeIntervalSince(lastScrollUp) < 0.15 }
 
-    static func start() {
+    func start() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged]) { event in
-            lastInput = Date()
+            MainActor.assumeIsolated { ChatScrollInput.shared.observe(event) }
             return event
+        }
+    }
+
+    private func observe(_ event: NSEvent) {
+        guard let content = event.window?.contentView else { return }
+        let location = event.locationInWindow
+        guard chatFrame.contains(CGPoint(x: location.x, y: content.bounds.height - location.y)) else { return }
+        lastInput = Date()
+        // Positive is toward the top of the chat, with natural scrolling or without.
+        if event.type == .scrollWheel, event.scrollingDeltaY > 0 {
+            lastScrollUp = Date()
+            onScrollUp()
         }
     }
 }
@@ -823,6 +876,7 @@ private struct ScrollFollowGeometry: Equatable {
     var offset: CGFloat
     var containerHeight: CGFloat
     var distanceFromBottom: CGFloat
+    var canScroll: Bool
 }
 
 /// ⌘F: find in the chat. ⏎ and ⌘G go to the next match, ⇧⏎ and ⇧⌘G back, Esc closes.

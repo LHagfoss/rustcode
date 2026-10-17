@@ -32,12 +32,27 @@ pub(crate) fn parallel_inspection(call: &crate::tools::ToolCall) -> bool {
             | "project_map"
             | "codebase_map"
             | "get_project_map"
+            // Network lookups wait seconds each; a batch of them overlaps.
+            | "search_web"
+            | "read_url"
     ) && crate::tools::is_read_only_call(call)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_lookups_run_as_parallel_inspection() {
+        for name in ["search_web", "read_url"] {
+            let call = crate::tools::ToolCall {
+                name: name.to_owned(),
+                arguments: serde_json::json!({"query": "acp", "url": "https://example.com"}),
+                call_id: None,
+            };
+            assert!(parallel_inspection(&call), "{name}");
+        }
+    }
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},

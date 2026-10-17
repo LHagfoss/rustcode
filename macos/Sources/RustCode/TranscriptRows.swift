@@ -1,7 +1,7 @@
 import RustCodeKit
 import SwiftUI
 
-struct TranscriptRow: View {
+struct TranscriptRow: View, Equatable {
     let item: TranscriptItem
     var isCurrentMatch = false
     /// This is the reply the agent is still writing.
@@ -352,13 +352,16 @@ private struct ToolRow: View {
     private func detail(_ title: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            ScrollView([.vertical, .horizontal]) {
+            // Lines wrap, so this scrolls on one axis only, and only once the
+            // output is taller than the box; short output never takes the wheel.
+            ScrollView(.vertical) {
                 Text(text)
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
             }
+            .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: 240)
             .fixedSize(horizontal: false, vertical: true)
             .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
@@ -464,7 +467,7 @@ private struct FileChangeView: View {
                 Spacer(minLength: 8)
                 FileActions(path: change.path).buttons
             }
-            ScrollView(.horizontal) {
+            HorizontalOverflow {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(visibleRows.enumerated()), id: \.offset) { _, row in
                         rowView(row)
@@ -596,4 +599,19 @@ extension EnvironmentValues {
     @Entry var messageActions: MessageActions? = nil
     /// The open chat's project directory, for paths shown relative to it.
     @Entry var projectRoot: String? = nil
+}
+
+/// Content as wide as it needs, scrolling sideways only when it is wider than
+/// the chat. A nested scroller that is not needed still catches the wheel and
+/// stalls the chat's own scrolling under the pointer.
+struct HorizontalOverflow<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            content.fixedSize(horizontal: true, vertical: false)
+            ScrollView(.horizontal) { content }
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        }
+    }
 }
