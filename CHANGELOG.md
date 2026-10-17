@@ -1,3 +1,13 @@
+## [v0.76.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.76.2) - 2026-10-17
+
+### Fixes
+- macOS: only one chat in the sidebar lights up on hover (#2105)
+- macOS: ⌘P pins or unpins the open chat (#2105)
+- macOS: a new chat shows in the sidebar as soon as you send its first message (#2105)
+- macOS: smoother chat scrolling; code blocks, diffs and tool output no longer catch the scroll wheel (#2105)
+- macOS: autoscroll follows chat-app conventions: scrolling up lets go, reaching the end or sending a message follows again (#2105)
+- engine: search_web no longer ships a built-in Exa key, adds `site:` only for a real domain, and no longer panics on non-ASCII snippets (#2105)
+- engine: batched web searches and URL reads run in parallel (#2105)
 ## [v0.76.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.76.1) - 2026-10-17
 
 ### Fixes
