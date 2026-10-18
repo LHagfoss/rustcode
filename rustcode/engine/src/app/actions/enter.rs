@@ -412,6 +412,31 @@ async fn handle_enter_inner(
                     crate::config::save_entire_config(&s.config);
                 }
             }
+            "/scroll-speed" | "/scroll_speed" => {
+                use crate::config::{SCROLL_LINES_RANGE, effective_scroll_lines};
+                match tokens.get(1) {
+                    None => {
+                        s.modal_picker_index =
+                            usize::from(effective_scroll_lines(s.config.scroll_lines));
+                        s.settings_picker = Some(crate::app::SettingsPicker::ScrollSpeed);
+                    }
+                    Some(&argument) => match argument.parse::<u16>() {
+                        Ok(lines) if SCROLL_LINES_RANGE.contains(&lines) => {
+                            s.config.scroll_lines = Some(lines);
+                            crate::config::save_entire_config(&s.config);
+                            s.set_transient_notice(crate::config::scroll_speed_notice(lines));
+                        }
+                        _ => s.show_command_panel(
+                            "Scroll speed",
+                            format!(
+                                "Use a number of lines per mouse wheel tick from {} to {}, or /scroll-speed alone to pick one.",
+                                SCROLL_LINES_RANGE.start(),
+                                SCROLL_LINES_RANGE.end()
+                            ),
+                        ),
+                    },
+                }
+            }
             "/pi" => {
                 let enabled = match tokens.get(1) {
                     None => Some(!s.config.prompt_improver),
