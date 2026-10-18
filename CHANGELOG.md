@@ -1,3 +1,18 @@
+## [v0.78.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.78.0) - 2026-10-18
+
+### Features
+- `rustcode export [id]` and `/export` save a session as a zip in Downloads (history, logs, telemetry and an EXPORT.md guide) to analyze on another machine (#2113)
+- terminal: the footer shares the input's background and shows reasoning effort, Plan mode and auto-approve (#2113)
+- terminal: `/verbosity`, `/effort`, `/thinking` and `/theme <name>` confirm in the footer instead of a panel (#2113)
+- terminal: `edits` verbosity no longer shows "0/N expanded" above the input until you toggle something (#2113)
+- terminal: in a question, Up from the first line of your own answer returns to the options and keeps what you typed (#2113)
+- terminal: new `scroll_lines` setting for rows per mouse wheel event; docs cover kitty's `touch_scroll_multiplier` on Wayland (#2113)
+- terminal: `/scroll-speed` opens a picker for lines per mouse wheel tick (1–20), saved as `scroll_lines` (#2117)
+- terminal: click a visualization table header to sort by that column, and click tree nodes to collapse or expand them (#2120)
+- engine: turns that hit the output or reasoning limit keep going while continuations add output, without the 1024-token recovery clamp; reasoning that fills the cap is retried with more room, and a real stop names the limit and the setting to change (#2122)
+- engine: cached prompt reads count at 1/10 toward the turn token budget, repeated re-verification rounds trigger recovery, and budget stops say they are not a round limit (#2119)
+- remote: `/remote` and `rustcode remote pair` count the pairing challenge down live and say how it ended; docs add discovery guidance and a security posture section (#2121)
+- macOS: the app gains a localhost preview panel (#2115); release builds are signed and notarized once Developer ID secrets are configured (#2116)
 ## [v0.77.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.77.1) - 2026-10-17
 
 ### Fixes
