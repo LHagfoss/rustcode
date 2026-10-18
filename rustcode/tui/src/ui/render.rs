@@ -236,6 +236,7 @@ pub(crate) fn render_with_transcript_snapshot(
         transcript.tasks_chip_hovered = false;
         transcript.set_tool_rows(ratatui::layout::Rect::default(), Vec::new());
         transcript.set_message_rows(ratatui::layout::Rect::default(), Vec::new());
+        transcript.set_viz_rows(ratatui::layout::Rect::default(), Vec::new());
         transcript.set_panel_targets(f.buffer(), area, false);
         transcript.refresh_hover();
         refresh_panel_selection(f, state, transcript, area);
@@ -454,6 +455,22 @@ pub(crate) fn render_with_transcript_snapshot(
             .zip(wrapped_counts.iter())
             .flat_map(|(&message, &count)| std::iter::repeat_n(message, count.max(1)))
             .take(chat_height as usize)
+            .collect::<Vec<_>>()
+    });
+    // A widget target sits on the first painted row of its line.
+    let viz_rows = transcript.viz_line_flags.take().map(|flags| {
+        let mut first_rows = Vec::with_capacity(wrapped_counts.len());
+        let mut row = 0usize;
+        for count in &wrapped_counts {
+            first_rows.push(row);
+            row += (*count).max(1);
+        }
+        flags
+            .into_iter()
+            .filter_map(|(line, columns, target)| {
+                let row = u16::try_from(*first_rows.get(line)?).ok()?;
+                (row < chat_height).then_some((row, columns, target))
+            })
             .collect::<Vec<_>>()
     });
     let soft_wrap_before: Vec<bool> = wrapped_counts
@@ -723,6 +740,9 @@ pub(crate) fn render_with_transcript_snapshot(
     if let Some(rows) = message_rows {
         transcript.set_message_rows(selection_area, rows);
     }
+    if let Some(rows) = viz_rows {
+        transcript.set_viz_rows(selection_area, rows);
+    }
     transcript.refresh_hover();
     transcript.highlight_hovered_message(f.buffer_mut(), |index| {
         state
@@ -731,6 +751,7 @@ pub(crate) fn render_with_transcript_snapshot(
             .is_some_and(|message| message.role != "assistant")
     });
     transcript.highlight_hovered_target(f.buffer_mut());
+    transcript.highlight_hovered_viz(f.buffer_mut());
     transcript.highlight_hovered_tool_block(f.buffer_mut(), |(first, end)| {
         !state
             .history()

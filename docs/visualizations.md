@@ -56,7 +56,7 @@ ASCII art, or wide Markdown tables:
 - **`table`** holds ranked or tabular results with validated cells. Fields:
   `columns: [string]` and `rows: [[cell]]`, where a cell is a string, number,
   boolean, or null. Optional `sort_by: {"column": index, "descending": bool}`
-  sorts numbers numerically and text lexically. Columns whose cells are all
+  sets the initial order, sorting numbers numerically and text lexically. Columns whose cells are all
   numbers are right-aligned. Cell text is escaped and laid out by the
   transcript's existing Markdown table renderer, so the table gets the same
   column fitting, narrow key/value fallback, and theme styles as a
@@ -64,14 +64,48 @@ ASCII art, or wide Markdown tables:
 - **`tree`** shows hierarchies: module layout, call trees, dependency or
   ownership trees. Fields: `nodes: [{"label", "note"?, "children"?}]`.
   Branches use box-drawing guides, and `note` is shown muted after the label.
+  Nodes with children carry a `▾`/`▸` fold marker.
 
 A general box-and-arrow diagram was left out. It needs a layout engine to be
 legible in a terminal, and a tree or table covers most coding cases.
 
-All three widgets are non-interactive. Keyboard focus inside a widget
-(column re-sorting, collapsing tree nodes) would need a focus model in the
-transcript, which does not exist yet. That is deferred. The rendered rows are
-already the textual representation: selecting them copies readable text.
+## Interacting in the terminal
+
+Tables and trees in a finished reply respond to the mouse, like the macOS
+app:
+
+- **Table headers sort.** Click a header to sort by that column ascending,
+  and click it again to flip the direction. Numeric columns sort by value
+  and text columns lexically. The sorted header shows `▲` or `▼`. A click
+  overrides the payload's `sort_by`, which is marked the same way. Every row
+  is sorted, then the first 50 are shown. A table narrow enough to fall back
+  to key/value records has no header row and cannot be re-sorted.
+- **Tree nodes fold.** A node with children shows `▾` when open and `▸` when
+  closed. Click it (marker or label) to toggle it. A closed node shows how
+  many nodes it hides (`▸ modals/  3 hidden`). Every node starts open.
+  Nodes cut off by the depth limit have no marker.
+
+Targets light up under the pointer. A press and a release on the same cell
+counts as a click, so dragging across a widget still selects text. If you
+are scrolled up, the row you clicked stays in place while rows below it come
+or go.
+
+This view state lives only in the TUI's transcript state. It is keyed by
+the message's history index and the widget's position among the message's
+`rustcode-viz` fences, together with a hash of the fence body, so state made
+for a different body is ignored. It is never written to the session,
+sent to the provider, or applied to `/copy` or export. The canonical text
+keeps the original fence. The committed block cache includes the view state
+in its key, so a click redraws the widget and nothing stale stays painted.
+Only finalized messages are interactive. A reply that is still streaming,
+an open fence, and rows already written to terminal scrollback always show
+the default view.
+
+Bar charts are not interactive. There is no keyboard path into a widget
+yet. The transcript has no focus model for items inside a message (the
+`ctrl+shift+o` step walks tool output only), so keyboard sorting and folding
+are left for a follow-up. The rendered rows are still the textual
+representation: selecting them copies readable text.
 
 ## Limits
 
@@ -114,7 +148,8 @@ and the body is not parsed. Terminal scrollback already holds an unfinished
 fence, so a partial widget is never committed. Once the fence closes, the
 live stream, committed scrollback chunks, and finalized history cells all
 draw the same rows through the same renderer. That renderer is cached by
-width and theme like any other assistant message.
+width and theme like any other assistant message, and in the transcript
+also by the widget view state.
 
 ## macOS app
 
@@ -127,7 +162,8 @@ payload, and `RustCode/VisualizationView.swift` draws it in SwiftUI:
 - `table` headers sort it: click once for ascending, again for descending.
   Every row is kept so a sort covers the whole table, but at most 50 are
   shown. `sort_by` sets the initial order.
-- `tree` branches collapse and expand. The first two levels start open.
+- `tree` branches collapse and expand. The first two levels start open
+  (the TUI starts with every node open).
 
 The card's Copy button and context menu copy the source fence. A block that
 is still streaming shows a "Building visualization…" placeholder. Invalid or

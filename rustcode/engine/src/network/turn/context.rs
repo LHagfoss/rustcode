@@ -117,6 +117,10 @@ pub struct ProgressState {
     pub made_edits: bool,
     pub failed_mutations: usize,
     pub consecutive_no_progress: usize,
+    /// Consecutive rounds that were mostly no-information results with no
+    /// workspace change, even if one result per round was fresh. Arms
+    /// evidence recovery for sustained re-verification.
+    pub consecutive_stale_rounds: usize,
     pub consecutive_failed_mutations: usize,
     /// Corroborated no-progress observations that arm evidence-based recovery
     /// (see `[loop_guard] evidence_recovery_streak`).
@@ -349,6 +353,7 @@ impl TurnContext {
                 made_edits: false,
                 failed_mutations: 0,
                 consecutive_no_progress: 0,
+                consecutive_stale_rounds: 0,
                 consecutive_failed_mutations: 0,
                 evidence_recovery_streak: crate::config::DEFAULT_EVIDENCE_RECOVERY_STREAK,
                 evidence_recovery_enabled: true,

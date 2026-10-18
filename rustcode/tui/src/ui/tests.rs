@@ -6778,6 +6778,9 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
         "[harness: stopped after 10 tool round(s) — 4 consecutive malformed tool-call blocks the harness could not parse. The task is NOT complete. Review the transcript above; if the remaining work is still valid, resume it in a new turn.]"
     ));
     assert!(super::is_hidden_system_notice(
+        "[harness: stopped — token budget reached (~5.1M of 5.0M budget tokens; cached prompt reads count at 1/10), after 43 tool round(s). This was the turn token budget, not a tool-round limit. The task is NOT complete. Review the transcript above; if the remaining work is still valid, resume it in a new turn.]"
+    ));
+    assert!(super::is_hidden_system_notice(
         "[Oversized response: only the first 1 tool calls were kept (use_skill); 1 more were dropped. Anything the response claimed about their results was imagined — continue from the real results below.]"
     ));
     assert!(!super::is_hidden_system_notice(
@@ -12796,6 +12799,130 @@ fn benchmark_scroll_and_selection_with_large_live_output() {
             );
         }
     }
+}
+
+#[test]
+fn visualization_headers_and_tree_nodes_are_click_targets_that_redraw() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+    use rustcode::controller::ChatMessage;
+
+    let table = r#"{"version":1,"type":"table","title":"Slow tests","columns":["Test","ms"],"rows":[["alpha",5],["beta",900],["gamma",40]]}"#;
+    let tree = r#"{"version":1,"type":"tree","title":"ui","nodes":[{"label":"ui/","children":[{"label":"markdown.rs"},{"label":"modals/","children":[{"label":"theme.rs"}]}]}]}"#;
+    let content = format!(
+        "Timings:\n\n```rustcode-viz\n{table}\n```\n\nLayout:\n\n```rustcode-viz\n{tree}\n```"
+    );
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new("user", "show me"));
+    state
+        .history
+        .push(ChatMessage::new("assistant", content.clone()));
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+    let mut draw = |transcript: &mut TranscriptState| {
+        terminal
+            .draw(|frame| {
+                render_with_transcript(frame, &state, transcript);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..30)
+            .map(|row| {
+                (0..80)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let row_of = |rows: &[String], needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} is not painted: {rows:#?}")) as u16
+    };
+    let column_of = |rows: &[String], row: u16, needle: &str| {
+        let text = &rows[usize::from(row)];
+        let byte = text.find(needle).unwrap();
+        UnicodeWidthStr::width(&text[..byte]) as u16
+    };
+
+    let rows = draw(&mut transcript);
+    let header = row_of(&rows, "Test");
+    let ms = column_of(&rows, header, "ms");
+    let target = transcript.viz_target_at(ms, header).expect("header target");
+    assert_eq!(target.message, 1);
+    assert_eq!(target.ordinal, 0);
+    assert_eq!(
+        target.action,
+        visualization::VizAction::Sort {
+            column: 1,
+            descending: false
+        }
+    );
+    // Body rows and prose are not targets.
+    assert_eq!(transcript.viz_target_at(ms, row_of(&rows, "alpha")), None);
+    assert_eq!(transcript.viz_target_at(4, row_of(&rows, "Timings:")), None);
+
+    // Sorting ascending puts the numbers in numeric order and marks the
+    // header.
+    let snapshot = render_snapshot(&state);
+    transcript.apply_viz_target(&snapshot, target);
+    let rows = draw(&mut transcript);
+    assert!(rows[usize::from(row_of(&rows, "Test"))].contains("ms ▲"));
+    let (alpha, gamma, beta) = (
+        row_of(&rows, "alpha"),
+        row_of(&rows, "gamma"),
+        row_of(&rows, "beta"),
+    );
+    assert!(alpha < gamma && gamma < beta, "{rows:#?}");
+
+    // Clicking the sorted header again flips it.
+    let header = row_of(&rows, "Test");
+    let target = transcript
+        .viz_target_at(column_of(&rows, header, "ms"), header)
+        .unwrap();
+    assert_eq!(
+        target.action,
+        visualization::VizAction::Sort {
+            column: 1,
+            descending: true
+        }
+    );
+    transcript.apply_viz_target(&snapshot, target);
+    let rows = draw(&mut transcript);
+    assert!(rows[usize::from(row_of(&rows, "Test"))].contains("ms ▼"));
+    assert!(row_of(&rows, "beta") < row_of(&rows, "alpha"));
+
+    // A tree node with children folds, and its subtree is counted.
+    let modals = row_of(&rows, "▾ modals/");
+    let target = transcript
+        .viz_target_at(column_of(&rows, modals, "modals/"), modals)
+        .expect("tree node target");
+    assert_eq!(target.ordinal, 1);
+    assert_eq!(
+        transcript.viz_target_at(4, row_of(&rows, "markdown.rs")),
+        None,
+        "leaves are not targets"
+    );
+    transcript.apply_viz_target(&snapshot, target);
+    let rows = draw(&mut transcript);
+    assert!(
+        rows[usize::from(row_of(&rows, "▸ modals/"))].contains("1 hidden"),
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("theme.rs")));
+    // The table keeps its own state.
+    assert!(rows.iter().any(|row| row.contains("ms ▼")));
+
+    // Opening it again restores the subtree; the canonical text never
+    // changed.
+    let modals = row_of(&rows, "▸ modals/");
+    let target = transcript
+        .viz_target_at(column_of(&rows, modals, "modals/"), modals)
+        .unwrap();
+    transcript.apply_viz_target(&snapshot, target);
+    let rows = draw(&mut transcript);
+    assert!(rows.iter().any(|row| row.contains("theme.rs")));
+    assert_eq!(state.history.get(1).unwrap().content, content);
 }
 
 #[test]

@@ -212,6 +212,28 @@ fn apply_round_stagnation(
     }
 }
 
+/// Recovery action label for a sustained run of stale re-verification rounds.
+const REVERIFICATION_ACTION: &str = "re-verification of unchanged files";
+
+/// Fold one round into the consecutive stale-round counter. A round is stale
+/// when at least half of its results were successful read-only re-reads that
+/// added no information, and it changed nothing. Mixed rounds matter because one fresh read clears both the
+/// per-action ledger streak and `consecutive_no_progress`. Without this, a
+/// model that re-reads the same docs alongside one new range every round
+/// never arms recovery.
+fn apply_stale_round(
+    consecutive: usize,
+    stale_rereads: usize,
+    assessed_results: usize,
+    lasting_progress: bool,
+) -> usize {
+    if !lasting_progress && stale_rereads > 0 && stale_rereads * 2 >= assessed_results {
+        consecutive.saturating_add(1)
+    } else {
+        0
+    }
+}
+
 fn mutation_batch_guidance(policy: &crate::config::ToolSchedulingPolicy) -> String {
     if policy.allow_batching {
         format!(
@@ -264,6 +286,11 @@ fn targeted_no_progress_guidance(
         .map_or(action, |(end, _)| &action[..end]);
     if action == "list_mcp_tools" {
         return "MCP discovery is repeating already-known tools. Stop listing the inventory. Invoke the discovered callable_name using its bound argument schema (a listed tool without input_schema needs one list_mcp_tools call with select:[callable_name]); if invocation is unavailable, explain the concrete blocker or ask a useful task question. Do not claim a tool ran without its result.".to_string();
+    }
+    if action == REVERIFICATION_ACTION {
+        return format!(
+            "The harness observed {streak} consecutive rounds that mostly re-read files already in the transcript, with no edits in between. Stop re-verifying: the results already in the transcript are current. Do the one concrete step that is still missing, or give the final summary now. Do not re-read a file unless an edit changed it or a specific missing line is identified. This recovery is bounded and preserves completed tool results."
+        );
     }
     let repeated_verification = action.starts_with("verification:");
     if repeated_verification {
@@ -1420,6 +1447,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // meaningful result in the batch clears the streak.
             let mut round_had_meaningful = false;
             let mut round_no_progress_hits = 0usize;
+            let mut round_stale_rereads = 0usize;
+            let mut round_assessed_results = 0usize;
+            let mut round_workspace_changed = false;
             let mut cross_tool_inspection_cycle = None;
             let mut cross_turn_made_progress = false;
             let mut cross_turn_had_edits = false;
@@ -1879,6 +1909,21 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         .and_then(|v| v.as_str())
                 });
                 cross_turn_tool_count += 1;
+                // Stale-round accounting covers only the model's own reads.
+                // Guardrail rejections are left out entirely, and failures and
+                // search misses have their own replan and stagnation paths.
+                if !assessment.suppress_stagnation && !boundary_failure {
+                    round_assessed_results += 1;
+                    if call_is_read_only
+                        && metadata.success
+                        && !no_result
+                        && assessment.reason == loop_detect::ProgressReason::NoNewInformation
+                    {
+                        round_stale_rereads += 1;
+                    }
+                }
+                round_workspace_changed |=
+                    assessment.reason == loop_detect::ProgressReason::WorkspaceChanged;
                 // Runtime probes, browser checks, and fresh reads can provide
                 // decisive evidence without changing a file. The progress
                 // ledger already classifies that evidence; carry its result
@@ -2014,6 +2059,28 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // progress and invalidates any stale inspection-cycle signal.
             if cross_turn_authoritative_progress {
                 cross_tool_inspection_cycle = None;
+            }
+
+            // Sustained re-verification: rounds that are mostly stale re-reads
+            // stay invisible to the checks above as long as each one also has
+            // a single fresh read. Feed a sustained run into the same bounded
+            // evidence recovery, so it escalates to a forced final answer
+            // well before the token budget runs out.
+            ctx.progress.consecutive_stale_rounds = apply_stale_round(
+                ctx.progress.consecutive_stale_rounds,
+                round_stale_rereads,
+                round_assessed_results,
+                round_workspace_changed || cross_turn_authoritative_progress,
+            );
+            if ctx.progress.consecutive_stale_rounds >= ctx.progress.evidence_recovery_streak {
+                if evidence_recovery.is_none() {
+                    evidence_recovery = Some((
+                        loop_detect::ProgressReason::NoNewInformation,
+                        ctx.progress.consecutive_stale_rounds,
+                        REVERIFICATION_ACTION.to_string(),
+                    ));
+                }
+                ctx.progress.consecutive_stale_rounds = 0;
             }
             if let Some((reason, path)) = cross_tool_inspection_cycle {
                 ctx.recovery.reasoning_loops_detected += 1;
@@ -2708,12 +2775,13 @@ mod tests {
 
     use super::super::{GroundedArtifactEvidence, TurnContext};
     use super::{
-        append_finalized_tool_batch, apply_round_stagnation, batch_invalidates_read_recovery,
-        benign_shell_wrapper_failure, bounded_malformed_tool_history,
-        content_bearing_inspection_status, grounded_artifact_recovery_message,
-        incomplete_tool_result, loop_signal_event, mutation_batch_guidance, scheduled_tool_calls,
-        selected_tool_call_indices, should_apply_loop_recovery, take_deferred_batch,
-        targeted_no_progress_guidance, tool_changes_workspace,
+        REVERIFICATION_ACTION, append_finalized_tool_batch, apply_round_stagnation,
+        apply_stale_round, batch_invalidates_read_recovery, benign_shell_wrapper_failure,
+        bounded_malformed_tool_history, content_bearing_inspection_status,
+        grounded_artifact_recovery_message, incomplete_tool_result, loop_signal_event,
+        mutation_batch_guidance, scheduled_tool_calls, selected_tool_call_indices,
+        should_apply_loop_recovery, take_deferred_batch, targeted_no_progress_guidance,
+        tool_changes_workspace,
     };
     use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;
@@ -3787,6 +3855,42 @@ mod tests {
         assert_eq!(apply_round_stagnation(2, true, 5), 0);
         assert_eq!(apply_round_stagnation(2, false, 0), 2);
         assert_eq!(apply_round_stagnation(usize::MAX, false, 3), usize::MAX);
+    }
+
+    #[test]
+    fn mostly_stale_rounds_arm_reverification_recovery_despite_one_fresh_read() {
+        // Session 01a14e34cc01 turn 3, rounds 26-28 and 35-37: each round
+        // re-read 2-3 unchanged files plus one fresh range, with no edits.
+        // `apply_round_stagnation` clears on that single fresh read, so the
+        // turn burned its token budget with zero recoveries (#2114).
+        let streak = crate::config::DEFAULT_EVIDENCE_RECOVERY_STREAK;
+        let mut stale = 0;
+        let mut no_progress = 0;
+        for (hits, assessed) in [(3, 4), (3, 4), (3, 4)] {
+            stale = apply_stale_round(stale, hits, assessed, false);
+            no_progress = apply_round_stagnation(no_progress, true, hits);
+        }
+        assert_eq!(no_progress, 0, "the existing round guard never trips");
+        assert!(stale >= streak, "three stale rounds arm recovery");
+
+        // An edit, a fresh verification, or a round that is mostly new
+        // evidence restarts the count.
+        assert_eq!(apply_stale_round(2, 3, 4, true), 0);
+        assert_eq!(apply_stale_round(2, 1, 5, false), 0);
+        assert_eq!(apply_stale_round(2, 0, 4, false), 0);
+        assert_eq!(apply_stale_round(2, 2, 4, false), 3);
+    }
+
+    #[test]
+    fn reverification_guidance_asks_to_finish_instead_of_rereading() {
+        let guidance = targeted_no_progress_guidance(
+            loop_detect::ProgressReason::NoNewInformation,
+            3,
+            REVERIFICATION_ACTION,
+        );
+        assert!(guidance.contains("3 consecutive rounds"), "{guidance}");
+        assert!(guidance.contains("Stop re-verifying"), "{guidance}");
+        assert!(guidance.contains("final summary"), "{guidance}");
     }
 
     #[test]
