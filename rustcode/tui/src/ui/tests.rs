@@ -6778,6 +6778,9 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
         "[harness: stopped after 10 tool round(s) — 4 consecutive malformed tool-call blocks the harness could not parse. The task is NOT complete. Review the transcript above; if the remaining work is still valid, resume it in a new turn.]"
     ));
     assert!(super::is_hidden_system_notice(
+        "[harness: stopped — token budget reached (~5.1M of 5.0M budget tokens; cached prompt reads count at 1/10), after 43 tool round(s). This was the turn token budget, not a tool-round limit. The task is NOT complete. Review the transcript above; if the remaining work is still valid, resume it in a new turn.]"
+    ));
+    assert!(super::is_hidden_system_notice(
         "[Oversized response: only the first 1 tool calls were kept (use_skill); 1 more were dropped. Anything the response claimed about their results was imagined — continue from the real results below.]"
     ));
     assert!(!super::is_hidden_system_notice(

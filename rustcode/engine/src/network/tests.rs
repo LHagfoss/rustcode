@@ -5386,6 +5386,81 @@ fn missing_provider_usage_falls_back_to_a_content_estimate_without_double_counti
 }
 
 #[test]
+fn cached_prompt_reads_are_charged_at_a_tenth_of_the_turn_token_budget() {
+    // Session 01a14e34cc01 turn 3 (#2114): 43 rounds, 5,053,432 input tokens
+    // of which 3,768,576 were prompt-cache reads, plus 29,390 output. Raw,
+    // that is 5,082,822 tokens and tripped the 5M budget. Weighted, it is
+    // about a third of it.
+    let usage = crate::app::TokenUsage {
+        prompt_tokens: 5_053_432,
+        completion_tokens: 29_390,
+        total_tokens: 5_082_822,
+        cached_tokens: Some(3_768_576),
+        ..Default::default()
+    };
+    let charged = budget_tokens_for_usage(&usage);
+    assert_eq!(charged, 5_082_822 - 3_768_576 + 376_858);
+    assert!(charged < MAX_TURN_TOKEN_BUDGET / 2);
+
+    // Without cache information every token counts at full weight.
+    let uncached = crate::app::TokenUsage {
+        cached_tokens: None,
+        ..usage.clone()
+    };
+    assert_eq!(budget_tokens_for_usage(&uncached), 5_082_822);
+
+    // A malformed report cannot underflow.
+    let bogus = crate::app::TokenUsage {
+        total_tokens: 10,
+        cached_tokens: Some(50),
+        ..Default::default()
+    };
+    assert_eq!(budget_tokens_for_usage(&bogus), 1);
+}
+
+#[test]
+fn a_fully_cached_runaway_turn_is_still_bounded_by_the_token_budget() {
+    let round = crate::app::TokenUsage {
+        prompt_tokens: 200_000,
+        completion_tokens: 0,
+        total_tokens: 200_000,
+        cached_tokens: Some(200_000),
+        ..Default::default()
+    };
+    let mut ctx = TurnContext::new();
+    let mut rounds = 0;
+    while turn_budget_exceeded(&ctx).is_none() {
+        ctx.budget.tokens_used = accumulate_tokens_used(
+            ctx.budget.tokens_used,
+            Some(budget_tokens_for_usage(&round)),
+            "",
+        );
+        rounds += 1;
+        assert!(rounds <= 250, "cached reads must still consume the budget");
+    }
+    assert_eq!(rounds, 250);
+}
+
+#[tokio::test]
+async fn token_budget_stop_notice_leads_with_the_budget_not_the_round_count() {
+    let mut ctx = TurnContext::new();
+    ctx.budget.tool_rounds = 43;
+    ctx.budget.tokens_used = 5_082_822;
+    let limit = turn_budget_exceeded(&ctx).expect("token budget is exceeded");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    stop_turn_for_budget(&state, &mut ctx, limit).await;
+    let notice = &ctx.response.final_content;
+    assert!(
+        notice.starts_with(
+            "[harness: stopped — token budget reached (~5.1M of 5.0M budget tokens; cached prompt reads count at 1/10), after 43 tool round(s)."
+        ),
+        "{notice}"
+    );
+    assert!(notice.contains("not a tool-round limit"), "{notice}");
+    assert!(notice.contains("The task is NOT complete"), "{notice}");
+}
+
+#[test]
 fn a_genuinely_oversized_turn_trips_the_token_budget() {
     let mut ctx = TurnContext::new();
     for _ in 0..200 {

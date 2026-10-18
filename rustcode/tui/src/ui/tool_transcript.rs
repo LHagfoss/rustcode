@@ -2474,7 +2474,9 @@ pub(crate) fn is_hidden_system_notice(content: &str) -> bool {
         || content.contains("Oversized response:")
         || is_deferred_tool_batch_notice(content)
         || rustcode::controller::is_compaction_summary(content)
-        || content.starts_with("[harness: stopped after ")
+        // Budget stops: `[harness: stopped — <limit>, after N tool round(s)…]`,
+        // and the older `[harness: stopped after N tool round(s) — …]`.
+        || content.starts_with("[harness: stopped ")
         || (content.starts_with("[harness: turn stopped — ") && !is_turn_cancelled_notice(content))
         || content.contains("Your reasoning became repetitive")
         || content.contains("reasoning loop")
