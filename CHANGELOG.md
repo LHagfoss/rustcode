@@ -1,3 +1,9 @@
+## [v0.79.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.79.0) - 2026-10-18
+
+### Features
+- Linux ARM64 (aarch64) release binaries: `install.sh`, `rustcode --update` and `/update` pick them on ARM Linux such as Arch Linux ARM; `install.sh` refuses musl systems with a build-from-source hint (#2126)
+- engine: sessions no longer get stuck on "Native tool history is incomplete" after an ACP background task finishes; affected sessions recover on the next prompt, and the stop notice no longer says "Image analysis unavailable" (#2124)
+- terminal: the footer below the input sits on the transcript background instead of the panel color (#2125)
 ## [v0.78.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.78.0) - 2026-10-18
 
 ### Features
