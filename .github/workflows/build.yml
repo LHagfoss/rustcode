@@ -104,6 +104,53 @@ jobs:
               shell: bash
               run: ${SCCACHE_PATH} --show-stats
 
+            # Developer ID signing switches on once all five MACOS_* secrets
+            # exist (docs/macos-release-signing.md); until then the binary
+            # ships as the linker signed it and this prints a notice.
+            - name: Check macOS signing secrets
+              id: signing
+              if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'macOS'
+              shell: bash
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: scripts/macos-release-signing.sh check
+
+            - name: Import Developer ID certificate
+              if: steps.signing.outputs.enabled == 'true'
+              shell: bash
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: scripts/macos-release-signing.sh import
+
+            # A bare executable cannot be stapled: it is signed and submitted,
+            # and Gatekeeper finds the ticket online.
+            - name: Sign and notarize macOS binary
+              if: steps.signing.outputs.enabled == 'true'
+              shell: bash
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: |
+                  scripts/macos-release-signing.sh sign target/${{ matrix.target }}/release/rustcode
+                  ditto -c -k --keepParent target/${{ matrix.target }}/release/rustcode "$RUNNER_TEMP/rustcode-cli-notarize.zip"
+                  scripts/macos-release-signing.sh notarize "$RUNNER_TEMP/rustcode-cli-notarize.zip"
+
+            - name: Remove signing keychain
+              if: always() && steps.signing.outputs.enabled == 'true'
+              shell: bash
+              run: scripts/macos-release-signing.sh cleanup
+
             - name: Package Linux / macOS binary
               if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os != 'Windows'
               shell: bash
@@ -148,12 +195,64 @@ jobs:
             - name: Test Swift package
               run: swift test --package-path macos
 
+            # Without the MACOS_* secrets the app stays ad-hoc signed and
+            # unnotarized (docs/macos-release-signing.md).
+            - name: Check macOS signing secrets
+              id: signing
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: scripts/macos-release-signing.sh check
+
+            - name: Import Developer ID certificate
+              if: steps.signing.outputs.enabled == 'true'
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: scripts/macos-release-signing.sh import
+
+            # Signs with MACOS_SIGN_IDENTITY when the import set it, else ad hoc.
             - name: Package SwiftUI app
               run: |
                   tar xzf engine/rustcode-macos-aarch64.tar.gz -C engine
                   chmod +x engine/rustcode-macos-aarch64
                   REQUIRE_COMPILED_ICON=1 scripts/package-swift-app.sh engine/rustcode-macos-aarch64 target/swift-release
-                  ditto -c -k --sequesterRsrc --keepParent target/swift-release/RustCode.app rustcode-macos-aarch64-swift-app.zip
+
+            - name: Notarize and staple SwiftUI app
+              if: steps.signing.outputs.enabled == 'true'
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: scripts/macos-release-signing.sh notarize target/swift-release/RustCode.app
+
+            - name: Zip SwiftUI app
+              run: ditto -c -k --sequesterRsrc --keepParent target/swift-release/RustCode.app rustcode-macos-aarch64-swift-app.zip
+
+            # Check the asset as a user gets it: unpacked from the zip, with
+            # the quarantine flag a browser download sets.
+            - name: Verify downloaded app with Gatekeeper
+              if: steps.signing.outputs.enabled == 'true'
+              run: |
+                  check="$RUNNER_TEMP/gatekeeper-check"
+                  rm -rf "$check" && mkdir -p "$check"
+                  ditto -x -k rustcode-macos-aarch64-swift-app.zip "$check"
+                  xattr -w com.apple.quarantine "0083;$(printf '%x' "$(date +%s)");Safari;" "$check/RustCode.app"
+                  xcrun stapler validate "$check/RustCode.app"
+                  spctl --assess --type execute --verbose=4 "$check/RustCode.app"
+                  codesign --verify --deep --strict --verbose=2 "$check/RustCode.app"
+
+            - name: Remove signing keychain
+              if: always() && steps.signing.outputs.enabled == 'true'
+              run: scripts/macos-release-signing.sh cleanup
 
             - name: Upload app artifact
               uses: actions/upload-artifact@v7
