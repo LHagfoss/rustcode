@@ -1702,7 +1702,12 @@ async fn test_theme_command_flow() {
         let s = state.lock().await;
         assert_eq!(s.config.theme, "nord");
         assert!(s.history.is_empty());
-        assert!(s.command_panel.as_ref().unwrap().content.contains("nord"));
+        // A successful switch confirms in the footer, not a panel to dismiss.
+        assert!(s.command_panel.is_none());
+        assert!(
+            s.active_transient_notice()
+                .is_some_and(|notice| notice.contains("nord"))
+        );
     }
 
     // Switch to unknown theme

@@ -235,8 +235,8 @@ pub(crate) fn runtime_tests_available() -> bool {
         use std::sync::OnceLock;
         static RESULT: OnceLock<Result<(), String>> = OnceLock::new();
         match RESULT.get_or_init(|| {
-            let bubblewrap = match find_bubblewrap() {
-                Some(path) => path,
+            match find_bubblewrap() {
+                Some(_) => {}
                 None if !bubblewrap_candidate_exists() => {
                     return Err("bubblewrap is not installed".to_string());
                 }
@@ -710,7 +710,9 @@ fn network_filter_instructions() -> Result<Vec<BpfInstruction>, String> {
     const ALLOW: u32 = 0x7fff_0000;
     const ERRNO_EPERM: u32 = 0x0005_0000 | libc::EPERM as u32;
     const KILL_PROCESS: u32 = 0x8000_0000;
+    #[cfg(target_arch = "x86_64")]
     const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
+    #[cfg(target_arch = "aarch64")]
     const AUDIT_ARCH_AARCH64: u32 = 0xc000_00b7;
     const OFF_NR: u32 = 0;
     const OFF_ARCH: u32 = 4;

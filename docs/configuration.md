@@ -236,6 +236,23 @@ reduced_motion = true
 The default is off, so the sweep is unchanged unless you opt in. This is purely
 presentational, so a project `.rustcode/config.toml` may set it.
 
+## Mouse wheel speed
+
+Each mouse wheel event scrolls the transcript one row, and the terminal decides
+how many events a wheel notch or trackpad gesture sends. When scrolling feels
+slow in every TUI, raise it in the terminal: kitty on Wayland reports a mouse
+wheel as high-resolution scrolling, so `touch_scroll_multiplier` in
+`kitty.conf` (default 1) is the setting that applies, not
+`wheel_scroll_multiplier`.
+
+To scroll more rows per event in RustCode alone, set `scroll_lines` (1–20):
+
+```toml
+scroll_lines = 3
+```
+
+This is purely presentational, so a project `.rustcode/config.toml` may set it.
+
 ## Keeping the transcript in terminal scrollback
 
 The readable transcript lives in the terminal surface RustCode paints, and on

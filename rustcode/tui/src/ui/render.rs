@@ -151,10 +151,10 @@ fn render_transcript_status_row(
         return;
     }
     transcript.follow_control.clear();
-    // The candidate walk is proportional to the tool history, and the collapsed
-    // default is the common case: an empty set is answered without walking, so
-    // an ordinary frame never pays for the readout.
-    if state.expanded_thoughts().is_empty() && !state.verbosity().edits_open() {
+    // The stored set records flips from the verbosity's default, so an empty
+    // set is the default view at every level (edits open at `edits`): it has
+    // nothing to report and is answered without the candidate walk.
+    if state.expanded_thoughts().is_empty() {
         return;
     }
     let (expanded, collapsible) = transcript.expand_progress(state, f.area().width);

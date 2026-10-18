@@ -495,6 +495,7 @@ pub fn build_help_text() -> String {
                 ("/new", "Start a new conversation"),
                 ("/fork", "Fork the current conversation into a new session"),
                 ("/archive", "Persist the current session"),
+                ("/export", "Export this session as a zip into Downloads"),
                 ("/continue", "Continue restored pending session work"),
                 ("/workspace", "Manage an isolated task workspace"),
                 ("/pwd", "Show the effective workspace path"),

@@ -888,6 +888,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     },
     PaletteItem {
         group: "Session",
+        name: "Export session to Downloads",
+        shortcut: "/export",
+    },
+    PaletteItem {
+        group: "Session",
         name: "Clear conversation",
         shortcut: "/clear",
     },

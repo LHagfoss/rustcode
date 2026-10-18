@@ -1267,6 +1267,11 @@ pub struct AppConfig {
     /// so project config may set it like `theme` and `fullscreen`.
     #[serde(default)]
     pub reduced_motion: bool,
+    /// Transcript rows one mouse wheel event scrolls in the TUI (1–20).
+    /// `None` keeps one row per event; the terminal decides how many events
+    /// a wheel notch sends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_lines: Option<u16>,
     /// Generate a catch-up recap after 10 minutes idle following completed
     /// work. Manual `/recap` remains available.
     #[serde(default = "default_true")]
@@ -1465,6 +1470,8 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reduced_motion: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    scroll_lines: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_recap: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prompt_improver: Option<bool>,
@@ -1621,6 +1628,7 @@ impl Default for AppConfig {
             fullscreen: false,
             preserve_transcript_scrollback: false,
             reduced_motion: false,
+            scroll_lines: None,
             auto_recap: true,
             prompt_improver: false,
             yolo: false,
@@ -2010,6 +2018,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         fullscreen: Some(config.fullscreen),
         preserve_transcript_scrollback: Some(config.preserve_transcript_scrollback),
         reduced_motion: Some(config.reduced_motion),
+        scroll_lines: config.scroll_lines,
         auto_recap: Some(config.auto_recap),
         prompt_improver: Some(config.prompt_improver),
         yolo: config.yolo.then_some(true),
@@ -2129,6 +2138,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(reduced_motion) = file.reduced_motion {
         config.reduced_motion = reduced_motion;
+    }
+    if let Some(scroll_lines) = file.scroll_lines {
+        config.scroll_lines = Some(scroll_lines);
     }
     if let Some(auto_recap) = file.auto_recap {
         config.auto_recap = auto_recap;
@@ -2318,6 +2330,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         fullscreen: None,
         preserve_transcript_scrollback: None,
         reduced_motion: None,
+        scroll_lines: None,
         auto_recap: None,
         prompt_improver: None,
         yolo: None,
@@ -2389,8 +2402,10 @@ pub use mcp_servers::{
 pub(crate) use mcp_servers::{add_mcp_server_in, remove_mcp_server_in, workspace_mcp_servers_in};
 
 mod session;
+mod session_export;
 pub use session::session_title;
 pub use session::*;
+pub use session_export::{downloads_dir, export_session};
 
 #[cfg(test)]
 use session::{next_session_id_value, queue_history_write, write_history_file};

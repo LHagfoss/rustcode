@@ -190,7 +190,15 @@ pub(super) fn question_modal_lines(
             }),
         )],
         vec![Span::styled(
-            "Type your own answer",
+            if question.custom_draft.is_empty() {
+                "Type your own answer".to_owned()
+            } else {
+                // A draft kept from stepping back up shows where it waits.
+                format!(
+                    "Your answer: {}",
+                    question.custom_draft.lines().next().unwrap_or_default()
+                )
+            },
             Style::default()
                 .fg(if custom_selected {
                     COLOR_TEXT()
@@ -308,7 +316,11 @@ pub(super) fn question_modal_footer(
 ) -> Line<'static> {
     if width < 40 {
         let text = if question.custom_input.is_some() {
-            "↵ submit · esc back".to_owned()
+            if question.options.is_empty() {
+                "↵ submit · esc back".to_owned()
+            } else {
+                "↵ submit · ↑ options · esc".to_owned()
+            }
         } else if question.is_multi_select {
             "space toggle · ↵ submit · esc".to_owned()
         } else if chained {
@@ -325,7 +337,12 @@ pub(super) fn question_modal_footer(
     };
     Line::from(Span::styled(
         if question.custom_input.is_some() {
-            format!("enter to submit answer | esc to go back{nav_hint}")
+            let options_hint = if question.options.is_empty() {
+                ""
+            } else {
+                " | ↑ to options"
+            };
+            format!("enter to submit answer{options_hint} | esc to go back{nav_hint}")
         } else if question.is_multi_select {
             format!("space to toggle | enter to submit answer | esc to interrupt{nav_hint}")
         } else {

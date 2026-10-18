@@ -212,12 +212,41 @@ pub(super) struct ReadingAnchor {
     pub(super) live_rows: usize,
 }
 
-/// Rows the mouse wheel moves per event.
+/// The finest wheel step: one row per event.
 ///
-/// Each wheel event advances one row for precise transcript navigation.
 /// Selected wheel scrolling applies the same delta in the next frame.
-/// Keyboard and edge-drag scrolling also advance one row at a time.
+/// Keyboard and edge-drag scrolling also advance one row at a time. The step
+/// the wheel actually uses is [`wheel_scroll_lines`].
 pub(crate) const WHEEL_SCROLL_LINES: usize = 1;
+
+/// The configured wheel step; 0 until startup sets it.
+static CONFIGURED_WHEEL_LINES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Rows one wheel event moves unless `scroll_lines` says otherwise.
+///
+/// One row per event (#1800): the terminal decides how many events a wheel
+/// notch or trackpad gesture sends, so its own setting (kitty's
+/// `touch_scroll_multiplier` on Wayland, for one) speeds up every TUI at once.
+pub(crate) const fn default_wheel_scroll_lines() -> usize {
+    WHEEL_SCROLL_LINES
+}
+
+/// Apply `scroll_lines` from the config: `None` keeps the default.
+pub(crate) fn set_wheel_scroll_lines(configured: Option<u16>) {
+    let lines = configured.map_or(default_wheel_scroll_lines(), |lines| {
+        usize::from(lines.clamp(1, 20))
+    });
+    CONFIGURED_WHEEL_LINES.store(lines, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Rows one mouse wheel event moves the transcript or a scrollable panel.
+pub(crate) fn wheel_scroll_lines() -> usize {
+    match CONFIGURED_WHEEL_LINES.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => default_wheel_scroll_lines(),
+        lines => lines,
+    }
+}
 
 /// Upper bound on the reading offset between two frames. Each projection
 /// clamps the offset to the real transcript height, so this only stops a

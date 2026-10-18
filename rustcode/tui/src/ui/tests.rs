@@ -8907,7 +8907,8 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
     );
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
-    assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
+    // The footer shares the composer's panel color, so the two read as one block.
+    assert_eq!(buffer[(0, footer_row)].bg, COLOR_PANEL());
     assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
 }
 
@@ -10657,6 +10658,12 @@ fn ctrl_o_moves_every_collapsed_body_and_the_readout_counts_them() {
     let recollapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
     assert!(!recollapsed.contains("expanded ·"), "{recollapsed}");
     assert!(!recollapsed.contains("(ctrl+o all"), "{recollapsed}");
+
+    // `edits` opens file changes by default; that default view is not a toggle
+    // the reader made, so it does not claim the row above the composer.
+    state.verbosity = rustcode::controller::Verbosity::Edits;
+    let edits_default = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 24);
+    assert!(!edits_default.contains("expanded ·"), "{edits_default}");
 }
 
 /// #1594: a selection releases follow, so pointing at a row is enough to keep
