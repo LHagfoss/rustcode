@@ -397,6 +397,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
     let content_mark = (history_revision, live_content.finish() as usize);
     transcript.tool_line_flags = Some(Vec::new());
     transcript.message_line_flags = Some(Vec::new());
+    transcript.viz_line_flags = Some(Vec::new());
     if let Some(agent) = state.selected_subagent() {
         // An agent context has no reading anchor of its own, so it scrolls as
         // a plain offset from the newest row of the agent's whole history.
@@ -451,6 +452,7 @@ pub(crate) fn render_visible_conversation_with_transcript(
     if transcript.selection.is_active() {
         transcript.tool_line_flags = None;
         transcript.message_line_flags = None;
+        transcript.viz_line_flags = None;
         return render_selected_history_projection(
             state,
             width,
@@ -534,12 +536,34 @@ pub(crate) fn render_visible_conversation_with_transcript(
     // A message's rows light together under the pointer, and a right-click
     // on any of them copies it.
     let mut message_lines = Vec::with_capacity(capacity);
+    // Table headers and tree nodes a click can sort or fold.
+    let mut viz_lines = Vec::new();
     let mut offset = 0;
     for (block, tool_block, message) in blocks.into_iter().rev() {
         let block_end = offset + block.len();
         let from = start.saturating_sub(offset).min(block.len());
         let through = end.saturating_sub(offset).min(block.len());
         if from < through {
+            if let Some(index) = message {
+                let hits = transcript.committed_block_viz_hits(state, index, width);
+                viz_lines.extend(
+                    hits.iter()
+                        .filter(|hit| (from..through).contains(&hit.line))
+                        .map(|hit| {
+                            (
+                                lines.len() + hit.line - from,
+                                hit.columns.clone(),
+                                super::VizTarget {
+                                    message: index,
+                                    ordinal: hit.ordinal,
+                                    source: hit.source,
+                                    action: hit.action,
+                                    width,
+                                },
+                            )
+                        }),
+                );
+            }
             lines.extend_from_slice(&block[from..through]);
             let owners = tool_block.map(|(first, end)| {
                 transcript.committed_tool_group_owners(state, first, end, width)
@@ -566,11 +590,13 @@ pub(crate) fn render_visible_conversation_with_transcript(
         if offset >= end {
             transcript.tool_line_flags = Some(tool_lines);
             transcript.message_line_flags = Some(message_lines);
+            transcript.viz_line_flags = Some(viz_lines);
             return lines;
         }
     }
     transcript.tool_line_flags = Some(tool_lines);
     transcript.message_line_flags = Some(message_lines);
+    transcript.viz_line_flags = Some(viz_lines);
     let from = start.saturating_sub(offset).min(live.len());
     let through = end.saturating_sub(offset).min(live.len());
     if from < through {
@@ -891,6 +917,46 @@ fn selected_subagent_lines(
     }
     lines.extend(blocks.into_iter().rev().flatten());
     lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
+/// [`render_committed_history_block_snapshot`] for the in-app transcript:
+/// an assistant message's widgets are drawn under their view state, and the
+/// clickable spans of its rows come back with them. Terminal scrollback
+/// keeps the default rendering, since nothing written there can change.
+pub(crate) fn render_committed_history_block_interactive(
+    state: &RenderSnapshot,
+    message_index: usize,
+    width: u16,
+    views: Vec<(usize, super::visualization::VizView)>,
+) -> (Vec<Line<'static>>, Vec<super::visualization::VizHit>) {
+    let history = state.active_history();
+    let Some(message) = history.get(message_index) else {
+        return (Vec::new(), Vec::new());
+    };
+    if message.role != "assistant"
+        || message.conversation_recap
+        || is_hidden_system_notice(&message.content)
+        || !message.content.contains("rustcode-viz")
+    {
+        return (
+            render_committed_history_block_snapshot(state, message_index, width),
+            Vec::new(),
+        );
+    }
+    let (mut response, hits) = history_cell::AssistantMarkdownCell::committed(
+        &message.content,
+        message.token_usage.clone(),
+        message.response_time_ms,
+        message.thought_time_ms,
+        message.thought_tokens,
+    )
+    .interactive_display_lines(width, views);
+    let completion = render_turn_completion(message, width);
+    if !completion.is_empty() {
+        response.extend(completion);
+        response.push(Line::from(""));
+    }
+    (response, hits)
 }
 
 /// Render one finalized history entry for insertion into terminal scrollback.

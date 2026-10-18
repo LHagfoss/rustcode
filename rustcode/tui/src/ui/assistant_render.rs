@@ -352,7 +352,7 @@ pub(super) fn render_assistant_message<'a>(
     copy_registry: &mut Vec<(usize, String)>,
     options: AssistantRenderOptions,
 ) {
-    render_assistant_message_with_cache(content, lines, copy_registry, options, None);
+    render_assistant_message_with_cache(content, lines, copy_registry, options, None, None);
 }
 
 pub(super) fn render_assistant_message_with_cache<'a>(
@@ -361,6 +361,7 @@ pub(super) fn render_assistant_message_with_cache<'a>(
     copy_registry: &mut Vec<(usize, String)>,
     options: AssistantRenderOptions,
     mut streaming_cache: Option<&mut Vec<super::markdown::StreamingMarkdownCache>>,
+    mut viz: Option<&mut super::visualization::VizContext>,
 ) {
     let AssistantRenderOptions {
         token_usage,
@@ -500,6 +501,7 @@ pub(super) fn render_assistant_message_with_cache<'a>(
         let mut markdown_block_index = 0;
         let mut fence_open = None;
         let mut current_lang = String::new();
+        let mut viz_ordinal = 0;
         while i < processed_lines.len() {
             if processed_lines[i].0 {
                 let line_str = &processed_lines[i].1;
@@ -536,22 +538,45 @@ pub(super) fn render_assistant_message_with_cache<'a>(
                         // never parsed, drawn, or committed to scrollback.
                         if super::visualization::is_viz_info(&current_lang) {
                             let closed = j < processed_lines.len();
+                            let ordinal = viz_ordinal;
+                            viz_ordinal += 1;
+                            let source = super::visualization::source_hash(&code_text);
                             let viz_lines = if closed {
-                                super::visualization::render_visualization(
+                                super::visualization::render_visualization_with_view(
                                     &code_text,
                                     box_width,
                                     show_picker,
+                                    viz.as_deref().and_then(|viz| viz.view(ordinal, source)),
                                 )
                             } else if is_generating {
-                                Ok(vec![super::visualization::streaming_placeholder(
-                                    j - i - 1,
-                                    show_picker,
-                                )])
+                                Ok((
+                                    vec![super::visualization::streaming_placeholder(
+                                        j - i - 1,
+                                        show_picker,
+                                    )],
+                                    Vec::new(),
+                                ))
                             } else {
                                 Err("incomplete block".to_owned())
                             };
                             match viz_lines {
-                                Ok(viz_lines) => {
+                                Ok((viz_lines, hits)) => {
+                                    // Every widget row carries the two-cell
+                                    // assistant gutter.
+                                    if let Some(viz) = viz.as_deref_mut() {
+                                        let first = lines.len();
+                                        viz.hits.extend(hits.into_iter().map(
+                                            |(line, columns, action)| {
+                                                super::visualization::VizHit {
+                                                    line: first + line,
+                                                    columns: columns.start + 2..columns.end + 2,
+                                                    ordinal,
+                                                    source,
+                                                    action,
+                                                }
+                                            },
+                                        ));
+                                    }
                                     // Copy the canonical fence so pasting it
                                     // reproduces the same widget.
                                     if closed {
