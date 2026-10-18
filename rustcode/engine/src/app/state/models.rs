@@ -84,6 +84,9 @@ pub struct PendingQuestion {
     /// slot is active); the string is the in-progress text.
     pub custom_input: Option<String>,
     pub custom_cursor: usize,
+    /// Freeform text kept while the user steps back up to the option list,
+    /// restored when the "write your own" slot is entered again.
+    pub custom_draft: String,
     /// The submitted answer for this question once the user moves on or the
     /// chain is submitted. `None` while unanswered (a skipped question).
     pub answer: Option<String>,
@@ -103,6 +106,7 @@ impl PendingQuestion {
             chosen,
             custom_input: None,
             custom_cursor: 0,
+            custom_draft: String::new(),
             answer: None,
         }
     }
@@ -161,9 +165,33 @@ impl PendingQuestion {
     }
     pub fn activate_custom_input(&mut self) {
         if self.custom_input.is_none() {
-            self.custom_input = Some(String::new());
-            self.custom_cursor = 0;
+            let draft = std::mem::take(&mut self.custom_draft);
+            self.custom_cursor = draft.len();
+            self.custom_input = Some(draft);
         }
+    }
+
+    /// Step from the freeform answer back up to the last option, keeping the
+    /// typed text as a draft. Returns `false` when there is no option to
+    /// return to, so the caller can leave the answer focused.
+    pub fn leave_custom_input(&mut self) -> bool {
+        if self.options.is_empty() {
+            return false;
+        }
+        if let Some(text) = self.custom_input.take() {
+            self.custom_draft = text;
+        }
+        self.custom_cursor = 0;
+        self.selected = self.options.len() - 1;
+        true
+    }
+
+    /// Whether the cursor of the freeform answer sits on its first line, where
+    /// Up has no line left to move to.
+    pub fn custom_cursor_on_first_line(&self) -> bool {
+        self.custom_input
+            .as_deref()
+            .is_none_or(|text| !text[..self.custom_cursor.min(text.len())].contains('\n'))
     }
 
     /// Apply one of the shared editing operations to the custom answer.

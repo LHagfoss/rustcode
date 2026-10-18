@@ -52,8 +52,13 @@ fn handle_question_custom_key(
         KeyAction::InsertNewline => question.insert_char('\n'),
         KeyAction::Submit => return Submit,
         KeyAction::Paste => return Paste,
-        // The answer may span lines: Up and Down move through them.
-        KeyAction::HistoryPrevious => question.edit(TextEdit::LineUp),
+        // The answer may span lines: Up and Down move through them, and Up on
+        // the first line steps back to the options with the text kept.
+        KeyAction::HistoryPrevious => {
+            if !question.custom_cursor_on_first_line() || !question.leave_custom_input() {
+                question.edit(TextEdit::LineUp);
+            }
+        }
         KeyAction::HistoryNext => question.edit(TextEdit::LineDown),
         // Modal and composer actions do not edit an answer.
         _ => {
@@ -290,7 +295,7 @@ fn scroll_panel_selection(
     }
     if transcript.panel_selection_scrollable {
         transcript.panel_selection.clear();
-        let step = ui::WHEEL_SCROLL_LINES as i16;
+        let step = ui::wheel_scroll_lines() as i16;
         scroll_command_panel(
             modal_scroll_row,
             transcript.panel_max_scroll_row,
@@ -911,6 +916,7 @@ pub(super) async fn handle_app_event(
                                     if let Some(q) = s.pending_question.as_mut() {
                                         q.custom_input = None;
                                         q.custom_cursor = 0;
+                                        q.custom_draft.clear();
                                     }
                                     QuestionEditAction::Handled
                                 }
@@ -2321,18 +2327,18 @@ pub(super) async fn handle_app_event(
                     event::MouseEventKind::ScrollUp if transcript_state.selection.is_active() => {
                         transcript_state
                             .selection
-                            .queue_scroll(-1, ui::WHEEL_SCROLL_LINES);
+                            .queue_scroll(-1, ui::wheel_scroll_lines());
                     }
                     event::MouseEventKind::ScrollDown if transcript_state.selection.is_active() => {
                         transcript_state
                             .selection
-                            .queue_scroll(1, ui::WHEEL_SCROLL_LINES);
+                            .queue_scroll(1, ui::wheel_scroll_lines());
                     }
                     event::MouseEventKind::ScrollUp => {
-                        transcript_state.scroll_up(ui::WHEEL_SCROLL_LINES);
+                        transcript_state.scroll_up(ui::wheel_scroll_lines());
                     }
                     event::MouseEventKind::ScrollDown => {
-                        transcript_state.scroll_down(ui::WHEEL_SCROLL_LINES);
+                        transcript_state.scroll_down(ui::wheel_scroll_lines());
                     }
                     // A right-click on a tool call copies the call and what it
                     // returned; a live selection keeps the right-click for
@@ -2820,6 +2826,46 @@ mod tests {
 
         assert_eq!(question.custom_input.as_deref(), Some("først\n二つ\nslutt"));
         assert_eq!(question.custom_cursor, "først\n二つ\nslutt".len());
+    }
+
+    #[test]
+    fn ask_question_up_from_first_answer_line_returns_to_options_with_draft() {
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let mut question = PendingQuestion::new(
+            "Question?".to_owned(),
+            vec!["One".to_owned(), "Two".to_owned()],
+            false,
+        );
+        question.selected = 2;
+        question.activate_custom_input();
+        question.insert_str("first\nsecond");
+
+        // Up on the second line moves within the answer.
+        handle_question_custom_key(&mut question, up);
+        assert!(question.custom_input.is_some());
+        assert!(question.custom_cursor_on_first_line());
+
+        // Up on the first line returns to the last option and keeps the text.
+        handle_question_custom_key(&mut question, up);
+        assert!(question.custom_input.is_none());
+        assert_eq!(question.selected, 1);
+        assert_eq!(question.custom_draft, "first\nsecond");
+
+        question.activate_custom_input();
+        assert_eq!(question.custom_input.as_deref(), Some("first\nsecond"));
+        assert_eq!(question.custom_cursor, "first\nsecond".len());
+    }
+
+    #[test]
+    fn ask_question_up_without_options_stays_in_the_answer() {
+        let mut question = PendingQuestion::new("Question?".to_owned(), vec![], false);
+        question.activate_custom_input();
+        question.insert_str("text");
+        handle_question_custom_key(
+            &mut question,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        );
+        assert_eq!(question.custom_input.as_deref(), Some("text"));
     }
 
     #[tokio::test]

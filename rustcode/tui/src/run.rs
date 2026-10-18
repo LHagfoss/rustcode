@@ -448,8 +448,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Some(crate::cli::Commands::Export { id, out }) = cli_args.command.as_ref() {
+        run_session_export(id.as_deref(), out.as_deref());
+        return Ok(());
+    }
+
     if let Some(crate::cli::Commands::Sessions { command }) = cli_args.command.as_ref() {
         match command {
+            Some(crate::cli::SessionCommands::Export { id, out }) => {
+                run_session_export(id.as_deref(), out.as_deref());
+            }
             Some(crate::cli::SessionCommands::Migrate { dry_run }) => {
                 let Some(report) = rustcode::config::migrate_legacy_sessions(*dry_run) else {
                     eprintln!("Session migration failed: configuration directory is unavailable.");
@@ -882,6 +890,35 @@ fn resume_latest_unscoped(
 
 /// `rustcode sessions list`: print saved sessions scoped to the current
 /// workspace by default; `--all` prints every workspace with its path.
+/// `rustcode export [id]`: zip a session for another machine. Without an id,
+/// the most recent session of the current workspace is exported.
+fn run_session_export(id: Option<&str>, out: Option<&std::path::Path>) {
+    let id = match id {
+        Some(id) => id.to_owned(),
+        None => {
+            let scope = rustcode::config::SessionScope::for_current_dir();
+            let (sessions, _) = rustcode::config::list_sessions_in_scope(1, &scope);
+            match sessions
+                .first()
+                .and_then(|meta| rustcode::config::session_id_from_path(&meta.path))
+            {
+                Some(id) => id,
+                None => {
+                    eprintln!("No saved sessions in this workspace; pass a session id.");
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+    match rustcode::config::export_session(&id, out) {
+        Ok(path) => println!("{}", path.display()),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn run_sessions_list(show_all: bool) {
     const LIMIT: usize = 50;
     // `--all` lists every workspace; the default scope is the store's shared
@@ -972,6 +1009,7 @@ async fn run_interactive(
         .into_iter()
         .map(|theme| theme.name)
         .collect();
+    crate::ui::set_wheel_scroll_lines(app_state_struct.config.scroll_lines);
     let fullscreen_requested = cli_args.fullscreen || app_state_struct.config.fullscreen;
     let local_terminal = crate::terminal_probe::probe().supports_alternate_screen();
     let fullscreen = fullscreen_requested && local_terminal;

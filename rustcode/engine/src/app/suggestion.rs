@@ -114,6 +114,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Fork the current conversation into a new session",
     },
     CommandInfo {
+        name: "/export",
+        desc: "Export this session as a zip into Downloads",
+    },
+    CommandInfo {
         name: "/archive",
         desc: "Persist the current session",
     },

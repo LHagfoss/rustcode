@@ -44,6 +44,7 @@ fn installed_path(document: &str) -> Option<&str> {
 }
 
 /// Development/test binaries never register a persistent login service.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn installed_program(program: &Path) -> bool {
     let mut directories = vec![
         PathBuf::from("/opt/homebrew/bin"),

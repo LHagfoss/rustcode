@@ -398,10 +398,7 @@ async fn handle_enter_inner(
                             s.verbosity = level;
                             changed = true;
                             let current = s.verbosity.label();
-                            s.show_command_panel(
-                                "Output verbosity",
-                                format!("Verbosity set to {current}."),
-                            );
+                            s.set_transient_notice(format!("Verbosity set to {current}"));
                         } else {
                             s.show_command_panel(
                                 "Output verbosity",
@@ -479,7 +476,7 @@ async fn handle_enter_inner(
                         Some(false) => "Thinking forced off.",
                         None => "Thinking left at server/Modelfile default.",
                     };
-                    s.show_command_panel("Thinking", label);
+                    s.set_transient_notice(label);
                 }
             }
             "/effort" => {
@@ -523,7 +520,7 @@ async fn handle_enter_inner(
                         Some(ref e) => format!("Reasoning effort set to '{e}'."),
                         None => "Reasoning effort cleared (default).".to_string(),
                     };
-                    s.show_command_panel("Reasoning effort", label);
+                    s.set_transient_notice(label);
                 }
             }
             // Theme browsing renders a picker in the terminal frontend, which
@@ -552,7 +549,7 @@ async fn handle_enter_inner(
                             s.config.theme = theme.clone();
                             s.theme_picker_index = idx;
                             crate::config::save_entire_config(&s.config);
-                            s.show_command_panel("Theme", format!("Theme changed to '{theme}'"));
+                            s.set_transient_notice(format!("Theme set to '{theme}'"));
                         } else {
                             s.show_command_panel(
                                 "Theme",
@@ -1074,6 +1071,30 @@ async fn handle_enter_inner(
                     );
                 } else {
                     s.show_command_panel("Ollama", "Usage:\n  /ollama list [url] - List available models\n  /ollama <url> <model> - Set 'ollama' profile URL and model");
+                }
+            }
+            "/export" => {
+                // Flush the live transcript first so the archive holds every
+                // message shown on screen.
+                let session_id = s.active_session_id.clone();
+                crate::config::save_session_history(&session_id, &s.history);
+                let destination = tokens.get(1).map(|path| {
+                    let path = path.strip_prefix("~/").map_or_else(
+                        || std::path::PathBuf::from(path),
+                        |rest| {
+                            std::env::var_os("HOME")
+                                .map(std::path::PathBuf::from)
+                                .unwrap_or_default()
+                                .join(rest)
+                        },
+                    );
+                    path
+                });
+                match crate::config::export_session(&session_id, destination.as_deref()) {
+                    Ok(path) => {
+                        s.set_transient_notice(format!("Exported session to {}", path.display()))
+                    }
+                    Err(error) => s.show_command_panel("Export", error),
                 }
             }
             "/change_title" => {

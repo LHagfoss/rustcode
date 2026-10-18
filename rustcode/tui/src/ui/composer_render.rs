@@ -1231,6 +1231,28 @@ pub(super) fn footer_location(state: &RenderSnapshot) -> String {
     format!("{branch} · {path}")
 }
 
+/// Standing session settings for the footer: the model with its reasoning
+/// effort when one is set, then Plan mode and auto-approval, which change
+/// what a prompt will do and were otherwise visible only as a passing notice.
+pub(super) fn footer_session_badges(state: &RenderSnapshot) -> Vec<String> {
+    let mut badges = Vec::new();
+    let effort = state
+        .active_model_profile()
+        .and_then(|profile| profile.reasoning_effort.as_deref())
+        .filter(|effort| !effort.is_empty());
+    badges.push(match effort {
+        Some(effort) => format!("{} {effort}", state.model_name()),
+        None => state.model_name().to_string(),
+    });
+    if state.agent_mode() == rustcode::controller::AgentMode::Plan {
+        badges.push("plan mode".to_owned());
+    }
+    if state.auto_confirm() {
+        badges.push("auto-approve".to_owned());
+    }
+    badges
+}
+
 /// Paint the footer. Returns where the task counter was drawn, so the pointer
 /// can hover and click it.
 pub(super) fn render_composer_footer(
@@ -1267,7 +1289,7 @@ pub(super) fn render_composer_footer(
             } else {
                 "  ⚠ Press Ctrl+C again to exit".to_owned()
             },
-            get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
+            get_themed_style(Color::Yellow, COLOR_PANEL(), Modifier::BOLD, false),
             None,
         )
     } else if let Some(notice) = state.transient_notice() {
@@ -1276,7 +1298,7 @@ pub(super) fn render_composer_footer(
         // selection to clipboard", not the copy key sitting next to it.
         (
             format!("  {notice}"),
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+            get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, false),
             None,
         )
     } else if let Some(clauses) = hint_clauses {
@@ -1284,7 +1306,7 @@ pub(super) fn render_composer_footer(
         // metadata rather than competing with it for the same row.
         (
             String::new(),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false),
             Some(clauses),
         )
     } else {
@@ -1293,12 +1315,13 @@ pub(super) fn render_composer_footer(
             metadata.push(agent.name().to_string());
         }
         // The running indicator lives at the bottom of the chat now, so the
-        // footer keeps only the model and workspace.
-        metadata.push(state.model_name().to_string());
+        // footer carries the session's standing settings: model and effort,
+        // a non-default mode, then the workspace.
+        metadata.extend(footer_session_badges(state));
         metadata.push(location);
         (
             format!("  {}", metadata.join(" · ")),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false),
             None,
         )
     };
@@ -1333,7 +1356,7 @@ pub(super) fn render_composer_footer(
     } else {
         right
     };
-    let right_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
+    let right_style = get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false);
     let right_width = right.width();
     // The hint is the actionable content on this row, so it claims the width
     // first and the context percentage yields when the two compete: degrade the
@@ -1379,7 +1402,7 @@ pub(super) fn render_composer_footer(
     let padding = row_width.saturating_sub(left.width() + chip_width + right_width);
     let mut spans = vec![
         Span::styled(left, left_style),
-        Span::styled(" ".repeat(padding), Style::default().bg(COLOR_BG())),
+        Span::styled(" ".repeat(padding), Style::default().bg(COLOR_PANEL())),
     ];
     let mut chip_area = None;
     if let Some(chip) = chip {
@@ -1397,17 +1420,17 @@ pub(super) fn render_composer_footer(
                 if tasks_hovered {
                     COLOR_HOVER_BG()
                 } else {
-                    COLOR_BG()
+                    COLOR_PANEL()
                 },
                 Modifier::BOLD,
                 false,
             ),
         ));
-        spans.push(Span::styled("  ", Style::default().bg(COLOR_BG())));
+        spans.push(Span::styled("  ", Style::default().bg(COLOR_PANEL())));
     }
     spans.push(Span::styled(right, right_style));
     f.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(COLOR_BG())),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(COLOR_PANEL())),
         area,
     );
     chip_area

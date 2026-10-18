@@ -81,6 +81,17 @@ pub enum Commands {
         command: Option<SyncCommands>,
     },
 
+    /// Export a session as a zip archive (default: into ~/Downloads) to send
+    /// to another machine; same as `sessions export`
+    Export {
+        /// Session id, as shown by `sessions list` or `/status`; defaults to
+        /// the most recent session
+        id: Option<String>,
+        /// Directory to write the archive into
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+
     /// Inspect or migrate the on-disk session store
     Sessions {
         #[command(subcommand)]
@@ -449,6 +460,14 @@ pub enum SessionCommands {
         /// Session id, as shown by `sessions list` or `/session`
         id: String,
     },
+    /// Export a session as a zip archive (default: into ~/Downloads)
+    Export {
+        /// Session id; defaults to the most recent session
+        id: Option<String>,
+        /// Directory to write the archive into
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -723,6 +742,21 @@ mod tests {
             cli.command,
             Some(Commands::Sessions {
                 command: Some(SessionCommands::Migrate { dry_run: true })
+            })
+        ));
+        let export = Cli::try_parse_from(["rustcode", "export", "abc", "--out", "/tmp"]).unwrap();
+        assert!(matches!(
+            export.command,
+            Some(Commands::Export { id: Some(id), out: Some(_) }) if id == "abc"
+        ));
+        let export = Cli::try_parse_from(["rustcode", "sessions", "export"]).unwrap();
+        assert!(matches!(
+            export.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Export {
+                    id: None,
+                    out: None
+                })
             })
         ));
         let path = Cli::try_parse_from(["rustcode", "sessions", "path", "abc"]).unwrap();
