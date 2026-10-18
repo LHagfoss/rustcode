@@ -125,7 +125,7 @@ scrollback and motion settings — is in the
 
 | Topic | Guide |
 | --- | --- |
-| Install, update, desktop app | [docs/install.md](docs/install.md) |
+| Install, update, desktop app | [docs/install.md](docs/install.md) · [macOS release signing](docs/macos-release-signing.md) |
 | Configuration, skills, MCP, sync | [docs/configuration.md](docs/configuration.md) |
 | Providers and sign-in | [docs/provider-auth.md](docs/provider-auth.md) · [GitHub Copilot](docs/github-copilot.md) |
 | Approvals and sandbox modes | [docs/sandbox.md](docs/sandbox.md) · [shell approvals](docs/shell-approvals.md) |

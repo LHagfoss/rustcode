@@ -81,10 +81,13 @@ open target/swift-app/RustCode.app
 ```
 
 Tagged releases publish `rustcode-macos-aarch64-swift-app.zip` alongside the
-CLI archives. The bundle is ad-hoc signed but not notarized, so macOS
+CLI archives. The bundle is ad-hoc signed but not notarized yet, so macOS
 Gatekeeper warns when opening a downloaded copy; right-click it and choose
 Open, or clear the quarantine flag with
-`xattr -d com.apple.quarantine RustCode.app`.
+`xattr -d com.apple.quarantine RustCode.app`. The release workflow switches
+to Developer ID signing and notarization once its signing secrets are set
+(see [macOS release signing](macos-release-signing.md)); this workaround is
+removed from here with the first notarized release.
 
 Questions the agent asks (`ask_question`) appear as cards: one button per
 option, ticks and Submit for multi-select questions, and a free-text answer.

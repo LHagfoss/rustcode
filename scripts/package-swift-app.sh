@@ -68,11 +68,23 @@ cat > "$STAGING/Contents/Info.plist" <<EOF
 </dict></plist>
 EOF
 plutil -lint "$STAGING/Contents/Info.plist"
-# Ad-hoc sign inside out so the bundle is sealed. Apple Silicon refuses to run
-# an unsealed quarantined bundle and reports it as damaged; sealed but
+# Sign inside out so the bundle is sealed. With MACOS_SIGN_IDENTITY (a
+# Developer ID Application identity in the keychain, set by
+# scripts/macos-release-signing.sh import) both are signed for notarization:
+# hardened runtime and a secure timestamp. Neither needs entitlements: the app
+# is not sandboxed, and neither executable uses JIT or loads third-party
+# libraries. Otherwise the bundle is ad-hoc signed: Apple Silicon refuses to
+# run an unsealed quarantined bundle and reports it as damaged; sealed but
 # unnotarized, Gatekeeper shows a warning the user can bypass.
-codesign --force --sign - "$STAGING/Contents/Helpers/rustcode"
-codesign --force --sign - "$STAGING"
+if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+    SIGNING="Developer ID signed"
+    SIGN_ARGS=(--force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY")
+else
+    SIGNING="ad-hoc signed"
+    SIGN_ARGS=(--force --sign -)
+fi
+codesign "${SIGN_ARGS[@]}" "$STAGING/Contents/Helpers/rustcode"
+codesign "${SIGN_ARGS[@]}" "$STAGING"
 codesign --verify --deep --strict "$STAGING"
 rm -rf "$APP.previous"
 if [[ -e "$APP" ]]; then mv "$APP" "$APP.previous"; fi
@@ -83,4 +95,4 @@ else
     [[ ! -e "$APP.previous" ]] || mv "$APP.previous" "$APP"
     exit 1
 fi
-printf 'Built ad-hoc signed %s (version %s)\n' "$APP" "$VERSION"
+printf 'Built %s %s (version %s)\n' "$SIGNING" "$APP" "$VERSION"
