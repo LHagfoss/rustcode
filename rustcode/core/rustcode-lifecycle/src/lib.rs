@@ -167,6 +167,10 @@ pub enum StopReason {
     UnavailableTool,
     InfrastructureFailure(String),
     BudgetExceeded(String),
+    /// The provider stopped at its output-token cap and recovery could not
+    /// finish the response. The detail names the cap, see
+    /// [`output_limit_detail`].
+    OutputLimit(String),
 }
 
 impl fmt::Display for StopReason {
@@ -187,6 +191,7 @@ impl fmt::Display for StopReason {
                 write!(f, "infrastructure_failure:{fingerprint}")
             }
             Self::BudgetExceeded(limit) => write!(f, "budget:{limit}"),
+            Self::OutputLimit(detail) => write!(f, "output_limit:{detail}"),
         }
     }
 }
@@ -264,6 +269,7 @@ pub fn stop_marker_notice(content: &str) -> Option<String> {
         "provider_error" if !detail.is_empty() => format!("Stopped: provider error {detail}"),
         "provider_error" => "Stopped: provider error".to_owned(),
         "budget" => format!("Stopped: {} limit reached", detail.replace('_', " ")),
+        "output_limit" => output_limit_notice(detail),
         "infrastructure_failure" => "Stopped: infrastructure failure".to_owned(),
         "connect_timeout" | "header_timeout" | "first_event_timeout" | "stream_idle_timeout" => {
             "Stopped: the provider timed out".to_owned()
@@ -275,9 +281,114 @@ pub fn stop_marker_notice(content: &str) -> Option<String> {
     })
 }
 
+/// Where the output cap of the last request came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputCapSource {
+    /// `max_output_tokens` (or legacy `max_tokens`) in the model profile.
+    Configured,
+    /// RustCode's own default, e.g. the tool-round cap.
+    Default,
+    /// No cap was sent; the provider applied its own limit.
+    Provider,
+    /// RustCode's client-side reasoning budget cut the response.
+    ReasoningBudget,
+}
+
+impl OutputCapSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Default => "default",
+            Self::Provider => "provider",
+            Self::ReasoningBudget => "reasoning_budget",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "configured" => Self::Configured,
+            "default" => Self::Default,
+            "provider" => Self::Provider,
+            "reasoning_budget" => Self::ReasoningBudget,
+            _ => return None,
+        })
+    }
+}
+
+/// Detail for [`StopReason::OutputLimit`]: `<source>:<cap or 0>:<output tokens or 0>`.
+pub fn output_limit_detail(source: OutputCapSource, cap: Option<u32>, used: Option<u32>) -> String {
+    format!(
+        "{}:{}:{}",
+        source.as_str(),
+        cap.unwrap_or(0),
+        used.unwrap_or(0)
+    )
+}
+
+/// What the user reads when a turn stopped at an output cap: which cap, how
+/// large, and the setting that changes it.
+pub fn output_limit_notice(detail: &str) -> String {
+    let mut parts = detail.split(':');
+    let source = parts.next().and_then(OutputCapSource::parse);
+    let number = |part: Option<&str>| part.and_then(|v| v.parse::<u32>().ok()).filter(|v| *v > 0);
+    let cap = number(parts.next());
+    let used = number(parts.next());
+    let used = used
+        .map(|used| format!(" after {used} output tokens"))
+        .unwrap_or_default();
+    // Lead with the limit that stopped the turn, like the budget stops
+    // (`stopped — <limit>, …`), then say what to change.
+    match (source, cap) {
+        (Some(OutputCapSource::Configured), Some(cap)) => format!(
+            "Stopped — output limit: the profile's max_output_tokens = {cap}{used}. Raise `max_output_tokens` in this model profile or lower its reasoning effort."
+        ),
+        (Some(OutputCapSource::Default), Some(cap)) => format!(
+            "Stopped — output limit: RustCode's default cap of {cap} tokens{used}. Set `max_output_tokens` in this model profile to raise it, or lower its reasoning effort."
+        ),
+        (Some(OutputCapSource::ReasoningBudget), Some(cap)) => format!(
+            "Stopped — reasoning limit: RustCode's {cap}-token thinking budget{used}. Raise `client_reasoning_budget` (or `thinking_budget`) in this model profile, or lower its reasoning effort."
+        ),
+        _ => format!(
+            "Stopped — output limit: the provider's own limit{used}; no output cap was sent. Lower the reasoning effort or split the request into smaller steps."
+        ),
+    }
+}
+
 #[cfg(test)]
 mod mapping_tests {
     use super::*;
+
+    #[test]
+    fn output_limit_notice_names_the_cap_and_the_setting() {
+        let configured = StopReason::OutputLimit(output_limit_detail(
+            OutputCapSource::Configured,
+            Some(16_000),
+            Some(16_000),
+        ));
+        let notice = stop_marker_notice(&stop_marker(&configured)).unwrap();
+        assert!(notice.starts_with("Stopped — output limit: "), "{notice}");
+        assert!(notice.contains("max_output_tokens = 16000"), "{notice}");
+        assert!(notice.contains("after 16000 output tokens"), "{notice}");
+        assert!(notice.contains("Raise `max_output_tokens`"), "{notice}");
+
+        let default = StopReason::OutputLimit(output_limit_detail(
+            OutputCapSource::Default,
+            Some(8192),
+            None,
+        ));
+        let notice = stop_marker_notice(&stop_marker(&default)).unwrap();
+        assert!(notice.contains("default cap of 8192 tokens"), "{notice}");
+        assert!(notice.contains("Set `max_output_tokens`"), "{notice}");
+
+        let provider = StopReason::OutputLimit(output_limit_detail(
+            OutputCapSource::Provider,
+            None,
+            Some(900),
+        ));
+        let notice = stop_marker_notice(&stop_marker(&provider)).unwrap();
+        assert!(notice.contains("provider's own limit"), "{notice}");
+        assert!(!notice.contains("repeating"), "{notice}");
+    }
 
     #[test]
     fn unavailable_tool_detection_is_narrow() {

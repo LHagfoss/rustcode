@@ -690,6 +690,45 @@ impl ModelProfile {
         }
     }
 
+    /// Wire cap for a retry after an output-limit stop. A cap the user
+    /// configured is honoured, without the tool-round clamp. An unconfigured
+    /// cap grows to the profile's full completion budget, and at least twice
+    /// the normal cap where a quarter of the context window leaves room. An
+    /// unconfigured Responses profile keeps the provider default.
+    pub fn output_recovery_token_limit(&self, allow_tools: bool) -> Option<u32> {
+        let configured = self.max_output_tokens.is_some() || self.max_tokens.is_some();
+        if self.reasoning_shares_output_cap() && !configured {
+            return None;
+        }
+        let budget = self.context_budget();
+        if configured {
+            return Some(budget.max_output_tokens);
+        }
+        let normal = self.completion_token_limit(allow_tools);
+        let room = (budget.context_window / 4).max(normal);
+        Some(
+            budget
+                .max_output_tokens
+                .max(normal.saturating_mul(2))
+                .min(room)
+                .min(DEFAULT_REQUEST_MAX_TOKENS.max(normal)),
+        )
+    }
+
+    /// Where the wire cap of a request comes from, for the stop notice.
+    pub fn output_cap_source(
+        &self,
+        sent: Option<u32>,
+    ) -> crate::network::lifecycle::OutputCapSource {
+        if sent.is_none() {
+            crate::network::lifecycle::OutputCapSource::Provider
+        } else if self.max_output_tokens.is_some() || self.max_tokens.is_some() {
+            crate::network::lifecycle::OutputCapSource::Configured
+        } else {
+            crate::network::lifecycle::OutputCapSource::Default
+        }
+    }
+
     fn default_context_window(&self) -> u32 {
         let chatgpt = self.credential.as_ref().is_some_and(|credential| {
             credential.method == crate::provider_auth::AuthMethod::ChatGpt

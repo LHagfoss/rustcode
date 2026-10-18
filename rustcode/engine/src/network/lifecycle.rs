@@ -5,7 +5,8 @@
 //! workspace crates without networking dependencies.
 
 pub(crate) use rustcode_lifecycle::{
-    StopReason, StreamFailure, StreamFailureKind, StreamTermination, TurnLifecycle,
-    final_transcript_content, is_turn_cancelled_marker, is_unavailable_tool_error,
-    stop_marker_notice, stop_reason_for_stream_failure, stream_failure_kind_from_message,
+    OutputCapSource, StopReason, StreamFailure, StreamFailureKind, StreamTermination,
+    TurnLifecycle, final_transcript_content, is_turn_cancelled_marker, is_unavailable_tool_error,
+    output_limit_detail, stop_marker_notice, stop_reason_for_stream_failure,
+    stream_failure_kind_from_message,
 };

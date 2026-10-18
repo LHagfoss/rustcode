@@ -100,11 +100,11 @@ fn apply_profile_generation_options(
             payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(enable_thinking);
         }
     }
-    if let Some(effort) = profile
-        .filter(|p| p.supports_reasoning_effort_wire())
-        .and_then(|p| p.reasoning_effort.as_ref())
+    if let Some(p) = profile.filter(|p| p.supports_reasoning_effort_wire())
+        && let Some(effort) = p.reasoning_effort.as_deref()
     {
-        payload["reasoning_effort"] = serde_json::json!(effort);
+        payload["reasoning_effort"] =
+            serde_json::json!(request_reasoning_effort(p, effort, thinking_mode));
     }
     if let Some(thinking_budget) = profile
         .filter(|p| p.supports_thinking_budget_wire())
@@ -180,6 +180,65 @@ pub enum ThinkingMode {
     Normal,
     BoundedRecovery,
     Disabled,
+    /// Retry after the provider stopped at its output cap: lift RustCode's
+    /// default cap to the profile's full completion budget and, when the
+    /// stop produced nothing, lower the reasoning effort.
+    OutputRecovery {
+        reduce_reasoning: bool,
+    },
+}
+
+impl ThinkingMode {
+    /// Whether the profile's own reasoning settings apply to this request.
+    fn keeps_profile_reasoning(self) -> bool {
+        matches!(self, Self::Normal | Self::OutputRecovery { .. })
+    }
+}
+
+/// The effort to send for `effort`, lowered for a retry whose previous
+/// attempt spent the whole output cap reasoning. Uses `low` when the profile
+/// lists it (or lists nothing), otherwise the cheapest listed effort that
+/// still reasons.
+fn request_reasoning_effort<'a>(
+    profile: &'a crate::config::ModelProfile,
+    effort: &'a str,
+    thinking_mode: ThinkingMode,
+) -> &'a str {
+    if !matches!(
+        thinking_mode,
+        ThinkingMode::OutputRecovery {
+            reduce_reasoning: true
+        }
+    ) || matches!(effort, "none" | "off" | "minimal" | "low")
+    {
+        return effort;
+    }
+    let listed = profile.reasoning_efforts.as_deref().unwrap_or_default();
+    if listed.is_empty() || listed.iter().any(|e| e == "low") {
+        return "low";
+    }
+    listed
+        .iter()
+        .map(String::as_str)
+        .find(|e| !matches!(*e, "none" | "off"))
+        .unwrap_or(effort)
+}
+
+/// Keep a wire `thinking_budget` below the request's output cap so the
+/// provider cannot spend the whole cap reasoning and return no answer.
+fn bound_wire_thinking_budget(payload: &mut serde_json::Value, output_token_limit: Option<u32>) {
+    let (Some(limit), Some(budget)) = (
+        output_token_limit,
+        payload
+            .get("thinking_budget")
+            .and_then(serde_json::Value::as_u64),
+    ) else {
+        return;
+    };
+    if budget >= u64::from(limit) {
+        let answer_room = (limit / 4).max(1);
+        payload["thinking_budget"] = serde_json::json!(limit.saturating_sub(answer_room).max(1));
+    }
 }
 
 fn apply_api_native_tools(
@@ -563,14 +622,14 @@ fn apply_responses_generation_options(
     profile: Option<&crate::config::ModelProfile>,
     thinking_mode: ThinkingMode,
 ) {
-    if thinking_mode != ThinkingMode::Normal {
+    if !thinking_mode.keeps_profile_reasoning() {
         return;
     }
-    if let Some(effort) = profile
-        .filter(|p| p.supports_reasoning_effort_wire())
-        .and_then(|p| p.reasoning_effort.as_ref())
+    if let Some(p) = profile.filter(|p| p.supports_reasoning_effort_wire())
+        && let Some(effort) = p.reasoning_effort.as_deref()
     {
-        payload["reasoning"] = serde_json::json!({"effort": effort});
+        payload["reasoning"] =
+            serde_json::json!({"effort": request_reasoning_effort(p, effort, thinking_mode)});
     }
 }
 
@@ -1333,6 +1392,32 @@ fn clamp_request_max_tokens(max_tokens: u32, thinking_mode: ThinkingMode) -> u32
         max_tokens.min(RECOVERY_MAX_TOKENS)
     } else {
         max_tokens
+    }
+}
+
+/// The wire output cap for one request, before the context-capacity clamp.
+fn request_output_token_limit(
+    profile: Option<&crate::config::ModelProfile>,
+    allow_tools: bool,
+    thinking_mode: ThinkingMode,
+    fallback_max_tokens: u32,
+) -> Option<u32> {
+    let bounded_recovery = thinking_mode == ThinkingMode::BoundedRecovery;
+    match profile {
+        Some(p) if matches!(thinking_mode, ThinkingMode::OutputRecovery { .. }) => {
+            p.output_recovery_token_limit(allow_tools)
+        }
+        // The recovery clamp assumes reasoning can be switched off for the
+        // retry. Where it cannot (hidden Responses reasoning, or a profile
+        // without an `enable_thinking` control), the clamp would starve the
+        // answer.
+        Some(p) if p.reasoning_shares_output_cap() || p.enable_thinking.is_none() => {
+            p.output_token_limit(allow_tools, bounded_recovery)
+        }
+        Some(p) => p
+            .output_token_limit(allow_tools, bounded_recovery)
+            .map(|limit| clamp_request_max_tokens(limit, thinking_mode)),
+        None => (allow_tools || bounded_recovery).then_some(fallback_max_tokens),
     }
 }
 
@@ -3476,6 +3561,155 @@ mod tests {
     }
 
     #[test]
+    fn bounded_recovery_clamp_needs_a_way_to_switch_reasoning_off() {
+        // #2118: a profile that reasons by default (Gemini, DeepSeek) or only
+        // sets an effort cannot turn reasoning off for the retry, so 1024
+        // tokens would be spent reasoning.
+        let effort_only = crate::config::ModelProfile {
+            context_window: Some(128_000),
+            reasoning_effort: Some("high".to_string()),
+            supports_reasoning_effort: Some(true),
+            ..crate::config::ModelProfile::default()
+        };
+        assert_eq!(
+            request_output_token_limit(Some(&effort_only), true, ThinkingMode::BoundedRecovery, 1),
+            Some(crate::config::DEFAULT_TOOL_ROUND_MAX_TOKENS)
+        );
+        let switchable = crate::config::ModelProfile {
+            enable_thinking: Some(true),
+            ..effort_only.clone()
+        };
+        assert_eq!(
+            request_output_token_limit(Some(&switchable), true, ThinkingMode::BoundedRecovery, 1),
+            Some(RECOVERY_MAX_TOKENS)
+        );
+    }
+
+    #[test]
+    fn output_recovery_lifts_the_default_tool_round_cap() {
+        let recovery = ThinkingMode::OutputRecovery {
+            reduce_reasoning: false,
+        };
+        // Remote Chat Completions, nothing configured: 8192 on a tool round,
+        // the full completion budget on the retry.
+        let remote = crate::config::ModelProfile {
+            url: "https://example.test/v1/chat/completions".to_string(),
+            context_window: Some(128_000),
+            ..crate::config::ModelProfile::default()
+        };
+        assert_eq!(
+            request_output_token_limit(Some(&remote), true, ThinkingMode::Normal, 1),
+            Some(8192)
+        );
+        assert_eq!(
+            request_output_token_limit(Some(&remote), true, recovery, 1),
+            Some(32_000)
+        );
+        // An Ollama profile defaults to 4096; the retry gets twice that.
+        let local = crate::config::ModelProfile {
+            engine: Some("ollama".to_string()),
+            ..remote.clone()
+        };
+        assert_eq!(
+            request_output_token_limit(Some(&local), true, ThinkingMode::Normal, 1),
+            Some(4096)
+        );
+        assert_eq!(
+            request_output_token_limit(Some(&local), true, recovery, 1),
+            Some(8192)
+        );
+        // A configured cap is honoured, without the tool-round clamp.
+        let configured = crate::config::ModelProfile {
+            max_output_tokens: Some(16_000),
+            ..remote.clone()
+        };
+        assert_eq!(
+            request_output_token_limit(Some(&configured), true, recovery, 1),
+            Some(16_000)
+        );
+        // An unconfigured Responses profile keeps the provider default.
+        let responses = crate::config::ModelProfile {
+            url: "https://api.openai.com/v1/responses".to_string(),
+            api_protocol: Some(crate::config::ApiProtocol::Responses),
+            ..remote
+        };
+        assert_eq!(
+            request_output_token_limit(Some(&responses), true, recovery, 1),
+            None
+        );
+    }
+
+    #[test]
+    fn output_recovery_lowers_reasoning_effort_only_after_an_empty_stop() {
+        let profile = crate::config::ModelProfile {
+            reasoning_effort: Some("xhigh".to_string()),
+            supports_reasoning_effort: Some(true),
+            reasoning_efforts: Some(vec!["low".into(), "medium".into(), "xhigh".into()]),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_responses_generation_options(
+            &mut payload,
+            Some(&profile),
+            ThinkingMode::OutputRecovery {
+                reduce_reasoning: false,
+            },
+        );
+        assert_eq!(payload["reasoning"]["effort"], "xhigh");
+
+        let mut payload = serde_json::json!({});
+        apply_responses_generation_options(
+            &mut payload,
+            Some(&profile),
+            ThinkingMode::OutputRecovery {
+                reduce_reasoning: true,
+            },
+        );
+        assert_eq!(payload["reasoning"]["effort"], "low");
+
+        let mut payload = serde_json::json!({});
+        apply_profile_generation_options(
+            &mut payload,
+            Some(&profile),
+            ThinkingMode::OutputRecovery {
+                reduce_reasoning: true,
+            },
+        );
+        assert_eq!(payload["reasoning_effort"], "low");
+
+        // Without `low` in the list the cheapest listed effort is used.
+        let no_low = crate::config::ModelProfile {
+            reasoning_efforts: Some(vec!["medium".into(), "high".into()]),
+            ..profile
+        };
+        assert_eq!(
+            request_reasoning_effort(
+                &no_low,
+                "high",
+                ThinkingMode::OutputRecovery {
+                    reduce_reasoning: true
+                }
+            ),
+            "medium"
+        );
+    }
+
+    #[test]
+    fn wire_thinking_budget_leaves_answer_room_below_the_cap() {
+        let mut payload = serde_json::json!({"thinking_budget": 16_000});
+        bound_wire_thinking_budget(&mut payload, Some(8192));
+        assert_eq!(payload["thinking_budget"], 6144);
+
+        let mut payload = serde_json::json!({"thinking_budget": 2048});
+        bound_wire_thinking_budget(&mut payload, Some(8192));
+        assert_eq!(payload["thinking_budget"], 2048);
+
+        let mut payload = serde_json::json!({"thinking_budget": 16_000});
+        bound_wire_thinking_budget(&mut payload, None);
+        assert_eq!(payload["thinking_budget"], 16_000);
+    }
+
+    #[test]
     fn profile_sampling_options_are_sent_without_changing_unspecified_defaults() {
         let profile = crate::config::ModelProfile {
             temperature: Some(1.0),
@@ -4567,18 +4801,8 @@ async fn stream_request_with_timeouts(
         .as_ref()
         .map(crate::config::ModelProfile::resolved_output_token_field)
         .unwrap_or(crate::config::OutputTokenField::MaxTokens);
-    let bounded_recovery = thinking_mode == ThinkingMode::BoundedRecovery;
-    let mut output_token_limit = match profile.as_ref() {
-        // The recovery clamp assumes reasoning can be switched off for the
-        // retry. Where it cannot, the clamp would starve the answer.
-        Some(p) if p.reasoning_shares_output_cap() => {
-            p.output_token_limit(allow_tools, bounded_recovery)
-        }
-        Some(p) => p
-            .output_token_limit(allow_tools, bounded_recovery)
-            .map(|limit| clamp_request_max_tokens(limit, thinking_mode)),
-        None => (allow_tools || bounded_recovery).then_some(max_tokens),
-    };
+    let mut output_token_limit =
+        request_output_token_limit(profile.as_ref(), allow_tools, thinking_mode, max_tokens);
     if allow_tools && thinking_mode == ThinkingMode::Normal {
         if let Some(override_limit) = tool_output_limit_override {
             let verified_ceiling = profile
@@ -4761,6 +4985,7 @@ async fn stream_request_with_timeouts(
         apply_output_token_limit(&mut payload, output_token_field, output_token_limit);
 
         apply_profile_generation_options(&mut payload, profile.as_ref(), thinking_mode);
+        bound_wire_thinking_budget(&mut payload, output_token_limit);
         apply_profile_sampling_options(&mut payload, profile.as_ref());
 
         // Only send `frequency_penalty` when the profile sets it: backends

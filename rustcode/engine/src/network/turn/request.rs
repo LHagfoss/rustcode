@@ -611,6 +611,11 @@ pub(super) async fn collect_round(
     let allow_thinking_router = !is_recovery_request(ctx);
     let request_thinking_mode = if ctx.recovery.force_final {
         super::super::stream_request::ThinkingMode::Disabled
+    } else if let Some(recovery) = ctx.recovery.output_limit.pending.take() {
+        ctx.recovery.reasoning_recovery_pending = false;
+        super::super::stream_request::ThinkingMode::OutputRecovery {
+            reduce_reasoning: recovery.reduce_reasoning,
+        }
     } else if std::mem::take(&mut ctx.recovery.reasoning_recovery_pending) {
         super::super::stream_request::ThinkingMode::BoundedRecovery
     } else {
@@ -1050,6 +1055,9 @@ pub(super) async fn collect_round(
         return Err(RoundCollectionError::Stop);
     }
     let buffer = stream_buffer.lock().await;
+    ctx.recovery.output_limit.last_request_limit = buffer.output_token_limit;
+    ctx.recovery.output_limit.last_output_tokens =
+        token_usage.as_ref().map(|usage| usage.completion_tokens);
     let native_tool_calls = buffer.native_tool_calls.clone();
     ctx.response.streamed_call_ids = if native_tool_calls.is_empty() {
         buffer.tool_call_ids.clone()

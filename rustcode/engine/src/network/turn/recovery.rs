@@ -39,10 +39,181 @@ pub(super) fn reasoning_loop_final_response() -> &'static str {
 const CLIENT_BUDGET_CONTINUATION_PROMPT: &str = "The client reasoning budget ended this response before the provider reported a stop. Continue from the saved response and tool results with one bounded, action-oriented step; do not restart the same inspection or repeat a completed tool call. If the available evidence is sufficient, answer directly. If not, use one different focused tool action.";
 const OUTPUT_BUDGET_CONTINUATION_PROMPT: &str = "The provider exhausted the output-token budget before finishing. Continue from the saved partial answer without repeating completed work. Preserve prior findings, finish the requested response, and keep any remaining gaps explicit.";
 const EMPTY_OUTPUT_BUDGET_CONTINUATION_PROMPT: &str = "The provider exhausted the output-token budget before producing any answer, so nothing was saved from that attempt. Keep reasoning brief and respond now: take one tool action or answer directly.";
-const MAX_OUTPUT_BUDGET_RECOVERIES: u8 = 1;
+/// Continuations of a cut-off answer between two tool rounds that made
+/// progress. Each must add new output; the cap only bounds a pathological
+/// run that keeps hitting the limit.
+const MAX_OUTPUT_BUDGET_CONTINUATIONS: u8 = 4;
+/// A cap stop that produced nothing gets one retry with a larger cap and
+/// lower reasoning effort.
+const MAX_EMPTY_OUTPUT_BUDGET_RETRIES: u8 = 1;
+/// Consecutive cut-off tool calls before the turn stops.
+pub(super) const MAX_TRUNCATED_TOOL_CALL_RETRIES: u8 = 3;
+pub(super) const TRUNCATED_TOOL_CALL_GUIDANCE: &str = "[Tool calls rejected: the provider stopped at the output limit before the complete tool request was available. No tool ran. Reissue a smaller, complete call: write a large file in pieces with write_file_chunk (at most 16 KiB per chunk, more=true on every chunk but the last), and split a large edit into several smaller edits.]";
 
-pub(super) fn output_budget_final_response() -> &'static str {
-    "The model used its whole output-token budget before producing an answer. Raise `max_output_tokens` for this model profile or lower its reasoning effort, then send the request again."
+/// The stop reason for a turn that ended at an output cap, naming the cap of
+/// the last request and where it came from.
+pub(super) fn output_limit_stop_reason(
+    profile: Option<&crate::config::ModelProfile>,
+    ctx: &TurnContext,
+) -> crate::network::lifecycle::StopReason {
+    use crate::network::lifecycle::{OutputCapSource, StopReason, output_limit_detail};
+    let cap = ctx.recovery.output_limit.last_request_limit;
+    let source = profile
+        .map(|profile| profile.output_cap_source(cap))
+        .unwrap_or(if cap.is_some() {
+            OutputCapSource::Default
+        } else {
+            OutputCapSource::Provider
+        });
+    StopReason::OutputLimit(output_limit_detail(
+        source,
+        cap,
+        ctx.recovery.output_limit.last_output_tokens,
+    ))
+}
+
+/// The assistant text for a turn that stopped at an output cap without an
+/// answer: the same words as the stop notice.
+pub(super) fn output_limit_final_response(
+    reason: &crate::network::lifecycle::StopReason,
+) -> String {
+    crate::network::lifecycle::stop_marker_notice(&rustcode_lifecycle::stop_marker(reason))
+        .unwrap_or_else(|| reason.to_string())
+}
+
+fn partial_fingerprint(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.trim().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The provider stopped at its output cap with no native tool call. Keep the
+/// answer going while each continuation adds new output, retry an empty stop
+/// once with more room and less reasoning, and re-request a cut-off textual
+/// tool call (never run it). When none of that is possible the turn stops
+/// with a notice that names the cap.
+async fn handle_output_limit_stop(
+    state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+    ctx: &mut TurnContext,
+    turn_response_time_ms: u64,
+    turn_token_usage: Option<crate::app::TokenUsage>,
+    thought_time_ms: Option<u64>,
+    thought_tokens: Option<u32>,
+    turn_session_id: &str,
+) -> ResponseRecoveryOutcome {
+    use super::super::push_or_replace_recovery_notice;
+    use crate::app::{AppStatus, StreamTracker};
+
+    let mut s = state.lock().await;
+    super::clear_turn_steerability_for_session(&mut s, turn_session_id);
+    let content = ctx.response.final_content.clone();
+    // A cut-off textual tool call is not an answer to continue: it is
+    // dropped (never run) and re-requested in a smaller shape.
+    let truncated_call = rustcode_tool_protocol::has_incomplete_actionable_tool_call(&content);
+    // Reasoning alone is not an answer either; the retry gets less of it.
+    let has_partial = !truncated_call
+        && !rustcode_tool_protocol::text::strip_think_blocks(&content)
+            .trim()
+            .is_empty();
+    let fingerprint = has_partial.then(|| partial_fingerprint(&content));
+    let repeated =
+        fingerprint.is_some() && fingerprint == ctx.recovery.output_limit.last_partial_fingerprint;
+    if has_partial && !repeated {
+        let mut partial = ChatMessage::new("assistant", &content);
+        partial.response_time_ms = Some(turn_response_time_ms);
+        partial.token_usage = turn_token_usage;
+        partial.thought_time_ms = thought_time_ms;
+        partial.thought_tokens = thought_tokens;
+        s.history.push(partial);
+        ctx.response.final_content_persisted = true;
+    } else if repeated {
+        // The identical text is already in history.
+        ctx.response.final_content_persisted = true;
+    }
+
+    let recovery = &mut ctx.recovery.output_limit;
+    let (kind, allowed, prompt, reduce_reasoning) = if truncated_call {
+        recovery.truncated_tool_calls = recovery.truncated_tool_calls.saturating_add(1);
+        (
+            "truncated_tool_call",
+            recovery.truncated_tool_calls <= MAX_TRUNCATED_TOOL_CALL_RETRIES,
+            TRUNCATED_TOOL_CALL_GUIDANCE,
+            false,
+        )
+    } else if has_partial {
+        recovery.continuations = recovery.continuations.saturating_add(1);
+        (
+            "partial",
+            !repeated && recovery.continuations <= MAX_OUTPUT_BUDGET_CONTINUATIONS,
+            OUTPUT_BUDGET_CONTINUATION_PROMPT,
+            false,
+        )
+    } else {
+        recovery.empty_retries = recovery.empty_retries.saturating_add(1);
+        (
+            "empty",
+            recovery.empty_retries <= MAX_EMPTY_OUTPUT_BUDGET_RETRIES,
+            EMPTY_OUTPUT_BUDGET_CONTINUATION_PROMPT,
+            true,
+        )
+    };
+
+    if !allowed {
+        let reason = output_limit_stop_reason(s.active_model_profile().as_ref(), ctx);
+        ctx.lifecycle.task_completed = false;
+        if !has_partial {
+            ctx.response.final_content = output_limit_final_response(&reason);
+            ctx.response.final_content_persisted = false;
+        }
+        crate::logger::operational_event(
+            "turn.output_budget_exhausted",
+            serde_json::json!({
+                "kind": kind,
+                "repeated_partial": repeated,
+                "attempts": ctx.recovery.output_budget_recovery_attempts,
+                "request_output_limit": ctx.recovery.output_limit.last_request_limit,
+                "output_tokens": ctx.recovery.output_limit.last_output_tokens,
+                "stop_reason": reason.to_string(),
+                "partial_content_bytes": content.len(),
+                "outcome": "incomplete",
+            }),
+        );
+        ctx.lifecycle.stop_reason = Some(reason);
+        crate::config::save_session_history(&s.active_session_id, &s.history);
+        s.clear_current_response();
+        return ResponseRecoveryOutcome::Stop;
+    }
+
+    ctx.recovery.output_budget_recovery_attempts = ctx
+        .recovery
+        .output_budget_recovery_attempts
+        .saturating_add(1);
+    if fingerprint.is_some() {
+        ctx.recovery.output_limit.last_partial_fingerprint = fingerprint;
+    }
+    ctx.recovery.output_limit.pending =
+        Some(super::context::OutputRecoveryRequest { reduce_reasoning });
+    crate::logger::operational_event(
+        "turn.output_budget_continuation",
+        serde_json::json!({
+            "kind": kind,
+            "attempt": ctx.recovery.output_budget_recovery_attempts,
+            "request_output_limit": ctx.recovery.output_limit.last_request_limit,
+            "output_tokens": ctx.recovery.output_limit.last_output_tokens,
+            "reduce_reasoning": reduce_reasoning,
+            "partial_content_bytes": content.len(),
+            "outcome": "continuation_requested",
+        }),
+    );
+    push_or_replace_recovery_notice(s.history.as_mut_vec(), prompt.to_owned());
+    crate::config::save_session_history(&s.active_session_id, &s.history);
+    s.clear_current_response();
+    s.status = AppStatus::Streaming;
+    s.stream_tracker = Some(StreamTracker::new());
+    drop(s);
+    ctx.lifecycle.turn_machine.abandon_tool_phase();
+    ctx.budget.tool_rounds += 1;
+    ResponseRecoveryOutcome::Continue
 }
 
 const OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT: &str = "The user explicitly requested an external action, and the transcript does not show that action succeeding. Stop researching: do not search, query, browse, or gather more evidence. Use the evidence already gathered and take exactly one next step toward the requested action with the appropriate available tool. Preserve all normal safety, permission, and confirmation requirements; this recovery instruction does not authorize a side effect the user did not request. If required details are missing or the action cannot be completed safely, ask one focused question or explain the blocker instead of calling more research tools.";
@@ -377,70 +548,16 @@ pub(super) async fn handle_response_recovery(
     use crate::app::{AppStatus, ChatMessage, StreamTracker};
     use rustcode_tool_protocol::text::{self, strip_tool_call_syntax};
     if response_finish_reason == Some("length") && native_tool_calls_empty {
-        let mut s = state.lock().await;
-        super::clear_turn_steerability_for_session(&mut s, turn_session_id);
-        // An empty assistant message carries no checkpoint and only pollutes
-        // the next request.
-        let has_partial = !ctx.response.final_content.trim().is_empty();
-        if has_partial {
-            let mut partial = ChatMessage::new("assistant", &ctx.response.final_content);
-            partial.response_time_ms = Some(turn_response_time_ms);
-            partial.token_usage = turn_token_usage;
-            partial.thought_time_ms = thought_time_ms;
-            partial.thought_tokens = thought_tokens;
-            s.history.push(partial);
-            ctx.response.final_content_persisted = true;
-        }
-
-        if ctx.recovery.output_budget_recovery_attempts >= MAX_OUTPUT_BUDGET_RECOVERIES {
-            ctx.lifecycle.task_completed = false;
-            ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
-            if !has_partial {
-                ctx.response.final_content = output_budget_final_response().to_string();
-            }
-            crate::logger::operational_event(
-                "turn.output_budget_exhausted",
-                serde_json::json!({
-                    "attempts": ctx.recovery.output_budget_recovery_attempts,
-                    "partial_content_bytes": ctx.response.final_content.len(),
-                    "outcome": "incomplete",
-                }),
-            );
-            crate::config::save_session_history(&s.active_session_id, &s.history);
-            s.clear_current_response();
-            return ResponseRecoveryOutcome::Stop;
-        }
-
-        ctx.recovery.output_budget_recovery_attempts = ctx
-            .recovery
-            .output_budget_recovery_attempts
-            .saturating_add(1);
-        ctx.recovery.reasoning_recovery_pending = true;
-        crate::logger::operational_event(
-            "turn.output_budget_continuation",
-            serde_json::json!({
-                "attempt": ctx.recovery.output_budget_recovery_attempts,
-                "partial_content_bytes": ctx.response.final_content.len(),
-                "outcome": "continuation_requested",
-            }),
-        );
-        push_or_replace_recovery_notice(
-            s.history.as_mut_vec(),
-            if has_partial {
-                OUTPUT_BUDGET_CONTINUATION_PROMPT
-            } else {
-                EMPTY_OUTPUT_BUDGET_CONTINUATION_PROMPT
-            }
-            .to_owned(),
-        );
-        crate::config::save_session_history(&s.active_session_id, &s.history);
-        s.clear_current_response();
-        s.status = AppStatus::Streaming;
-        s.stream_tracker = Some(StreamTracker::new());
-        drop(s);
-        ctx.lifecycle.turn_machine.abandon_tool_phase();
-        ctx.budget.tool_rounds += 1;
-        return ResponseRecoveryOutcome::Continue;
+        return handle_output_limit_stop(
+            state,
+            ctx,
+            turn_response_time_ms,
+            turn_token_usage,
+            thought_time_ms,
+            thought_tokens,
+            turn_session_id,
+        )
+        .await;
     }
 
     if ctx.response.final_content.is_empty() && native_tool_calls_empty {
@@ -592,8 +709,26 @@ pub(super) async fn handle_response_recovery(
                         "attempt": ctx.recovery.reasoning_recovery_attempts,
                     }),
                 );
-                ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
                 let mut s = state.lock().await;
+                // A client reasoning-budget cut is a cap, not a loop: say
+                // which budget ended the turn and how to raise it.
+                let budget_stop = (response_finish_reason == Some("reasoning_budget")).then(|| {
+                    let budget = s.active_model_profile().and_then(|profile| {
+                        profile.client_reasoning_budget.or_else(|| {
+                            Some(profile.context_budget().thinking_budget).filter(|b| *b > 0)
+                        })
+                    });
+                    lifecycle::StopReason::OutputLimit(lifecycle::output_limit_detail(
+                        lifecycle::OutputCapSource::ReasoningBudget,
+                        budget,
+                        thought_tokens,
+                    ))
+                });
+                ctx.lifecycle.stop_reason = Some(
+                    budget_stop
+                        .clone()
+                        .unwrap_or(lifecycle::StopReason::LoopEscalation),
+                );
                 let mut msg = ChatMessage::new("assistant", &ctx.response.final_content);
                 msg.response_time_ms = Some(turn_response_time_ms);
                 msg.token_usage = turn_token_usage.clone();
@@ -605,7 +740,10 @@ pub(super) async fn handle_response_recovery(
                 s.clear_current_response();
                 drop(s);
                 ctx.lifecycle.turn_machine.abandon_tool_phase();
-                ctx.response.final_content = reasoning_loop_final_response().to_string();
+                ctx.response.final_content = budget_stop
+                    .as_ref()
+                    .map(output_limit_final_response)
+                    .unwrap_or_else(|| reasoning_loop_final_response().to_string());
                 ctx.response.final_content_persisted = false;
                 return ResponseRecoveryOutcome::Stop;
             }
@@ -709,7 +847,17 @@ mod tests {
 
         assert_eq!(outcome, ResponseRecoveryOutcome::Continue);
         assert!(ctx.response.final_content_persisted);
-        assert!(ctx.recovery.reasoning_recovery_pending);
+        // The continuation keeps the profile's reasoning and lifts the cap;
+        // it is not the 1024-token bounded recovery (#2118).
+        assert!(!ctx.recovery.reasoning_recovery_pending);
+        assert_eq!(
+            ctx.recovery.output_limit.pending,
+            Some(
+                crate::network::turn_engine::context::OutputRecoveryRequest {
+                    reduce_reasoning: false
+                }
+            )
+        );
         let state = state.lock().await;
         assert!(state.history.iter().any(|message| {
             message.role == "assistant" && message.content == "partial review findings"
@@ -725,7 +873,10 @@ mod tests {
         let turn_session_id = state.lock().await.active_session_id.clone();
         let mut ctx = TurnContext::new();
         ctx.response.final_content = "first partial".to_owned();
-        ctx.recovery.output_budget_recovery_attempts = 1;
+        ctx.recovery.output_budget_recovery_attempts = 4;
+        ctx.recovery.output_limit.continuations = 4;
+        ctx.recovery.output_limit.last_request_limit = Some(8192);
+        ctx.recovery.output_limit.last_output_tokens = Some(8192);
 
         let outcome = handle_response_recovery(
             &state,
@@ -743,10 +894,14 @@ mod tests {
         .await;
 
         assert_eq!(outcome, ResponseRecoveryOutcome::Stop);
-        assert_eq!(
-            ctx.lifecycle.stop_reason,
-            Some(crate::network::lifecycle::StopReason::LoopEscalation)
-        );
+        let reason = ctx.lifecycle.stop_reason.clone().expect("stop reason");
+        assert_eq!(reason.to_string(), "output_limit:default:8192:8192");
+        let notice = crate::network::lifecycle::stop_marker_notice(
+            &rustcode_lifecycle::stop_marker(&reason),
+        )
+        .unwrap();
+        assert!(notice.contains("8192"), "{notice}");
+        assert!(notice.contains("max_output_tokens"), "{notice}");
         assert_eq!(ctx.response.final_content, "first partial");
         assert!(ctx.response.final_content_persisted);
         assert!(
@@ -779,6 +934,16 @@ mod tests {
 
         assert_eq!(outcome, ResponseRecoveryOutcome::Continue);
         assert!(!ctx.response.final_content_persisted);
+        // Nothing came back: retry with more room and less reasoning.
+        assert_eq!(
+            ctx.recovery.output_limit.pending,
+            Some(
+                crate::network::turn_engine::context::OutputRecoveryRequest {
+                    reduce_reasoning: true
+                }
+            )
+        );
+        ctx.recovery.output_limit.pending = None;
         {
             let state = state.lock().await;
             assert!(
@@ -808,10 +973,16 @@ mod tests {
         .await;
 
         assert_eq!(outcome, ResponseRecoveryOutcome::Stop);
-        assert_eq!(
-            ctx.response.final_content,
-            crate::network::turn_engine::recovery::output_budget_final_response()
+        assert!(matches!(
+            ctx.lifecycle.stop_reason,
+            Some(crate::network::lifecycle::StopReason::OutputLimit(_))
+        ));
+        assert!(
+            ctx.response.final_content.contains("output limit"),
+            "{}",
+            ctx.response.final_content
         );
+        assert!(!ctx.response.final_content.contains("repeating"));
         assert!(!ctx.response.final_content_persisted);
         assert!(
             !state
@@ -849,6 +1020,144 @@ mod tests {
         assert_eq!(ctx.recovery.output_budget_recovery_attempts, 0);
         assert!(!ctx.response.final_content_persisted);
         assert!(state.lock().await.history.is_empty());
+    }
+
+    async fn length_stop(
+        state: &Arc<Mutex<crate::app::AppState>>,
+        ctx: &mut TurnContext,
+        content: &str,
+    ) -> ResponseRecoveryOutcome {
+        let turn_session_id = state.lock().await.active_session_id.clone();
+        ctx.response.final_content = content.to_owned();
+        ctx.response.final_content_persisted = false;
+        handle_response_recovery(
+            state,
+            ctx,
+            true,
+            Some("length"),
+            10,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
+            &turn_session_id,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_long_answer_keeps_going_while_each_continuation_adds_output() {
+        // #2118: a second length stop used to end the turn even when the
+        // continuation had added new text.
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let mut ctx = TurnContext::new();
+        for part in ["part one", "part two", "part three", "part four"] {
+            assert_eq!(
+                length_stop(&state, &mut ctx, part).await,
+                ResponseRecoveryOutcome::Continue,
+                "{part}"
+            );
+            ctx.recovery.output_limit.pending = None;
+        }
+        let state = state.lock().await;
+        let saved: Vec<_> = state
+            .history
+            .iter()
+            .filter(|message| message.role == "assistant")
+            .map(|message| message.content.as_str())
+            .collect();
+        assert_eq!(saved, ["part one", "part two", "part three", "part four"]);
+        assert_eq!(ctx.lifecycle.stop_reason, None);
+    }
+
+    #[tokio::test]
+    async fn a_continuation_that_repeats_itself_stops_with_an_output_limit_notice() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let mut ctx = TurnContext::new();
+        assert_eq!(
+            length_stop(&state, &mut ctx, "same text").await,
+            ResponseRecoveryOutcome::Continue
+        );
+        assert_eq!(
+            length_stop(&state, &mut ctx, "same text").await,
+            ResponseRecoveryOutcome::Stop
+        );
+        assert!(matches!(
+            ctx.lifecycle.stop_reason,
+            Some(crate::network::lifecycle::StopReason::OutputLimit(_))
+        ));
+        // The repeat is not saved a second time.
+        let state = state.lock().await;
+        assert_eq!(
+            state
+                .history
+                .iter()
+                .filter(|message| message.content == "same text")
+                .count(),
+            1
+        );
+        assert!(ctx.response.final_content_persisted);
+    }
+
+    #[tokio::test]
+    async fn tool_progress_resets_the_output_limit_run() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let mut ctx = TurnContext::new();
+        for round in 0..3 {
+            for part in 0..4 {
+                assert_eq!(
+                    length_stop(&state, &mut ctx, &format!("round {round} part {part}")).await,
+                    ResponseRecoveryOutcome::Continue
+                );
+            }
+            // A tool round made progress between the answers.
+            ctx.recovery.output_limit.record_progress();
+        }
+        assert_eq!(ctx.lifecycle.stop_reason, None);
+    }
+
+    #[tokio::test]
+    async fn a_cut_off_textual_tool_call_is_dropped_and_re_requested_smaller() {
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let mut ctx = TurnContext::new();
+        let truncated = "```tool\n{\"name\":\"write_to_file\",\"arguments\":{\"path\":\"big.rs\",\"content\":\"fn main() {";
+        for _ in 0..3 {
+            assert_eq!(
+                length_stop(&state, &mut ctx, truncated).await,
+                ResponseRecoveryOutcome::Continue
+            );
+            assert_eq!(
+                ctx.recovery.output_limit.pending,
+                Some(
+                    crate::network::turn_engine::context::OutputRecoveryRequest {
+                        reduce_reasoning: false
+                    }
+                )
+            );
+        }
+        {
+            let state = state.lock().await;
+            assert!(
+                !state
+                    .history
+                    .iter()
+                    .any(|message| message.role == "assistant"),
+                "a cut-off call is never saved as an answer to continue"
+            );
+            assert!(state.history.iter().any(|message| {
+                message.role == "system" && message.content.contains("write_file_chunk")
+            }));
+        }
+        assert_eq!(
+            length_stop(&state, &mut ctx, truncated).await,
+            ResponseRecoveryOutcome::Stop
+        );
+        assert!(matches!(
+            ctx.lifecycle.stop_reason,
+            Some(crate::network::lifecycle::StopReason::OutputLimit(_))
+        ));
+        assert!(!ctx.response.final_content.contains("write_to_file"));
     }
 
     #[tokio::test]

@@ -61,6 +61,44 @@ pub struct RecoveryState {
     pub finish_gate_retries: u32,
     pub consecutive_malformed_calls: usize,
     pub last_malformed_call: Option<String>,
+    pub output_limit: OutputLimitRecovery,
+}
+
+/// State for recovering from provider output-cap stops (#2118).
+#[derive(Debug, Default, Clone)]
+pub struct OutputLimitRecovery {
+    /// Continuations of a cut-off answer since the last tool progress. Each
+    /// one must add new output; the count bounds a run that keeps hitting the
+    /// cap.
+    pub continuations: u8,
+    /// Retries after a cap stop that produced no text and no tool call.
+    pub empty_retries: u8,
+    /// Consecutive responses whose tool call was cut off by the cap.
+    pub truncated_tool_calls: u8,
+    /// Fingerprint of the last saved partial, so a continuation that only
+    /// repeats it stops instead of looping.
+    pub last_partial_fingerprint: Option<u64>,
+    /// The next request recovers from a cap stop.
+    pub pending: Option<OutputRecoveryRequest>,
+    /// Wire cap of the most recent request (`None`: none was sent).
+    pub last_request_limit: Option<u32>,
+    /// Output tokens the provider reported for the most recent round.
+    pub last_output_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputRecoveryRequest {
+    pub reduce_reasoning: bool,
+}
+
+impl OutputLimitRecovery {
+    /// A tool round made progress: earlier cap stops no longer count
+    /// against the run.
+    pub fn record_progress(&mut self) {
+        self.continuations = 0;
+        self.empty_retries = 0;
+        self.last_partial_fingerprint = None;
+    }
 }
 
 pub struct ProgressState {
@@ -303,6 +341,7 @@ impl TurnContext {
                 finish_gate_retries: 0,
                 consecutive_malformed_calls: 0,
                 last_malformed_call: None,
+                output_limit: OutputLimitRecovery::default(),
             },
             progress: ProgressState {
                 ledger: loop_detect::ProgressLedger::default(),
