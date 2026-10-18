@@ -63,6 +63,11 @@ struct RustCodeApp: App {
             CommandGroup(before: .sidebar) {
                 Button(model.showsSidebar ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
                     .keyboardShortcut("b", modifiers: .command)
+                Button(model.showsPreview ? "Hide Preview" : "Show Preview") { model.togglePreview() }
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                Button("Reload Preview") { model.preview.reload() }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(!model.showsPreview)
             }
         }
     }
@@ -105,8 +110,15 @@ final class DesktopModel: ObservableObject {
     @Published var sessions: [SessionSummary] = []
     @Published var selectedSession: String?
     @Published var workspace: URL {
-        didSet { UserDefaults.standard.set(workspace.path, forKey: "workspacePath") }
+        didSet {
+            UserDefaults.standard.set(workspace.path, forKey: "workspacePath")
+            preview.setWorkspace(workspace.path)
+        }
     }
+    /// The localhost preview beside the chat, remembered per project. It is
+    /// view-only: nothing in it is passed to the engine.
+    let preview = PreviewController()
+    @Published var showsPreview = false
     @Published var draft = ""
     @Published var showsSidebar = true
     @Published var showsSettings = false
@@ -178,6 +190,7 @@ final class DesktopModel: ObservableObject {
         workspace = savedPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? (launchPath == "/" ? FileManager.default.homeDirectoryForCurrentUser
                 : URL(fileURLWithPath: launchPath, isDirectory: true))
+        preview.setWorkspace(workspace.path)
         TurnNotifier.shared.openSession = { [weak self] id in
             guard let self, let session = self.sessions.first(where: { $0.id == id }) else { return }
             Task { await self.select(session) }
@@ -534,6 +547,11 @@ final class DesktopModel: ObservableObject {
 
     func toggleSidebar() {
         withAnimation(.snappy(duration: 0.25)) { showsSidebar.toggle() }
+    }
+
+    /// ⇧⌘P: show or hide the localhost preview.
+    func togglePreview() {
+        withAnimation(.snappy(duration: 0.25)) { showsPreview.toggle() }
     }
 
     func chooseAttachments() {

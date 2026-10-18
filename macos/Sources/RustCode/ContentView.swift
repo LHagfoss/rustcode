@@ -6,6 +6,7 @@ import SwiftUI
 /// chat, with no split-view divider between them.
 struct ContentView: View {
     @ObservedObject var model: DesktopModel
+    @AppStorage("previewWidth") private var previewWidth: Double = 480
 
     var body: some View {
         HStack(spacing: 0) {
@@ -16,6 +17,15 @@ struct ContentView: View {
             }
             ChatView(model: model)
                 .background(Color.chatBackground)
+            if model.showsPreview {
+                HStack(spacing: 0) {
+                    PreviewResizeHandle(width: $previewWidth)
+                    PreviewPanel(preview: model.preview) { model.togglePreview() }
+                        .frame(width: CGFloat(previewWidth))
+                }
+                .background(Color.chatBackground)
+                .transition(.move(edge: .trailing))
+            }
         }
         .background(Color.sidebarBackground)
         .ignoresSafeArea()
@@ -748,6 +758,11 @@ private struct ChatView: View {
                     ClusterButton(systemImage: "folder", help: "Show chat in Finder") {
                         Task { await model.revealInFinder(session) }
                     }
+                }
+            }
+            if !model.showsPreview {
+                ToolbarCluster {
+                    ClusterButton(systemImage: "globe", help: "Show localhost preview (⇧⌘P)") { model.togglePreview() }
                 }
             }
         }
