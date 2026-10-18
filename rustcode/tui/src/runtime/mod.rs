@@ -16,8 +16,10 @@ use crossterm::{
     execute,
 };
 use ratatui::layout::Size;
+#[cfg(test)]
+use rustcode::app::ChatMessage;
 use rustcode::app::{AppState, AppStatus};
-use rustcode::app::{ChatMessage, UpdateDecision, Verbosity};
+use rustcode::app::{UpdateDecision, Verbosity};
 use rustcode::network::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
 use std::collections::HashMap;
 use std::error::Error;

@@ -30,10 +30,11 @@ pub(crate) use composer_render::render_input;
 pub(crate) use composer_selection::ComposerMouse;
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
+#[cfg(test)]
+pub(crate) use history_cell::WHEEL_SCROLL_LINES;
 use history_cell::{HistoryCell, is_live_tool_call_visible};
 pub(crate) use history_cell::{
-    PanelTarget, ToolBlock, TranscriptState, VizTarget, WHEEL_SCROLL_LINES, set_wheel_scroll_lines,
-    wheel_scroll_lines,
+    PanelTarget, ToolBlock, TranscriptState, VizTarget, set_wheel_scroll_lines, wheel_scroll_lines,
 };
 pub(crate) use transcript::TranscriptModel;
 mod follow_control;

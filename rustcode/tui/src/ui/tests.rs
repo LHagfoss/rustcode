@@ -8910,8 +8910,8 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
     );
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
-    // The footer shares the composer's panel color, so the two read as one block.
-    assert_eq!(buffer[(0, footer_row)].bg, COLOR_PANEL());
+    // The footer sits on the transcript background, below the composer panel.
+    assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
     assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
 }
 
