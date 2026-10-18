@@ -2576,9 +2576,16 @@ pub(super) async fn handle_app_event(
                                     .tool_block_at(mouse.column, mouse.row)
                                     .filter(|_| mouse.modifiers.is_empty())
                                     .map(|block| ((mouse.column, mouse.row), block));
+                                transcript_state.viz_click = transcript_state
+                                    .viz_target_at(mouse.column, mouse.row)
+                                    .filter(|_| mouse.modifiers.is_empty())
+                                    .map(|target| ((mouse.column, mouse.row), target));
                             }
                             event::MouseEventKind::Up(event::MouseButton::Left) => {}
-                            _ => transcript_state.tool_click = None,
+                            _ => {
+                                transcript_state.tool_click = None;
+                                transcript_state.viz_click = None;
+                            }
                         }
                         let selected = if mouse.kind
                             == event::MouseEventKind::Down(event::MouseButton::Left)
@@ -2610,6 +2617,26 @@ pub(super) async fn handle_app_event(
                             if !state.modal_open() {
                                 let width = terminal_runtime.terminal().area().width;
                                 toggle_tool_block(&mut state, width, block);
+                                *needs_redraw = true;
+                            }
+                        }
+                        // A click on a table header sorts it; one on a tree
+                        // node with children opens or closes it.
+                        if mouse.kind == event::MouseEventKind::Up(event::MouseButton::Left)
+                            && let Some((pressed, target)) = transcript_state.viz_click.take()
+                            && pressed == (mouse.column, mouse.row)
+                            && !transcript_state.selection.has_selection()
+                        {
+                            let snapshot = {
+                                let state = app_state.lock().await;
+                                (!state.modal_open()).then(|| {
+                                    ui::render_snapshot::render_snapshot(
+                                        &rustcode::controller::render_state(&state),
+                                    )
+                                })
+                            };
+                            if let Some(snapshot) = snapshot {
+                                transcript_state.apply_viz_target(&snapshot, target);
                                 *needs_redraw = true;
                             }
                         }

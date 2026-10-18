@@ -26,6 +26,89 @@ pub(super) const MAX_TABLE_COLUMNS: usize = 8;
 pub(super) const MAX_TREE_NODES: usize = 120;
 pub(super) const MAX_TREE_DEPTH: usize = 8;
 
+/// Terminal-only view state for one widget: the sort a click chose for a
+/// table, or the tree nodes whose open state was flipped. It lives in
+/// [`super::TranscriptState`] keyed by `(history index, viz ordinal)` and is
+/// never persisted, sent to a provider, or written into the message text.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct VizView {
+    /// [`source_hash`] of the fence body this state was made for. A message
+    /// whose body changed under the same key ignores stale state.
+    pub(crate) source: u64,
+    /// `(column, descending)` picked by clicking a header. Overrides the
+    /// payload's `sort_by`.
+    pub(crate) sort: Option<(usize, bool)>,
+    /// Preorder ids of tree nodes whose open state differs from the default
+    /// (every node starts open).
+    pub(crate) toggled: std::collections::BTreeSet<usize>,
+}
+
+impl VizView {
+    /// Apply a click to this state.
+    pub(crate) fn apply(&mut self, action: VizAction) {
+        match action {
+            VizAction::Sort { column, descending } => self.sort = Some((column, descending)),
+            VizAction::ToggleNode(id) => {
+                if !self.toggled.remove(&id) {
+                    self.toggled.insert(id);
+                }
+            }
+        }
+    }
+}
+
+/// What a click on a widget row does. The renderer resolves the target state
+/// (for a header, the direction the next click picks), so applying it never
+/// needs the payload again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum VizAction {
+    Sort { column: usize, descending: bool },
+    ToggleNode(usize),
+}
+
+/// A clickable span of one rendered message row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VizHit {
+    /// Row of the rendered message.
+    pub(crate) line: usize,
+    /// Display columns of that row.
+    pub(crate) columns: std::ops::Range<u16>,
+    /// Which `rustcode-viz` fence of the message, counting from 0.
+    pub(crate) ordinal: usize,
+    /// [`source_hash`] of that fence body.
+    pub(crate) source: u64,
+    pub(crate) action: VizAction,
+}
+
+/// Interactive inputs and outputs of one assistant message render: the view
+/// state of its widgets in, the clickable spans out. Only finalized messages
+/// get one, so an open fence or a live stream is never interactive.
+#[derive(Default)]
+pub(crate) struct VizContext {
+    pub(crate) views: Vec<(usize, VizView)>,
+    pub(crate) hits: Vec<VizHit>,
+}
+
+impl VizContext {
+    pub(super) fn view(&self, ordinal: usize, source: u64) -> Option<&VizView> {
+        self.views
+            .iter()
+            .find(|(index, view)| *index == ordinal && view.source == source)
+            .map(|(_, view)| view)
+    }
+}
+
+/// Stable fingerprint of a fence body for [`VizView::source`].
+pub(crate) fn source_hash(source: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Clickable spans of a widget, relative to its own rows and columns.
+type WidgetHits = Vec<(usize, std::ops::Range<u16>, VizAction)>;
+
 pub(super) fn is_viz_info(info: &str) -> bool {
     info.trim() == VIZ_INFO_STRING
 }
@@ -58,11 +141,23 @@ pub(super) fn fallback_note(reason: &str, show_picker: bool) -> Line<'static> {
 
 /// Render a complete `rustcode-viz` body to lines no wider than `width`.
 /// `Err` carries a short reason for the source fallback note.
+#[cfg(test)]
 pub(super) fn render_visualization(
     source: &str,
     width: usize,
     show_picker: bool,
 ) -> Result<Vec<Line<'static>>, String> {
+    render_visualization_with_view(source, width, show_picker, None).map(|(lines, _)| lines)
+}
+
+/// [`render_visualization`] under a widget's view state, also returning the
+/// clickable spans of the rendered rows.
+pub(super) fn render_visualization_with_view(
+    source: &str,
+    width: usize,
+    show_picker: bool,
+    view: Option<&VizView>,
+) -> Result<(Vec<Line<'static>>, WidgetHits), String> {
     if source.trim().is_empty() {
         return Err("empty block".into());
     }
@@ -88,10 +183,10 @@ pub(super) fn render_visualization(
     let summary = optional_text(object, "summary")?;
 
     let width = width.max(10);
-    let body = match kind {
-        "bar_chart" => render_bar_chart(object, width, show_picker)?,
-        "table" => render_table(object, width, show_picker)?,
-        "tree" => render_tree(object, width, show_picker)?,
+    let (body, hits) = match kind {
+        "bar_chart" => (render_bar_chart(object, width, show_picker)?, Vec::new()),
+        "table" => render_table(object, width, show_picker, view)?,
+        "tree" => render_tree(object, width, show_picker, view)?,
         other => {
             return Err(format!(
                 "unsupported type \"{}\"",
@@ -122,8 +217,13 @@ pub(super) fn render_visualization(
             width,
         ));
     }
+    let offset = lines.len();
     lines.extend(body);
-    Ok(lines)
+    let hits = hits
+        .into_iter()
+        .map(|(line, columns, action)| (line + offset, columns, action))
+        .collect();
+    Ok((lines, hits))
 }
 
 fn optional_text(
@@ -375,12 +475,13 @@ fn escape_markdown_cell(text: &str) -> String {
 /// Tables reuse the transcript's Markdown table layout (column fitting,
 /// narrow key/value records, theme styles) so a structured table looks the
 /// same as a hand-written one, while the payload stays validated, bounded,
-/// and optionally sorted.
+/// and optionally sorted. Clicking a header sorts by that column.
 fn render_table(
     object: &serde_json::Map<String, Value>,
     width: usize,
     show_picker: bool,
-) -> Result<Vec<Line<'static>>, String> {
+    view: Option<&VizView>,
+) -> Result<(Vec<Line<'static>>, WidgetHits), String> {
     let columns = object
         .get("columns")
         .and_then(Value::as_array)
@@ -415,17 +516,29 @@ fn render_table(
         parsed_rows.push((parsed, sort_key));
     }
 
-    if let Some(sort) = object.get("sort_by") {
-        let column = sort
-            .get("column")
-            .and_then(Value::as_u64)
-            .map(|column| column as usize)
-            .filter(|column| *column < shown_columns)
-            .ok_or("\"sort_by.column\" must be a shown column index")?;
-        let descending = sort
-            .get("descending")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+    let payload_sort = match object.get("sort_by") {
+        None => None,
+        Some(sort) => {
+            let column = sort
+                .get("column")
+                .and_then(Value::as_u64)
+                .map(|column| column as usize)
+                .filter(|column| *column < shown_columns)
+                .ok_or("\"sort_by.column\" must be a shown column index")?;
+            let descending = sort
+                .get("descending")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Some((column, descending))
+        }
+    };
+    // A header click overrides the payload's order. Every row is sorted, so
+    // the shown rows are the top of the whole table, not of the first 50.
+    let sort = view
+        .and_then(|view| view.sort)
+        .filter(|(column, _)| *column < shown_columns)
+        .or(payload_sort);
+    if let Some((column, descending)) = sort {
         parsed_rows.sort_by(|(left, left_keys), (right, right_keys)| {
             let ordering = match (
                 left_keys.get(column).copied().flatten(),
@@ -453,8 +566,14 @@ fn render_table(
 
     let mut markdown = String::new();
     markdown.push('|');
-    for header in &headers {
-        markdown.push_str(&format!(" {} |", escape_markdown_cell(header)));
+    for (column, header) in headers.iter().enumerate() {
+        let header = match sort {
+            Some((sorted, descending)) if sorted == column => {
+                format!("{header} {}", if descending { '▼' } else { '▲' })
+            }
+            _ => header.clone(),
+        };
+        markdown.push_str(&format!(" {} |", escape_markdown_cell(&header)));
     }
     markdown.push_str("\n|");
     for numeric in &numeric_columns {
@@ -468,6 +587,15 @@ fn render_table(
     }
 
     let mut lines = render_markdown(&markdown, width, show_picker, true);
+    // Clicking a header sorts ascending, and clicking the sorted header
+    // again flips it, like the macOS app.
+    let hits = table_header_columns(&lines, shown_columns)
+        .into_iter()
+        .map(|(line, columns, column)| {
+            let descending = sort == Some((column, false));
+            (line, columns, VizAction::Sort { column, descending })
+        })
+        .collect();
     let mut notes = Vec::new();
     if parsed_rows.len() > MAX_TABLE_ROWS {
         notes.push(format!(
@@ -487,13 +615,77 @@ fn render_table(
     if !notes.is_empty() {
         lines.push(more_line(format!("… {}", notes.join("; ")), show_picker));
     }
-    Ok(lines)
+    Ok((lines, hits))
 }
 
-struct TreeWalk {
+/// The display columns each header cell covers in a table drawn by the
+/// Markdown renderer, as `(row, columns, column index)`.
+///
+/// A grid row is, per column, a padding span, the cell's styled spans, a
+/// padding span, and a gap span before the next column; padding is unstyled
+/// and every header span is styled. The header is every row above the `━`
+/// rule. A table drawn as narrow key/value records has no header row, and
+/// anything else that does not have this shape yields no targets rather than
+/// a wrong one.
+fn table_header_columns(
+    lines: &[Line<'static>],
+    columns: usize,
+) -> Vec<(usize, std::ops::Range<u16>, usize)> {
+    let is_rule = |line: &Line<'_>| {
+        line.width() > 0
+            && line
+                .spans
+                .iter()
+                .all(|span| span.content.chars().all(|character| character == '━'))
+    };
+    let header_rows = lines.iter().position(is_rule).unwrap_or(lines.len().min(1));
+    let is_padding = |span: &Span<'_>| {
+        span.style == Style::default() && span.content.chars().all(|character| character == ' ')
+    };
+    let mut hits = Vec::new();
+    for (row, line) in lines[..header_rows].iter().enumerate() {
+        let mut spans = line.spans.iter().peekable();
+        let mut x = 0usize;
+        let mut row_hits = Vec::with_capacity(columns);
+        for column in 0..columns {
+            let Some(left) = spans.next().filter(|span| is_padding(span)) else {
+                return Vec::new();
+            };
+            let start = x;
+            x += left.width();
+            while let Some(span) = spans.next_if(|span| span.style != Style::default()) {
+                x += span.width();
+            }
+            let Some(right) = spans.next().filter(|span| is_padding(span)) else {
+                return Vec::new();
+            };
+            x += right.width();
+            row_hits.push((row, start as u16..x as u16, column));
+            if column + 1 < columns {
+                let Some(gap) = spans.next().filter(|span| is_padding(span)) else {
+                    return Vec::new();
+                };
+                x += gap.width();
+            }
+        }
+        if spans.next().is_some() {
+            return Vec::new();
+        }
+        hits.extend(row_hits);
+    }
+    hits
+}
+
+struct TreeWalk<'a> {
     lines: Vec<Line<'static>>,
+    hits: WidgetHits,
     shown: usize,
     hidden: usize,
+    /// Preorder id of the next node in the whole tree, shown or not, so a
+    /// node keeps its id however much above it is collapsed.
+    next_id: usize,
+    /// Nodes whose open state was flipped from the default (open).
+    toggled: Option<&'a std::collections::BTreeSet<usize>>,
     width: usize,
     show_picker: bool,
 }
@@ -535,13 +727,15 @@ fn count_nodes(nodes: &[Value]) -> usize {
         .sum()
 }
 
-impl TreeWalk {
+impl TreeWalk<'_> {
     fn walk(&mut self, nodes: &[Value], prefix: &str, depth: usize) {
         for (index, node) in nodes.iter().enumerate() {
             if self.shown >= MAX_TREE_NODES {
                 self.hidden += count_nodes(&nodes[index..]);
                 return;
             }
+            let id = self.next_id;
+            self.next_id += 1;
             let last = index + 1 == nodes.len();
             let branch = if depth == 0 {
                 ""
@@ -562,47 +756,79 @@ impl TreeWalk {
                 .and_then(Value::as_array)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
+            // Children past the depth limit are never drawn, so that node is
+            // not a toggle.
+            let collapsible = !children.is_empty() && depth < MAX_TREE_DEPTH;
+            let collapsed =
+                collapsible && self.toggled.is_some_and(|toggled| toggled.contains(&id));
 
             let guide = format!("{prefix}{branch}");
             let guide_width = UnicodeWidthStr::width(guide.as_str());
-            let available = self.width.saturating_sub(guide_width).max(1);
-            let label_text = fit_width(&label, available);
-            let mut spans = vec![
-                Span::styled(
-                    guide,
+            let mut available = self.width.saturating_sub(guide_width).max(1);
+            let muted = get_themed_style(
+                COLOR_MUTED(),
+                COLOR_BG(),
+                Modifier::empty(),
+                self.show_picker,
+            );
+            let mut spans = vec![Span::styled(guide, muted)];
+            if collapsible && available > 3 {
+                spans.push(Span::styled(
+                    if collapsed { "▸ " } else { "▾ " },
                     get_themed_style(
-                        COLOR_MUTED(),
+                        COLOR_PRIMARY(),
                         COLOR_BG(),
                         Modifier::empty(),
                         self.show_picker,
                     ),
+                ));
+                available -= 2;
+            }
+            let label_text = fit_width(&label, available);
+            spans.push(Span::styled(
+                label_text.clone(),
+                get_themed_style(
+                    COLOR_TEXT(),
+                    COLOR_BG(),
+                    if children.is_empty() {
+                        Modifier::empty()
+                    } else {
+                        Modifier::BOLD
+                    },
+                    self.show_picker,
                 ),
-                Span::styled(
-                    label_text.clone(),
-                    get_themed_style(
-                        COLOR_TEXT(),
-                        COLOR_BG(),
-                        if children.is_empty() {
-                            Modifier::empty()
-                        } else {
-                            Modifier::BOLD
-                        },
-                        self.show_picker,
-                    ),
-                ),
-            ];
-            let remaining = available.saturating_sub(UnicodeWidthStr::width(label_text.as_str()));
+            ));
+            let mut remaining =
+                available.saturating_sub(UnicodeWidthStr::width(label_text.as_str()));
+            if collapsible {
+                let label_end = self.width - remaining;
+                self.hits.push((
+                    self.lines.len(),
+                    guide_width as u16..label_end as u16,
+                    VizAction::ToggleNode(id),
+                ));
+            }
+            if collapsed {
+                let hint = format!("  {} hidden", count_nodes(children));
+                if remaining >= UnicodeWidthStr::width(hint.as_str()) {
+                    remaining -= UnicodeWidthStr::width(hint.as_str());
+                    spans.push(Span::styled(
+                        hint,
+                        get_themed_style(
+                            COLOR_MUTED(),
+                            COLOR_BG(),
+                            Modifier::ITALIC,
+                            self.show_picker,
+                        ),
+                    ));
+                }
+            }
             if let Some(note) = note
                 && remaining > 4
             {
                 spans.push(Span::styled(
                     format!("  {}", fit_width(&note, remaining - 2)),
-                    get_themed_style(
-                        COLOR_MUTED(),
-                        COLOR_BG(),
-                        Modifier::empty(),
-                        self.show_picker,
-                    ),
+                    muted,
                 ));
             }
             self.lines.push(Line::from(spans));
@@ -611,8 +837,13 @@ impl TreeWalk {
             if children.is_empty() {
                 continue;
             }
-            if depth + 1 > MAX_TREE_DEPTH {
+            if !collapsible {
                 self.hidden += count_nodes(children);
+                self.next_id += count_nodes(children);
+                continue;
+            }
+            if collapsed {
+                self.next_id += count_nodes(children);
                 continue;
             }
             let child_prefix = if depth == 0 {
@@ -631,7 +862,8 @@ fn render_tree(
     object: &serde_json::Map<String, Value>,
     width: usize,
     show_picker: bool,
-) -> Result<Vec<Line<'static>>, String> {
+    view: Option<&VizView>,
+) -> Result<(Vec<Line<'static>>, WidgetHits), String> {
     let nodes = object
         .get("nodes")
         .and_then(Value::as_array)
@@ -644,8 +876,11 @@ fn render_tree(
 
     let mut walk = TreeWalk {
         lines: Vec::new(),
+        hits: Vec::new(),
         shown: 0,
         hidden: 0,
+        next_id: 0,
+        toggled: view.map(|view| &view.toggled),
         width,
         show_picker,
     };
@@ -660,7 +895,7 @@ fn render_tree(
             show_picker,
         ));
     }
-    Ok(lines)
+    Ok((lines, walk.hits))
 }
 
 #[cfg(test)]
@@ -771,8 +1006,187 @@ mod tests {
         let body = r#"{"version":1,"type":"tree","title":"ui","nodes":[{"label":"ui/","children":[{"label":"markdown.rs","note":"tables"},{"label":"modals/","children":[{"label":"theme.rs"}]}]}]}"#;
         let rendered = text(&render_visualization(body, 60, false).unwrap());
         assert!(rendered.contains("├─ markdown.rs  tables"), "{rendered}");
-        assert!(rendered.contains("└─ modals/"), "{rendered}");
+        assert!(rendered.contains("└─ ▾ modals/"), "{rendered}");
         assert!(rendered.contains("   └─ theme.rs"), "{rendered}");
+    }
+
+    const TABLE: &str = r#"{"version":1,"type":"table","title":"Slow tests","columns":["Test","ms"],"rows":[["b",5],["a",900],["c",40]]}"#;
+    const TREE: &str = r#"{"version":1,"type":"tree","nodes":[{"label":"ui/","children":[{"label":"modals/","children":[{"label":"theme.rs"},{"label":"picker.rs"}]},{"label":"tests/","children":[{"label":"x.rs"}]}]}]}"#;
+
+    fn with_view(
+        body: &str,
+        width: usize,
+        view: &VizView,
+    ) -> (Vec<Line<'static>>, WidgetHits, String) {
+        let (lines, hits) = render_visualization_with_view(body, width, false, Some(view)).unwrap();
+        let rendered = text(&lines);
+        (lines, hits, rendered)
+    }
+
+    #[test]
+    fn clicked_sort_orders_numbers_numerically_and_marks_the_header() {
+        let ascending = VizView {
+            sort: Some((1, false)),
+            ..Default::default()
+        };
+        let (_, _, rendered) = with_view(TABLE, 60, &ascending);
+        assert!(rendered.contains("ms ▲"), "{rendered}");
+        let at = |needle: &str| rendered.find(needle).unwrap();
+        // 5 < 40 < 900, which a text sort would get wrong.
+        assert!(at(" b ") < at(" c ") && at(" c ") < at(" a "), "{rendered}");
+
+        let by_name = VizView {
+            sort: Some((0, true)),
+            ..Default::default()
+        };
+        let (_, _, rendered) = with_view(TABLE, 60, &by_name);
+        assert!(rendered.contains("Test ▼") && !rendered.contains('▲'));
+        let at = |needle: &str| rendered.find(needle).unwrap();
+        assert!(at(" c ") < at(" b ") && at(" b ") < at(" a "), "{rendered}");
+
+        // The payload's own sort_by is marked too, and a click overrides it.
+        let sorted = TABLE.replace(
+            r#""rows""#,
+            r#""sort_by":{"column":1,"descending":true},"rows""#,
+        );
+        let rendered = text(&render_visualization(&sorted, 60, false).unwrap());
+        assert!(rendered.contains("ms ▼"), "{rendered}");
+        let (_, _, rendered) = with_view(&sorted, 60, &by_name);
+        assert!(rendered.contains("Test ▼") && !rendered.contains("ms ▼"));
+    }
+
+    #[test]
+    fn header_targets_cover_their_column_and_pick_the_next_direction() {
+        let (lines, hits, _) = with_view(TABLE, 60, &VizView::default());
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        for (line, columns, action) in &hits {
+            let row = lines[*line].to_string();
+            let cell: String = row
+                .chars()
+                .skip(usize::from(columns.start))
+                .take(usize::from(columns.end - columns.start))
+                .collect();
+            let VizAction::Sort { column, descending } = action else {
+                panic!("{action:?}");
+            };
+            assert!(!descending);
+            assert_eq!(cell.trim(), ["Test", "ms"][*column], "{row:?}");
+        }
+
+        let ascending = VizView {
+            sort: Some((1, false)),
+            ..Default::default()
+        };
+        let (_, hits, _) = with_view(TABLE, 60, &ascending);
+        let actions = hits
+            .iter()
+            .map(|(_, _, action)| *action)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actions,
+            [
+                VizAction::Sort {
+                    column: 0,
+                    descending: false
+                },
+                VizAction::Sort {
+                    column: 1,
+                    descending: true
+                }
+            ]
+        );
+
+        // Narrow key/value records have no header row to click.
+        let wide = r#"{"version":1,"type":"table","columns":["Name","Purpose","Owner"],"rows":[["rustcode","a terminal coding agent","core"]]}"#;
+        let (_, hits, rendered) = with_view(wide, 24, &VizView::default());
+        assert!(rendered.contains("Name: rustcode"), "{rendered}");
+        assert!(hits.is_empty(), "{hits:?}");
+    }
+
+    #[test]
+    fn collapsed_tree_nodes_hide_their_subtree_with_a_count() {
+        let (_, hits, rendered) = with_view(TREE, 60, &VizView::default());
+        assert!(rendered.contains("▾ ui/"), "{rendered}");
+        assert!(rendered.contains("├─ ▾ modals/"), "{rendered}");
+        assert!(rendered.contains("│  ├─ theme.rs"), "{rendered}");
+        // Only nodes with children are targets: ui/, modals/, tests/ in
+        // preorder.
+        let ids = hits
+            .iter()
+            .map(|(_, _, action)| *action)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                VizAction::ToggleNode(0),
+                VizAction::ToggleNode(1),
+                VizAction::ToggleNode(4)
+            ]
+        );
+
+        let mut view = VizView::default();
+        view.apply(VizAction::ToggleNode(1));
+        let (_, hits, rendered) = with_view(TREE, 60, &view);
+        assert!(rendered.contains("├─ ▸ modals/  2 hidden"), "{rendered}");
+        assert!(!rendered.contains("theme.rs"), "{rendered}");
+        // tests/ keeps its id although fewer rows come before it.
+        assert!(
+            hits.iter()
+                .any(|(line, _, action)| *action == VizAction::ToggleNode(4)
+                    && text(&with_view(TREE, 60, &view).0[*line..=*line]).contains("tests/"))
+        );
+
+        view.apply(VizAction::ToggleNode(0));
+        let (_, _, rendered) = with_view(TREE, 60, &view);
+        assert!(rendered.contains("▸ ui/  5 hidden"), "{rendered}");
+        assert!(!rendered.contains("modals/"), "{rendered}");
+
+        view.apply(VizAction::ToggleNode(0));
+        view.apply(VizAction::ToggleNode(1));
+        assert!(view.toggled.is_empty());
+        let (_, _, rendered) = with_view(TREE, 60, &view);
+        assert!(rendered.contains("theme.rs"));
+    }
+
+    #[test]
+    fn message_targets_sit_on_widget_rows_past_the_gutter_and_skip_stale_state() {
+        let content = fenced(TABLE);
+        let cell = AssistantMarkdownCell::committed(&content, None, None, None, None);
+        let (lines, hits) = cell.interactive_display_lines(60, Vec::new());
+        assert_eq!(hits.len(), 2);
+        for hit in &hits {
+            assert_eq!(hit.ordinal, 0);
+            assert_eq!(hit.source, source_hash(TABLE));
+            let row = lines[hit.line].to_string();
+            let cell: String = row
+                .chars()
+                .skip(usize::from(hit.columns.start))
+                .take(usize::from(hit.columns.end - hit.columns.start))
+                .collect();
+            assert!(["Test", "ms"].contains(&cell.trim()), "{row:?} {hit:?}");
+        }
+        // Without view state the interactive render matches the cached one.
+        assert_eq!(text(&lines), text(&cell.display_lines(60)));
+
+        // State made for another body is ignored.
+        let stale = VizView {
+            source: source_hash("something else"),
+            sort: Some((1, false)),
+            ..Default::default()
+        };
+        let (lines, _) = cell.interactive_display_lines(60, vec![(0, stale)]);
+        assert!(!text(&lines).contains('▲'));
+        let fresh = VizView {
+            source: source_hash(TABLE),
+            sort: Some((1, false)),
+            ..Default::default()
+        };
+        let (lines, _) = cell.interactive_display_lines(60, vec![(0, fresh)]);
+        assert!(text(&lines).contains("ms ▲"));
+
+        // A live stream is never interactive, even after the fence closes.
+        let live = AssistantMarkdownCell::streaming(&content, false, None, None, None);
+        assert!(!text(&live.display_lines(60)).contains('▲'));
     }
 
     #[test]

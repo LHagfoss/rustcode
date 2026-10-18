@@ -123,6 +123,38 @@ pub(crate) struct TranscriptState {
     held_indicator: Option<HeldIndicator>,
     /// Click counting and word/line units for mouse selection in the composer.
     pub(crate) composer_mouse: super::ComposerMouse,
+    /// Sort and collapse state of visualization widgets, keyed by
+    /// `(history index, viz ordinal)`. Terminal UI state only: never saved
+    /// with the session or sent to a provider.
+    viz_views: std::collections::BTreeMap<(usize, usize), super::visualization::VizView>,
+    /// Clickable widget spans of each cached committed block.
+    viz_hit_cache:
+        Option<super::lru::LruCache<CommittedKey, Arc<Vec<super::visualization::VizHit>>>>,
+    /// For each widget target of the projection just built, its transcript
+    /// line and columns. `None` while a selection pins the view, like
+    /// [`Self::tool_line_flags`].
+    pub(super) viz_line_flags: Option<Vec<(usize, std::ops::Range<u16>, VizTarget)>>,
+    /// Painted cells of each widget target in the last frame.
+    viz_rows: Vec<(ratatui::layout::Rect, VizTarget)>,
+    /// A press on a widget target; releasing in place applies it.
+    pub(crate) viz_click: Option<((u16, u16), VizTarget)>,
+    /// The widget target under the pointer, lit so it reads as clickable.
+    hovered_viz: Option<ratatui::layout::Rect>,
+}
+
+/// One clickable part of a visualization in the transcript: a table header
+/// or a tree node with children.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VizTarget {
+    /// History index of the assistant message holding the widget.
+    pub(crate) message: usize,
+    /// Which `rustcode-viz` fence of that message.
+    pub(crate) ordinal: usize,
+    /// Fingerprint of the fence body the target was drawn from.
+    pub(crate) source: u64,
+    pub(crate) action: super::visualization::VizAction,
+    /// Layout width the target was drawn at.
+    pub(crate) width: u16,
 }
 
 struct HeldIndicator {
@@ -194,6 +226,12 @@ impl Default for TranscriptState {
             pointer: None,
             held_indicator: None,
             composer_mouse: super::ComposerMouse::default(),
+            viz_views: std::collections::BTreeMap::new(),
+            viz_hit_cache: None,
+            viz_line_flags: None,
+            viz_rows: Vec::new(),
+            viz_click: None,
+            hovered_viz: None,
         }
     }
 }
@@ -513,10 +551,16 @@ impl TranscriptState {
         let message = self
             .message_at(column, row)
             .filter(|_| target.is_none() && self.panel_selection_area.is_none());
+        let viz = self
+            .viz_rect_at(column, row)
+            .map(|(rect, _)| rect)
+            .filter(|_| target.is_none() && self.panel_selection_area.is_none());
         let changed = block != self.hovered_tool_block
             || chip != self.tasks_chip_hovered
             || target != self.hovered_target
-            || message != self.hovered_message;
+            || message != self.hovered_message
+            || viz != self.hovered_viz;
+        self.hovered_viz = viz;
         self.hovered_message = message;
         self.hovered_tool_block = block;
         self.tasks_chip_hovered = chip;
@@ -718,11 +762,134 @@ impl TranscriptState {
         if let Some(lines) = self.committed_cache().get(&key) {
             return Arc::clone(lines);
         }
-        let lines = Arc::new(super::render_committed_history_block_snapshot(
-            state, index, width,
-        ));
+        self.render_committed_block(state, index, width, key).0
+    }
+
+    /// Render the block behind `key` and cache its rows and widget targets.
+    fn render_committed_block(
+        &mut self,
+        state: &super::RenderSnapshot,
+        index: usize,
+        width: u16,
+        key: CommittedKey,
+    ) -> (
+        Arc<Vec<Line<'static>>>,
+        Arc<Vec<super::visualization::VizHit>>,
+    ) {
+        let (lines, hits) = super::render_committed_history_block_interactive(
+            state,
+            index,
+            width,
+            self.viz_views_for(index),
+        );
+        let (lines, hits) = (Arc::new(lines), Arc::new(hits));
         self.committed_cache().insert(key, Arc::clone(&lines));
-        lines
+        self.viz_hit_cache().insert(key, Arc::clone(&hits));
+        (lines, hits)
+    }
+
+    /// The clickable widget spans of [`Self::committed_block`].
+    pub(crate) fn committed_block_viz_hits(
+        &mut self,
+        state: &super::RenderSnapshot,
+        index: usize,
+        width: u16,
+    ) -> Arc<Vec<super::visualization::VizHit>> {
+        let key = self.committed_key(state, index, index, width);
+        if let Some(hits) = self.viz_hit_cache().get(&key) {
+            return Arc::clone(hits);
+        }
+        self.render_committed_block(state, index, width, key).1
+    }
+
+    fn viz_views_for(&self, message: usize) -> Vec<(usize, super::visualization::VizView)> {
+        self.viz_views
+            .range((message, 0)..(message + 1, 0))
+            .map(|(&(_, ordinal), view)| (ordinal, view.clone()))
+            .collect()
+    }
+
+    /// Apply a click on a widget target: sort the table or open or close the
+    /// tree node. A reader scrolled up keeps the clicked row where it is.
+    pub(crate) fn apply_viz_target(&mut self, state: &super::RenderSnapshot, target: VizTarget) {
+        let before = self
+            .committed_block(state, target.message, target.width)
+            .len();
+        let key = (target.message, target.ordinal);
+        let view = self.viz_views.entry(key).or_default();
+        if view.source != target.source {
+            *view = super::visualization::VizView {
+                source: target.source,
+                ..Default::default()
+            };
+        }
+        view.apply(target.action);
+        if view.sort.is_none() && view.toggled.is_empty() {
+            self.viz_views.remove(&key);
+        }
+        let after = self
+            .committed_block(state, target.message, target.width)
+            .len();
+        if self.scroll_rows > 0 && after != before {
+            // Rows came or went below the clicked one; the offset counts
+            // from the bottom.
+            self.shift_reading_offset(after as isize - before as isize);
+            self.reading_anchor = None;
+        }
+    }
+
+    pub(super) fn set_viz_rows(
+        &mut self,
+        area: ratatui::layout::Rect,
+        targets: Vec<(u16, std::ops::Range<u16>, VizTarget)>,
+    ) {
+        self.viz_rows = targets
+            .into_iter()
+            .filter(|(row, columns, _)| *row < area.height && columns.start < columns.end)
+            .map(|(row, columns, target)| {
+                let rect = ratatui::layout::Rect::new(
+                    area.x.saturating_add(columns.start),
+                    area.y + row,
+                    columns.end - columns.start,
+                    1,
+                )
+                .intersection(area);
+                (rect, target)
+            })
+            .filter(|(rect, _)| !rect.is_empty())
+            .collect();
+        if self
+            .hovered_viz
+            .is_some_and(|hovered| !self.viz_rows.iter().any(|(rect, _)| *rect == hovered))
+        {
+            self.hovered_viz = None;
+        }
+    }
+
+    fn viz_rect_at(&self, column: u16, row: u16) -> Option<(ratatui::layout::Rect, VizTarget)> {
+        let position = ratatui::layout::Position::new(column, row);
+        self.viz_rows
+            .iter()
+            .find(|(rect, _)| rect.contains(position))
+            .copied()
+    }
+
+    /// The widget target the last painted frame showed at this cell.
+    pub(crate) fn viz_target_at(&self, column: u16, row: u16) -> Option<VizTarget> {
+        self.viz_rect_at(column, row).map(|(_, target)| target)
+    }
+
+    /// Light the widget target under the pointer.
+    pub(super) fn highlight_hovered_viz(&self, buffer: &mut ratatui::buffer::Buffer) {
+        let Some(hovered) = self.hovered_viz else {
+            return;
+        };
+        let hovered = hovered.intersection(buffer.area);
+        for y in hovered.y..hovered.bottom() {
+            for x in hovered.x..hovered.right() {
+                buffer[(x, y)].set_bg(super::COLOR_HOVER_BG());
+            }
+        }
     }
 
     /// The committed tool chain `first..end`, including its trailing blank
@@ -814,6 +981,12 @@ impl TranscriptState {
                 .contains(&message)
                 .hash(&mut theme_hash);
         }
+        // A sorted table or collapsed tree draws different rows.
+        if end == index {
+            for view in self.viz_views.range((index, 0)..(index + 1, 0)) {
+                view.hash(&mut theme_hash);
+            }
+        }
         let mut session_hash = std::collections::hash_map::DefaultHasher::new();
         state.active_session_id().hash(&mut session_hash);
         (
@@ -877,6 +1050,13 @@ impl TranscriptState {
         // evicts what the next frame needs and re-renders the whole span per
         // wheel tick, which is what froze fast scrolling in long sessions.
         self.committed_cache
+            .get_or_insert_with(|| super::lru::LruCache::new(COMMITTED_CACHE_BLOCKS))
+    }
+
+    fn viz_hit_cache(
+        &mut self,
+    ) -> &mut super::lru::LruCache<CommittedKey, Arc<Vec<super::visualization::VizHit>>> {
+        self.viz_hit_cache
             .get_or_insert_with(|| super::lru::LruCache::new(COMMITTED_CACHE_BLOCKS))
     }
 
@@ -1091,16 +1271,29 @@ impl AssistantMarkdownCell {
     }
 }
 
-impl HistoryCell for AssistantMarkdownCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let theme_name = super::theme::active_palette().name.to_owned();
-        if let Some((cached_width, cached_theme, lines)) = self.cached_display.borrow().as_ref()
-            && *cached_width == width
-            && cached_theme == &theme_name
-        {
-            return lines.clone();
-        }
+impl AssistantMarkdownCell {
+    /// Rows of a finalized message drawn under its widgets' view state, and
+    /// the clickable spans of those widgets. Not cached here: the committed
+    /// block cache keys on the view state instead.
+    pub(super) fn interactive_display_lines(
+        &self,
+        width: u16,
+        views: Vec<(usize, super::visualization::VizView)>,
+    ) -> (Vec<Line<'static>>, Vec<super::visualization::VizHit>) {
+        debug_assert!(!self.generating, "a live stream is never interactive");
+        let mut viz = super::visualization::VizContext {
+            views,
+            hits: Vec::new(),
+        };
+        let lines = self.render_lines(width, Some(&mut viz));
+        (lines, viz.hits)
+    }
 
+    fn render_lines(
+        &self,
+        width: u16,
+        viz: Option<&mut super::visualization::VizContext>,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let mut copy_clicks = Vec::new();
         let mut streaming_markdown = self.streaming_markdown.borrow_mut();
@@ -1119,6 +1312,7 @@ impl HistoryCell for AssistantMarkdownCell {
                 last_copy_text: None,
             },
             self.generating.then_some(&mut *streaming_markdown),
+            viz.filter(|_| !self.generating),
         );
         if self.continuation {
             super::demote_assistant_bullet(&mut lines);
@@ -1128,10 +1322,23 @@ impl HistoryCell for AssistantMarkdownCell {
                 lines.pop();
             }
         }
-        let lines = lines
+        lines
             .into_iter()
             .map(|line| super::own_line(&line))
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+    }
+}
+
+impl HistoryCell for AssistantMarkdownCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let theme_name = super::theme::active_palette().name.to_owned();
+        if let Some((cached_width, cached_theme, lines)) = self.cached_display.borrow().as_ref()
+            && *cached_width == width
+            && cached_theme == &theme_name
+        {
+            return lines.clone();
+        }
+        let lines = self.render_lines(width, None);
         self.cached_display
             .replace(Some((width, theme_name, lines.clone())));
         lines

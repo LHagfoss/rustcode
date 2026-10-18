@@ -32,7 +32,7 @@ pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
 use history_cell::{HistoryCell, is_live_tool_call_visible};
 pub(crate) use history_cell::{
-    PanelTarget, ToolBlock, TranscriptState, WHEEL_SCROLL_LINES, set_wheel_scroll_lines,
+    PanelTarget, ToolBlock, TranscriptState, VizTarget, WHEEL_SCROLL_LINES, set_wheel_scroll_lines,
     wheel_scroll_lines,
 };
 pub(crate) use transcript::TranscriptModel;
