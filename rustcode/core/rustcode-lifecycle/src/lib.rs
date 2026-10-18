@@ -377,10 +377,7 @@ mod mapping_tests {
             None,
         ));
         let notice = stop_marker_notice(&stop_marker(&default)).unwrap();
-        assert!(
-            notice.contains("default output cap of 8192 tokens"),
-            "{notice}"
-        );
+        assert!(notice.contains("default cap of 8192 tokens"), "{notice}");
         assert!(notice.contains("Set `max_output_tokens`"), "{notice}");
 
         let provider = StopReason::OutputLimit(output_limit_detail(
