@@ -37,6 +37,10 @@ instructions for work in this repository.
 
 ## Naming
 
+Never add AI or agent attribution anywhere: no `Co-Authored-By` trailers for
+an assistant, no session links, no "Generated with …" footers in commits, PR
+titles or bodies, comments, or release notes.
+
 Use Conventional Commits consistently for branch names, commit messages, and
 PR titles:
 
