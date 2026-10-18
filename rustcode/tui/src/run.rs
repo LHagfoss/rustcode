@@ -299,7 +299,12 @@ async fn run_remote_command(
             } else {
                 remote::QrStyle::Text
             };
-            println!("{}", remote::format_offer(&lifecycle.pair().await?, style));
+            let before = lifecycle.status().await.ok().flatten();
+            let offer = lifecycle.pair().await?;
+            println!("{}", remote::format_offer(&offer, style));
+            if style == remote::QrStyle::Ansi {
+                remote::watch_pairing_in_terminal(&lifecycle, &offer, before.as_ref()).await;
+            }
         }
         RemoteCommands::Devices { json } => {
             let devices = lifecycle.devices()?;

@@ -9,7 +9,7 @@
 use super::address::AdvertisedAddress;
 use super::handshake::Secret;
 use super::hub::SessionSummary;
-use super::pairing::{self, PairingOffer};
+use super::pairing::{self, ChallengeEnd, PairingOffer};
 use crate::daemon::protocol::{read_async_frame, write_async_frame};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -116,7 +116,7 @@ pub struct DeviceSummary {
 }
 
 /// Where pairing stands, without any secret.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairingStatus {
     /// Lifetime left of the open challenge.
     pub expires_in_secs: Option<u64>,
@@ -124,6 +124,22 @@ pub struct PairingStatus {
     pub attempts_left: Option<u8>,
     /// Pairing is locked after too many failures on this host.
     pub locked_for_secs: Option<u64>,
+    /// Serial of the open challenge. `None` without one, or from a gateway
+    /// that does not number its challenges.
+    #[serde(default)]
+    pub challenge: Option<u64>,
+    /// Serial of the most recently issued challenge, open or not.
+    #[serde(default)]
+    pub last_challenge: Option<u64>,
+    /// The last challenge that ended before it expired.
+    #[serde(default)]
+    pub ended: Option<EndedChallenge>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndedChallenge {
+    pub challenge: u64,
+    pub end: ChallengeEnd,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +160,14 @@ pub struct OfferDetails {
     pub credential: Secret,
     pub code: Secret,
     pub expires_in_secs: u64,
+    /// Serial of this challenge, to follow it in [`PairingStatus`]. `None`
+    /// from a gateway that does not number its challenges.
+    #[serde(default)]
+    pub challenge: Option<u64>,
+    /// Pairing is locked on this host right now: the challenge cannot be
+    /// redeemed, not even with the right code, until the lockout ends.
+    #[serde(default)]
+    pub locked_for_secs: Option<u64>,
     /// The exact string a pairing QR code encodes.
     pub qr_payload: Secret,
 }
@@ -168,6 +192,8 @@ impl OfferDetails {
             credential: offer.credential,
             code: offer.code,
             expires_in_secs: offer.lifetime.as_secs(),
+            challenge: None,
+            locked_for_secs: None,
         }
     }
 }

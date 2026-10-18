@@ -259,7 +259,7 @@ impl RemoteBridge {
                     share.pairing_due = wants_code;
                 }
                 self.share_all = None;
-                if self.show_pairing_details(app_state) {
+                if self.show_pairing_details(app_state).await {
                     return;
                 }
                 if self.share.is_none() {
@@ -322,7 +322,7 @@ impl RemoteBridge {
     /// Put the pairing details for the last `/remote` on screen, if they are
     /// due and the gateway has accepted the registration. The request runs on
     /// its own task: the loop does not wait on the gateway's control socket.
-    fn show_pairing_details(&mut self, app_state: &Arc<Mutex<AppState>>) -> bool {
+    async fn show_pairing_details(&mut self, app_state: &Arc<Mutex<AppState>>) -> bool {
         let due = self.share.as_ref().is_some_and(|share| {
             share.pairing_due
                 && share
@@ -341,12 +341,15 @@ impl RemoteBridge {
         }
         #[cfg(unix)]
         if let Some(directory) = self.connector.gateway_directory() {
-            tokio::spawn(rustcode::remote_gateway::command::show_pairing_details(
-                Arc::clone(app_state),
-                PANEL_TITLE,
-                self.status(),
-                directory,
-            ));
+            tokio::spawn(
+                rustcode::remote_gateway::command::show_pairing_details(
+                    Arc::clone(app_state),
+                    PANEL_TITLE,
+                    self.status(),
+                    directory,
+                )
+                .await,
+            );
             return true;
         }
         let _ = app_state;
@@ -363,13 +366,16 @@ impl RemoteBridge {
                 .share
                 .as_ref()
                 .map(|share| share.publisher.registration().session_id.clone());
-            tokio::spawn(rustcode::remote_gateway::command::show_gateway_status(
-                Arc::clone(app_state),
-                PANEL_TITLE,
-                self.session_status(),
-                directory,
-                session_id,
-            ));
+            tokio::spawn(
+                rustcode::remote_gateway::command::show_gateway_status(
+                    Arc::clone(app_state),
+                    PANEL_TITLE,
+                    self.session_status(),
+                    directory,
+                    session_id,
+                )
+                .await,
+            );
             return true;
         }
         let _ = app_state;
@@ -768,7 +774,7 @@ impl RemoteBridge {
             state.update_command_panel(PANEL_TITLE, format!("{notice}\nThis session is private."));
             state.set_transient_notice(notice);
             *needs_redraw = true;
-        } else if self.show_pairing_details(app_state) {
+        } else if self.show_pairing_details(app_state).await {
             *needs_redraw = true;
         }
     }
@@ -1480,6 +1486,17 @@ mod tests {
             .trim()
             .to_owned();
         assert_eq!(offer_code.len(), 9, "{offer_code}");
+        assert!(
+            report.contains("Pair a device within 120 seconds, by "),
+            "{report}"
+        );
+        // The panel counts the open challenge down above the code.
+        let counting = panel_until(&mut runtime, |report| {
+            report.contains("Waiting for a device: expires in")
+        })
+        .await;
+        assert!(counting.contains("5 wrong codes left"), "{counting}");
+        assert!(counting.contains(&offer_code), "{counting}");
 
         let status = lifecycle
             .status()

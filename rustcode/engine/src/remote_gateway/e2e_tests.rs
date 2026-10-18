@@ -967,8 +967,19 @@ async fn two_terminals_share_and_a_third_stays_private() {
         .send(SessionCloseReason::SessionChanged)
         .unwrap();
     bounded(second.task).await.unwrap();
-    let listed = phone.request(None, json!({"type": "list_sessions"})).await;
-    assert_eq!(listed["result"]["sessions"].as_array().unwrap().len(), 1);
+    // The terminal's task ending closes its owner connection; the gateway
+    // drops the session when it reads that close, which may come a moment
+    // later.
+    bounded(async {
+        loop {
+            let listed = phone.request(None, json!({"type": "list_sessions"})).await;
+            if listed["result"]["sessions"].as_array().unwrap().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
     let refused = phone
         .request(Some(&old), json!({"type": "attach_session"}))
         .await;

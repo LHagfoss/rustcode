@@ -128,7 +128,7 @@ paired.
 | Command | Behavior |
 | --- | --- |
 | `/remote` (`/remote on`) | Switch remote access on for this machine. Finds the running gateway or starts one and shares the session on screen; every other terminal shares its session within a couple of seconds, and so does every terminal started later. While no device is paired it shows the gateway address, a QR code and a manual pairing code; afterwards it shows the status. |
-| `/remote pair` | Same, and always shows a fresh pairing challenge, to add another device. |
+| `/remote pair` | Same, and always shows a fresh pairing challenge, to add another device. The panel counts the challenge down and shows the wrong codes left, a lockout, and how it ended (see [Pairing](#pairing)). |
 | `/remote status` | Whether this session is shared, the gateway address, the devices attached to this session and the devices connected to the gateway, followed by everything `rustcode remote status` shows (addresses, paired devices, pairing state, shared sessions with this terminal's marked, log paths) once the gateway answers. Names only, never a credential. |
 | `/remote off` | Switch remote access off for this machine: the gateway stops, every session disappears from every device, and nothing is shared until `/remote` is run again. Pairings are kept; running turns are not affected. |
 
@@ -180,7 +180,7 @@ remote access on is the short moment before it has registered.
 | `rustcode remote serve [--bind <ip>] [--port <port>] [--advertise <host>] [--prefer-interface <name>]` | Run the gateway in the foreground until Ctrl-C, SIGTERM or `remote stop`. |
 | `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
 | `rustcode remote off` | Stop the running gateway (alias of `stop`). |
-| `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address and code. |
+| `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address, code and expiry time. In a terminal it then counts the challenge down until a device pairs or it ends (Ctrl-C leaves earlier); otherwise it prints and exits. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time and expiry. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
 | `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
@@ -230,10 +230,26 @@ challenges, lock pairing for the rest of that window; while locked, even a
 correct code is refused. A peer on the network can therefore block pairing for
 a while, but cannot buy more guesses by reconnecting.
 
-The pairing details state the lifetime and the number of wrong codes allowed.
-They are a snapshot, not a countdown: `rustcode remote status` shows how many
-seconds and wrong codes the open challenge has left, or for how long pairing
-is locked. An expired or used-up challenge is replaced by running `/remote` or
+The pairing details state the lifetime, the wall-clock time the challenge
+expires and the number of wrong codes allowed. While they are on screen a
+line above them counts down, once a second, the time and the wrong codes
+left, and says when pairing is locked and for how long:
+
+```text
+Waiting for a device: expires in 1:27, 4 wrong codes left.
+Pairing is locked for 4:10 after too many wrong codes on this host: even the right code is refused until then. This code expires in 40 s.
+```
+
+When the challenge ends the line says how, and the QR code is taken down:
+`Paired "Lars's iPhone".`, used up (five wrong codes), expired, replaced by a
+newer challenge, or gone because the gateway stopped or restarted. In the
+`/remote` panel this runs until the panel is closed or replaced;
+`rustcode remote pair` in a terminal keeps running until the challenge ends
+(Ctrl-C leaves earlier, the challenge stays valid). When output is not a
+terminal, `rustcode remote pair` prints the details once and exits. If pairing
+is already locked when the challenge is issued, the details say so first.
+`rustcode remote status` shows the same numbers at any time. An expired or
+used-up challenge is replaced by running `/remote pair` or
 `rustcode remote pair` again.
 
 A paired device receives a random token once. The host stores only its
@@ -341,6 +357,52 @@ terminal with another environment no longer rewrites the agent and restarts
 the gateway under its devices. `rustcode remote stop` removes the agent; the
 next start installs it with the current environment.
 
+## Choosing the address a device dials
+
+- **Same Wi-Fi or LAN:** nothing to choose. `auto` picks this machine's private
+  IPv4 address, the QR code carries it, and the listener follows DHCP changes
+  by itself (see [Automatic address selection](#automatic-address-selection)).
+- **Do not type the `.local` name.** `mac.local` resolves over mDNS to every
+  address the machine has, IPv6 and VM bridges or VPNs included, and a phone
+  may try one where the gateway does not listen (`-1004 could not connect` in
+  the app). Use the IPv4 address from the QR code or `remote status`.
+- **IPv6:** `auto` prefers IPv4 and uses a routable IPv6 address only when
+  the machine has no LAN IPv4 address. Link-local `fe80::` addresses are never
+  used: they need a scope the phone cannot know. `--bind <ipv6>` chooses one
+  explicitly; pairing details then show it as `[address]:port`.
+- **Away from home, or a name that never changes:** NetBird. On both devices
+  join the same NetBird network, then on the Mac
+  `rustcode remote stop && rustcode remote serve --bind <netbird ip> --advertise <host>.netbird.cloud`
+  (or the same two values as `[remote] bind` and `advertise`). On Linux
+  `--prefer-interface netbird` finds the address by itself.
+- **Bonjour** announces the service name, port, protocol version and
+  gateway identifier, but no address on purpose: the phone resolves the
+  announcement itself on the network it is on, so the record cannot go stale
+  after a DHCP change and never points at an interface the phone cannot
+  reach. A paired phone that finds its gateway identifier at a new address
+  reconnects there with its token.
+
+## Security posture
+
+- **Transport:** no TLS. On a plain LAN anyone on the network can read and
+  alter the traffic. Use it only on a network you trust; NetBird encrypts the
+  traffic end to end and is the recommended path off the home LAN. Never
+  forward the port to the internet. The app shows an unencrypted-LAN banner
+  for a plain address.
+- **Pairing:** a 2-minute, single-use challenge with five wrong codes; ten
+  failures in five minutes lock pairing for the host. Only the local user can
+  ask for a challenge (control socket `0600`).
+- **Access is per host.** A paired device can read and drive every session
+  this machine shares, now and later, for 30 days or until revoked. There are
+  no per-session grants and no per-session opt-out. Per-session grants have
+  been considered; they are not planned for now.
+- **Ending access:** `rustcode remote revoke <device>` closes that device's
+  connections in the same step and forgets its token; `/remote off` or
+  `rustcode remote stop` ends access for every device (see
+  [Revoking and stopping](#revoking-and-stopping)).
+- **Browsers** cannot reach the gateway: an upgrade request with an `Origin`
+  header is refused.
+
 ## How it holds together
 
 **Local sockets.** The gateway has two Unix sockets in `remote/` under the
@@ -413,7 +475,6 @@ gateway.
 - A session started from a device shows up in the Mac app and the terminal's
   session lists only after its first exchange.
 - No push notifications.
-- Pairing details show the challenge's lifetime but do not count it down.
 - Access is per host: a paired device sees every session open in a terminal.
   There are no per-session grants and no per-session opt-out.
 - Reachability from a real iPhone (local-network permission, NetBird routing)

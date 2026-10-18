@@ -6,6 +6,7 @@ use super::devices::DeviceRecord;
 use super::gateway::{Gateway, GatewayConfig, Limits};
 use super::hub::{HubLimits, SessionHub};
 use super::lifecycle::{RemoteLifecycle, Revocation};
+use super::pairing_watch::{self, PairingWatch, format_progress};
 use super::qr;
 use anyhow::Result;
 use std::path::Path;
@@ -204,11 +205,20 @@ pub fn format_offer(offer: &OfferDetails, style: QrStyle) -> String {
         QrStyle::Panel => qr::panel(offer.qr_payload.expose()),
         QrStyle::Text => None,
     };
+    let expires_at = chrono::Local::now()
+        + chrono::Duration::seconds(offer.expires_in_secs.try_into().unwrap_or(i64::MAX));
     let lifetime = format!(
-        "Pair a device within {} seconds (single use, {} wrong codes allowed).",
+        "Pair a device within {} seconds, by {} (single use, {} wrong codes allowed).",
         offer.expires_in_secs,
+        expires_at.format("%H:%M:%S"),
         super::pairing::ATTEMPTS_PER_CHALLENGE
     );
+    if let Some(locked) = offer.locked_for_secs {
+        blocks.push(format!(
+            "Pairing is locked for {locked} s after too many wrong codes on this host: \
+             even this code is refused until then."
+        ));
+    }
     let by_hand = format!(
         "  address:  {}\n  code:     {}",
         offer.advertised_address,
@@ -237,8 +247,9 @@ pub fn format_offer(offer: &OfferDetails, style: QrStyle) -> String {
     blocks.join("\n\n")
 }
 
-/// `/remote`: ask the running gateway for a pairing challenge and show it in
-/// the command panel under `header`. Runs on its own task, so the terminal
+/// `/remote`: open the command panel under `header` at once, then return the
+/// work that asks the running gateway for a pairing challenge, shows it and
+/// counts it down. The caller runs that on its own task, so the terminal
 /// never waits on the control socket; the panel is only updated while it is
 /// still the one this request opened.
 pub async fn show_pairing_details(
@@ -246,20 +257,108 @@ pub async fn show_pairing_details(
     title: &'static str,
     header: String,
     config_directory: std::path::PathBuf,
-) {
+) -> impl std::future::Future<Output = ()> + Send + 'static {
     let generation = state.lock().await.show_command_panel_request(
         title,
         format!("{header}\n\nAsking the gateway for pairing details…"),
     );
-    let details = match RemoteLifecycle::new(config_directory).pair().await {
-        Ok(offer) => format_offer(&offer, QrStyle::Panel),
-        Err(error) => format!("Pairing details are not available: {error:#}"),
+    async move {
+        follow_pairing_details(state, title, generation, header, config_directory).await;
+    }
+}
+
+async fn follow_pairing_details(
+    state: Arc<tokio::sync::Mutex<crate::app::AppState>>,
+    title: &'static str,
+    generation: u64,
+    header: String,
+    config_directory: std::path::PathBuf,
+) {
+    let lifecycle = RemoteLifecycle::new(config_directory);
+    let before = lifecycle.status().await.ok().flatten();
+    let offer = match lifecycle.pair().await {
+        Ok(offer) => offer,
+        Err(error) => {
+            state.lock().await.update_command_panel_if_current(
+                title,
+                generation,
+                format!("Pairing details are not available: {error:#}\n\n{header}"),
+            );
+            return;
+        }
     };
-    state.lock().await.update_command_panel_if_current(
+    let details = format_offer(&offer, QrStyle::Panel);
+    if !state.lock().await.update_command_panel_if_current(
         title,
         generation,
         format!("{details}\n\n{header}"),
-    );
+    ) {
+        return;
+    }
+    // Count the challenge down in the panel, and say how it ended, for as
+    // long as the panel stays open.
+    let watch = PairingWatch::new(&offer, before.as_ref());
+    loop {
+        tokio::time::sleep(pairing_watch::REFRESH).await;
+        let progress = match lifecycle.status().await {
+            Ok(status) => watch.observe(status.as_ref()),
+            // A slow control socket is not an answer; ask again.
+            Err(_) => continue,
+        };
+        let Some(line) = format_progress(&progress, "/remote pair") else {
+            return;
+        };
+        let content = if progress.is_final() {
+            format!("{line}\n\n{header}")
+        } else {
+            format!("{line}\n\n{details}\n\n{header}")
+        };
+        if !state
+            .lock()
+            .await
+            .update_command_panel_if_current(title, generation, content)
+            || progress.is_final()
+        {
+            return;
+        }
+    }
+}
+
+/// `rustcode remote pair` in a terminal: after the details, one line that
+/// counts the challenge down and says how it ended. Returns once it ended or
+/// on Ctrl-C.
+pub async fn watch_pairing_in_terminal(
+    lifecycle: &RemoteLifecycle,
+    offer: &OfferDetails,
+    before: Option<&GatewayStatus>,
+) {
+    use std::io::Write as _;
+    let watch = PairingWatch::new(offer, before);
+    let interrupted = tokio::signal::ctrl_c();
+    tokio::pin!(interrupted);
+    loop {
+        tokio::select! {
+            _ = &mut interrupted => {
+                println!();
+                return;
+            }
+            _ = tokio::time::sleep(pairing_watch::REFRESH) => {}
+        }
+        let Ok(status) = lifecycle.status().await else {
+            continue;
+        };
+        let progress = watch.observe(status.as_ref());
+        let Some(line) = format_progress(&progress, "`rustcode remote pair`") else {
+            return;
+        };
+        // Rewrite the same line: carriage return, then clear it.
+        print!("\r\x1b[2K{line}");
+        if progress.is_final() {
+            println!();
+            return;
+        }
+        let _ = std::io::stdout().flush();
+    }
 }
 
 /// Table of paired devices. Carries identifiers and labels, never a token.
@@ -520,30 +619,35 @@ fn stale_address_warnings(status: &GatewayStatus) -> Vec<(String, Vec<String>)> 
     warnings
 }
 
-/// `/remote status`: the terminal's own sharing state (`header`), then the
-/// running gateway's full status, asked for on its own task so the terminal
-/// never waits on the control socket. The panel is only updated while it is
-/// still the one this request opened.
+/// `/remote status`: the terminal's own sharing state (`header`) in the
+/// command panel at once, then the returned work fills in the running
+/// gateway's full status. The caller runs that on its own task so the
+/// terminal never waits on the control socket. The panel is only updated
+/// while it is still the one this request opened.
 pub async fn show_gateway_status(
     state: Arc<tokio::sync::Mutex<crate::app::AppState>>,
     title: &'static str,
     header: String,
     config_directory: std::path::PathBuf,
     this_session: Option<String>,
-) {
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    // Opened before returning: a caller that looks right after `/remote
+    // status` sees this terminal's state, not the panel it replaced.
     let generation = state.lock().await.show_command_panel_request(
         title,
         format!("{header}\n\nAsking the gateway for its status…"),
     );
-    let detail = match RemoteLifecycle::new(config_directory).status().await {
-        Ok(status) => format_status_for(status.as_ref(), this_session.as_deref()),
-        Err(error) => format!("Remote gateway status is not available: {error:#}"),
-    };
-    state.lock().await.update_command_panel_if_current(
-        title,
-        generation,
-        format!("{header}\n\n{detail}"),
-    );
+    async move {
+        let detail = match RemoteLifecycle::new(config_directory).status().await {
+            Ok(status) => format_status_for(status.as_ref(), this_session.as_deref()),
+            Err(error) => format!("Remote gateway status is not available: {error:#}"),
+        };
+        state.lock().await.update_command_panel_if_current(
+            title,
+            generation,
+            format!("{header}\n\n{detail}"),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -646,7 +750,7 @@ mod tests {
             pairing: Some(PairingStatus {
                 expires_in_secs: Some(87),
                 attempts_left: Some(4),
-                locked_for_secs: None,
+                ..PairingStatus::default()
             }),
             unregistered_owners: vec!["session-1".into()],
             log_path: Some("/config/remote/gateway.log".into()),
