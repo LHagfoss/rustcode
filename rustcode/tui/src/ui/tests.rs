@@ -12797,3 +12797,18 @@ fn benchmark_scroll_and_selection_with_large_live_output() {
         }
     }
 }
+
+#[test]
+fn scroll_speed_picker_shows_the_value_bar_and_keys() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.settings_picker = Some(rustcode::controller::SettingsPicker::ScrollSpeed);
+    state.modal_picker_index = 3;
+    state.config.scroll_lines = Some(3);
+    let text = render_state_to_text(&mut state, 100, 30);
+    assert!(text.contains("Scroll speed"), "{text}");
+    assert!(text.contains("‹ 3 lines per wheel tick ›"), "{text}");
+    assert!(text.contains("(active)"), "{text}");
+    assert!(text.contains("■■■·"), "{text}");
+    assert!(text.contains("adjust ←/→"), "{text}");
+}

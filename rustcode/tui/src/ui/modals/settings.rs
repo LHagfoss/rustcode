@@ -242,3 +242,100 @@ pub(in crate::ui) fn render_yolo_picker_modal(
         modal_chunks[3],
     );
 }
+
+/// The `/scroll-speed` panel: one value, stepped with the arrow keys, drawn
+/// as a number and a bar so the choice reads at a glance.
+pub(in crate::ui) fn render_scroll_speed_picker_modal(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    input_area: ratatui::layout::Rect,
+) {
+    let modal_area = input_anchor_rect(f, input_area, SCROLL_SPEED_PICKER_HEIGHT);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let width = inner_area.width as usize;
+    let range = rustcode::config::SCROLL_LINES_RANGE;
+    let max = usize::from(*range.end());
+    let selected = state
+        .modal_picker_index()
+        .clamp(usize::from(*range.start()), max);
+    let current = usize::from(rustcode::config::effective_scroll_lines(
+        state.config().scroll_lines,
+    ));
+
+    let title = "Scroll speed";
+    let header = Line::from(vec![
+        Span::styled(
+            title,
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" ".repeat(picker_header_padding(width, title, "esc"))),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
+
+    let value = format!(
+        "{selected} line{} per wheel tick",
+        if selected == 1 { "" } else { "s" }
+    );
+    let badge = if selected == current { "(active)" } else { "" };
+    let value_line = Line::from(vec![
+        Span::styled("‹ ", Style::default().fg(COLOR_MUTED())),
+        Span::styled(
+            value.clone(),
+            Style::default()
+                .fg(COLOR_PRIMARY())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ›", Style::default().fg(COLOR_MUTED())),
+        Span::raw(" ".repeat(picker_row_padding(width, &format!("‹ {value} ›"), badge))),
+        Span::styled(badge, Style::default().fg(COLOR_MUTED())),
+    ]);
+
+    // One cell per possible value, so the bar's length is the setting.
+    let bar_width = max.min(width);
+    let filled = selected * bar_width / max;
+    let bar_line = Line::from(vec![
+        Span::styled("■".repeat(filled), Style::default().fg(COLOR_PRIMARY())),
+        Span::styled(
+            "·".repeat(bar_width.saturating_sub(filled)),
+            Style::default().fg(COLOR_MUTED()),
+        ),
+    ]);
+
+    let hint = Line::from(Span::styled(
+        "Your terminal sets how many ticks a wheel notch sends (kitty: touch_scroll_multiplier).",
+        Style::default().fg(COLOR_MUTED()),
+    ));
+    let footer = Line::from(vec![
+        Span::styled("adjust ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("←/→   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("save ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("cancel ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
+    let lines = vec![
+        header,
+        Line::default(),
+        value_line,
+        bar_line,
+        Line::default(),
+        hint,
+        Line::default(),
+        footer,
+    ];
+    f.render_widget(
+        // Unwrapped, so a narrow panel clips the hint rather than the keys.
+        Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL())),
+        inner_area,
+    );
+}

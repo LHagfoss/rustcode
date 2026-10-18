@@ -1195,6 +1195,24 @@ impl From<DefaultConfig> for DefaultOverride {
     }
 }
 
+/// Rows per mouse wheel tick that `scroll_lines` and `/scroll-speed` accept.
+pub const SCROLL_LINES_RANGE: std::ops::RangeInclusive<u16> = 1..=20;
+
+/// Footer confirmation after the wheel speed changes.
+pub fn scroll_speed_notice(lines: u16) -> String {
+    format!(
+        "Scroll speed set to {lines} line{} per wheel tick",
+        if lines == 1 { "" } else { "s" }
+    )
+}
+
+/// Rows per wheel tick for a configured `scroll_lines`, clamped to range.
+pub fn effective_scroll_lines(configured: Option<u16>) -> u16 {
+    configured.map_or(*SCROLL_LINES_RANGE.start(), |lines| {
+        lines.clamp(*SCROLL_LINES_RANGE.start(), *SCROLL_LINES_RANGE.end())
+    })
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub default: DefaultConfig,
@@ -1267,9 +1285,9 @@ pub struct AppConfig {
     /// so project config may set it like `theme` and `fullscreen`.
     #[serde(default)]
     pub reduced_motion: bool,
-    /// Transcript rows one mouse wheel event scrolls in the TUI (1–20).
-    /// `None` keeps one row per event; the terminal decides how many events
-    /// a wheel notch sends.
+    /// Transcript rows one mouse wheel event scrolls in the TUI
+    /// ([`SCROLL_LINES_RANGE`]). `None` keeps one row per event; the terminal
+    /// decides how many events a wheel notch sends. Set with `/scroll-speed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll_lines: Option<u16>,
     /// Generate a catch-up recap after 10 minutes idle following completed

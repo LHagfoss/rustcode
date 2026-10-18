@@ -114,6 +114,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Fork the current conversation into a new session",
     },
     CommandInfo {
+        name: "/scroll-speed",
+        desc: "Choose how many lines a mouse wheel tick scrolls",
+    },
+    CommandInfo {
         name: "/export",
         desc: "Export this session as a zip into Downloads",
     },
@@ -440,6 +444,17 @@ fn argument_values(command: &str, sources: &ArgumentSources) -> Option<Vec<Argum
                 .filter(|profile| !profile.name.contains(char::is_whitespace))
                 .map(|profile| suggestion(&profile.name, &profile.model))
                 .collect(),
+        ),
+        "/scroll-speed" => Some(
+            [
+                ("1", "Precise: one line per wheel tick (default)"),
+                ("3", "Three lines per wheel tick"),
+                ("5", "Five lines per wheel tick"),
+                ("10", "Ten lines per wheel tick"),
+            ]
+            .iter()
+            .map(|(value, desc)| suggestion(value, desc))
+            .collect(),
         ),
         "/theme" => Some(
             sources

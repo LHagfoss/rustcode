@@ -28,6 +28,9 @@ pub enum SettingsPicker {
     Effort,
     Protocol,
     Yolo,
+    /// Mouse wheel rows per tick; `modal_picker_index` holds the value being
+    /// chosen rather than a row.
+    ScrollSpeed,
 }
 
 #[derive(Debug, Clone)]
