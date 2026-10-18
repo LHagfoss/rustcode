@@ -54,7 +54,7 @@ cd rustcode
 cargo install --path rustcode/tui
 ```
 
-Prebuilt binaries cover Linux x86_64, macOS Apple Silicon and Windows x86_64.
+Prebuilt binaries cover Linux x86_64 and ARM64, macOS Apple Silicon and Windows x86_64.
 Update with `rustcode --update`, `/update` inside the TUI, or
 `brew upgrade rustcode`. Platform details, the desktop app and source builds
 are in the [install guide](docs/install.md).
