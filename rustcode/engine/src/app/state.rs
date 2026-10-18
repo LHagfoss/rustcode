@@ -1680,13 +1680,13 @@ impl AppState {
     }
 
     /// Refresh an asynchronous command panel only while the request that
-    /// opened it remains current.
+    /// opened it remains current. Returns whether it was.
     pub(crate) fn update_command_panel_if_current(
         &mut self,
         title: &'static str,
         generation: u64,
         content: impl Into<String>,
-    ) {
+    ) -> bool {
         if self.command_panel_generation == generation
             && let Some(panel) = self
                 .command_panel
@@ -1695,7 +1695,9 @@ impl AppState {
         {
             panel.content = content.into();
             self.request_redraw();
+            return true;
         }
+        false
     }
 
     /// Refresh an asynchronous command without reopening a dismissed panel.

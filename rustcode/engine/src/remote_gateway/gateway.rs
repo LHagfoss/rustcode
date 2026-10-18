@@ -9,7 +9,7 @@
 use super::address::{AdvertisedAddress, Candidate, ListenPlan, candidate_addresses};
 use super::control::{
     CONTROL_TIMEOUT, ConnectionSummary, ControlRequest, ControlResponse, DeviceSummary,
-    GatewayStatus, OfferDetails, PairingStatus,
+    EndedChallenge, GatewayStatus, OfferDetails, PairingStatus,
 };
 use super::devices::{DeviceError, DeviceRecord, DeviceStore, Devices};
 use super::handshake::{
@@ -434,13 +434,18 @@ impl Shared {
     }
 
     fn issue_pairing(&self) -> OfferDetails {
-        let offer = self.state().pairing.issue(Instant::now());
-        OfferDetails::new(
+        let now = Instant::now();
+        let mut state = self.state();
+        let offer = state.pairing.issue(now);
+        let mut details = OfferDetails::new(
             &self.advertised.borrow(),
             &self.gateway_id,
             self.host_name.as_deref(),
             offer,
-        )
+        );
+        details.challenge = state.pairing.last_serial();
+        details.locked_for_secs = state.pairing.lockout(now).map(|left| left.as_secs().max(1));
+        details
     }
 }
 
@@ -836,6 +841,12 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
             expires_in_secs: expires_in.map(|left| left.as_secs()),
             attempts_left,
             locked_for_secs: state.pairing.lockout(now).map(|left| left.as_secs().max(1)),
+            challenge: state.pairing.open_serial(now),
+            last_challenge: state.pairing.last_serial(),
+            ended: state
+                .pairing
+                .last_ended()
+                .map(|(challenge, end)| EndedChallenge { challenge, end }),
         }),
         unregistered_owners,
         log_path: Some(shared.lifecycle.log_path()),

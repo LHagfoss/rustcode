@@ -35,6 +35,8 @@ pub mod lifecycle;
 #[cfg(unix)]
 pub mod owner_client;
 #[cfg(unix)]
+pub mod pairing_watch;
+#[cfg(unix)]
 mod transport;
 
 #[cfg(all(test, unix))]

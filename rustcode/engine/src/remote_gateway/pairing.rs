@@ -83,7 +83,18 @@ pub enum PairingError {
     RateLimited { retry_after: Duration },
 }
 
+/// How a challenge ended before its lifetime ran out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChallengeEnd {
+    /// A device paired with it.
+    Paired,
+    /// Every wrong code it tolerates was used.
+    UsedUp,
+}
+
 struct Challenge {
+    serial: u64,
     credential_digest: [u8; 32],
     code_digest: [u8; 32],
     expires_at: Instant,
@@ -93,6 +104,10 @@ struct Challenge {
 #[derive(Default)]
 pub struct PairingState {
     challenge: Option<Challenge>,
+    /// Serial of the last challenge issued; challenges are numbered from 1.
+    issued: u64,
+    /// The last challenge that ended early, and how.
+    ended: Option<(u64, ChallengeEnd)>,
     /// Times of recent failed attempts, oldest first; at most `HOST_FAILURE_LIMIT`.
     failures: VecDeque<Instant>,
 }
@@ -107,7 +122,9 @@ impl PairingState {
         let credential = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
         let number = rand::rng().random_range(0..10u32.pow(CODE_DIGITS as u32));
         let digits = format!("{number:0width$}", width = CODE_DIGITS);
+        self.issued += 1;
         self.challenge = Some(Challenge {
+            serial: self.issued,
             credential_digest: digest(credential.as_bytes()),
             code_digest: digest(digits.as_bytes()),
             expires_at: now + CHALLENGE_LIFETIME,
@@ -125,6 +142,25 @@ impl PairingState {
         self.challenge
             .as_ref()
             .is_some_and(|challenge| now < challenge.expires_at && challenge.attempts_left > 0)
+    }
+
+    /// Serial of the open challenge, if there is one. It tells a watcher
+    /// whether the challenge it showed is still the open one.
+    pub fn open_serial(&self, now: Instant) -> Option<u64> {
+        self.challenge
+            .as_ref()
+            .filter(|_| self.is_open(now))
+            .map(|challenge| challenge.serial)
+    }
+
+    /// Serial of the most recently issued challenge, open or not.
+    pub fn last_serial(&self) -> Option<u64> {
+        (self.issued > 0).then_some(self.issued)
+    }
+
+    /// The last challenge that ended before it expired, and how.
+    pub fn last_ended(&self) -> Option<(u64, ChallengeEnd)> {
+        self.ended
     }
 
     /// Lifetime and wrong attempts left of the open challenge, if there is one.
@@ -171,10 +207,12 @@ impl PairingState {
             ),
         };
         if matches {
+            self.ended = Some((challenge.serial, ChallengeEnd::Paired));
             self.challenge = None;
             return Ok(());
         }
         if challenge.attempts_left == 0 {
+            self.ended = Some((challenge.serial, ChallengeEnd::UsedUp));
             self.challenge = None;
         }
         Err(self.fail(now))
@@ -279,6 +317,33 @@ mod tests {
         }
         assert_eq!(state.lockout(now), Some(HOST_FAILURE_WINDOW));
         assert_eq!(state.lockout(now + HOST_FAILURE_WINDOW), None);
+    }
+
+    #[test]
+    fn challenges_are_numbered_and_say_how_they_ended() {
+        let mut state = PairingState::default();
+        let now = Instant::now();
+        assert_eq!((state.open_serial(now), state.last_serial()), (None, None));
+        let first = state.issue(now);
+        assert_eq!(state.open_serial(now), Some(1));
+        state
+            .redeem(now, PairingMethod::Code, first.code.expose())
+            .unwrap();
+        assert_eq!(state.open_serial(now), None);
+        assert_eq!(state.last_ended(), Some((1, ChallengeEnd::Paired)));
+
+        state.issue(now);
+        assert_eq!(state.open_serial(now), Some(2));
+        for _ in 0..ATTEMPTS_PER_CHALLENGE {
+            let _ = wrong_code(&mut state, now);
+        }
+        assert_eq!(state.last_ended(), Some((2, ChallengeEnd::UsedUp)));
+
+        // Expiry is not an early end: the serial stays the last one issued.
+        state.issue(now);
+        assert_eq!(state.open_serial(now + CHALLENGE_LIFETIME), None);
+        assert_eq!(state.last_serial(), Some(3));
+        assert_eq!(state.last_ended(), Some((2, ChallengeEnd::UsedUp)));
     }
 
     #[test]
