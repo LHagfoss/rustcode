@@ -218,7 +218,8 @@ else
             }
         }
         END {
-            if (malformed || count != 1 || checksum !~ /^[0-9a-f]{64}$/) {
+            # mawk (Debian/Ubuntu default) has no {n} intervals.
+            if (malformed || count != 1 || length(checksum) != 64 || checksum ~ /[^0-9a-f]/) {
                 exit 1
             }
             print checksum
