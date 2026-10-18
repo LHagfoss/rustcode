@@ -1041,7 +1041,7 @@ pub(super) async fn collect_round(
         let reported = s
             .current_token_usage
             .as_ref()
-            .map(|u| u.total_tokens as u64);
+            .map(crate::network::budget_tokens_for_usage);
         ctx.budget.tokens_used = accumulate_tokens_used(ctx.budget.tokens_used, reported, &content);
     }
     if cancel_token.is_cancelled() {

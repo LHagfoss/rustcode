@@ -251,7 +251,19 @@ pub(crate) const MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS: u8 = 4;
 /// Safety budgets for a single agent turn. Production live turns leave round
 /// ceilings disabled and rely on the token and progress/recovery guards;
 /// finite round budgets remain available to explicit low-level callers.
+///
+/// The token budget is measured in *budget tokens*, not raw provider tokens:
+/// see [`budget_tokens_for_usage`].
 const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
+/// Provider-reported prompt-cache reads are charged at 1/N of their raw count
+/// against [`MAX_TURN_TOKEN_BUDGET`]. Every round re-sends the whole
+/// conversation prefix, so on a long, well-cached turn most of each round's
+/// `total_tokens` is the same prefix read back from the cache. Providers bill
+/// those reads at roughly a tenth of fresh input, and they add no new context.
+/// Charging them at full weight stopped cheap turns after a few dozen rounds.
+/// Cached reads still count, so a runaway turn whose prompt is fully cached
+/// stays bounded.
+const CACHED_INPUT_BUDGET_DIVISOR: u64 = 10;
 /// A tool that reports success without changing anything (already-applied
 /// edits, no-op runs) does not count as progress, so this escalates much
 /// faster than the round budget when the agent is just spinning.
@@ -297,7 +309,12 @@ impl std::fmt::Display for TurnBudgetLimit {
             TurnBudgetLimit::TotalToolRounds(n) => {
                 write!(f, "maximum total tool rounds reached ({n})")
             }
-            TurnBudgetLimit::Tokens(n) => write!(f, "maximum token budget reached (~{n} tokens)"),
+            TurnBudgetLimit::Tokens(n) => write!(
+                f,
+                "token budget reached (~{} of {} budget tokens; cached prompt reads count at 1/{CACHED_INPUT_BUDGET_DIVISOR})",
+                crate::controller::format_token_count(*n as usize),
+                crate::controller::format_token_count(MAX_TURN_TOKEN_BUDGET as usize),
+            ),
             TurnBudgetLimit::NoProgress(n) => write!(
                 f,
                 "{n} consecutive tool results with no meaningful progress (no-op or unchanged edits)"
@@ -325,6 +342,18 @@ impl std::fmt::Display for TurnBudgetLimit {
             }
         }
     }
+}
+
+/// Budget tokens one round charges against the turn token budget: uncached
+/// input (cache writes included), plus output, plus cached input reads at
+/// 1/[`CACHED_INPUT_BUDGET_DIVISOR`] weight. `cached_tokens` is a subset of
+/// `prompt_tokens` for every adapter (the Anthropic adapter folds cache reads
+/// into `prompt_tokens`), so it is subtracted from the total before it is
+/// added back at the lower weight.
+pub(crate) fn budget_tokens_for_usage(usage: &crate::app::TokenUsage) -> u64 {
+    let total = u64::from(usage.total_tokens);
+    let cached = u64::from(usage.cached_tokens.unwrap_or(0)).min(total);
+    (total - cached).saturating_add(cached.div_ceil(CACHED_INPUT_BUDGET_DIVISOR))
 }
 
 /// Adds this round's token usage onto the turn's running total. The
@@ -434,8 +463,16 @@ pub(crate) async fn stop_turn_for_budget(
             ctx.budget.tool_rounds,
         )
     } else {
+        // Lead with the limit that actually stopped the turn. "stopped after
+        // N tool round(s) — token budget" read as a round limit to both the
+        // model and the user.
+        let not_a_round_limit = if matches!(limit, TurnBudgetLimit::Tokens(_)) {
+            " This was the turn token budget, not a tool-round limit."
+        } else {
+            ""
+        };
         format!(
-            "[harness: stopped after {} tool round(s) — {limit}. The task is NOT complete. \
+            "[harness: stopped — {limit}, after {} tool round(s).{not_a_round_limit} The task is NOT complete. \
              Review the transcript above; if the remaining work is still valid, resume it in a new turn.]",
             ctx.budget.tool_rounds
         )
