@@ -245,7 +245,10 @@ wheel as high-resolution scrolling, so `touch_scroll_multiplier` in
 `kitty.conf` (default 1) is the setting that applies, not
 `wheel_scroll_multiplier`.
 
-To scroll more rows per event in RustCode alone, set `scroll_lines` (1–20):
+To scroll more rows per event in RustCode alone, run `/scroll-speed`: a panel
+steps the value with ←/→ (or a digit), Enter saves it and Esc cancels.
+`/scroll-speed 3` sets it directly. Both write `scroll_lines` (1–20) and apply
+at once:
 
 ```toml
 scroll_lines = 3

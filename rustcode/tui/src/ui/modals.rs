@@ -60,7 +60,9 @@ pub(in crate::ui) use panel::{
     panel_value_spans, render_command_panel,
 };
 pub(in crate::ui) use question::render_question_modal;
-pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};
+pub(in crate::ui) use settings::{
+    render_scroll_speed_picker_modal, render_verbosity_picker_modal, render_yolo_picker_modal,
+};
 pub(in crate::ui) use tasks::render_tasks_panel_modal;
 
 pub(crate) fn approval_event_for_key(
@@ -449,6 +451,8 @@ pub(super) const YOLO_PICKER_HEIGHT: u16 = 10;
 pub(super) const THINKING_PICKER_HEIGHT: u16 = 10;
 pub(super) const EFFORT_PICKER_HEIGHT: u16 = 11;
 pub(super) const PROTOCOL_PICKER_HEIGHT: u16 = 10;
+/// Header, blank, value and bar, blank, hint, blank, footer, plus padding.
+pub(super) const SCROLL_SPEED_PICKER_HEIGHT: u16 = 10;
 
 /// Smallest usable panel, so a modal never collapses to a title bar when the
 /// terminal is short.
@@ -542,6 +546,7 @@ pub(super) fn open_modal_max_height(state: &RenderSnapshot) -> u16 {
             Some(rustcode::controller::SettingsPicker::Effort) => EFFORT_PICKER_HEIGHT,
             Some(rustcode::controller::SettingsPicker::Protocol) => PROTOCOL_PICKER_HEIGHT,
             Some(rustcode::controller::SettingsPicker::Yolo) => YOLO_PICKER_HEIGHT,
+            Some(rustcode::controller::SettingsPicker::ScrollSpeed) => SCROLL_SPEED_PICKER_HEIGHT,
             _ => return 0,
         }
     };

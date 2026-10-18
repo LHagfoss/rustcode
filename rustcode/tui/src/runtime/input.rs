@@ -70,6 +70,33 @@ fn handle_question_custom_key(
     Handled
 }
 
+/// One key in the `/scroll-speed` panel. The value being chosen lives in
+/// `modal_picker_index`; arrows step it within range, Home/End jump to the
+/// ends, digits pick a value directly. Returns the value to save on Enter;
+/// Esc closes without saving.
+fn scroll_speed_picker_key(state: &mut AppState, key: KeyCode) -> Option<u16> {
+    let range = rustcode::controller::SCROLL_LINES_RANGE;
+    let (min, max) = (usize::from(*range.start()), usize::from(*range.end()));
+    let value = state.modal_picker_index.clamp(min, max);
+    state.modal_picker_index = match key {
+        KeyCode::Left | KeyCode::Down | KeyCode::Char('-') => value.saturating_sub(1).max(min),
+        KeyCode::Right | KeyCode::Up | KeyCode::Char('+') | KeyCode::Char('=') => {
+            (value + 1).min(max)
+        }
+        KeyCode::Home => min,
+        KeyCode::End => max,
+        KeyCode::Char(digit @ '1'..='9') => usize::from(digit as u8 - b'0'),
+        KeyCode::Char('0') => 10,
+        KeyCode::Enter => return u16::try_from(value).ok(),
+        KeyCode::Esc => {
+            state.close_modal_status();
+            value
+        }
+        _ => value,
+    };
+    None
+}
+
 /// Bound list movement at the visible endpoints so repeated arrow presses can
 /// reach every row without unexpectedly jumping back to the top.
 fn move_picker_selection(selected: usize, len: usize, next: bool) -> usize {
@@ -1051,6 +1078,22 @@ pub(super) async fn handle_app_event(
 
                 {
                     let s = app_state.lock().await;
+                    if s.settings_picker == Some(rustcode::controller::SettingsPicker::ScrollSpeed)
+                    {
+                        drop(s);
+                        let mut s = app_state.lock().await;
+                        if let Some(lines) = scroll_speed_picker_key(&mut s, key.code) {
+                            s.config.scroll_lines = Some(lines);
+                            rustcode::controller::save_config(&s.config);
+                            s.close_modal_status();
+                            s.set_transient_notice(rustcode::controller::scroll_speed_notice(
+                                lines,
+                            ));
+                        }
+                        *needs_redraw = true;
+                        return Ok(InputFlow::ContinueIteration);
+                    }
+
                     if s.settings_picker == Some(rustcode::controller::SettingsPicker::Verbosity) {
                         drop(s);
                         match key.code {
@@ -2881,6 +2924,36 @@ mod tests {
         question.activate_custom_input();
         assert_eq!(question.custom_input.as_deref(), Some("first\nsecond"));
         assert_eq!(question.custom_cursor, "first\nsecond".len());
+    }
+
+    #[test]
+    fn scroll_speed_picker_steps_within_range_and_saves_on_enter() {
+        let mut state = AppState::new();
+        state.settings_picker = Some(rustcode::controller::SettingsPicker::ScrollSpeed);
+        state.modal_picker_index = 1;
+
+        assert_eq!(
+            super::scroll_speed_picker_key(&mut state, KeyCode::Left),
+            None
+        );
+        assert_eq!(state.modal_picker_index, 1, "never below one line");
+        super::scroll_speed_picker_key(&mut state, KeyCode::Right);
+        super::scroll_speed_picker_key(&mut state, KeyCode::Up);
+        assert_eq!(state.modal_picker_index, 3);
+        super::scroll_speed_picker_key(&mut state, KeyCode::End);
+        super::scroll_speed_picker_key(&mut state, KeyCode::Right);
+        assert_eq!(state.modal_picker_index, 20, "never above the range");
+        super::scroll_speed_picker_key(&mut state, KeyCode::Char('5'));
+        assert_eq!(
+            super::scroll_speed_picker_key(&mut state, KeyCode::Enter),
+            Some(5)
+        );
+
+        assert_eq!(
+            super::scroll_speed_picker_key(&mut state, KeyCode::Esc),
+            None
+        );
+        assert!(state.settings_picker.is_none(), "esc closes without saving");
     }
 
     #[test]

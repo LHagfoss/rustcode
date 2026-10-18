@@ -1009,7 +1009,6 @@ async fn run_interactive(
         .into_iter()
         .map(|theme| theme.name)
         .collect();
-    crate::ui::set_wheel_scroll_lines(app_state_struct.config.scroll_lines);
     let fullscreen_requested = cli_args.fullscreen || app_state_struct.config.fullscreen;
     let local_terminal = crate::terminal_probe::probe().supports_alternate_screen();
     let fullscreen = fullscreen_requested && local_terminal;

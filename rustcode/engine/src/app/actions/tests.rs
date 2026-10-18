@@ -2517,3 +2517,65 @@ fn a_footer_notice_replaced_before_it_was_readable_is_shown_next() {
     assert!(state.clear_expired_transient_notice());
     assert_eq!(state.active_transient_notice(), None);
 }
+
+#[tokio::test]
+async fn scroll_speed_command_opens_the_picker_or_sets_the_value() {
+    use crate::app::state::AppState;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let client = reqwest::Client::new();
+    let mut cancel_token = CancellationToken::new();
+    let theme_names = Vec::new;
+    let run = |input: &str| {
+        let input = input.to_owned();
+        let state = Arc::clone(&state);
+        async move {
+            state.lock().await.input_buffer = input;
+        }
+    };
+
+    // Alone, it opens the picker on the current value.
+    state.lock().await.config.scroll_lines = Some(4);
+    run("/scroll-speed").await;
+    super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await;
+    {
+        let s = state.lock().await;
+        assert_eq!(
+            s.settings_picker,
+            Some(crate::app::SettingsPicker::ScrollSpeed)
+        );
+        assert_eq!(s.modal_picker_index, 4);
+    }
+
+    // With a value, it saves and confirms in the footer.
+    state.lock().await.settings_picker = None;
+    run("/scroll-speed 7").await;
+    super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await;
+    {
+        let s = state.lock().await;
+        assert_eq!(s.config.scroll_lines, Some(7));
+        assert!(s.command_panel.is_none());
+        assert_eq!(
+            s.active_transient_notice(),
+            Some("Scroll speed set to 7 lines per wheel tick")
+        );
+    }
+
+    // Out of range is refused and leaves the setting alone.
+    run("/scroll_speed 99").await;
+    super::handle_enter(&state, &client, &mut cancel_token, &theme_names).await;
+    {
+        let s = state.lock().await;
+        assert_eq!(s.config.scroll_lines, Some(7));
+        assert!(
+            s.command_panel
+                .as_ref()
+                .unwrap()
+                .content
+                .contains("1 to 20")
+        );
+    }
+}

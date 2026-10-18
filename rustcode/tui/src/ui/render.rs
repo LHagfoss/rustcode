@@ -219,6 +219,9 @@ pub(crate) fn render_with_transcript_snapshot(
     transcript: &mut TranscriptState,
 ) -> (u16, ratatui::layout::Rect) {
     theme::set_active_theme(&state.config().theme);
+    // Like the theme, the wheel step follows the config every frame, so a
+    // change from `/scroll-speed` applies without a restart.
+    super::set_wheel_scroll_lines(state.config().scroll_lines);
     transcript.task_log_max_scroll_row = 0;
 
     if state
@@ -692,6 +695,10 @@ pub(crate) fn render_with_transcript_snapshot(
 
         if state.settings_picker() == Some(rustcode::controller::SettingsPicker::Yolo) {
             render_yolo_picker_modal(f, state, input_box_area);
+        }
+
+        if state.settings_picker() == Some(rustcode::controller::SettingsPicker::ScrollSpeed) {
+            render_scroll_speed_picker_modal(f, state, input_box_area);
         }
     });
 

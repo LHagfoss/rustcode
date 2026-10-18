@@ -95,6 +95,17 @@ engine's configured sandbox and permission policy still govern file and tool
 access. Tool permissions are requested through ACP and the app never starts the
 engine with `--yolo`.
 
+To look at a web app the agent is building, open the localhost preview with
+⇧⌘P (View > Show Preview, or the globe button in the chat's title bar). It is a
+panel beside the chat that shows a running dev server in an embedded WebKit
+view, with JavaScript, client-side routing and the server's assets working as in
+a browser. Enter `http://localhost:PORT`, `127.0.0.1` or `[::1]` (a bare port
+such as `5173` means localhost); other hosts are refused with an offer to open
+them in the browser, and links to other sites open there too. Back, forward,
+reload (⌘R) and Open in Browser are in its toolbar, an unreachable server shows
+Retry, and the last URL is remembered per project. The preview is view-only:
+the agent cannot see or control the page.
+
 
 ## Updating
 

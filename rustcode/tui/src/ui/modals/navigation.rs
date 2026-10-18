@@ -882,6 +882,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         shortcut: "/yolo",
     },
     PaletteItem {
+        group: "System",
+        name: "Set mouse wheel scroll speed",
+        shortcut: "/scroll-speed",
+    },
+    PaletteItem {
         group: "Session",
         name: "Change session title",
         shortcut: "/change_title",
