@@ -216,18 +216,18 @@ fn apply_round_stagnation(
 const REVERIFICATION_ACTION: &str = "re-verification of unchanged files";
 
 /// Fold one round into the consecutive stale-round counter. A round is stale
-/// when at least half of its results added no information and it changed
-/// nothing. Mixed rounds matter because one fresh read clears both the
+/// when at least half of its results were successful read-only re-reads that
+/// added no information, and it changed nothing. Mixed rounds matter because one fresh read clears both the
 /// per-action ledger streak and `consecutive_no_progress`. Without this, a
 /// model that re-reads the same docs alongside one new range every round
 /// never arms recovery.
 fn apply_stale_round(
     consecutive: usize,
-    no_progress_hits: usize,
+    stale_rereads: usize,
     assessed_results: usize,
     lasting_progress: bool,
 ) -> usize {
-    if !lasting_progress && no_progress_hits > 0 && no_progress_hits * 2 >= assessed_results {
+    if !lasting_progress && stale_rereads > 0 && stale_rereads * 2 >= assessed_results {
         consecutive.saturating_add(1)
     } else {
         0
@@ -1404,6 +1404,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // meaningful result in the batch clears the streak.
             let mut round_had_meaningful = false;
             let mut round_no_progress_hits = 0usize;
+            let mut round_stale_rereads = 0usize;
             let mut round_assessed_results = 0usize;
             let mut round_workspace_changed = false;
             let mut cross_tool_inspection_cycle = None;
@@ -1864,8 +1865,18 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         .and_then(|v| v.as_str())
                 });
                 cross_turn_tool_count += 1;
-                if !assessment.suppress_stagnation {
+                // Stale-round accounting covers only the model's own reads.
+                // Guardrail rejections are left out entirely, and failures and
+                // search misses have their own replan and stagnation paths.
+                if !assessment.suppress_stagnation && !boundary_failure {
                     round_assessed_results += 1;
+                    if call_is_read_only
+                        && metadata.success
+                        && !no_result
+                        && assessment.reason == loop_detect::ProgressReason::NoNewInformation
+                    {
+                        round_stale_rereads += 1;
+                    }
                 }
                 round_workspace_changed |=
                     assessment.reason == loop_detect::ProgressReason::WorkspaceChanged;
@@ -2013,7 +2024,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // well before the token budget runs out.
             ctx.progress.consecutive_stale_rounds = apply_stale_round(
                 ctx.progress.consecutive_stale_rounds,
-                round_no_progress_hits,
+                round_stale_rereads,
                 round_assessed_results,
                 round_workspace_changed || cross_turn_authoritative_progress,
             );
