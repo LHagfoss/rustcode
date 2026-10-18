@@ -38,7 +38,7 @@ jobs:
             # stands in for the engine.
             - name: Package ad-hoc signed app
               run: |
-                  scripts/package-swift-app.sh "$(command -v true)" target/swift-ci
+                  scripts/package-swift-app.sh /usr/bin/true target/swift-ci
                   codesign --verify --deep --strict --verbose=2 target/swift-ci/RustCode.app
                   bash -n scripts/macos-release-signing.sh
                   scripts/macos-release-signing.sh check
