@@ -1046,6 +1046,7 @@ phase_verify_release() {
 
     local expected_assets=(
         "rustcode-linux-x86_64.tar.gz"
+        "rustcode-linux-aarch64.tar.gz"
         "rustcode-macos-aarch64.tar.gz"
         "rustcode-macos-aarch64-swift-app.zip"
         "rustcode-ios-unsigned.xcarchive.zip"

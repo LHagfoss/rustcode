@@ -150,11 +150,12 @@ if [ "$TARGET_OS" = "macos" ]; then
         error "Intel macOS is not distributed via prebuilt binaries. Build from source instead: cargo install --path rustcode/tui"
     fi
 elif [ "$TARGET_OS" = "linux" ]; then
-    if [ "$TARGET_ARCH" = "x86_64" ]; then
-        ASSET_NAME="rustcode-linux-x86_64.tar.gz"
-    else
-        error "Linux $ARCH is not yet distributed via prebuilt binaries. Build from source instead: cargo install --path rustcode/tui"
+    # Release binaries link against glibc; musl systems (Alpine, Void musl)
+    # cannot run them.
+    if ldd --version 2>&1 | grep -qi musl; then
+        error "Prebuilt Linux binaries need glibc; this system uses musl. Build from source instead: cargo install --path rustcode/tui"
     fi
+    ASSET_NAME="rustcode-linux-${TARGET_ARCH}.tar.gz"
 fi
 
 info "Detecting latest release for ${TARGET_OS}-${TARGET_ARCH}..."
@@ -187,6 +188,9 @@ trap cleanup EXIT
 
 ARCHIVE_PATH="${TMP_DIR}/${ASSET_NAME}"
 if ! run_with_spinner "Downloading RustCode ${LATEST_TAG} (${ASSET_NAME})..." download "$DOWNLOAD_URL" "$ARCHIVE_PATH"; then
+    if [ "$ASSET_NAME" = "rustcode-linux-aarch64.tar.gz" ]; then
+        error "RustCode ${LATEST_TAG} has no Linux ARM64 binary (published from v0.79.0). Build from source instead: cargo install --path rustcode/tui"
+    fi
     error "Could not download ${ASSET_NAME}."
 fi
 

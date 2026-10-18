@@ -6,8 +6,10 @@ updating.
 
 ## Supported platforms
 
-Official release binaries are published for Linux x86_64, macOS Apple Silicon
-(ARM64), and Windows x86_64. Intel macOS is not supported by the prebuilt
+Official release binaries are published for Linux x86_64, Linux ARM64
+(aarch64, from v0.79.0), macOS Apple Silicon (ARM64), and Windows x86_64.
+Linux binaries need glibc (Arch, Arch Linux ARM, Debian, Ubuntu, Fedora);
+musl distributions such as Alpine build from source. Intel macOS is not supported by the prebuilt
 installer or Homebrew formula. Building from source may support additional
 targets, but those targets are not covered by release CI.
 
