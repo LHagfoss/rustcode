@@ -1289,7 +1289,7 @@ pub(super) fn render_composer_footer(
             } else {
                 "  ⚠ Press Ctrl+C again to exit".to_owned()
             },
-            get_themed_style(Color::Yellow, COLOR_PANEL(), Modifier::BOLD, false),
+            get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
             None,
         )
     } else if let Some(notice) = state.transient_notice() {
@@ -1298,7 +1298,7 @@ pub(super) fn render_composer_footer(
         // selection to clipboard", not the copy key sitting next to it.
         (
             format!("  {notice}"),
-            get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, false),
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
             None,
         )
     } else if let Some(clauses) = hint_clauses {
@@ -1306,7 +1306,7 @@ pub(super) fn render_composer_footer(
         // metadata rather than competing with it for the same row.
         (
             String::new(),
-            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
             Some(clauses),
         )
     } else {
@@ -1321,7 +1321,7 @@ pub(super) fn render_composer_footer(
         metadata.push(location);
         (
             format!("  {}", metadata.join(" · ")),
-            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
             None,
         )
     };
@@ -1356,7 +1356,7 @@ pub(super) fn render_composer_footer(
     } else {
         right
     };
-    let right_style = get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false);
+    let right_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     let right_width = right.width();
     // The hint is the actionable content on this row, so it claims the width
     // first and the context percentage yields when the two compete: degrade the
@@ -1402,7 +1402,7 @@ pub(super) fn render_composer_footer(
     let padding = row_width.saturating_sub(left.width() + chip_width + right_width);
     let mut spans = vec![
         Span::styled(left, left_style),
-        Span::styled(" ".repeat(padding), Style::default().bg(COLOR_PANEL())),
+        Span::styled(" ".repeat(padding), Style::default().bg(COLOR_BG())),
     ];
     let mut chip_area = None;
     if let Some(chip) = chip {
@@ -1420,17 +1420,17 @@ pub(super) fn render_composer_footer(
                 if tasks_hovered {
                     COLOR_HOVER_BG()
                 } else {
-                    COLOR_PANEL()
+                    COLOR_BG()
                 },
                 Modifier::BOLD,
                 false,
             ),
         ));
-        spans.push(Span::styled("  ", Style::default().bg(COLOR_PANEL())));
+        spans.push(Span::styled("  ", Style::default().bg(COLOR_BG())));
     }
     spans.push(Span::styled(right, right_style));
     f.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(COLOR_BG())),
         area,
     );
     chip_area
