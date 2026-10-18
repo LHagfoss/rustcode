@@ -518,7 +518,7 @@ pub(super) async fn collect_round(
     {
         Ok(msgs) => msgs,
         Err(error) => {
-            dbg_log!("Image fallback failed: {error}");
+            dbg_log!("Request preparation failed: {error}");
             let mut s = state.lock().await;
             if error.starts_with(crate::network::CONTEXT_PREFLIGHT_STOP_PREFIX) {
                 let notice = error
@@ -541,7 +541,7 @@ pub(super) async fn collect_round(
             let notice = if error == "cancelled" {
                 "Request cancelled by user".to_string()
             } else {
-                format!("Image analysis unavailable: {error}")
+                format!("Request stopped: {error}")
             };
             s.history.push(ChatMessage::new("system", notice));
             s.current_token_usage = None;
