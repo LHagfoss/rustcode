@@ -235,7 +235,7 @@ pub(crate) const fn default_wheel_scroll_lines() -> usize {
 /// Apply `scroll_lines` from the config: `None` keeps the default.
 pub(crate) fn set_wheel_scroll_lines(configured: Option<u16>) {
     let lines = configured.map_or(default_wheel_scroll_lines(), |lines| {
-        usize::from(rustcode::config::effective_scroll_lines(Some(lines)))
+        usize::from(rustcode::controller::effective_scroll_lines(Some(lines)))
     });
     CONFIGURED_WHEEL_LINES.store(lines, std::sync::atomic::Ordering::Relaxed);
 }

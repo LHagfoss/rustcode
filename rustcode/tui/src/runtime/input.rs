@@ -75,7 +75,7 @@ fn handle_question_custom_key(
 /// ends, digits pick a value directly. Returns the value to save on Enter;
 /// Esc closes without saving.
 fn scroll_speed_picker_key(state: &mut AppState, key: KeyCode) -> Option<u16> {
-    let range = rustcode::config::SCROLL_LINES_RANGE;
+    let range = rustcode::controller::SCROLL_LINES_RANGE;
     let (min, max) = (usize::from(*range.start()), usize::from(*range.end()));
     let value = state.modal_picker_index.clamp(min, max);
     state.modal_picker_index = match key {
@@ -1086,7 +1086,9 @@ pub(super) async fn handle_app_event(
                             s.config.scroll_lines = Some(lines);
                             rustcode::controller::save_config(&s.config);
                             s.close_modal_status();
-                            s.set_transient_notice(rustcode::config::scroll_speed_notice(lines));
+                            s.set_transient_notice(rustcode::controller::scroll_speed_notice(
+                                lines,
+                            ));
                         }
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);

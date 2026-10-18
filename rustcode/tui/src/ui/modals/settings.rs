@@ -261,12 +261,12 @@ pub(in crate::ui) fn render_scroll_speed_picker_modal(
         horizontal: 2,
     });
     let width = inner_area.width as usize;
-    let range = rustcode::config::SCROLL_LINES_RANGE;
+    let range = rustcode::controller::SCROLL_LINES_RANGE;
     let max = usize::from(*range.end());
     let selected = state
         .modal_picker_index()
         .clamp(usize::from(*range.start()), max);
-    let current = usize::from(rustcode::config::effective_scroll_lines(
+    let current = usize::from(rustcode::controller::effective_scroll_lines(
         state.config().scroll_lines,
     ));
 
