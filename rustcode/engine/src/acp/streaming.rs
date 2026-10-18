@@ -220,6 +220,8 @@ fn rustcode_meta(value: serde_json::Value) -> serde_json::Map<String, serde_json
 pub(crate) fn acp_stop_reason(cancelled: bool, harness_reason: Option<&str>) -> StopReason {
     if cancelled {
         StopReason::Cancelled
+    } else if harness_reason.is_some_and(|reason| reason.starts_with("output_limit:")) {
+        StopReason::MaxTokens
     } else if harness_reason
         .is_some_and(|reason| reason.starts_with("budget:") || reason == "loop_escalation")
     {

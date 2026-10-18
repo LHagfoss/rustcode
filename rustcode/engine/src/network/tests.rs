@@ -1832,6 +1832,87 @@ async fn output_truncated_native_response_never_executes_salvaged_call() {
 }
 
 #[tokio::test]
+async fn repeated_truncated_native_calls_get_split_guidance_then_an_output_limit_stop() {
+    // #2118: a cut-off tool call is re-requested with more room and advice to
+    // split large writes; a run of them ends with a notice naming the cap.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("must-not-exist.txt");
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+    ctx.recovery.output_limit.last_request_limit = Some(8192);
+    let call = || {
+        vec![crate::tools::ToolCallEnvelope {
+            call_id: "call_partial_write".to_string(),
+            tool_name: "write_to_file".to_string(),
+            arguments: serde_json::json!({"path": target, "content": "cut off"}),
+        }]
+    };
+    for attempt in 1..=3 {
+        let outcome = super::turn_engine::tools::handle_tool_response(
+            &reqwest::Client::new(),
+            &state,
+            &cancel_token,
+            &policy,
+            &mut ctx,
+            Some("length"),
+            0,
+            None,
+            None,
+            None,
+            call(),
+            "",
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            super::turn_engine::tools::ToolHandlingOutcome::Continue,
+            "attempt {attempt}"
+        );
+        assert!(ctx.recovery.output_limit.pending.is_some());
+        ctx.recovery.output_limit.pending = None;
+    }
+    assert!(state.lock().await.history.iter().any(|message| {
+        message.role == "system" && message.content.contains("write_file_chunk")
+    }));
+
+    let outcome = super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("length"),
+        0,
+        None,
+        None,
+        None,
+        call(),
+        "",
+    )
+    .await;
+    assert_eq!(
+        outcome,
+        super::turn_engine::tools::ToolHandlingOutcome::Stop
+    );
+    assert!(!target.exists(), "a truncated call never runs");
+    let reason = ctx.lifecycle.stop_reason.clone().expect("stop reason");
+    assert!(reason.to_string().starts_with("output_limit:"), "{reason}");
+    assert!(
+        ctx.response.final_content.contains("8192"),
+        "{}",
+        ctx.response.final_content
+    );
+}
+
+#[tokio::test]
 async fn output_truncated_text_response_never_executes_salvaged_call() {
     let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("must-not-exist.txt");
@@ -8345,4 +8426,206 @@ async fn thinking_router_decision_reaches_main_request_and_failure_keeps_default
         assert_eq!(payload.get("reasoning_effort").is_some(), expected_thinking);
         assert_eq!(payload.get("thinking_budget").is_some(), expected_thinking);
     }
+}
+
+/// A provider that answers each request with the next scripted SSE body
+/// (repeating the last one) and records every request body.
+async fn scripted_provider(
+    scripts: Vec<String>,
+) -> (String, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind scripted provider");
+    let address = listener.local_addr().expect("provider address");
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&bodies);
+    tokio::spawn(async move {
+        let mut served = 0usize;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 8_192];
+            let body_start = loop {
+                let read = socket.read(&mut buffer).await.unwrap_or(0);
+                if read == 0 {
+                    break None;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + length {
+                    break Some((header_end + 4, length));
+                }
+            };
+            let Some((start, length)) = body_start else {
+                continue;
+            };
+            if let Ok(body) = serde_json::from_slice(&request[start..start + length]) {
+                recorded.lock().unwrap().push(body);
+            }
+            let script = scripts[served.min(scripts.len() - 1)].clone();
+            served += 1;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                script.len(),
+                script
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (format!("http://{address}/v1/chat/completions"), bodies)
+}
+
+fn chat_sse(text: &str, finish_reason: &str) -> String {
+    format!(
+        "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        serde_json::json!({"choices": [{"delta": {"content": text}}]}),
+        serde_json::json!({"choices": [{"delta": {}, "finish_reason": finish_reason}]}),
+    )
+}
+
+async fn scripted_turn(
+    scripts: Vec<String>,
+    profile: crate::config::ModelProfile,
+) -> (TurnContext, Vec<serde_json::Value>, Vec<ChatMessage>) {
+    let (endpoint, bodies) = scripted_provider(scripts).await;
+    let mut app = AppState::new();
+    app.api_base_url = endpoint.clone();
+    app.model_name = "output-limit-test".into();
+    app.config.models = vec![crate::config::ModelProfile {
+        name: app.model_name.clone(),
+        url: endpoint.clone(),
+        model: app.model_name.clone(),
+        api_protocol: Some(crate::config::ApiProtocol::ChatCompletions),
+        context_window: Some(128_000),
+        ..profile
+    }];
+    app.record_function_calling_support(&endpoint, false);
+    app.history
+        .push(ChatMessage::new("user", "Write the long design summary."));
+    let state = Arc::new(Mutex::new(app));
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+    let ctx = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        run_agent_turn(
+            &reqwest::Client::new(),
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            &policy,
+            &buffer,
+        ),
+    )
+    .await
+    .expect("turn finishes");
+    let bodies = bodies.lock().unwrap().clone();
+    let history = state.lock().await.history.as_slice().to_vec();
+    (ctx, bodies, history)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_answer_survives_repeated_length_stops_without_the_recovery_clamp() {
+    // #2118: the second length stop ended the turn, and the one continuation
+    // on Chat Completions was clamped to 1024 tokens.
+    let (ctx, bodies, history) = scripted_turn(
+        vec![
+            chat_sse("Part one. ", "length"),
+            chat_sse("Part two. ", "length"),
+            chat_sse("Part three. ", "length"),
+            chat_sse("Part four. ", "length"),
+            chat_sse("Done.", "stop"),
+        ],
+        crate::config::ModelProfile::default(),
+    )
+    .await;
+
+    assert_eq!(bodies.len(), 5, "{bodies:#?}");
+    let caps: Vec<_> = bodies
+        .iter()
+        .map(|body| body["max_tokens"].as_u64())
+        .collect();
+    assert!(
+        caps.iter().all(|cap| *cap != Some(1024)),
+        "no request is clamped to 1024: {caps:?}"
+    );
+    // The fake provider is on loopback, so the profile is local: a 4096
+    // tool-round cap, doubled for the turn-level continuation.
+    assert_eq!(caps[0], Some(4096), "{caps:?}");
+    assert_eq!(
+        caps[3],
+        Some(8192),
+        "the continuation lifts the cap: {caps:?}"
+    );
+    assert!(
+        !matches!(
+            ctx.lifecycle.stop_reason,
+            Some(lifecycle::StopReason::OutputLimit(_) | lifecycle::StopReason::LoopEscalation)
+        ),
+        "{:?}",
+        ctx.lifecycle.stop_reason
+    );
+    let answer: String = history
+        .iter()
+        .filter(|message| message.role == "assistant")
+        .map(|message| message.content.as_str())
+        .collect();
+    assert!(answer.contains("Part one."), "{answer}");
+    assert!(answer.contains("Done."), "{answer}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_that_fills_the_cap_is_retried_with_more_room_then_named() {
+    // A reasoning-only response that hits the cap gets one retry with the
+    // full completion budget and a lower effort; if that also produces
+    // nothing, the notice names the cap and `max_output_tokens`.
+    let reasoning_only = format!(
+        "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        serde_json::json!({"choices": [{"delta": {"reasoning_content": "thinking hard"}}]}),
+        serde_json::json!({"choices": [{"delta": {}, "finish_reason": "length"}]}),
+    );
+    let (ctx, bodies, _history) = scripted_turn(
+        vec![reasoning_only],
+        crate::config::ModelProfile {
+            reasoning_effort: Some("high".into()),
+            supports_reasoning_effort: Some(true),
+            ..crate::config::ModelProfile::default()
+        },
+    )
+    .await;
+
+    let retry = bodies
+        .iter()
+        .find(|body| body["reasoning_effort"] == "low")
+        .unwrap_or_else(|| panic!("a retry with lower effort: {bodies:#?}"));
+    assert!(
+        retry["max_tokens"].as_u64().unwrap_or(0) > bodies[0]["max_tokens"].as_u64().unwrap_or(0),
+        "{bodies:#?}"
+    );
+    assert_eq!(bodies[0]["reasoning_effort"], "high");
+    assert!(
+        bodies.iter().all(|body| body["max_tokens"] != 1024),
+        "{bodies:#?}"
+    );
+    let reason = ctx.lifecycle.stop_reason.clone().expect("stop reason");
+    assert!(
+        reason.to_string().starts_with("output_limit:default:"),
+        "{reason}"
+    );
+    assert!(
+        ctx.response.final_content.contains("max_output_tokens"),
+        "{}",
+        ctx.response.final_content
+    );
 }

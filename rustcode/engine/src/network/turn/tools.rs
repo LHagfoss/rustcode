@@ -783,6 +783,32 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     // transaction so the next request can safely re-issue a smaller call.
     if response_was_output_truncated && !parsed_tool_calls.is_empty() {
         let call_refs = call_refs_for(&parsed_tool_calls, &ctx.response.streamed_call_ids);
+        let recovery = &mut ctx.recovery.output_limit;
+        recovery.truncated_tool_calls = recovery.truncated_tool_calls.saturating_add(1);
+        let retry =
+            recovery.truncated_tool_calls <= super::recovery::MAX_TRUNCATED_TOOL_CALL_RETRIES;
+        if retry {
+            // More room for the reissued call; the guidance asks for a
+            // smaller one.
+            recovery.pending = Some(super::context::OutputRecoveryRequest {
+                reduce_reasoning: false,
+            });
+        }
+        crate::logger::operational_event(
+            if retry {
+                "turn.output_budget_continuation"
+            } else {
+                "turn.output_budget_exhausted"
+            },
+            serde_json::json!({
+                "kind": "truncated_native_tool_call",
+                "attempt": ctx.recovery.output_limit.truncated_tool_calls,
+                "calls": parsed_tool_calls.len(),
+                "request_output_limit": ctx.recovery.output_limit.last_request_limit,
+                "output_tokens": ctx.recovery.output_limit.last_output_tokens,
+                "outcome": if retry { "continuation_requested" } else { "incomplete" },
+            }),
+        );
         let mut s = state.lock().await;
         let mut message = ChatMessage::new("assistant", &ctx.response.final_content)
             .with_tool_calls(call_refs.clone())
@@ -798,9 +824,22 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             "provider stopped at the output limit; the call was not executed",
             crate::tools::ToolErrorKind::OutputLimit,
         ));
+        if !retry {
+            let reason =
+                super::recovery::output_limit_stop_reason(s.active_model_profile().as_ref(), ctx);
+            ctx.response.final_content = super::recovery::output_limit_final_response(&reason);
+            ctx.response.final_content_persisted = false;
+            ctx.lifecycle.task_completed = false;
+            ctx.lifecycle.stop_reason = Some(reason);
+            crate::config::save_session_history(&s.active_session_id, &s.history);
+            s.clear_current_response();
+            drop(s);
+            ctx.lifecycle.turn_machine.abandon_tool_phase();
+            return ToolHandlingOutcome::Stop;
+        }
         s.history.push(ChatMessage::new(
             "system",
-            "[Tool calls rejected: the provider stopped at the output limit before the complete tool request was available. No tool ran. Reissue one smaller, complete tool call.]",
+            super::recovery::TRUNCATED_TOOL_CALL_GUIDANCE,
         ));
         crate::config::save_session_history(&s.active_session_id, &s.history);
         s.clear_current_response();
@@ -811,6 +850,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         return ToolHandlingOutcome::Continue;
     }
 
+    if !parsed_tool_calls.is_empty() {
+        // A complete tool request arrived: earlier cut-off calls are behind.
+        ctx.recovery.output_limit.truncated_tool_calls = 0;
+    }
     let requested_calls = parsed_tool_calls.len();
     let validation_errors = crate::tools::validation_errors_by_call(&parsed_tool_calls);
     let scheduling_policy = {
@@ -1619,6 +1662,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         ctx.recovery.loop_detector.reset();
                         ctx.recovery.reasoning_loop_detector.reset();
                         ctx.recovery.reasoning_recovery_attempts = 0;
+                        ctx.recovery.output_limit.record_progress();
                         ctx.progress.grounded_artifact = None;
                     }
                 }

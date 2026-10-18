@@ -2185,6 +2185,10 @@ mod tests {
             StopReason::MaxTurnRequests
         );
         assert_eq!(
+            acp_stop_reason(false, Some("output_limit:default:8192:8192")),
+            StopReason::MaxTokens
+        );
+        assert_eq!(
             acp_stop_reason(false, Some("completed")),
             StopReason::EndTurn
         );
