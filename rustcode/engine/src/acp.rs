@@ -580,13 +580,14 @@ impl SessionTaskSink {
         self.runtime.spawn(async move {
             {
                 let mut state = state.lock().await;
-                state
-                    .history
-                    .push(crate::background_task_history_message_with_call_id(
-                        &task_id,
-                        output.clone(),
-                        Some(call_id.clone()),
-                    ));
+                // The call that started the task was answered when it went to
+                // the background. Reusing its id here would give that call a
+                // second result and break the provider transcript; the id only
+                // addresses the client update below.
+                state.history.push(crate::background_task_history_message(
+                    &task_id,
+                    output.clone(),
+                ));
                 crate::config::save_session_history(&event_session_id, &state.history);
             }
             let update = SessionUpdate::ToolCallUpdate(

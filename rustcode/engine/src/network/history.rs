@@ -635,7 +635,81 @@ fn to_messages_with_scope(
         });
     }
 
-    messages
+    repair_native_tool_batches(messages)
+}
+
+/// Last-line repair of the rendered native-tool sequence.
+///
+/// History is append-only and several writers share it: a background task
+/// sink can land a completion between a call batch and its results, or answer
+/// a call id the batch already answered. Either breaks the provider contract
+/// (one result per announced id, nothing interleaved) and, because the row is
+/// persisted, every later request in the session fails the same way. Here a
+/// batch keeps exactly its own answers; anything interleaved moves after the
+/// batch, and a structured result no open batch is waiting for falls back to
+/// the text form.
+fn repair_native_tool_batches(messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut repaired = Vec::with_capacity(messages.len());
+    let mut iter = messages.into_iter().peekable();
+    while let Some(message) = iter.next() {
+        let mut pending: Vec<String> = message["tool_calls"]
+            .as_array()
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|call| call["id"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if pending.is_empty() {
+            repaired.push(if message["role"] == "tool" {
+                tool_result_as_text(message)
+            } else {
+                message
+            });
+            continue;
+        }
+        repaired.push(message);
+        let mut deferred = Vec::new();
+        while !pending.is_empty() {
+            let Some(next) = iter.peek() else { break };
+            if next["role"] == "assistant" {
+                break;
+            }
+            let next = iter.next().expect("peeked message");
+            let answers = next["role"] == "tool"
+                && next["tool_call_id"]
+                    .as_str()
+                    .and_then(|id| pending.iter().position(|pending| pending == id))
+                    .map(|position| pending.remove(position))
+                    .is_some();
+            if answers {
+                repaired.push(next);
+            } else if next["role"] == "tool" {
+                deferred.push(tool_result_as_text(next));
+            } else {
+                deferred.push(next);
+            }
+        }
+        for call_id in pending {
+            repaired.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": UNRUN_CALL_RESULT,
+            }));
+        }
+        repaired.extend(deferred);
+    }
+    repaired
+}
+
+/// Text form of a structured tool result that has no open call to answer.
+fn tool_result_as_text(message: serde_json::Value) -> serde_json::Value {
+    let content = message["content"].as_str().unwrap_or_default();
+    serde_json::json!({
+        "role": "user",
+        "content": format!("<tool_result>\n{content}\n</tool_result>"),
+    })
 }
 
 fn request_turn_starts(history: &[ChatMessage]) -> Option<(usize, Option<usize>)> {
@@ -1990,6 +2064,80 @@ mod tests {
         let messages = to_messages(&history, "system");
 
         assert_native_tool_call_results(&messages);
+    }
+
+    #[test]
+    fn background_completion_reusing_an_answered_call_id_stays_valid() {
+        // An ACP background completion was persisted with the id of the call
+        // that started the task, after that call was already answered, then
+        // the next batch ran. Every later request failed validation (#session
+        // 01a14ffb777a).
+        let call = |id: &str| crate::app::ToolCallRef {
+            id: id.into(),
+            name: "run_command".into(),
+            arguments: "{}".into(),
+        };
+        let history = vec![
+            ChatMessage::new("user", "install it"),
+            ChatMessage::new("assistant", "starting").with_tool_calls(vec![call("call_bg")]),
+            ChatMessage::new("tool", "run_command: Task started in background.")
+                .answering(Some("call_bg".into())),
+            crate::background_task_history_message_with_call_id(
+                "task-1",
+                crate::tools::ToolExecutionOutput::success("installed".to_owned()),
+                Some("call_bg".to_owned()),
+            ),
+            ChatMessage::new("assistant", "next").with_tool_calls(vec![call("call_next")]),
+            ChatMessage::new("tool", "run_command: ok").answering(Some("call_next".into())),
+        ];
+
+        let messages = to_messages(&history, "system");
+
+        validate_native_tool_messages(&messages).expect("duplicate answer is repaired");
+        assert!(
+            messages.iter().any(|message| message["role"] == "user"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("Task task-1 completed"))),
+            "the completion still reaches the model as text"
+        );
+    }
+
+    #[test]
+    fn background_completion_interleaved_in_a_batch_moves_after_it() {
+        let calls = vec![
+            crate::app::ToolCallRef {
+                id: "call_a".into(),
+                name: "run_command".into(),
+                arguments: "{}".into(),
+            },
+            crate::app::ToolCallRef {
+                id: "call_b".into(),
+                name: "run_command".into(),
+                arguments: "{}".into(),
+            },
+        ];
+        let history = vec![
+            ChatMessage::new("user", "run both"),
+            ChatMessage::new("assistant", "running").with_tool_calls(calls),
+            ChatMessage::new("tool", "run_command: a").answering(Some("call_a".into())),
+            crate::background_task_history_message(
+                "task-2",
+                crate::tools::ToolExecutionOutput::success("done".to_owned()),
+            ),
+            ChatMessage::new("tool", "run_command: b").answering(Some("call_b".into())),
+        ];
+
+        let messages = to_messages(&history, "system");
+
+        validate_native_tool_messages(&messages).expect("batch stays contiguous");
+        let last = messages.last().expect("messages");
+        assert_eq!(last["role"], "user");
+        assert!(
+            last["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("task-2"))
+        );
     }
 
     #[test]
