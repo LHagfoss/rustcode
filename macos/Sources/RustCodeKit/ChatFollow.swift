@@ -51,15 +51,31 @@ public struct ChatFollow: Equatable, Sendable {
     /// own wheel, trackpad or scroller input is in progress. Returns true when
     /// the chat should scroll to its end: it follows but sits short of it,
     /// because output grew or rows below took their real height late.
-    public mutating func update(_ new: Geometry, readerScrolling: Bool) -> Bool {
+    /// `towardEnd` is whether the reader's latest input points down the chat.
+    public mutating func update(_ new: Geometry, readerScrolling: Bool, towardEnd: Bool = false) -> Bool {
         let old = geometry
         geometry = new
         // A resize moves the offset without anyone scrolling.
-        let movedUp = old.map { new.offset < $0.offset - 0.5 && new.containerHeight == $0.containerHeight } ?? false
-        // The reader moving the chat up lets go, also in the first frames
-        // still within the threshold, so output cannot pull it back down.
-        if readerScrolling, movedUp {
-            follows = false
+        let sameSize = old.map { new.containerHeight == $0.containerHeight } ?? false
+        let movedUp = sameSize && new.offset < old!.offset - 0.5
+        let movedDown = sameSize && new.offset > old!.offset + 0.5
+        if readerScrolling {
+            // The reader moving the chat up lets go, also in the first frames
+            // still within the threshold, so output cannot pull it back down.
+            // Moving up from a scroll down is the bounce at the end, not the
+            // reader leaving it; letting go there fought the pull to the end
+            // while a reply streamed.
+            if movedUp, !towardEnd {
+                follows = false
+                return false
+            }
+            // While the reader scrolls, only their own way down to the end
+            // holds on again. Output arriving between their scroll events
+            // changes the geometry too, and while the end was still held it
+            // even moves the chat down; taking that for reaching the end
+            // pulled a reader just leaving the end back to it on every
+            // token, so the chat fought the scroll.
+            if new.isAtEnd, (movedDown && towardEnd) || follows { follows = true }
             return false
         }
         // At the end means following, however the chat got there.
@@ -67,7 +83,7 @@ public struct ChatFollow: Equatable, Sendable {
             follows = true
             return false
         }
-        return follows && !readerScrolling
+        return follows
     }
 
     /// A wheel or trackpad scroll toward the top, over the chat. Lets go at
