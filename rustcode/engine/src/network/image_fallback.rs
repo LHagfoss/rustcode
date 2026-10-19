@@ -63,19 +63,21 @@ where
 {
     use futures_util::StreamExt;
 
-    if active_profile.image_input_supported() == Some(true) {
+    // Naming the active model as its own vision_model says it reads images,
+    // even when the profile never set supports_vision: send them natively
+    // instead of asking the same model to describe each one first.
+    let sees_images = match active_profile.image_input_supported() {
+        Some(supported) => supported,
+        None => vision_profile.name == active_profile.name,
+    };
+    if sees_images {
         return Ok(());
     }
     if !has_image_markers(history) {
         return Ok(());
     }
 
-    // A text-only model named as its own vision_model can only fail, one slow
-    // request per image.
-    let vision_usable = match vision_profile.image_input_supported() {
-        Some(supported) => supported,
-        None => vision_profile.name != active_profile.name,
-    };
+    let vision_usable = vision_profile.image_input_supported() != Some(false);
     let latest = history.len() - 1;
     let image_messages: Vec<usize> = history
         .iter()
@@ -833,11 +835,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_model_named_as_its_own_vision_model_gets_native_images() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "one.png", b"one");
+        let main = profile(None);
+        let mut history = vec![ChatMessage::new("user", marker.clone())];
+        let mut calls = 0;
+
+        preprocess_history_with(&mut history, &main, &main, &mut HashMap::new(), |_, _| {
+            calls += 1;
+            async { Ok("unused".to_string()) }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(calls, 0);
+        assert_eq!(history[0].content, marker);
+    }
+
+    #[tokio::test]
     async fn text_only_model_as_its_own_vision_model_fails_fast() {
         let dir = tempdir().unwrap();
         let older = image(dir.path(), "older.png", b"older");
         let latest = image(dir.path(), "latest.png", b"latest");
-        let main = profile(None);
+        let main = profile(Some(false));
         let mut calls = 0;
 
         let mut history = vec![
