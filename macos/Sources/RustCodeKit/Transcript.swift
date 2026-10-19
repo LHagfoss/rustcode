@@ -29,6 +29,10 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
 
     public let id: Int
     public var content: Content
+    /// When a live thought began, and how long it ran once the next item
+    /// arrived or the turn ended. Replayed history has neither.
+    public var startedAt: Date?
+    public var duration: TimeInterval?
 
     /// Everything a find in the chat can match.
     public var searchableText: String {
@@ -37,6 +41,14 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
         case .tool(let tool): [tool.title, tool.input, tool.output].compactMap { $0 }.joined(separator: "\n")
         case .command(let input, let output): input + "\n" + output
         }
+    }
+
+    /// "Thought for 12s", the header of a finished thought.
+    public static func thoughtLabel(duration: TimeInterval) -> String {
+        let seconds = max(Int(duration.rounded()), 1)
+        if seconds < 60 { return "Thought for \(seconds)s" }
+        let minutes = seconds / 60
+        return seconds % 60 == 0 ? "Thought for \(minutes)m" : "Thought for \(minutes)m \(seconds % 60)s"
     }
 }
 
@@ -78,23 +90,25 @@ public struct Transcript: Equatable, Sendable {
         append(.command(input: input, output: ""))
     }
 
-    public mutating func apply(_ update: SessionUpdate) {
+    /// `now` is when a live update arrived, so a thought can say how long it
+    /// took; a replayed session passes nil.
+    public mutating func apply(_ update: SessionUpdate, at now: Date? = nil) {
         switch update {
         case .userText(let text):
-            append(.user(text))
+            append(.user(text), at: now)
         case .agentText(let text):
             if case .command(let input, let output) = items.last?.content {
                 items[items.count - 1].content = .command(input: input, output: output + text)
             } else if case .assistant(let previous) = items.last?.content {
                 items[items.count - 1].content = .assistant(previous + text)
             } else {
-                append(.assistant(text))
+                append(.assistant(text), at: now)
             }
         case .thoughtText(let text):
             if case .thinking(let previous) = items.last?.content {
                 items[items.count - 1].content = .thinking(previous + text)
             } else {
-                append(.thinking(text))
+                append(.thinking(text), at: now)
             }
         case .toolCall(let id, let title, let kind, let status, let input, let engineDetail):
             let rendered = input.map { $0.prettyPrinted() }
@@ -107,7 +121,7 @@ public struct Transcript: Equatable, Sendable {
                 tool.inputDetail = detail ?? tool.inputDetail
                 items[index].content = .tool(tool)
             } else {
-                append(.tool(ToolItem(callId: id, title: title, kind: kind, status: status, input: rendered, inputDetail: detail)))
+                append(.tool(ToolItem(callId: id, title: title, kind: kind, status: status, input: rendered, inputDetail: detail)), at: now)
             }
         case .toolCallUpdate(let id, let title, let status, let output, let diffs, let outputDelta):
             let changes = FileChange.group(diffs)
@@ -119,10 +133,10 @@ public struct Transcript: Equatable, Sendable {
                 if !changes.isEmpty { tool.changes = changes }
                 items[index].content = .tool(tool)
             } else {
-                append(.tool(ToolItem(callId: id, title: title ?? "Tool", status: status, output: output, changes: changes)))
+                append(.tool(ToolItem(callId: id, title: title ?? "Tool", status: status, output: output, changes: changes)), at: now)
             }
         case .contextReport(let text, _):
-            apply(.agentText(text))
+            apply(.agentText(text), at: now)
         case .usage(let usage):
             self.usage = usage
         case .notice, .title, .configOptions, .availableCommands, .unknown:
@@ -145,8 +159,19 @@ public struct Transcript: Equatable, Sendable {
         }
     }
 
-    private mutating func append(_ content: TranscriptItem.Content) {
-        items.append(TranscriptItem(id: nextId, content: content))
+    /// The turn ended: a thought still open at the end took until `now`.
+    public mutating func finishThinking(at now: Date) {
+        guard let last = items.indices.last, case .thinking = items[last].content,
+              let started = items[last].startedAt, items[last].duration == nil else { return }
+        items[last].duration = max(now.timeIntervalSince(started), 0)
+    }
+
+    private mutating func append(_ content: TranscriptItem.Content, at now: Date? = nil) {
+        // Whatever follows a thought ends it.
+        if let now { finishThinking(at: now) }
+        var item = TranscriptItem(id: nextId, content: content)
+        if case .thinking = content { item.startedAt = now }
+        items.append(item)
         nextId += 1
     }
 }

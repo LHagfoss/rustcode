@@ -12,6 +12,43 @@ final class TranscriptTests: XCTestCase {
         XCTAssertEqual(transcript.items.map(\.content), [.user("hi"), .thinking("Let me think."), .assistant("Hello")])
     }
 
+    func testLiveThoughtIsTimedUntilWhatFollowsIt() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var transcript = Transcript()
+        transcript.apply(.thoughtText("Let me "), at: start)
+        transcript.apply(.thoughtText("think."), at: start.addingTimeInterval(4))
+        XCTAssertEqual(transcript.items[0].startedAt, start)
+        XCTAssertNil(transcript.items[0].duration)
+        transcript.apply(.agentText("Hello"), at: start.addingTimeInterval(12))
+        XCTAssertEqual(transcript.items[0].duration, 12)
+        XCTAssertNil(transcript.items[1].duration)
+    }
+
+    func testThoughtEndingTheTurnStopsAtTheEnd() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var transcript = Transcript()
+        transcript.apply(.thoughtText("Hmm"), at: start)
+        transcript.finishThinking(at: start.addingTimeInterval(3))
+        transcript.finishThinking(at: start.addingTimeInterval(9))
+        XCTAssertEqual(transcript.items[0].duration, 3)
+    }
+
+    func testReplayedThoughtHasNoTiming() {
+        var transcript = Transcript()
+        transcript.apply(.thoughtText("Hmm"))
+        transcript.apply(.agentText("Done"))
+        transcript.finishThinking(at: Date())
+        XCTAssertNil(transcript.items[0].startedAt)
+        XCTAssertNil(transcript.items[0].duration)
+    }
+
+    func testThoughtLabelReadsLikeADuration() {
+        XCTAssertEqual(TranscriptItem.thoughtLabel(duration: 0.2), "Thought for 1s")
+        XCTAssertEqual(TranscriptItem.thoughtLabel(duration: 12.4), "Thought for 12s")
+        XCTAssertEqual(TranscriptItem.thoughtLabel(duration: 120), "Thought for 2m")
+        XCTAssertEqual(TranscriptItem.thoughtLabel(duration: 95), "Thought for 1m 35s")
+    }
+
     func testToolUpdatesChangeTheirCardInPlace() {
         var transcript = Transcript()
         transcript.apply(.toolCall(id: "t1", title: "run_command", kind: "execute", status: .inProgress, input: ["cmd": "ls"]))

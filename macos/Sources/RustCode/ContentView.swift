@@ -15,7 +15,7 @@ struct ContentView: View {
                     .frame(width: 270)
                     .transition(.move(edge: .leading))
             }
-            ChatView(model: model)
+            ChatView(model: model, chat: model.chat)
                 .background(Color.chatBackground)
             if model.showsPreview {
                 HStack(spacing: 0) {
@@ -528,6 +528,9 @@ private struct SessionRow: View {
 
 private struct ChatView: View {
     @ObservedObject var model: DesktopModel
+    /// The transcript publishes on its own, so streaming redraws the chat
+    /// but not the sidebar or the composer.
+    @ObservedObject var chat: LiveTranscript
     @State private var composerHeight: CGFloat = 60
     /// The chat keeps the newest output in view. Scrolling up hands control to
     /// the reader and shows the Latest button; scrolling back down follows again.
@@ -544,28 +547,41 @@ private struct ChatView: View {
     }
 
     var body: some View {
+        let transcript = chat.transcript
+        // Found once per redraw: asked per row, every row searched the chat.
+        let currentMatch = model.showsFind ? model.currentMatch : nil
+        let lastId = transcript.items.last?.id
         ScrollViewReader { proxy in
             ScrollView {
                 // The Latest button is a pinned footer, inside the scroll view,
                 // so the wheel still scrolls the chat while the pointer is on it.
-                LazyVStack(alignment: .leading, spacing: 18, pinnedViews: .sectionFooters) {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionFooters) {
                     Section {
                         // Rows are laid out eagerly: lazy rows took their real
                         // height only on screen, so scrolling up made the chat
                         // jump and the scroller resize under the pointer. Rows
                         // are equatable, so only the one that changed redraws.
-                        VStack(alignment: .leading, spacing: 18) {
-                            ForEach(model.transcript.items) { item in
-                                TranscriptRow(item: item, isCurrentMatch: model.showsFind && item.id == model.currentMatch,
-                                              isStreaming: isReplyStreaming && item.id == model.transcript.items.last?.id)
-                                    .equatable()
-                                    .id(item.id)
+                        VStack(spacing: 0) {
+                            VStack(alignment: .leading, spacing: 18) {
+                                ForEach(transcript.items) { item in
+                                    TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
+                                                  isStreaming: isReplyStreaming && item.id == lastId)
+                                        .equatable()
+                                        .id(item.id)
+                                }
+                                // Up for the whole turn, also while a reply streams or the
+                                // model plans its next step, so a live turn always says so.
+                                if isReplyStreaming {
+                                    WorkingIndicator()
+                                }
                             }
-                            // Up for the whole turn, also while a reply streams or the
-                            // model plans its next step, so a live turn always says so.
-                            if isReplyStreaming {
-                                WorkingIndicator()
-                            }
+                            .frame(maxWidth: 760)
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 20)
+                            .frame(maxWidth: .infinity)
+                            // The very end of the chat, below its padding: a jump
+                            // here leaves nothing further to scroll, so one press
+                            // of Latest always lands where following resumes.
                             Color.clear.frame(height: 1).id(bottomAnchor)
                         }
                     } footer: {
@@ -576,30 +592,29 @@ private struct ChatView: View {
                             .frame(maxWidth: .infinity)
                             .frame(height: 0)
                             .overlay(alignment: .bottomTrailing) {
-                                if !followsLatest, !model.transcript.isEmpty {
+                                if !followsLatest, !transcript.isEmpty {
                                     LatestButton { jumpToLatest(proxy) }
-                                        .padding(.bottom, 4)
-                                        .transition(.opacity)
+                                        .padding(.bottom, 12)
+                                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
                                 }
                             }
+                            .frame(maxWidth: 760)
+                            .padding(.horizontal, 28)
+                            .frame(maxWidth: .infinity)
                     }
                 }
-                .frame(maxWidth: 760)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 20)
-                .frame(maxWidth: .infinity)
             }
             .overlay {
                 if model.loadingSession != nil, model.loadingSession == model.selectedSession {
                     ProgressView("Loading chat…").controlSize(.small).foregroundStyle(.secondary)
-                } else if model.transcript.isEmpty, !model.busy {
+                } else if transcript.isEmpty, !model.busy {
                     EmptyChat(workspace: model.workspace)
                 }
             }
             .followsLatest($followsLatest)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ChatScrollInput.shared.chatFrame = $0 }
             .animation(.snappy(duration: 0.2), value: followsLatest)
-            .onChange(of: model.transcript) { old, new in
+            .onChange(of: chat.transcript) { old, new in
                 // Sending a message always brings the chat back to its end.
                 if new.items.count > old.items.count, case .user = new.items.last?.content { followsLatest = true }
                 if followsLatest, !model.showsFind { scrollToEnd(proxy) }
@@ -611,22 +626,20 @@ private struct ChatView: View {
                 followsLatest = true
                 scrollToEnd(proxy)
             }
-            .onChange(of: model.currentMatch) { _, match in
-                guard model.showsFind, let match else { return }
+            .onChange(of: currentMatch) { _, match in
+                guard let match else { return }
                 followsLatest = false
                 withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(match, anchor: .center) }
             }
         }
         .environment(\.findQuery, model.showsFind ? model.findQuery : "")
         .environment(\.projectRoot, selected.map(\.cwd).flatMap { $0.isEmpty ? nil : $0 } ?? model.workspace.path)
-        .environment(\.messageActions, MessageActions(
-            edit: { model.edit($0) },
-            retry: { text in Task { await model.retry(text) } }))
+        .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 header
                 if model.showsFind {
-                    FindBar(model: model)
+                    FindBar(model: model, chat: chat)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -642,7 +655,7 @@ private struct ChatView: View {
                         PermissionCard(model: model, request: permission).id(permission.id)
                     }
                 }
-                Composer(model: model)
+                Composer(model: model, composer: model.composer)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             }
             .frame(maxWidth: 760)
@@ -651,47 +664,8 @@ private struct ChatView: View {
             .frame(maxWidth: .infinity)
         }
         .overlay { composerPanel }
-        .overlay { commandSuggestions }
+        .overlay { CommandSuggestions(model: model, composer: model.composer, composerHeight: composerHeight) }
         .animation(.snappy(duration: 0.18), value: model.composerPanel)
-    }
-
-    /// Slash commands matching what is typed, above the composer. ↑↓ choose,
-    /// Tab or ⏎ completes, Esc clears.
-    @ViewBuilder
-    private var commandSuggestions: some View {
-        let suggestions = model.commandSuggestions
-        if model.composerPanel == nil, !suggestions.isEmpty {
-            VStack {
-                Spacer()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, command in
-                                CommandRow(command: command, isSelected: index == min(model.commandSelection, suggestions.count - 1)) {
-                                    model.commandSelection = index
-                                    model.completeCommand()
-                                }
-                                .id(command.id)
-                            }
-                        }
-                        .padding(6)
-                    }
-                    .frame(maxHeight: 280)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .onChange(of: model.commandSelection) { _, index in
-                        guard index < suggestions.count else { return }
-                        proxy.scrollTo(suggestions[index].id)
-                    }
-                }
-                .clipShape(.rect(cornerRadius: 20))
-                .glassSurface(in: .rect(cornerRadius: 20))
-                .frame(maxWidth: 760)
-                .padding(.horizontal, 28)
-                .padding(.bottom, composerHeight + 16 + 8)
-                .frame(maxWidth: .infinity)
-            }
-            .transition(.opacity)
-        }
     }
 
     /// The + or model panel, drawn over the whole chat so nothing clips it, with
@@ -742,7 +716,7 @@ private struct ChatView: View {
                 Text(projectName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            if let usage = model.transcript.usage {
+            if let usage = chat.transcript.usage {
                 Button { model.showContext() } label: { UsageCapsule(usage: usage) }
                     .buttonStyle(.plain)
                     .accessibilityHint("Shows how the context window is used")
@@ -796,6 +770,51 @@ private struct ChatView: View {
     }
 }
 
+/// Slash commands matching what is typed, above the composer. ↑↓ choose,
+/// Tab or ⏎ completes, Esc clears. Its own view, so typing redraws it and
+/// not the chat behind it.
+private struct CommandSuggestions: View {
+    @ObservedObject var model: DesktopModel
+    @ObservedObject var composer: ComposerDraft
+    let composerHeight: CGFloat
+
+    var body: some View {
+        let suggestions = model.commandSuggestions
+        if model.composerPanel == nil, !suggestions.isEmpty {
+            VStack {
+                Spacer()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, command in
+                                CommandRow(command: command, isSelected: index == min(model.commandSelection, suggestions.count - 1)) {
+                                    model.commandSelection = index
+                                    model.completeCommand()
+                                }
+                                .id(command.id)
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(maxHeight: 280)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onChange(of: model.commandSelection) { _, index in
+                        guard index < suggestions.count else { return }
+                        proxy.scrollTo(suggestions[index].id)
+                    }
+                }
+                .clipShape(.rect(cornerRadius: 20))
+                .glassSurface(in: .rect(cornerRadius: 20))
+                .frame(maxWidth: 760)
+                .padding(.horizontal, 28)
+                .padding(.bottom, composerHeight + 16 + 8)
+                .frame(maxWidth: .infinity)
+            }
+            .transition(.opacity)
+        }
+    }
+}
+
 /// Jumps back to the newest message after the reader scrolled up.
 private struct LatestButton: View {
     let action: () -> Void
@@ -809,6 +828,7 @@ private struct LatestButton: View {
                 .background(.regularMaterial, in: .capsule)
                 .overlay(Capsule().strokeBorder(.separator))
                 .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
+                .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .help("Scroll to the latest message")
@@ -908,6 +928,8 @@ private struct ScrollFollowGeometry: Equatable {
 /// ⌘F: find in the chat. ⏎ and ⌘G go to the next match, ⇧⏎ and ⇧⌘G back, Esc closes.
 private struct FindBar: View {
     @ObservedObject var model: DesktopModel
+    /// Matches change as the transcript does.
+    @ObservedObject var chat: LiveTranscript
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -999,6 +1021,7 @@ private struct ErrorBanner: View {
 /// top, and below it the + menu, the model and Send. ⏎ sends, ⇧⏎ breaks the line.
 private struct Composer: View {
     @ObservedObject var model: DesktopModel
+    @ObservedObject var composer: ComposerDraft
     @FocusState private var focused: Bool
     @State private var isDropTarget = false
     @State private var pasteMonitor: Any?
@@ -1074,7 +1097,7 @@ private struct Composer: View {
                     return .ignored
                 }
                 .onKeyPress(.delete) { model.unwrapCommandChip() ? .handled : .ignored }
-                .onChange(of: model.draft) { _, _ in
+                .onChange(of: composer.text) { _, _ in
                     model.commandSelection = 0
                     model.promoteTypedCommand()
                 }
@@ -1146,7 +1169,7 @@ private struct Composer: View {
 
     /// The text, with the rest of a half-typed command shown in gray after it.
     private var messageField: some View {
-        TextField(placeholder, text: $model.draft, axis: .vertical)
+        TextField(placeholder, text: $composer.text, axis: .vertical)
             .textFieldStyle(.plain)
             .font(.body)
             .lineLimit(1...10)

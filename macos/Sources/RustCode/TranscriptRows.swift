@@ -25,7 +25,7 @@ struct TranscriptRow: View, Equatable {
         switch item.content {
         case .user(let text): UserMessage(text: text)
         case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming)
-        case .thinking(let text): ThinkingBlock(text: text)
+        case .thinking(let text): ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration)
         case .tool(let tool): ToolRow(tool: tool)
         case .command(let input, let output): CommandCard(input: input, output: output)
         }
@@ -176,16 +176,35 @@ private struct AssistantMessage: View {
     var isStreaming = false
     @Environment(\.messageActions) private var messageActions
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private struct Parsed {
+        var blocks: [AssistantBlock]
+        var summary: AssistantSummary?
+    }
+
+    private static let cache = RenderCache<Parsed>(countLimit: 1_000)
+
+    /// Split once per text: finding the summary tries to read JSON at every
+    /// `{` from the end, too slow to repeat for every message on every redraw.
+    private var parsed: Parsed {
+        Self.cache.value(for: (isStreaming ? "s\u{0}" : "\u{0}") + text) {
             let (prose, summary) = AssistantSummary.split(text)
-            ForEach(Array(AssistantBlock.parse(prose).enumerated()), id: \.offset) { _, block in
+            return Parsed(blocks: AssistantBlock.parse(prose, isStreaming: isStreaming), summary: summary)
+        }
+    }
+
+    var body: some View {
+        let parsed = parsed
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
+                let isLast = index == parsed.blocks.count - 1
                 switch block {
-                case .markdown(let text): MarkdownText(text: text, visualizations: true, isStreaming: isStreaming)
-                case .thinking(let text, _): ThinkingBlock(text: text)
+                case .markdown(let text):
+                    MarkdownText(text: text, visualizations: true, isStreaming: isStreaming && isLast)
+                case .thinking(let text, let isComplete):
+                    ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
                 }
             }
-            if let summary { SummaryCard(summary: summary) }
+            if let summary = parsed.summary { SummaryCard(summary: summary) }
         }
         .contextMenu {
             Button("Copy Reply", systemImage: "doc.on.doc") { Clipboard.copy(AssistantSummary.split(text).prose) }
@@ -200,26 +219,81 @@ private struct AssistantMessage: View {
     }
 }
 
+/// The model's reasoning, muted and folded away, as the iOS app shows it.
+/// While it is being written it stays open on its last lines; once done it
+/// folds to a "Thought for 12s" header unless the reader opened it.
 private struct ThinkingBlock: View {
     let text: String
-    @State private var isExpanded = false
+    /// The thought is still being written.
+    var isLive = false
+    /// How long it took, when it was watched live.
+    var duration: TimeInterval?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Nil until the reader toggles it: open while live, closed after.
+    @State private var expanded: Bool?
+
+    private static let liveLines = 5
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var isExpanded: Binding<Bool> {
+        Binding(get: { expanded ?? isLive }, set: { expanded = $0 })
+    }
+
+    private var title: String {
+        if isLive { return "Thinking…" }
+        if let duration { return TranscriptItem.thoughtLabel(duration: duration) }
+        return "Thinking"
+    }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            Text(MarkdownText.inline(text.trimmingCharacters(in: .whitespacesAndNewlines)))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 12)
-                .overlay(alignment: .leading) { Capsule().fill(.quaternary).frame(width: 2) }
-                .padding(.top, 6)
+        // A thought with no text has nothing to show once it is over.
+        if isLive || !trimmed.isEmpty { card }
+    }
+
+    private var card: some View {
+        DisclosureGroup(isExpanded: isExpanded) {
+            Group {
+                if trimmed.isEmpty {
+                    EmptyView()
+                } else if isLive, expanded == nil {
+                    // The newest lines only, so a long thought does not push
+                    // the chat around while it streams.
+                    Text(MarkdownText.inline(liveTail))
+                        .lineLimit(Self.liveLines)
+                        .truncationMode(.head)
+                } else {
+                    MarkdownText(text: trimmed)
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 8)
+            .contextMenu { Button("Copy Thinking", systemImage: "doc.on.doc") { Clipboard.copy(trimmed) } }
         } label: {
-            Label("Thinking", systemImage: "brain")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Label(title, systemImage: "brain")
+                    .contentTransition(.opacity)
+                if isLive { ProgressView().controlSize(.mini) }
+            }
+            .font(.callout.weight(.medium))
+            .foregroundStyle(.secondary)
         }
         .disclosureGroupStyle(RowDisclosureStyle())
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.fill.quaternary, in: .rect(cornerRadius: 12))
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: isLive)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+
+    private var liveTail: String {
+        trimmed.split(separator: "\n", omittingEmptySubsequences: true)
+            .suffix(Self.liveLines).joined(separator: "\n")
     }
 }
 
