@@ -17,6 +17,7 @@ struct ContentView: View {
             }
             ChatView(model: model, chat: model.chat)
                 .background(Color.chatBackground)
+                .terminalDrawer(model.terminal)
             if model.showsPreview {
                 HStack(spacing: 0) {
                     PreviewResizeHandle(width: $previewWidth)
@@ -749,6 +750,7 @@ private struct ChatView: View {
                     }
                 }
             }
+            TerminalToolbarButton(terminal: model.terminal)
             if !model.showsPreview {
                 ToolbarCluster {
                     ClusterButton(systemImage: "globe", help: "Show localhost preview (⇧⌘P)") { model.togglePreview() }
