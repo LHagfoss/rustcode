@@ -1,3 +1,11 @@
+## [v0.80.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.80.0) - 2026-10-19
+
+### Features
+- **macOS:** native terminal panel per project: `/terminal`, ⇧⌘T or View → Show Terminal; real PTY shells (SwiftTerm) with tabs, relaunch, 10,000-line scrollback; localhost links open in the preview (#2142)
+- **macOS:** the agent can inspect, screenshot, navigate, click, fill, select and scroll the localhost preview after you allow it for the chat; restricted to the approved localhost origin and revocable from the preview toolbar (#2143)
+- **macOS:** the Latest button follows the real distance from the bottom and lands there in one click; long streamed replies no longer blank the transcript (#2141)
+- **macOS:** long chats resize and scroll smoothly (#2135)
+- **Engine:** send images natively to a model named as its own `vision_model` (#2134)
 ## [v0.79.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.79.1) - 2026-10-19
 
 ### Fixes
