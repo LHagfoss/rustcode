@@ -273,13 +273,23 @@ struct StreamingProse: View {
 
     var body: some View {
         let count = text.characters.count
-        Group {
-            if #available(macOS 15, *), !reduceMotion {
-                TimelineView(.animation(minimumInterval: 1.0 / 60, paused: arrivals.isEmpty)) { context in
-                    faded(count: count).textRenderer(FadeInRenderer(now: context.date))
+        // Only the paragraph still arriving goes through the fade renderer. It
+        // draws its text as one layer, and a layer far taller than the window
+        // draws nothing: a long reply streamed this way went blank. Settled
+        // paragraphs above are plain text, laid out once rather than per frame.
+        let head = StreamingSplit.settledLength(of: text.characters, settled: settled)
+        VStack(alignment: .leading, spacing: 0) {
+            if head > 0 {
+                Text(AttributedString(text[text.startIndex..<index(head, count: count)]))
+            }
+            Group {
+                if #available(macOS 15, *), !reduceMotion {
+                    TimelineView(.animation(minimumInterval: 1.0 / 60, paused: arrivals.isEmpty)) { context in
+                        faded(from: head > 0 ? head + 1 : 0, count: count).textRenderer(FadeInRenderer(now: context.date))
+                    }
+                } else {
+                    Text(AttributedString(text[index(head > 0 ? head + 1 : 0, count: count)...]))
                 }
-            } else {
-                Text(text)
             }
         }
         .onAppear { arrivals = [Arrival(end: count, time: Date())] }
@@ -310,19 +320,23 @@ struct StreamingProse: View {
     /// Text past the last known chunk has not been counted yet, so it starts
     /// hidden rather than flashing in for a frame.
     @available(macOS 15, *)
-    private func faded(count: Int) -> Text {
-        func index(_ offset: Int) -> AttributedString.Index {
-            text.characters.index(text.endIndex, offsetBy: min(offset, count) - count)
-        }
-        var position = min(settled, count)
-        var result = Text(AttributedString(text[text.startIndex..<index(position)]))
+    private func faded(from start: Int, count: Int) -> Text {
+        var position = min(max(settled, start), count)
+        var result = Text(AttributedString(text[index(start, count: count)..<index(position, count: count)]))
         for piece in arrivals + [Arrival(end: count, time: .distantFuture)] where piece.end > position {
             let end = min(piece.end, count)
-            result = result + Text(AttributedString(text[index(position)..<index(end)]))
+            result = result + Text(AttributedString(text[index(position, count: count)..<index(end, count: count)]))
                 .customAttribute(FreshText(arrival: piece.time))
             position = end
         }
         return result
+    }
+}
+
+private extension StreamingProse {
+    /// Counted from the end: new text arrives there, so it is the short walk.
+    func index(_ offset: Int, count: Int) -> AttributedString.Index {
+        text.characters.index(text.endIndex, offsetBy: min(offset, count) - count)
     }
 }
 

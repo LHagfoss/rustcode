@@ -115,6 +115,39 @@ panel's prompt, only on the approved localhost origin, and only until you click
 the Agent button in the preview's toolbar to revoke it, switch project or
 restart the engine. Details and limits are in [docs/preview.md](preview.md).
 
+For your own commands, open the terminal with ⇧⌘T (View > Show Terminal, the
+terminal button in the chat's title bar, or `/terminal` in the composer, which
+works even while the engine is not running). It is a resizable drawer under the
+chat running your login shell (`$SHELL`, else the account's shell) on a real
+PTY, so interactive programs, colors, Unicode, resizing and Ctrl-C behave as in
+Terminal. It starts with the same environment the app gives the engine (the
+usual tool directories appended to `PATH`, plus `TERM=xterm-256color` and a
+UTF-8 locale when none is set), and your shell profile runs as a login shell.
+
+- Terminals belong to the project they were opened in and start in its folder;
+  the panel header shows the project and directory. Switching projects shows
+  that project's terminals only: the others keep running, are never sent input
+  and never move. A project folder that no longer exists is reported instead of
+  starting the shell elsewhere.
+- Use + (or View > New Terminal Tab) for more tabs, up to 8 per project. A shell
+  that exits shows Relaunch; closing a tab ends its shell and everything it
+  started, after asking if something is still running. Hiding the panel never
+  stops a process.
+- Quitting RustCode hangs up every terminal and kills what remains after a
+  short grace period, so dev servers do not outlive the app.
+- Each terminal keeps 10,000 lines of scrollback; older lines are dropped.
+- A dev server started here works with the preview: click its
+  `http://localhost:PORT` link to load it in the preview (other web links open
+  in the browser), or type the address there. The preview works without the
+  terminal.
+
+The terminal is not an agent tool. What you type runs directly as you, without
+the engine's sandbox or tool approvals, and the agent never sees its input or
+output. The agent's own shell commands still go through the engine, its
+sandbox and its permission prompts. The emulator is
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, pinned in
+`macos/Package.swift`; its license ships in the app's `Contents/Resources`).
+
 
 ## Updating
 

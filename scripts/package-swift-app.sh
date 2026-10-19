@@ -31,6 +31,11 @@ mkdir -p "$STAGING/Contents/MacOS" "$STAGING/Contents/Helpers" "$STAGING/Content
     cp .build/release/RustCode "$STAGING/Contents/MacOS/RustCode"
 )
 install -m 755 "$ENGINE" "$STAGING/Contents/Helpers/rustcode"
+# SwiftTerm (the terminal panel) is statically linked into the app; its MIT
+# license travels with it. Its SwiftPM resource bundle (a Metal shader) is not
+# shipped: the app uses SwiftTerm's default CoreGraphics renderer, and the
+# Metal path looks the bundle up without crashing when it is absent.
+install -m 644 "$ROOT/macos/.build/checkouts/SwiftTerm/LICENSE" "$STAGING/Contents/Resources/SwiftTerm-LICENSE.txt"
 # Compile the Icon Composer source (Liquid Glass on macOS 26) with Xcode 26 or
 # later; older toolchains fall back to the committed flat AppIcon.icns, which
 # macOS 26 shows on a gray plate. REQUIRE_COMPILED_ICON=1 makes that an error.
@@ -73,7 +78,7 @@ plutil -lint "$STAGING/Contents/Info.plist"
 # scripts/macos-release-signing.sh import) both are signed for notarization:
 # hardened runtime and a secure timestamp. Neither needs entitlements: the app
 # is not sandboxed, and neither executable uses JIT or loads third-party
-# libraries. Otherwise the bundle is ad-hoc signed: Apple Silicon refuses to
+# libraries at run time (SwiftTerm is linked in statically). Otherwise the bundle is ad-hoc signed: Apple Silicon refuses to
 # run an unsealed quarantined bundle and reports it as damaged; sealed but
 # unnotarized, Gatekeeper shows a warning the user can bypass.
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then

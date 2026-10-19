@@ -10,6 +10,9 @@ struct RustCodeApp: App {
         // A write to the engine's stdin after it exits must surface as an
         // error, not kill the app with the default SIGPIPE action.
         signal(SIGPIPE, SIG_IGN)
+        // One window, no window tabs: AppKit's View > Show Tab Bar would
+        // otherwise take ⇧⌘T from the terminal.
+        NSWindow.allowsAutomaticWindowTabbing = false
         AppearanceSetting.apply(UserDefaults.standard.string(forKey: AppearanceSetting.key))
     }
 
@@ -68,6 +71,7 @@ struct RustCodeApp: App {
                 Button("Reload Preview") { model.preview.reload() }
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(!model.showsPreview)
+                TerminalMenuItems(terminal: model.terminal)
             }
         }
     }
@@ -134,7 +138,7 @@ final class DesktopModel: ObservableObject {
         var answered = false
     }
     /// Slash commands the engine advertised, and the highlighted suggestion.
-    @Published var commands: [SlashCommand] = []
+    @Published var commands: [SlashCommand] = SlashCommand.appCommands
     var commandSelection: Int {
         get { composer.commandSelection }
         set { if composer.commandSelection != newValue { composer.commandSelection = newValue } }
@@ -155,6 +159,7 @@ final class DesktopModel: ObservableObject {
         didSet {
             UserDefaults.standard.set(workspace.path, forKey: "workspacePath")
             preview.setWorkspace(workspace.path)
+            terminal.setWorkspace(workspace.path)
         }
     }
     /// The localhost preview beside the chat, remembered per project. The
@@ -162,6 +167,9 @@ final class DesktopModel: ObservableObject {
     /// allows it for a chat (PreviewAgentBridge.swift).
     let preview = PreviewController()
     @Published var showsPreview = false
+    /// The workspace terminal, per project. The user's own shell: it never
+    /// goes through the engine or reaches the agent.
+    let terminal = TerminalController()
     let composer = ComposerDraft()
     var draft: String {
         get { composer.text }
@@ -244,6 +252,12 @@ final class DesktopModel: ObservableObject {
                 : URL(fileURLWithPath: launchPath, isDirectory: true))
         preview.setWorkspace(workspace.path)
         preview.chatTitle = { [weak self] id in self?.sessions.first { $0.id == id }?.title }
+        terminal.setWorkspace(workspace.path)
+        terminal.openInPreview = { [weak self] url in
+            guard let self else { return }
+            self.preview.load(url)
+            if !self.showsPreview { self.togglePreview() }
+        }
         TurnNotifier.shared.openSession = { [weak self] id in
             guard let self, let session = self.sessions.first(where: { $0.id == id }) else { return }
             Task { await self.select(session) }
@@ -479,6 +493,7 @@ final class DesktopModel: ObservableObject {
                 Clipboard.copy(text)
                 confirm("Copied the last reply", systemImage: "doc.on.doc.fill")
             }
+        case .terminal: terminal.open()
         case .execute: break
         }
     }
@@ -878,6 +893,13 @@ final class DesktopModel: ObservableObject {
     }
 
     func submit() async {
+        // App commands such as /terminal work without the engine.
+        if let command = SlashCommand.appCommand(chip: draftCommand, draft: draft) {
+            draftCommand = nil
+            draft = ""
+            await perform(command)
+            return
+        }
         guard engine?.connection != nil else { return }
         if let chip = draftCommand {
             draft = draft.isEmpty ? chip.name : chip.name + " " + draft
@@ -1169,7 +1191,7 @@ final class DesktopModel: ObservableObject {
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate
             && params["update"]?["sessionUpdate"]?.stringValue == "available_commands_update":
             // Commands are the same for every session, so take them from any.
-            if case .availableCommands(let list) = SessionUpdate(notificationParams: params) { commands = list }
+            if case .availableCommands(let list) = SessionUpdate(notificationParams: params) { commands = SlashCommand.withAppCommands(list) }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate:
             guard let sessionId = params["sessionId"]?.stringValue else { return }
             if captureCommandUpdate(SessionUpdate(notificationParams: params), in: sessionId) { return }

@@ -17,6 +17,7 @@ struct ContentView: View {
             }
             ChatView(model: model, chat: model.chat)
                 .background(Color.chatBackground)
+                .terminalDrawer(model.terminal)
             if model.showsPreview {
                 HStack(spacing: 0) {
                     PreviewResizeHandle(width: $previewWidth)
@@ -534,7 +535,7 @@ private struct ChatView: View {
     @State private var composerHeight: CGFloat = 60
     /// The chat keeps the newest output in view. Scrolling up hands control to
     /// the reader and shows the Latest button; scrolling back down follows again.
-    @State private var followsLatest = true
+    @State private var follow = ChatFollow()
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
@@ -564,26 +565,26 @@ private struct ChatView: View {
                             .equatable()
                             .id(item.id)
                     }
-                    VStack(spacing: 0) {
-                        VStack(alignment: .leading, spacing: 18) {
-                            ForEach(transcript.items[split...]) { item in
-                                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                                              isStreaming: isReplyStreaming && item.id == lastId)
-                                    .equatable()
-                                    .id(item.id)
-                            }
-                            // Up for the whole turn, also while a reply streams or the
-                            // model plans its next step, so a live turn always says so.
-                            if isReplyStreaming {
-                                WorkingIndicator()
-                            }
+                    VStack(alignment: .leading, spacing: 18) {
+                        ForEach(transcript.items[split...]) { item in
+                            TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
+                                          isStreaming: isReplyStreaming && item.id == lastId)
+                                .equatable()
+                                .id(item.id)
                         }
-                        .padding(.bottom, 20)
-                        // The very end of the chat, below its padding: a jump
-                        // here leaves nothing further to scroll, so one press
-                        // of Latest always lands where following resumes.
-                        Color.clear.frame(height: 1).id(bottomAnchor)
+                        // Up for the whole turn, also while a reply streams or the
+                        // model plans its next step, so a live turn always says so.
+                        if isReplyStreaming {
+                            WorkingIndicator()
+                        }
                     }
+                    .padding(.bottom, 2)
+                    // The very end of the chat, below its padding (with the stack
+                    // spacing, 20 points). A child of the lazy stack itself, not
+                    // nested in the block above: the stack can find its own
+                    // children unlaid, but not ids inside a child it has not
+                    // laid out, so a jump from far up did nothing.
+                    Color.clear.frame(height: 1).id(bottomAnchor)
                 }
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28)
@@ -593,16 +594,22 @@ private struct ChatView: View {
             // Over the chat rather than a pinned footer inside it: a pinned
             // view re-lays out its whole section on every scrolled frame.
             .overlay(alignment: .bottom) {
-                if !followsLatest, !transcript.isEmpty {
-                    HStack {
-                        Spacer(minLength: 0)
-                        LatestButton { jumpToLatest(proxy) }
+                let showsLatest = follow.showsLatest && !transcript.isEmpty
+                ZStack {
+                    if showsLatest {
+                        HStack {
+                            Spacer(minLength: 0)
+                            LatestButton { jumpToLatest(proxy) }
+                        }
+                        .frame(maxWidth: 760)
+                        .padding(.horizontal, 28)
+                        .padding(.bottom, 12)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottomTrailing)))
                     }
-                    .frame(maxWidth: 760)
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 12)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottomTrailing)))
                 }
+                // Animates the button only. On the scroll view it also animated
+                // the scroll anchor and the jump itself, landing short of the end.
+                .animation(.snappy(duration: 0.2), value: showsLatest)
             }
             .overlay {
                 if model.loadingSession != nil, model.loadingSession == model.selectedSession {
@@ -611,24 +618,33 @@ private struct ChatView: View {
                     EmptyChat(workspace: model.workspace)
                 }
             }
-            .followsLatest($followsLatest)
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ChatScrollInput.shared.chatFrame = $0 }
-            .animation(.snappy(duration: 0.2), value: followsLatest)
+            .followsLatest($follow) { scrollToEnd(proxy) }
+            .onGeometryChange(for: CGRect.self) { proxy in
+                // Only the part of the chat between the title bar and the
+                // composer: scrolling the composer or a card above it is not
+                // the reader scrolling the chat.
+                let frame = proxy.frame(in: .global)
+                let insets = proxy.safeAreaInsets
+                return CGRect(x: frame.minX, y: frame.minY + insets.top, width: frame.width,
+                              height: max(frame.height - insets.top - insets.bottom, 0))
+            } action: { ChatScrollInput.shared.chatFrame = $0 }
             .onChange(of: chat.transcript) { old, new in
                 // Sending a message always brings the chat back to its end.
-                if new.items.count > old.items.count, case .user = new.items.last?.content { followsLatest = true }
-                if followsLatest, !model.showsFind { scrollToEnd(proxy) }
+                if new.items.count > old.items.count, case .user = new.items.last?.content { follow.jumpToLatest() }
+                if follow.transcriptChanged(readerScrolling: ChatScrollInput.shared.isActive), !model.showsFind {
+                    scrollToEnd(proxy)
+                }
             }
             .onChange(of: isReplyStreaming) { _, _ in
-                if followsLatest, !model.showsFind { scrollToEnd(proxy) }
+                if follow.follows, !model.showsFind { scrollToEnd(proxy) }
             }
             .onChange(of: model.selectedSession) { _, _ in
-                followsLatest = true
+                follow.jumpToLatest()
                 scrollToEnd(proxy)
             }
             .onChange(of: currentMatch) { _, match in
                 guard let match else { return }
-                followsLatest = false
+                follow.letGo()
                 withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(match, anchor: .center) }
             }
         }
@@ -734,6 +750,7 @@ private struct ChatView: View {
                     }
                 }
             }
+            TerminalToolbarButton(terminal: model.terminal)
             if !model.showsPreview {
                 ToolbarCluster {
                     ClusterButton(systemImage: "globe", help: "Show localhost preview (⇧⌘P)") { model.togglePreview() }
@@ -752,17 +769,21 @@ private struct ChatView: View {
     private static let eagerTail = 20
 
     /// Rows below the fold get their real height only once laid out, so one
-    /// jump can land short of the end; a second one after layout reaches it.
+    /// jump can land short of the end. On macOS 15 the scroll geometry sees
+    /// that and scrolls again (`ChatFollow.update`) until the end is reached;
+    /// before it, a second jump after layout is the best there is.
     private func scrollToEnd(_ proxy: ScrollViewProxy) {
         proxy.scrollTo(bottomAnchor, anchor: .bottom)
-        Task { @MainActor in
-            await Task.yield()
-            if followsLatest { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+        if #unavailable(macOS 15) {
+            Task { @MainActor in
+                await Task.yield()
+                if follow.follows { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+            }
         }
     }
 
     private func jumpToLatest(_ proxy: ScrollViewProxy) {
-        followsLatest = true
+        follow.jumpToLatest()
         scrollToEnd(proxy)
     }
 
@@ -838,55 +859,36 @@ private struct LatestButton: View {
 }
 
 private extension View {
-    /// Sets `follows` the way chat apps do: any scroll up by the reader lets
-    /// go of the end at once, scrolling back down to it holds on again. While
-    /// held, the chat stays anchored to its end as output grows; once let go,
-    /// output growing below never moves what the reader is looking at.
+    /// Drives `follow` the way chat apps do: any scroll up by the reader lets
+    /// go of the end at once, reaching the end again holds on. While held, the
+    /// chat stays anchored to its end as output grows; once let go, output
+    /// growing below never moves what the reader is looking at. The decisions
+    /// are `ChatFollow`'s; this only measures and reports.
     @ViewBuilder
-    func followsLatest(_ follows: Binding<Bool>) -> some View {
+    func followsLatest(_ follow: Binding<ChatFollow>, scrollToEnd: @escaping () -> Void) -> some View {
         if #available(macOS 15, *) {
-            defaultScrollAnchor(follows.wrappedValue ? .bottom : .top, for: .sizeChanges)
-            .onScrollGeometryChange(for: ScrollFollowGeometry.self) { geometry in
-                ScrollFollowGeometry(
+            defaultScrollAnchor(follow.wrappedValue.follows ? .bottom : .top, for: .sizeChanges)
+            .onScrollGeometryChange(for: ChatFollow.Geometry.self) { geometry in
+                ChatFollow.Geometry(
                     offset: geometry.contentOffset.y,
                     containerHeight: geometry.containerSize.height,
                     distanceFromBottom: geometry.contentSize.height + geometry.contentInsets.bottom
                         - (geometry.contentOffset.y + geometry.containerSize.height),
                     canScroll: geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
                         > geometry.containerSize.height + 1)
-            } action: { old, new in
-                let input = ChatScrollInput.shared
-                input.canScroll = new.canScroll
-                let atEnd = new.distanceFromBottom <= ScrollFollowGeometry.threshold
-                input.atEnd = atEnd
-                // Being at the end always means following, however the chat
-                // got there. Requiring live input here missed scrolls whose
-                // last events landed short of the end and settled after them,
-                // which left Latest up with the chat already at its end.
-                if atEnd, !input.scrolledUpJustNow {
-                    if !follows.wrappedValue { follows.wrappedValue = true }
-                    return
-                }
-                // Only the reader lets go: output growing, rows settling, a
-                // resize or a jump to a find match move the geometry too.
-                guard input.isActive, old.containerHeight == new.containerHeight else { return }
-                if new.offset < old.offset - 0.5, follows.wrappedValue {
-                    // Dragging the scroller up.
-                    follows.wrappedValue = false
+            } action: { _, new in
+                if follow.wrappedValue.update(new, readerScrolling: ChatScrollInput.shared.isActive) {
+                    scrollToEnd()
                 }
             }
             .onScrollPhaseChange { _, phase in
                 // Momentum and the bounce at the end finish after the last
                 // input event; check once more where the scroll came to rest.
-                if phase == .idle, ChatScrollInput.shared.atEnd, !follows.wrappedValue {
-                    follows.wrappedValue = true
-                }
+                if phase == .idle { follow.wrappedValue.scrollSettled() }
             }
             .onAppear {
                 ChatScrollInput.shared.start()
-                ChatScrollInput.shared.onScrollUp = {
-                    if follows.wrappedValue, ChatScrollInput.shared.canScroll { follows.wrappedValue = false }
-                }
+                ChatScrollInput.shared.onScrollUp = { follow.wrappedValue.readerScrolledUp() }
             }
         } else {
             self
@@ -901,16 +903,12 @@ private final class ChatScrollInput {
     static let shared = ChatScrollInput()
     /// The chat's scroll view in window coordinates, top-left origin.
     var chatFrame: CGRect = .zero
-    var canScroll = false
-    /// The chat was within the follow threshold of its end at the last geometry change.
-    var atEnd = true
     var onScrollUp: () -> Void = {}
     private var lastInput = Date.distantPast
-    private var lastScrollUp = Date.distantPast
     private var monitor: Any?
 
+    /// The reader is scrolling the chat, or just was.
     var isActive: Bool { Date().timeIntervalSince(lastInput) < 0.3 }
-    var scrolledUpJustNow: Bool { Date().timeIntervalSince(lastScrollUp) < 0.15 }
 
     func start() {
         guard monitor == nil else { return }
@@ -926,20 +924,11 @@ private final class ChatScrollInput {
         guard chatFrame.contains(CGPoint(x: location.x, y: content.bounds.height - location.y)) else { return }
         lastInput = Date()
         // Positive is toward the top of the chat, with natural scrolling or without.
-        if event.type == .scrollWheel, event.scrollingDeltaY > 0 {
-            lastScrollUp = Date()
+        // Momentum continues a scroll; only the reader's own push lets go.
+        if event.type == .scrollWheel, event.scrollingDeltaY > 0, event.momentumPhase.isEmpty {
             onScrollUp()
         }
     }
-}
-
-private struct ScrollFollowGeometry: Equatable {
-    /// How close to the end still counts as following the newest message.
-    static let threshold: CGFloat = 24
-    var offset: CGFloat
-    var containerHeight: CGFloat
-    var distanceFromBottom: CGFloat
-    var canScroll: Bool
 }
 
 /// ⌘F: find in the chat. ⏎ and ⌘G go to the next match, ⇧⏎ and ⇧⌘G back, Esc closes.
