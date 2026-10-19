@@ -20,12 +20,18 @@ public struct ChatFollow: Equatable, Sendable {
         public var distanceFromBottom: Double
         /// The content is taller than the chat, so it scrolls at all.
         public var canScroll: Bool
+        /// The scroll view's content insets, under the title bar and composer.
+        public var insetTop: Double
+        public var insetBottom: Double
 
-        public init(offset: Double, containerHeight: Double, distanceFromBottom: Double, canScroll: Bool) {
+        public init(offset: Double, containerHeight: Double, distanceFromBottom: Double, canScroll: Bool,
+                    insetTop: Double = 0, insetBottom: Double = 0) {
             self.offset = offset
             self.containerHeight = containerHeight
             self.distanceFromBottom = distanceFromBottom
             self.canScroll = canScroll
+            self.insetTop = insetTop
+            self.insetBottom = insetBottom
         }
 
         public var isAtEnd: Bool { !canScroll || distanceFromBottom <= ChatFollow.threshold }

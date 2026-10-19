@@ -540,6 +540,9 @@ private struct ChatView: View {
     /// The chat keeps the newest output in view. Scrolling up hands control to
     /// the reader and shows the Latest button; scrolling back down follows again.
     @State private var follow = ChatFollow()
+    /// Real row heights for the chat's own scroller. Held, not observed:
+    /// measuring redraws only the scroller.
+    @State private var scroll = ChatScrollState()
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
@@ -567,6 +570,7 @@ private struct ChatView: View {
                     ForEach(transcript.items[..<split]) { item in
                         TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch)
                             .equatable()
+                            .reportsChatRow(item.id, to: scroll)
                             .id(item.id)
                     }
                     VStack(alignment: .leading, spacing: 18) {
@@ -574,12 +578,14 @@ private struct ChatView: View {
                             TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
                                           isStreaming: isReplyStreaming && item.id == lastId)
                                 .equatable()
+                                .reportsChatRow(item.id, to: scroll)
                                 .id(item.id)
                         }
                         // Up for the whole turn, also while a reply streams or the
                         // model plans its next step, so a live turn always says so.
                         if isReplyStreaming {
                             WorkingIndicator()
+                                .reportsChatRow(Self.workingRow, to: scroll)
                         }
                     }
                     .padding(.bottom, 2)
@@ -594,6 +600,12 @@ private struct ChatView: View {
                 .padding(.horizontal, 28)
                 .padding(.top, 20)
                 .frame(maxWidth: .infinity)
+                .background(EnclosingScrollView { [scroll] in scroll.scrollView = $0 })
+            }
+            .chatScroller(scroll) { delta, animated in
+                // Paging or dragging up is the reader leaving the end.
+                if delta < 0 { follow.letGo() }
+                scroll.scroll(by: delta, animated: animated)
             }
             // Over the chat rather than a pinned footer inside it: a pinned
             // view re-lays out its whole section on every scrolled frame.
@@ -622,7 +634,7 @@ private struct ChatView: View {
                     EmptyChat(workspace: model.workspace)
                 }
             }
-            .followsLatest($follow) { scrollToEnd(proxy) }
+            .followsLatest($follow, scroll: scroll) { scrollToEnd(proxy) }
             .onGeometryChange(for: CGRect.self) { proxy in
                 // Only the part of the chat between the title bar and the
                 // composer: scrolling the composer or a card above it is not
@@ -632,6 +644,9 @@ private struct ChatView: View {
                 return CGRect(x: frame.minX, y: frame.minY + insets.top, width: frame.width,
                               height: max(frame.height - insets.top - insets.bottom, 0))
             } action: { ChatScrollInput.shared.chatFrame = $0 }
+            .onChange(of: transcript.items.map(\.id) + (isReplyStreaming ? [Self.workingRow] : []), initial: true) { _, rows in
+                scroll.setRows(rows)
+            }
             .onChange(of: chat.transcript) { old, new in
                 // Sending a message always brings the chat back to its end.
                 if new.items.count > old.items.count, case .user = new.items.last?.content { follow.jumpToLatest() }
@@ -769,6 +784,8 @@ private struct ChatView: View {
     }
 
     private let bottomAnchor = "bottom"
+    /// The working indicator's place in the scroller's map, after every row.
+    private static let workingRow = Int.max
     /// Newest rows laid out eagerly; everything older is lazy.
     private static let eagerTail = 20
 
@@ -852,10 +869,8 @@ private struct LatestButton: View {
                 .font(.callout.weight(.medium))
                 .padding(.horizontal, 12)
                 .frame(height: 30)
-                .background(.regularMaterial, in: .capsule)
-                .overlay(Capsule().strokeBorder(.separator))
-                .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
                 .contentShape(.capsule)
+                .interactiveGlassSurface(in: .capsule)
         }
         .buttonStyle(.plain)
         .help("Scroll to the latest message")
@@ -869,18 +884,28 @@ private extension View {
     /// growing below never moves what the reader is looking at. The decisions
     /// are `ChatFollow`'s; this only measures and reports.
     @ViewBuilder
-    func followsLatest(_ follow: Binding<ChatFollow>, scrollToEnd: @escaping () -> Void) -> some View {
+    func followsLatest(_ follow: Binding<ChatFollow>, scroll: ChatScrollState,
+                       scrollToEnd: @escaping () -> Void) -> some View {
         if #available(macOS 15, *) {
             defaultScrollAnchor(follow.wrappedValue.follows ? .bottom : .top, for: .sizeChanges)
             .onScrollGeometryChange(for: ChatFollow.Geometry.self) { geometry in
-                ChatFollow.Geometry(
+                // The visible rect spans the insets under the title bar and the
+                // composer; the container size leaves them out on current macOS,
+                // which put the end of the chat `insets` short of where the
+                // scroll view stops, so Latest never hid there by itself.
+                let viewport = geometry.visibleRect.height
+                return ChatFollow.Geometry(
                     offset: geometry.contentOffset.y,
-                    containerHeight: geometry.containerSize.height,
+                    containerHeight: viewport,
                     distanceFromBottom: geometry.contentSize.height + geometry.contentInsets.bottom
-                        - (geometry.contentOffset.y + geometry.containerSize.height),
+                        - geometry.visibleRect.maxY,
                     canScroll: geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
-                        > geometry.containerSize.height + 1)
+                        > viewport + 1,
+                    insetTop: geometry.contentInsets.top,
+                    insetBottom: geometry.contentInsets.bottom)
             } action: { _, new in
+                scroll.geometryChanged(offset: new.offset, viewport: new.containerHeight,
+                                       insetTop: new.insetTop, insetBottom: new.insetBottom)
                 if follow.wrappedValue.update(new, readerScrolling: ChatScrollInput.shared.isActive) {
                     scrollToEnd()
                 }
@@ -894,6 +919,21 @@ private extension View {
                 ChatScrollInput.shared.start()
                 ChatScrollInput.shared.onScrollUp = { follow.wrappedValue.readerScrolledUp() }
             }
+        } else {
+            self
+        }
+    }
+}
+
+private extension View {
+    /// The chat's own scroller in place of the system one, whose knob follows
+    /// the lazy stack's guessed content size. It needs the scroll geometry of
+    /// macOS 15; before it the system scroller stays.
+    @ViewBuilder
+    func chatScroller(_ state: ChatScrollState, scrollBy: @escaping (Double, Bool) -> Void) -> some View {
+        if #available(macOS 15, *) {
+            scrollIndicators(.never)
+                .overlay(alignment: .topTrailing) { ChatScroller(state: state, scrollBy: scrollBy) }
         } else {
             self
         }
