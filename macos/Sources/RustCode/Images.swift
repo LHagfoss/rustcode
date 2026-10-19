@@ -63,14 +63,19 @@ struct InlineImage: View {
     var alt = ""
     var maxSize: CGFloat = 420
     @State private var preview: URL?
+    @State private var loaded: NSImage?
+    @State private var failed = false
 
     var body: some View {
         Group {
             if url.isFileURL {
-                if let image = NSImage(contentsOf: url) {
+                if let image = loaded ?? Thumbnails.cached(url, maxSize: maxSize) {
                     Image(nsImage: image).resizable().scaledToFit()
-                } else {
+                } else if failed {
                     missing
+                } else {
+                    RoundedRectangle(cornerRadius: 12).fill(.fill.quaternary)
+                        .frame(width: min(maxSize, 220), height: min(maxSize, 220) * 0.75)
                 }
             } else {
                 AsyncImage(url: url) { phase in
@@ -85,6 +90,13 @@ struct InlineImage: View {
         .help(alt.isEmpty ? url.lastPathComponent : alt)
         .accessibilityLabel(alt.isEmpty ? "Image" : alt)
         .quickLookPreview($preview)
+        // Decoded off the main thread, at the size it is shown: a chat with
+        // many screenshots read every file in full on each redraw.
+        .task(id: url) {
+            guard url.isFileURL, Thumbnails.cached(url, maxSize: maxSize) == nil else { return }
+            loaded = await Thumbnails.load(url, maxSize: maxSize)
+            failed = loaded == nil
+        }
     }
 
     private var missing: some View {
@@ -96,6 +108,58 @@ struct InlineImage: View {
     }
 }
 
+/// Images scaled down to the size the chat shows them, kept between redraws.
+@MainActor
+enum Thumbnails {
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 300
+        return cache
+    }()
+
+    private static func key(_ url: URL, _ maxSize: CGFloat) -> NSString {
+        "\(url.path)|\(Int(maxSize))" as NSString
+    }
+
+    static func cached(_ url: URL, maxSize: CGFloat) -> NSImage? {
+        cache.object(forKey: key(url, maxSize))
+    }
+
+    /// The file as an image at most `maxSize` points across, at Retina scale.
+    static func load(_ url: URL, maxSize: CGFloat) async -> NSImage? {
+        let pixels = Int(maxSize * 2)
+        let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+            return thumbnail(source, pixels: pixels)
+        }.value
+        // Formats Image I/O cannot thumbnail, such as PDF, load whole.
+        guard let image = cgImage.map({ NSImage(cgImage: $0, size: NSSize(width: CGFloat($0.width) / 2, height: CGFloat($0.height) / 2)) })
+                ?? NSImage(contentsOf: url) else { return nil }
+        cache.setObject(image, forKey: key(url, maxSize))
+        return image
+    }
+
+    /// An attachment's preview, decoded once per attachment.
+    static func chip(_ attachment: ImageAttachment) -> NSImage? {
+        let key = "chip|\(attachment.id.uuidString)" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        guard let source = CGImageSourceCreateWithData(attachment.data as CFData, nil),
+              let cgImage = thumbnail(source, pixels: 112) else { return nil }
+        let image = NSImage(cgImage: cgImage, size: NSSize(width: CGFloat(cgImage.width) / 2, height: CGFloat(cgImage.height) / 2))
+        cache.setObject(image, forKey: key)
+        return image
+    }
+
+    nonisolated private static func thumbnail(_ source: CGImageSource, pixels: Int) -> CGImage? {
+        CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: pixels,
+        ] as CFDictionary)
+    }
+}
+
 /// An image waiting in the composer, with a button to take it out.
 struct ImageChip: View {
     let image: ImageAttachment
@@ -103,7 +167,7 @@ struct ImageChip: View {
 
     var body: some View {
         Group {
-            if let picture = NSImage(data: image.data) {
+            if let picture = Thumbnails.chip(image) {
                 Image(nsImage: picture).resizable().scaledToFill()
             } else {
                 Image(systemName: "photo").foregroundStyle(.secondary)

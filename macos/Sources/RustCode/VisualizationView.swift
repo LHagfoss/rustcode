@@ -44,21 +44,14 @@ struct VisualizationView: View {
 private struct VisualizationCard: View {
     let visualization: Visualization
     let source: String
-    @State private var showsCopied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack {
                 Text(visualization.title).font(.headline)
                 Spacer(minLength: 8)
-                Button(action: copy) {
-                    Label(showsCopied ? "Copied" : "Copy", systemImage: showsCopied ? "checkmark" : "doc.on.doc")
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .font(.caption.weight(.medium))
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .help("Copy the visualization's source")
+                CopyButton(help: "Copy the visualization's source", action: copy)
+                    .padding(.trailing, -6)
             }
             if let summary = visualization.summary {
                 Text(summary).font(.callout).foregroundStyle(.secondary)
@@ -97,11 +90,6 @@ private struct VisualizationCard: View {
 
     private func copy() {
         Clipboard.copy(source)
-        showsCopied = true
-        Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            showsCopied = false
-        }
     }
 }
 

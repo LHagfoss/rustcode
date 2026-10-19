@@ -76,6 +76,40 @@ struct RustCodeApp: App {
 /// The panel open above the composer.
 enum ComposerPanel { case add, model, effort }
 
+/// The shown chat's transcript, observed apart from the rest of the model.
+/// Streamed chunks arrive far faster than the screen redraws, and each one
+/// used to re-evaluate the whole window, so a change is announced at most
+/// once per `publishInterval`; reads always see the latest transcript.
+@MainActor
+final class LiveTranscript: ObservableObject {
+    var transcript = Transcript() {
+        didSet { schedulePublish() }
+    }
+    private var publishPending = false
+
+    static let publishInterval = Duration.milliseconds(33)
+
+    private func schedulePublish() {
+        guard !publishPending else { return }
+        publishPending = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.publishInterval)
+            guard let self else { return }
+            self.publishPending = false
+            self.objectWillChange.send()
+        }
+    }
+}
+
+/// What is typed in the composer. Kept out of `DesktopModel` so a keystroke
+/// redraws the composer, not every view watching the model.
+@MainActor
+final class ComposerDraft: ObservableObject {
+    @Published var text = ""
+    /// The highlighted slash-command suggestion.
+    @Published var commandSelection = 0
+}
+
 @MainActor
 final class DesktopModel: ObservableObject {
     let updater = Updater()
@@ -101,12 +135,20 @@ final class DesktopModel: ObservableObject {
     }
     /// Slash commands the engine advertised, and the highlighted suggestion.
     @Published var commands: [SlashCommand] = []
-    @Published var commandSelection = 0
+    var commandSelection: Int {
+        get { composer.commandSelection }
+        set { if composer.commandSelection != newValue { composer.commandSelection = newValue } }
+    }
     /// A recognized slash command, shown as a chip in front of the draft.
     @Published var draftCommand: SlashCommand?
     /// The Settings section to show when the sheet opens.
     @Published var settingsSection: SettingsSection = .general
-    @Published var transcript = Transcript()
+    let chat = LiveTranscript()
+    var transcript: Transcript {
+        get { chat.transcript }
+        set { chat.transcript = newValue }
+        _modify { yield &chat.transcript }
+    }
     @Published var sessions: [SessionSummary] = []
     @Published var selectedSession: String?
     @Published var workspace: URL {
@@ -119,7 +161,16 @@ final class DesktopModel: ObservableObject {
     /// view-only: nothing in it is passed to the engine.
     let preview = PreviewController()
     @Published var showsPreview = false
-    @Published var draft = ""
+    let composer = ComposerDraft()
+    var draft: String {
+        get { composer.text }
+        set { if composer.text != newValue { composer.text = newValue } }
+    }
+    /// One value for the whole life of the model: a new one on every redraw
+    /// changed the environment of every message and redrew them all.
+    private(set) lazy var messageActions = MessageActions(
+        edit: { [weak self] in self?.edit($0) },
+        retry: { [weak self] text in Task { await self?.retry(text) } })
     @Published var showsSidebar = true
     @Published var showsSettings = false
     /// ⌘F: the find bar over the chat, its text and which match is current.
@@ -903,6 +954,8 @@ final class DesktopModel: ObservableObject {
         }
         // The turn is over, so the engine no longer waits on its requests.
         permissionQueue.removeAll { $0.sessionId == id }
+        // A thought the turn ended on stops its clock.
+        appendToTranscript(of: id) { $0.finishThinking(at: Date()) }
         if isCommand {
             finishCommand(in: id)
         } else if !stopped {
@@ -1125,7 +1178,7 @@ final class DesktopModel: ObservableObject {
             // A session open in the background keeps its transcript current.
             guard sessionId == selectedSession else {
                 if var open = openSessions[sessionId] {
-                    open.transcript.apply(SessionUpdate(notificationParams: params))
+                    open.transcript.apply(SessionUpdate(notificationParams: params), at: Date())
                     openSessions[sessionId] = open
                 }
                 return
@@ -1135,10 +1188,10 @@ final class DesktopModel: ObservableObject {
             case .title: await refreshSessions()
             case .configOptions(let options): applyConfig(options)
             case .contextReport(_, let context):
-                transcript.apply(update)
+                transcript.apply(update, at: Date())
                 contextSheet = context
             default:
-                if loadingSession == sessionId { replay.apply(update) } else { transcript.apply(update) }
+                if loadingSession == sessionId { replay.apply(update) } else { transcript.apply(update, at: Date()) }
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
             if let request = PermissionRequest(rpcId: id, params: params) {
