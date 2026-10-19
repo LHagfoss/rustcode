@@ -790,6 +790,12 @@ fn chatgpt_stream_payload(
         "input": input,
     });
     apply_responses_generation_options(&mut payload, profile, thinking_mode);
+    // Without a summary the plan streams no reasoning text at all, so the
+    // transcript showed no thinking even when a turn reasoned for thousands
+    // of tokens.
+    if let Some(reasoning) = payload.get_mut("reasoning").and_then(|r| r.as_object_mut()) {
+        reasoning.insert("summary".into(), serde_json::json!("auto"));
+    }
     payload
 }
 
@@ -844,6 +850,15 @@ fn normalize_responses_event(
         }
         "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
             delta.map(|delta| serde_json::json!({"choices": [{"delta": {"reasoning": delta}}]}))
+        }
+        // Summary parts arrive back to back; keep them as separate paragraphs.
+        "response.reasoning_summary_part.added"
+            if value
+                .get("summary_index")
+                .and_then(|v| v.as_u64())
+                .is_some_and(|index| index > 0) =>
+        {
+            Some(serde_json::json!({"choices": [{"delta": {"reasoning": "\n\n"}}]}))
         }
         "response.output_item.added" => {
             let item = value.get("item")?;
@@ -2774,6 +2789,7 @@ mod tests {
         assert_eq!(payload["stream"], true);
         assert_eq!(payload["store"], false);
         assert_eq!(payload["reasoning"]["effort"], "high");
+        assert_eq!(payload["reasoning"]["summary"], "auto");
         for unsupported in [
             "max_output_tokens",
             "temperature",
@@ -2880,6 +2896,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(text["choices"][0]["delta"]["content"], "hello");
+
+        let first_part = serde_json::json!({
+            "type": "response.reasoning_summary_part.added",
+            "summary_index": 0
+        });
+        assert!(
+            normalize_responses_event(&first_part, &mut call_ids, &mut argument_deltas).is_none()
+        );
+        let next_part = serde_json::json!({
+            "type": "response.reasoning_summary_part.added",
+            "summary_index": 1
+        });
+        let separator =
+            normalize_responses_event(&next_part, &mut call_ids, &mut argument_deltas).unwrap();
+        assert_eq!(separator["choices"][0]["delta"]["reasoning"], "\n\n");
 
         let added = normalize_responses_event(
             &serde_json::json!({
