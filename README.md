@@ -147,6 +147,12 @@ Running `rustcode` on Apple's on-device model needs
 It is not recommended for real work: the system model has roughly a 2k context
 window.
 
+## Contributing
+
+Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to
+build, test and name your PR, and [SECURITY.md](SECURITY.md) for reporting
+security problems.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
