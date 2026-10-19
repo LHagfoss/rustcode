@@ -145,6 +145,31 @@ The server exposes `web_search` and `web_fetch`. Search sends the query to
 Parallel; fetching sends the requested URLs. To remove the saved server, run
 `rustcode mcp remove parallel-search`.
 
+### Local code lookup with Sem
+
+[Sem](https://github.com/Ataraxy-Labs/sem) provides symbol lookup, source search,
+structural diffs and impact analysis over stdio MCP. Install Sem using its
+upstream instructions and ensure `sem --version` works in Rustcode's environment.
+
+```sh
+rustcode mcp add --env SEM_REPO=/absolute/path/to/checkout sem -- sem mcp
+rustcode mcp list
+```
+
+Replace the path with an existing Git checkout on the machine running Rustcode.
+Start a new session without a project `mcp_servers` override, then ask:
+
+> Use Sem to find an existing function by name and show its implementation and
+> callers. Do not edit the code or run validation commands.
+
+`sem_find` retrieves symbols and context; `sem_grep` searches source text.
+The configured path is fixed, not automatically changed when you switch
+workspaces. Remove it with `rustcode mcp remove sem` before configuring another
+checkout. The first lookup may build a local index. The full server also exposes
+validation tools that can execute commands: `SEM_REPO` selects a repository, not
+a sandbox. Use trusted checkouts and appropriate process permissions. Source
+returned by tools becomes part of the context sent to your configured model.
+
 ## Remote gateway address
 
 `/remote` starts the [remote gateway](remote.md) when none is running. Where
