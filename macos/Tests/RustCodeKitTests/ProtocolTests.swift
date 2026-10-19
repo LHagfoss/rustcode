@@ -129,6 +129,22 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(SlashCommand.invoked(by: "explain /model", in: commands))
     }
 
+    func testTerminalIsAnAppCommandListedWithTheEngines() {
+        let engine = [SlashCommand(name: "/status", description: "Session status")]
+        let listed = SlashCommand.withAppCommands(engine)
+        XCTAssertEqual(listed.map(\.name), ["/status", "/terminal"])
+        XCTAssertEqual(SlashCommand.suggestions(for: "/term", in: listed).map(\.action), [.terminal])
+        XCTAssertEqual(SlashCommand.withAppCommands([]).map(\.name), ["/terminal"], "listed with no engine")
+        // An engine command of the same name is not shadowed.
+        let clash = [SlashCommand(name: "/terminal", description: "engine")]
+        XCTAssertEqual(SlashCommand.withAppCommands(clash), clash)
+
+        XCTAssertEqual(SlashCommand.appCommand(chip: nil, draft: " /terminal ")?.action, .terminal)
+        XCTAssertEqual(SlashCommand.appCommand(chip: listed[1], draft: "")?.action, .terminal)
+        XCTAssertNil(SlashCommand.appCommand(chip: engine[0], draft: ""))
+        XCTAssertNil(SlashCommand.appCommand(chip: nil, draft: "open /terminal"))
+    }
+
     func testConfigOptionsCarryModelAndEffort() {
         let options = ModelOptions(configOptions: [
             ["id": "model", "currentValue": "a", "options": [["value": "a", "name": "A"]]],

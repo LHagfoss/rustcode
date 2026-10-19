@@ -430,6 +430,9 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
     public enum Action: String, Sendable {
         case execute, newSession = "new_session", modelPicker = "model_picker"
         case sessionPicker = "session_picker", copyResponse = "copy_response"
+        /// Opens the workspace terminal. The app's own; the engine never
+        /// advertises or sees it.
+        case terminal
     }
 
     /// With the leading slash, as typed.
@@ -465,6 +468,25 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
         let prefixed = commands.filter { $0.name.lowercased().hasPrefix(typed) }
         let others = commands.filter { !prefixed.contains($0) && $0.name.lowercased().contains(typed.dropFirst()) && typed.count > 1 }
         return prefixed + others
+    }
+
+    /// Commands the app adds to the engine's, answered without the engine.
+    public static let appCommands = [
+        SlashCommand(name: "/terminal", description: "Open a terminal in this project (⇧⌘T)", action: .terminal),
+    ]
+
+    /// The engine's commands plus the app's; an engine command of the same
+    /// name wins.
+    public static func withAppCommands(_ engine: [SlashCommand]) -> [SlashCommand] {
+        let names = Set(engine.map { $0.name.lowercased() })
+        return engine + appCommands.filter { !names.contains($0.name.lowercased()) }
+    }
+
+    /// The app command a draft (or its command chip) invokes, if any. These
+    /// work with no engine running.
+    public static func appCommand(chip: SlashCommand?, draft: String) -> SlashCommand? {
+        if let chip { return appCommands.contains(chip) ? chip : nil }
+        return invoked(by: draft, in: appCommands)
     }
 
     /// The advertised command a draft invokes, if it is one.
