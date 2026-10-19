@@ -25,6 +25,34 @@ final class ChatFollowTests: XCTestCase {
         XCTAssertTrue(follow.showsLatest)
     }
 
+    /// Streaming: a token lands between the reader's scroll events, so the
+    /// geometry changes without moving while the chat is still near its end.
+    func testOutputBetweenScrollEventsDoesNotPullTheReaderBack() {
+        var follow = atEnd()
+        follow.readerScrolledUp()
+        _ = follow.update(at(990, distance: 10), readerScrolling: true)
+        // The reply grew; the offset stayed put.
+        XCTAssertFalse(follow.update(at(990, distance: 16), readerScrolling: true))
+        XCTAssertFalse(follow.follows)
+        XCTAssertFalse(follow.transcriptChanged(readerScrolling: true))
+        // Still anchored to the end, the growth even moves the chat down.
+        _ = follow.update(at(996, distance: 4), readerScrolling: true, towardEnd: false)
+        XCTAssertFalse(follow.follows)
+        _ = follow.update(at(960, distance: 50), readerScrolling: true)
+        XCTAssertFalse(follow.follows)
+        XCTAssertTrue(follow.showsLatest)
+    }
+
+    func testTheBounceAtTheEndKeepsFollowing() {
+        var follow = atEnd()
+        // Momentum down overshoots the end and springs back up.
+        _ = follow.update(at(1_030, distance: -30), readerScrolling: true, towardEnd: true)
+        _ = follow.update(at(1_010, distance: -10), readerScrolling: true, towardEnd: true)
+        XCTAssertTrue(follow.follows)
+        _ = follow.update(at(1_000, distance: 0), readerScrolling: true, towardEnd: true)
+        XCTAssertTrue(follow.follows)
+    }
+
     func testDraggingTheScrollerUpLetsGo() {
         var follow = atEnd()
         // A scroller drag sends no wheel event, only the geometry moving up.
@@ -40,9 +68,9 @@ final class ChatFollowTests: XCTestCase {
         _ = follow.update(at(400, distance: 600), readerScrolling: true)
         XCTAssertTrue(follow.showsLatest)
         // Down again; the last input lands short and momentum settles the rest.
-        _ = follow.update(at(960, distance: 40), readerScrolling: true)
+        _ = follow.update(at(960, distance: 40), readerScrolling: true, towardEnd: true)
         XCTAssertTrue(follow.showsLatest)
-        _ = follow.update(at(990, distance: 10), readerScrolling: true)
+        _ = follow.update(at(990, distance: 10), readerScrolling: true, towardEnd: true)
         XCTAssertTrue(follow.follows)
         XCTAssertFalse(follow.showsLatest)
     }

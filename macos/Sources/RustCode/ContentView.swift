@@ -906,7 +906,8 @@ private extension View {
             } action: { _, new in
                 scroll.geometryChanged(offset: new.offset, viewport: new.containerHeight,
                                        insetTop: new.insetTop, insetBottom: new.insetBottom)
-                if follow.wrappedValue.update(new, readerScrolling: ChatScrollInput.shared.isActive) {
+                if follow.wrappedValue.update(new, readerScrolling: ChatScrollInput.shared.isActive,
+                                              towardEnd: ChatScrollInput.shared.isTowardEnd) {
                     scrollToEnd()
                 }
             }
@@ -953,6 +954,8 @@ private final class ChatScrollInput {
 
     /// The reader is scrolling the chat, or just was.
     var isActive: Bool { Date().timeIntervalSince(lastInput) < 0.3 }
+    /// The reader's latest scroll or scroller drag went down the chat.
+    private(set) var isTowardEnd = false
 
     func start() {
         guard monitor == nil else { return }
@@ -967,6 +970,13 @@ private final class ChatScrollInput {
         let location = event.locationInWindow
         guard chatFrame.contains(CGPoint(x: location.x, y: content.bounds.height - location.y)) else { return }
         lastInput = Date()
+        // Wheel deltas are positive toward the top; a scroller drag moves its
+        // knob, so down is toward the end.
+        switch event.type {
+        case .scrollWheel where event.scrollingDeltaY != 0: isTowardEnd = event.scrollingDeltaY < 0
+        case .leftMouseDragged where event.deltaY != 0: isTowardEnd = event.deltaY > 0
+        default: break
+        }
         // Positive is toward the top of the chat, with natural scrolling or without.
         // Momentum continues a scroll; only the reader's own push lets go.
         if event.type == .scrollWheel, event.scrollingDeltaY > 0, event.momentumPhase.isEmpty {
