@@ -1,3 +1,10 @@
+## [v0.79.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.79.1) - 2026-10-19
+
+### Fixes
+- **macOS:** keep long chats smooth — typing, scrolling and streaming no longer redraw the whole window; rendered Markdown, code and images are cached; streamed text fades in; the copy button no longer jumps; **Latest** scrolls to the true bottom in one press; thinking blocks show live and fold to "Thought for Ns" (#2132)
+- **Engine:** stream ChatGPT reasoning summaries so thinking blocks appear in the TUI, macOS and iOS (#2131)
+- **Engine:** switching a long, image-heavy session to a text-only model no longer stalls for minutes re-describing every past image, and cancelled analyses are no longer cached (#2130)
+- **Install:** validate checksums without awk regex intervals (#2129)
 ## [v0.79.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.79.0) - 2026-10-18
 
 ### Features
