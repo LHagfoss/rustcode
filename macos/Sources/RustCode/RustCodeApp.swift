@@ -227,7 +227,13 @@ final class DesktopModel: ObservableObject {
     var runningSessions: Set<String> { turnActivity.sessions }
     /// The shown chat has a turn running. A draft never does.
     /// The shown chat is running a turn or a host command; a new message queues.
-    var busy: Bool { selectedSession.map { runningSessions.contains($0) || runningCommands[$0] != nil } ?? false }
+    var busy: Bool {
+        startingChat || (selectedSession.map { runningSessions.contains($0) || runningCommands[$0] != nil } ?? false)
+    }
+    /// The first message of a new chat is on its way: the chat is being
+    /// created, so it has no turn yet, but a message sent now must queue
+    /// behind that one instead of running beside it.
+    @Published private(set) var startingChat = false
     /// The shown chat is running a model turn, which the chat shows as Working.
     var isTurnRunning: Bool { selectedSession.map(runningSessions.contains) ?? false }
     @Published var error: String?
@@ -870,18 +876,32 @@ final class DesktopModel: ObservableObject {
     /// A message written while a turn runs. It waits here and is sent when
     /// the chat's turn ends, as the iOS app queues them.
     struct QueuedPrompt: Identifiable, Equatable {
-        let id = UUID()
+        var id = UUID()
         let sessionId: String
         /// What was typed, for the preview and for editing it again.
         let typed: String
         let text: String
         let images: [ImageAttachment]
+
+        func moved(to session: String) -> QueuedPrompt {
+            QueuedPrompt(id: id, sessionId: session, typed: typed, text: text, images: images)
+        }
     }
 
     @Published var queuedPrompts: [QueuedPrompt] = []
 
     /// The selected chat's queued messages, oldest first.
-    var selectedQueue: [QueuedPrompt] { queuedPrompts.filter { $0.sessionId == selectedSession } }
+    var selectedQueue: [QueuedPrompt] {
+        queuedPrompts.filter { $0.sessionId == selectedSession || (startingChat && $0.sessionId == Self.newChatQueue) }
+    }
+
+    /// The queue of a chat still being created, before it has an id.
+    static let newChatQueue = ""
+
+    /// Messages queued while a chat was created move to it once it has an id.
+    static func adoptQueued(_ queue: [QueuedPrompt], into session: String) -> [QueuedPrompt] {
+        queue.map { $0.sessionId == newChatQueue ? $0.moved(to: session) : $0 }
+    }
 
     func removeQueued(_ prompt: QueuedPrompt) {
         queuedPrompts.removeAll { $0.id == prompt.id }
@@ -948,7 +968,7 @@ final class DesktopModel: ObservableObject {
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
         let sentImages = images
         if busy {
-            guard let id = selectedSession else { return }
+            guard let id = startingChat ? Self.newChatQueue : selectedSession else { return }
             queuedPrompts.append(QueuedPrompt(sessionId: id, typed: typed, text: text, images: sentImages))
             draft = ""
             attachments = []
@@ -959,14 +979,23 @@ final class DesktopModel: ObservableObject {
         attachments = []
         images = []
         let created = selectedSession == nil
-        guard let id = selectedSession == nil ? await createSession() : selectedSession else {
-            draft = typed
-            images = sentImages
+        // Until the new chat's turn starts, ⏎ and ⌘⏎ queue behind this message.
+        if created { startingChat = true }
+        guard let id = created ? await createSession() : selectedSession else {
+            startingChat = false
+            // Nothing was sent: what was queued behind it goes back too.
+            let queued = queuedPrompts.filter { $0.sessionId == Self.newChatQueue }
+            queuedPrompts.removeAll { $0.sessionId == Self.newChatQueue }
+            draft = ([typed] + queued.map(\.typed)).joined(separator: "\n\n")
+            images = sentImages + queued.flatMap(\.images)
             return
         }
         if created {
             startedSessions[id] = .started(id: id, cwd: workspace.path, prompt: typed, model: selectedModel)
             await refreshSessions()
+            queuedPrompts = Self.adoptQueued(queuedPrompts, into: id)
+            // `run` marks the turn before it waits, so busy never drops between.
+            startingChat = false
         }
         await run(QueuedPrompt(sessionId: id, typed: typed, text: text, images: sentImages))
     }
