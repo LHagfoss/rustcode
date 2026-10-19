@@ -4784,3 +4784,49 @@ fn visualization_hint_needs_a_rendering_frontend_and_a_root_prompt() {
         );
     }
 }
+
+#[test]
+fn localhost_preview_is_offered_only_with_a_client_preview() {
+    let has_preview = |schemas: &[serde_json::Value]| {
+        schemas
+            .iter()
+            .any(|tool| tool["function"]["name"] == crate::preview::PREVIEW_TOOL_NAME)
+    };
+    let regular = ToolSchemaPolicy::root(false);
+    assert!(!has_preview(
+        &native_tools_schema_for_context(regular, &[]).0
+    ));
+    assert!(!has_preview(&native_tools_schema(true)));
+    assert!(has_preview(
+        &native_tools_schema_for_context(regular.with_preview_tool(), &[]).0
+    ));
+    // Plan mode and subagents never drive the user's preview.
+    for policy in [
+        ToolSchemaPolicy::read_only_inspection(),
+        ToolSchemaPolicy::subagent(),
+        ToolSchemaPolicy::subagent_with_delegation(),
+    ] {
+        assert!(!policy.with_preview_tool().include_preview_tool);
+        assert!(!has_preview(
+            &native_tools_schema_for_context(policy.with_preview_tool(), &[]).0
+        ));
+    }
+    // The shared system prompt never names the tool; sessions that have it
+    // get the separate hint.
+    for protocol in [
+        crate::config::ToolProtocol::Json,
+        crate::config::ToolProtocol::Native,
+    ] {
+        let prompt = tool_system_prompt_for_policy(
+            regular.with_preview_tool(),
+            protocol,
+            crate::config::AgentMode::Build,
+        );
+        assert!(!prompt.contains(crate::preview::PREVIEW_TOOL_NAME));
+    }
+    let mut prompt = String::new();
+    super::schema::append_preview_hint(&mut prompt, regular);
+    assert!(prompt.is_empty());
+    super::schema::append_preview_hint(&mut prompt, regular.with_preview_tool());
+    assert!(prompt.contains("localhost_preview"));
+}

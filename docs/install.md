@@ -108,8 +108,12 @@ a browser. Enter `http://localhost:PORT`, `127.0.0.1` or `[::1]` (a bare port
 such as `5173` means localhost); other hosts are refused with an offer to open
 them in the browser, and links to other sites open there too. Back, forward,
 reload (⌘R) and Open in Browser are in its toolbar, an unreachable server shows
-Retry, and the last URL is remembered per project. The preview is view-only:
-the agent cannot see or control the page.
+Retry, and the last URL is remembered per project. Showing a page gives the
+agent nothing: it can inspect, screenshot or drive the preview with the
+`localhost_preview` tool only after you choose Allow for This Chat in the
+panel's prompt, only on the approved localhost origin, and only until you click
+the Agent button in the preview's toolbar to revoke it, switch project or
+restart the engine. Details and limits are in [docs/preview.md](preview.md).
 
 For your own commands, open the terminal with ⇧⌘T (View > Show Terminal, the
 terminal button in the chat's title bar, or `/terminal` in the composer, which

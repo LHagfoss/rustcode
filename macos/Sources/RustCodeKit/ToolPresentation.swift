@@ -75,6 +75,7 @@ public enum ToolPresentation {
         "remember": "Remember",
         "recall_memory": "Recall",
         "forget_memory": "Forget",
+        "localhost_preview": "Preview",
         "git_status": "Git status",
         "git_diff": "Git diff",
         "git_add": "Git add",

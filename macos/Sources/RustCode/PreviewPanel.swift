@@ -14,11 +14,13 @@ struct PreviewPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
+            if let approval = preview.agentApproval { agentApprovalBar(approval) }
             if let error = preview.addressError { addressErrorBar(error) }
-            ZStack {
+            ZStack(alignment: .bottom) {
                 PreviewWebView(controller: preview)
                     .id(preview.webViewGeneration)
                 overlay
+                if let activity = preview.agentActivity { agentActivityBadge(activity) }
             }
         }
         .background(Color.chatBackground)
@@ -56,6 +58,18 @@ struct PreviewPanel: View {
             .padding(.horizontal, 12)
             .frame(height: 28)
             .glassSurface(in: .capsule)
+            if !preview.agentAccess.isEmpty {
+                Button { preview.revokeAgentAccess() } label: {
+                    Label("Agent", systemImage: "hand.raised.slash")
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .glassSurface(in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .help("The agent can use this preview. Click to revoke its access.")
+                .accessibilityLabel("Revoke agent access to the preview")
+            }
             ToolbarCluster {
                 ClusterButton(systemImage: "safari", help: "Open in browser") { preview.openInBrowser() }
                 ClusterButton(systemImage: "xmark", help: "Hide preview (⇧⌘P)", action: close)
@@ -65,6 +79,47 @@ struct PreviewPanel: View {
         .frame(height: 28)
         .padding(.top, 6)
         .padding(.bottom, 8)
+    }
+
+    /// The agent asked to use the preview: allowed only by the user, for one chat.
+    private func agentApprovalBar(_ approval: PreviewAgentApproval) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "hand.raised.fill").foregroundStyle(Color.attention)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Let the agent use this preview?").font(.callout.weight(.semibold))
+                Text("It could read and act on pages at \(approval.origin.description) for \(agentChatTitle(approval.sessionId)), until you revoke it or switch project. You see everything it does here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Deny") { preview.answerAgentApproval(allow: false) }
+                .buttonStyle(PillButtonStyle())
+            Button("Allow for This Chat") { preview.answerAgentApproval(allow: true) }
+                .buttonStyle(PillButtonStyle(prominent: true))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.fill.quaternary)
+    }
+
+    private func agentChatTitle(_ session: String) -> String {
+        preview.chatTitle(session).map { "“\($0)”" } ?? "this chat"
+    }
+
+    private func agentActivityBadge(_ activity: String) -> some View {
+        Label(activity, systemImage: "sparkles")
+            .font(.caption.weight(.medium))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .glassSurface(in: .capsule)
+            .padding(.bottom, 12)
+            .padding(.horizontal, 16)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+            .accessibilityLabel("Agent: \(activity)")
     }
 
     private func addressErrorBar(_ error: PreviewURLError) -> some View {
@@ -88,7 +143,7 @@ struct PreviewPanel: View {
         case .idle:
             message(systemImage: "globe", title: "Preview a local app",
                     detail: "Enter the URL of the project's running dev server above, such as http://localhost:3000.") {
-                Text("Only you see this page. The agent cannot view or use it.")
+                Text("The agent can use this page only after you allow it.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

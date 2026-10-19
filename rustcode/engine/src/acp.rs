@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod edit_diff;
 mod permissions;
+mod preview;
 mod prompt;
 mod questions;
 mod session;
@@ -74,7 +75,10 @@ fn server_capabilities() -> AgentCapabilities {
         )
         .meta(serde_json::Map::from_iter([(
             "rustcode".to_owned(),
-            serde_json::json!({ "visualizations": VISUALIZATIONS_CAPABILITY_VERSION }),
+            serde_json::json!({
+                "visualizations": VISUALIZATIONS_CAPABILITY_VERSION,
+                "preview": crate::preview::PREVIEW_CAPABILITY_VERSION,
+            }),
         )]))
 }
 
@@ -408,6 +412,11 @@ async fn acp_load_session(
         }
         let mut state = build_loaded_app_state(&session_id, &cwd, history.clone());
         state.renders_visualizations = server.renders_visualizations.load(Ordering::Relaxed);
+        state.preview_client = preview::preview_client_for(
+            server.client_has_preview.load(Ordering::Relaxed),
+            connection,
+            &session_id,
+        );
         let config_options = build_session_config_options(&state);
         let loaded_usage = usage::usage_update(&state);
         let state = Arc::new(Mutex::new(state));
@@ -677,6 +686,9 @@ struct AcpServer {
     /// Set from the client's initialize capabilities; read when each session
     /// state is created so its prompt never changes mid-session.
     renders_visualizations: Arc<AtomicBool>,
+    /// The client advertised `_meta.rustcode.preview` (#2138), so its
+    /// sessions get `localhost_preview`.
+    client_has_preview: Arc<AtomicBool>,
 }
 
 impl AcpServer {
@@ -706,6 +718,7 @@ impl AcpServer {
             auto_approve,
             task_routes,
             renders_visualizations: Arc::new(AtomicBool::new(false)),
+            client_has_preview: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -740,6 +753,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     client_renders_visualizations(&request.client_capabilities),
                     Ordering::Relaxed,
                 );
+                server.client_has_preview.store(
+                    crate::preview::client_meta_supports_preview(
+                        request.client_capabilities.meta.as_ref(),
+                    ),
+                    Ordering::Relaxed,
+                );
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(server_capabilities()),
@@ -756,6 +775,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     state.renders_visualizations =
                         server.renders_visualizations.load(Ordering::Relaxed);
                     let session_id = state.active_session_id.clone();
+                    state.preview_client = preview::preview_client_for(
+                        server.client_has_preview.load(Ordering::Relaxed),
+                        &_connection,
+                        &session_id,
+                    );
                     state.raw_cli_mode = false;
                     state.task_working_directory = Some(cwd.clone());
                     // ACP's requested cwd is both the task's initial location
@@ -1233,6 +1257,7 @@ mod tests {
             auto_approve: false,
             task_routes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             renders_visualizations: Arc::new(AtomicBool::new(false)),
+            client_has_preview: Arc::new(AtomicBool::new(false)),
         };
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));

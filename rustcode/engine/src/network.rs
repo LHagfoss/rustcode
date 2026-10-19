@@ -1480,6 +1480,9 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         if session_title_tool_available {
             schema_policy = schema_policy.with_session_title_tool();
         }
+        if s.preview_client.is_some() && !compact_tool_prompt {
+            schema_policy = schema_policy.with_preview_tool();
+        }
         // The session-title tool only changes the native `tools` field; its
         // guidance goes in the context tail so the system prompt (and the
         // cached prefix) stays identical between the first and later turns.
@@ -1503,6 +1506,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             schema_policy,
             s.renders_visualizations,
         );
+        crate::tools::schema::append_preview_hint(&mut system_prompt, schema_policy);
         // Built only from the MCP registry, config and startup failures, so
         // the cached prompt prefix holds until the server set changes.
         crate::tools::append_mcp_catalogue(&mut system_prompt, schema_policy);

@@ -1381,6 +1381,14 @@ async fn execute_tool_batch_validated(
                     None,
                     std::time::Duration::ZERO,
                 )
+            } else if name_clone == crate::preview::PREVIEW_TOOL_NAME {
+                // Forwarded to the client's preview, which asks the user
+                // before the first action and bounds its own waits.
+                (
+                    crate::preview::execute(&state_clone, &cancel_token_clone, &args_clone).await,
+                    None,
+                    std::time::Duration::ZERO,
+                )
             } else if crate::tools::is_agent_tool(&name_clone) {
                 (
                     handle_agent_tool(

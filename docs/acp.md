@@ -79,6 +79,17 @@ free text by selecting any answer option and adding `_meta.rustcode.answer`:
 `{"options": ["A", "B"]}` or `{"text": "..."}`. The engine validates that answer
 like a terminal answer; one it cannot take cancels the question.
 
+## Localhost preview
+
+A client that sends `clientCapabilities._meta.rustcode.preview` (version 1) at
+initialize gets the `localhost_preview` tool in its sessions; no other client
+sees it. Each call is sent to the client as the extension request
+`_rustcode/preview` with `{"sessionId", "operation": {"action", …}}`, and the
+client answers `{"ok": true, …}` or `{"ok": false, "error": {"code",
+"message"}}`. The engine reports success only for `"ok": true` and bounds every
+call with a timeout and the turn's cancellation. The protocol, the client's
+approval and origin rules, and the limits are in [preview.md](preview.md).
+
 ## Failure behavior
 
 Per-session completion delivery is bounded so a disconnected or stalled client

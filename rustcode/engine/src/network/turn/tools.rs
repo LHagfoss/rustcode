@@ -180,6 +180,12 @@ fn append_finalized_tool_batch(
     result_messages: Vec<ChatMessage>,
 ) {
     state.history.extend(result_messages);
+    let screenshots = std::mem::take(&mut state.pending_preview_images);
+    if state.active_session_id == turn_session_id
+        && let Some(text) = crate::preview::screenshot_attachment_message(&screenshots)
+    {
+        state.history.push(ChatMessage::new("user", text));
+    }
     append_pending_steers(state, turn_session_id);
 }
 

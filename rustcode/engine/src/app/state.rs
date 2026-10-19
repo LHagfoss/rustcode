@@ -262,6 +262,13 @@ pub struct AppState {
     /// Set once when the frontend creates the session state, so the system
     /// prompt (and its cached prefix) stays the same for the whole session.
     pub renders_visualizations: bool,
+    /// The client's localhost preview, when it advertised one (#2138). Set
+    /// once with the session state, so the tool menu and system prompt stay
+    /// the same for the whole session. `None` hides `localhost_preview`.
+    pub preview_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
+    /// Screenshots taken by the current tool batch, attached to the
+    /// conversation right after its results.
+    pub pending_preview_images: Vec<std::path::PathBuf>,
 
     pub show_mcp_config: bool,
     pub mcp_picker_index: usize,
@@ -1561,6 +1568,8 @@ impl AppState {
             stats_usage_history: std::collections::BTreeMap::new(),
             session_title_tool_available: false,
             renders_visualizations: false,
+            preview_client: None,
+            pending_preview_images: Vec::new(),
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,
