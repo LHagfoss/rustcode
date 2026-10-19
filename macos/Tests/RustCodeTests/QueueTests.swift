@@ -14,5 +14,4 @@ final class QueueTests: XCTestCase {
         XCTAssertEqual(adopted[0].id, starting.id)
         XCTAssertEqual(adopted[0].typed, "second")
     }
-
 }
