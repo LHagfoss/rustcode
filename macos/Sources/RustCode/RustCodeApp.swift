@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import RustCodeKit
+import RustCodeTerminal
 
 @main
 struct RustCodeApp: App {
@@ -892,6 +893,18 @@ final class DesktopModel: ObservableObject {
         images = prompt.images
     }
 
+    /// Type a `!` command into the open project's terminal, showing the
+    /// panel so its output is in view. The draft stays when it cannot run.
+    private func runInTerminal(_ command: String) {
+        switch terminal.run(command) {
+        case .success(let session):
+            draft = ""
+            confirm("Ran in \(session.displayTitle)", systemImage: "terminal")
+        case .failure(let failure):
+            error = failure.description
+        }
+    }
+
     func submit() async {
         // App commands such as /terminal work without the engine.
         if let command = SlashCommand.appCommand(chip: draftCommand, draft: draft) {
@@ -899,6 +912,20 @@ final class DesktopModel: ObservableObject {
             draft = ""
             await perform(command)
             return
+        }
+        // `! command` runs in the project's terminal, never through the
+        // agent; `!!` sends a message that starts with one `!`.
+        if draftCommand == nil, draft.hasPrefix("!") {
+            switch InlineCommand.parse(draft.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            case .command(let command):
+                runInTerminal(command)
+                return
+            case .invalid(let reason):
+                error = reason
+                return
+            case .message(let text):
+                draft = text
+            }
         }
         guard engine?.connection != nil else { return }
         if let chip = draftCommand {

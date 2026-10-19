@@ -59,6 +59,13 @@ final class TerminalController: ObservableObject {
         focusRequest += 1
     }
 
+    /// A `! command` from the composer: shown in the panel and typed into
+    /// the open project's selected terminal. Focus stays in the composer.
+    func run(_ command: String) -> Result<TerminalSession, InlineCommandError> {
+        if !isShown { withAnimation(.snappy(duration: 0.25)) { isShown = true } }
+        return manager.run(command)
+    }
+
     func hide() {
         withAnimation(.snappy(duration: 0.25)) { isShown = false }
     }
