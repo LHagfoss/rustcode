@@ -1,3 +1,11 @@
+## [v0.81.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.81.0) - 2026-10-19
+
+### Features
+- **macOS:** start a composer message with `!` to run it in the open project's terminal (`! ls`); `!!` sends a message starting with `!`, busy terminals are refused, and the agent never issues or sees these commands (#2154)
+- **macOS:** a chat's sidebar spinner stops as soon as its turn ends, no longer waiting on the session list refresh or sticking after overlapping turns (#2152)
+- **macOS:** pinning with ⌘P or a list refresh no longer leaves a stale hover that made several sidebar rows look selected; hover is fainter than selection (#2153)
+- **macOS:** a message sent while a new chat is still starting now queues behind the first instead of running at once (#2155)
+- **Docs:** contributing guide, security policy and issue templates; Parallel Search and Sem MCP setup examples (#2145, #2109, #2146)
 ## [v0.80.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.80.0) - 2026-10-19
 
 ### Features
