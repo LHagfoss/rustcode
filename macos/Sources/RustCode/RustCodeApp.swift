@@ -219,9 +219,11 @@ final class DesktopModel: ObservableObject {
     @Published var attachments: [URL] = []
     /// Images pasted, dropped or attached; sent as ACP image blocks.
     @Published var images: [ImageAttachment] = []
-    /// Chats with a prompt turn running. Each chat runs its own turns, so a
-    /// new chat is ready while another one works.
-    @Published private(set) var runningSessions: Set<String> = []
+    /// Prompt turns in flight. Each chat runs its own turns, so a new chat is
+    /// ready while another one works.
+    @Published private(set) var turnActivity = TurnActivity()
+    /// Chats with a prompt turn running, which the sidebar shows as a spinner.
+    var runningSessions: Set<String> { turnActivity.sessions }
     /// The shown chat has a turn running. A draft never does.
     /// The shown chat is running a turn or a host command; a new message queues.
     var busy: Bool { selectedSession.map { runningSessions.contains($0) || runningCommands[$0] != nil } ?? false }
@@ -328,7 +330,7 @@ final class DesktopModel: ObservableObject {
                     // A late exit of an engine replaced by a project switch
                     // must not touch the state of the one now running.
                     guard let self, let launched, self.engine === launched else { return }
-                    self.runningSessions = []
+                    self.turnActivity.reset()
                     guard !exit.requested else { return }
                     // Drop the dead engine so the next `start()` launches a
                     // new one; its waiting requests can no longer be answered.
@@ -964,15 +966,14 @@ final class DesktopModel: ObservableObject {
             let markers = prompt.images.compactMap { $0.writePreview() }.map(ImageMarkers.marker)
             let shown = ([prompt.text] + markers).filter { !$0.isEmpty }.joined(separator: "\n")
             appendToTranscript(of: id) { $0.appendUser(shown) }
-            runningSessions.insert(id)
         }
+        // Ended exactly once below however the turn ends, so the chat cannot
+        // keep spinning after its answer.
+        let turn = isCommand ? nil : turnActivity.begin(id)
         var stopped = false
         do {
             let result = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: prompt.text, images: prompt.images))
             stopped = result["stopReason"]?.stringValue == "cancelled"
-            // A command answers before the session list refreshes behind it.
-            if isCommand { finishCommand(in: id) }
-            await refreshSessions()
         } catch {
             self.error = String(describing: error)
             stopped = true
@@ -987,12 +988,13 @@ final class DesktopModel: ObservableObject {
         } else if !stopped {
             notifyFinished(id)
         }
-        // A queued message starts at once, so "Working" stays up across the
-        // hand-off instead of blinking off between the two turns.
-        guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else {
-            runningSessions.remove(id)
-            return
-        }
+        // The list refreshes behind the answer: waiting for it kept the chat
+        // spinning until the engine listed every session.
+        Task { await refreshSessions() }
+        if let turn { turnActivity.end(turn) }
+        // A queued message starts at once, with no wait in between, so
+        // "Working" stays up across the hand-off instead of blinking off.
+        guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else { return }
         removeQueued(next)
         await run(next)
     }
@@ -1144,7 +1146,7 @@ final class DesktopModel: ObservableObject {
         selectedSession = nil
         // The engine is being stopped, so its waiting requests die with it.
         permissionQueue = []
-        runningSessions = []
+        turnActivity.reset()
     }
 
     private func applyConfig(_ value: JSONValue?) {
@@ -1186,7 +1188,7 @@ final class DesktopModel: ObservableObject {
     private func handle(_ inbound: ACPInbound) async {
         switch inbound {
         case .closed(let reason):
-            runningSessions = []
+            turnActivity.reset()
             if engine != nil { error = reason }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate
             && params["update"]?["sessionUpdate"]?.stringValue == "available_commands_update":
