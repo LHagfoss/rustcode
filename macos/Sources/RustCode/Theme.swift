@@ -52,6 +52,22 @@ extension View {
         #endif
     }
 
+    /// Liquid Glass that answers the pointer, for a floating button: it
+    /// lights under the pointer and flexes when pressed. A material capsule
+    /// before macOS 26.
+    @ViewBuilder
+    func interactiveGlassSurface(in shape: some Shape) -> some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) {
+            glassEffect(.regular.interactive(), in: shape)
+        } else {
+            floatingSurface(in: shape)
+        }
+        #else
+        floatingSurface(in: shape)
+        #endif
+    }
+
     /// A card in the transcript: a quiet fill with an optional coloured hairline.
     func card(cornerRadius: CGFloat = 14, outline: Color? = nil) -> some View {
         padding(12)
