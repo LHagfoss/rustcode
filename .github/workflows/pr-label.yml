@@ -8,8 +8,11 @@ name: PR labels
 #   fix(tui): …       -> fix
 #   chore: …          -> chore
 #   feat(engine)!: …  -> feature + breaking
+#
+# pull_request_target so fork PRs get a token that can write labels. Safe here:
+# the job never checks out or runs PR code, it only reads the title.
 on:
-    pull_request:
+    pull_request_target:
         types: [opened, edited, reopened, synchronize]
 
 permissions:
