@@ -140,6 +140,19 @@ UTF-8 locale when none is set), and your shell profile runs as a login shell.
   `http://localhost:PORT` link to load it in the preview (other web links open
   in the browser), or type the address there. The preview works without the
   terminal.
+- Start a composer message with `!` to run it in the terminal instead of
+  sending it to the agent: `! ls` (or `!ls`) types `ls` into the open project's
+  selected terminal tab and presses Return, so it uses that shell's folder,
+  environment and history, and its output appears there. It runs at once, even
+  while the chat is working. A line you had half typed in that shell is cleared
+  first (⌃Y brings it back in zsh and bash). With no terminal one is opened; an
+  exited shell is started again. If a program holds the terminal (an editor, a
+  REPL, a dev server not sent to the background) the command is refused rather
+  than typed into it; open another tab or finish the program. A lone `!` and
+  commands of more than one line are refused. To send the agent a message that
+  starts with `!`, begin it with `!!` (`!!important` sends `!important`). Only
+  you can issue these: the agent never runs `!` commands, and their output is
+  not sent to it.
 
 The terminal is not an agent tool. What you type runs directly as you, without
 the engine's sandbox or tool approvals, and the agent never sees its input or

@@ -94,6 +94,15 @@ public final class TerminalSession: ObservableObject, Identifiable {
         return !ProcessTree.children(of: pid).isEmpty
     }
 
+    /// A program the shell started holds the terminal, such as an editor, a
+    /// REPL or a dev server not sent to the background. Unlike
+    /// `hasRunningChildren`, a prompt's background helper does not count.
+    public var hasForegroundProgram: Bool {
+        guard case .running(let pid) = status, let process, process.childfd >= 0 else { return false }
+        let group = tcgetpgrp(process.childfd)
+        return group > 0 && group != pid
+    }
+
     /// The shell has ended, so it can be started again.
     public var canRelaunch: Bool {
         switch status {
