@@ -189,9 +189,10 @@ private struct SessionSidebar: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
+            let pinned = model.visibleSessions.filter { model.pinnedSessions.contains($0.id) }
+            let unpinned = model.visibleSessions.filter { !model.pinnedSessions.contains($0.id) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    let pinned = model.visibleSessions.filter { model.pinnedSessions.contains($0.id) }
                     if !pinned.isEmpty {
                         Label("Pinned", systemImage: "pin.fill")
                             .font(.caption.weight(.semibold))
@@ -201,10 +202,14 @@ private struct SessionSidebar: View {
                         ForEach(pinned) { row($0) }
                         Divider().opacity(0.4).padding(.vertical, 6).padding(.horizontal, 10)
                     }
-                    ForEach(model.visibleSessions.filter { !model.pinnedSessions.contains($0.id) }) { row($0) }
+                    ForEach(unpinned) { row($0) }
                 }
                 .padding(.horizontal, 10)
             }
+            // A pin (⌘P), a refresh or a filter moves rows under a still
+            // pointer, and none of them hears it leave: forget the hover so
+            // only the row the pointer next moves over lights up.
+            .onChange(of: (pinned + unpinned).map(\.id)) { _, _ in hoveredSession = nil }
             .overlay {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
@@ -302,7 +307,6 @@ extension SessionSidebar {
         SessionRow(session: session,
                    showsProject: model.showsAllProjects,
                    isSelected: session.id == model.selectedSession,
-                   isPinned: model.pinnedSessions.contains(session.id),
                    needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
                    isRunning: model.runningSessions.contains(session.id),
                    searchSnippet: model.searchSnippet(for: session),
@@ -438,7 +442,6 @@ private struct SessionRow: View {
     let session: SessionSummary
     var showsProject = false
     let isSelected: Bool
-    var isPinned = false
     let needsAnswer: Bool
     let isRunning: Bool
     /// Set for a chat found by its contents: the text around the match.
@@ -501,9 +504,8 @@ private struct SessionRow: View {
         .onContinuousHover { phase in
             if case .active = phase { onHover(true) } else { onHover(false) }
         }
-        // A context menu or a pin that moves the row never reports the pointer
-        // leaving; the next move over a row lights that one instead.
-        .onChange(of: isPinned) { _, _ in onHover(false) }
+        // A context menu never reports the pointer leaving; the next move
+        // over a row lights that one instead.
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
             onHover(false)
         }
@@ -522,8 +524,10 @@ private struct SessionRow: View {
         return text
     }
 
+    /// Selection is the one strong fill; hover is a faint wash so a hovered
+    /// row never reads as a second selection.
     private var rowFill: Color {
-        isSelected ? Color.primary.opacity(0.09) : isHovered ? Color.primary.opacity(0.04) : .clear
+        isSelected ? Color.primary.opacity(0.1) : isHovered ? Color.primary.opacity(0.035) : .clear
     }
 }
 
