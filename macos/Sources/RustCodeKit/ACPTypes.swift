@@ -71,7 +71,12 @@ public enum ACPRequests {
                 "terminal": false,
                 // The transcript draws `rustcode-viz` blocks natively, so the
                 // engine may teach the agent the format (docs/visualizations.md).
-                "_meta": ["rustcode": ["visualizations": .number(Double(Visualization.version))]],
+                // The localhost preview answers `_rustcode/preview` requests,
+                // so the engine offers `localhost_preview` (docs/preview.md).
+                "_meta": ["rustcode": [
+                    "visualizations": .number(Double(Visualization.version)),
+                    "preview": .number(Double(rustcodePreviewCapabilityVersion)),
+                ]],
             ],
             "clientInfo": ["name": "rustcode-macos", "title": "RustCode", "version": .string(appVersion)],
         ]

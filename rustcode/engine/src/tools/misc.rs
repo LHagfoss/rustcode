@@ -238,6 +238,30 @@ pub const ASK_QUESTION: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+fn localhost_preview_schema() -> Value {
+    crate::preview::operation_schema()
+}
+
+/// The macOS app's localhost preview, driven by the agent (#2138). Offered
+/// only to sessions whose client advertised `_meta.rustcode.preview`; the
+/// call is forwarded to that client, which asks the user before the first
+/// action and runs it in the visible preview. Executed anywhere else it
+/// fails: this handler is the fallback, never the real bridge.
+pub const LOCALHOST_PREVIEW: Tool = Tool {
+    name: crate::preview::PREVIEW_TOOL_NAME,
+    description: "Inspect and drive the local web app open in the RustCode macOS preview (localhost only, user-approved). Actions: inspect, screenshot, navigate, click, fill, select, scroll.",
+    arguments: r##"{"action": "inspect"} | {"action": "screenshot"} | {"action": "navigate", "url": "/settings"} | {"action": "click", "selector": "#save"} | {"action": "fill", "selector": "input[name=email]", "value": "a@b.c"} | {"action": "select", "selector": "#plan", "value": "pro"} | {"action": "scroll", "dy": 600}"##,
+    handler: localhost_preview_unavailable,
+    requires_confirmation: false,
+    schema: localhost_preview_schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+fn localhost_preview_unavailable(_args: &Value) -> Result<String, String> {
+    Err(crate::preview::UNAVAILABLE_MESSAGE.to_owned())
+}
+
 fn get_time_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": {}, "additionalProperties": false

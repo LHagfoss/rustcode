@@ -16,5 +16,8 @@ let package = Package(
         .target(name: "RustCodeKit"),
         .executableTarget(name: "RustCode", dependencies: ["RustCodeKit"]),
         .testTarget(name: "RustCodeKitTests", dependencies: ["RustCodeKit"], path: "Tests/RustCodeKitTests"),
+        // App-target tests that need AppKit or WebKit, such as the preview's
+        // web view lifecycle (#2140) and the agent bridge against a real page.
+        .testTarget(name: "RustCodeTests", dependencies: ["RustCode", "RustCodeKit"], path: "Tests/RustCodeTests"),
     ]
 )

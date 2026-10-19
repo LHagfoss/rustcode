@@ -157,8 +157,9 @@ final class DesktopModel: ObservableObject {
             preview.setWorkspace(workspace.path)
         }
     }
-    /// The localhost preview beside the chat, remembered per project. It is
-    /// view-only: nothing in it is passed to the engine.
+    /// The localhost preview beside the chat, remembered per project. The
+    /// agent can use it only through `localhost_preview`, after the user
+    /// allows it for a chat (PreviewAgentBridge.swift).
     let preview = PreviewController()
     @Published var showsPreview = false
     let composer = ComposerDraft()
@@ -242,6 +243,7 @@ final class DesktopModel: ObservableObject {
             ?? (launchPath == "/" ? FileManager.default.homeDirectoryForCurrentUser
                 : URL(fileURLWithPath: launchPath, isDirectory: true))
         preview.setWorkspace(workspace.path)
+        preview.chatTitle = { [weak self] id in self?.sessions.first { $0.id == id }?.title }
         TurnNotifier.shared.openSession = { [weak self] id in
             guard let self, let session = self.sessions.first(where: { $0.id == id }) else { return }
             Task { await self.select(session) }
@@ -329,6 +331,8 @@ final class DesktopModel: ObservableObject {
             launched = process
             try process.start()
             engine = process
+            // Grants belong to the sessions of the engine they were given in.
+            preview.revokeAgentAccess()
             inboundTask = Task { [weak self] in
                 for await inbound in process.connection.inbound {
                     await self?.handle(inbound)
@@ -1211,6 +1215,19 @@ final class DesktopModel: ObservableObject {
                     body: "\(chatTitle(request.sessionId)): \(request.question?.text ?? request.title)")
             }
             else { try? await engine?.connection.respond(id: id, error: .invalidParams(method)) }
+        case .request(let id, let method, let params) where method == ACPMethod.preview:
+            // Show the page the agent is about to use, and answer off the
+            // inbound loop: the first request waits for the user's approval.
+            guard let connection = engine?.connection else { return }
+            if !showsPreview { togglePreview() }
+            if let session = params["sessionId"]?.stringValue, preview.agent.access.origin(for: session) == nil {
+                TurnNotifier.shared.notify(session: session, title: "Preview access requested",
+                                           body: "\(chatTitle(session)) wants to use the localhost preview.")
+            }
+            Task { [weak self] in
+                guard let result = await self?.preview.runAgentRequest(params) else { return }
+                try? await connection.respond(id: id, result: result)
+            }
         case .request(let id, let method, _):
             try? await engine?.connection.respond(id: id, error: .methodNotFound(method))
         default: break

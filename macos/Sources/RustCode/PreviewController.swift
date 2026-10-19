@@ -6,13 +6,22 @@ import WebKit
 /// The localhost preview beside the chat: one web view showing the project's
 /// running dev server, with its address, history and load state.
 ///
-/// The preview is view-only. Nothing here is reachable from the engine or the
-/// agent: the agent cannot see, read, screenshot or drive this page, and the UI
-/// says so. Agent access (navigate, click, fill, snapshot) should be added as
-/// a separate bridge type that holds this controller and checks an explicit,
-/// per-project user grant before every action, surfaced through the same
-/// permission cards as tool approvals, so that showing a page never implies
-/// the agent can use it.
+/// Showing a page grants the agent nothing. The agent reaches this page only
+/// through `localhost_preview` (PreviewAgentBridge.swift), and only after the
+/// user allows it for one chat in the panel's prompt; `agent` holds those
+/// grants, which end on revoke, a project switch or a new engine.
+///
+/// Lifecycle (#2140): the controller lives as long as the app model and owns
+/// at most one web view, made on first use. A project switch tears that web
+/// view down (KVO observations invalidated, delegates cleared, removed from
+/// its host) so the old page and its WebContent process can go; the next
+/// project's page gets a new one. WebKit holds its navigation and UI
+/// delegates weakly and the KVO closures capture the controller weakly, and
+/// the agent bridge uses `callAsyncJavaScript` results rather than a script
+/// message handler, so nothing retains the controller from inside WebKit.
+/// Hiding the panel only removes the view from the window: the page keeps
+/// running (WebKit throttles timers and stops animation frames for a page out
+/// of a window), so a dev server's state and HMR connection survive.
 @MainActor
 final class PreviewController: NSObject, ObservableObject {
     @Published private(set) var state = PreviewState()
@@ -27,15 +36,49 @@ final class PreviewController: NSObject, ObservableObject {
     /// While the address field is being edited, page navigation leaves it alone.
     var isEditingAddress = false
 
+    /// The agent's access: which chats the user allowed, and the prompt
+    /// waiting for an answer. Mirrored into the published copies below.
+    let agent: PreviewAgentGate
+    @Published private(set) var agentAccess = PreviewAgentAccess()
+    @Published private(set) var agentApproval: PreviewAgentApproval?
+    /// What the agent is doing in the page right now, shown over it.
+    @Published var agentActivity: String?
+    /// True while an agent action runs: page dialogs are answered without a
+    /// modal and links that leave the preview are blocked, not opened.
+    var isAgentActing = false
+    /// What the page tried during the current agent action (a blocked
+    /// external link, a download, a dialog), reported back to the agent.
+    var agentNotes: [String] = []
+    /// A chat's title, for the access prompt; set by the app model.
+    var chatTitle: (String) -> String? = { _ in nil }
+
     private let store: PreviewURLStore
-    private var workspace: String?
+    private(set) var workspace: String?
     private var isVisible = false
-    private var createdWebView: WKWebView?
+    private(set) var createdWebView: WKWebView?
     private var observations: [NSKeyValueObservation] = []
 
-    init(store: PreviewURLStore = PreviewURLStore()) {
+    init(store: PreviewURLStore = PreviewURLStore(), agent: PreviewAgentGate = PreviewAgentGate()) {
         self.store = store
+        self.agent = agent
         super.init()
+        agent.onChange = { [weak self] in self?.syncAgentState() }
+    }
+
+    private func syncAgentState() {
+        if agentAccess != agent.access { agentAccess = agent.access }
+        if agentApproval != agent.pending { agentApproval = agent.pending }
+    }
+
+    /// The user's answer to the access prompt.
+    func answerAgentApproval(allow: Bool) {
+        guard let approval = agent.pending else { return }
+        agent.answer(approval.id, allow: allow)
+    }
+
+    /// The panel's revoke button, and a new engine: the agent loses access.
+    func revokeAgentAccess() {
+        agent.revokeAll()
     }
 
     /// The web view, made on first use so a closed preview costs nothing.
@@ -66,6 +109,7 @@ final class PreviewController: NSObject, ObservableObject {
     func setWorkspace(_ path: String) {
         guard path != workspace else { return }
         workspace = path
+        agent.setWorkspace(path)
         tearDownWebView()
         state.reset()
         addressError = nil
@@ -176,11 +220,17 @@ final class PreviewController: NSObject, ObservableObject {
     }
 
     /// Whether the page may go to `url`; one that leaves the preview opens
-    /// in the browser instead.
+    /// in the browser instead, unless the agent caused it: the agent never
+    /// opens anything outside the preview.
     private func allows(_ url: URL, isMainFrame: Bool) -> Bool {
         switch PreviewURL.policy(for: url, isMainFrame: isMainFrame) {
         case .allow: return true
-        case .openExternally: NSWorkspace.shared.open(url)
+        case .openExternally:
+            if isAgentActing {
+                agentNotes.append("Blocked a navigation outside the preview to \(url.absoluteString.prefix(200)).")
+            } else {
+                NSWorkspace.shared.open(url)
+            }
         case .cancel: break
         }
         return false
@@ -191,7 +241,23 @@ extension PreviewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         guard let url = navigationAction.request.url else { return .allow }
         let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        if navigationAction.shouldPerformDownload {
+            if isAgentActing { agentNotes.append("Blocked a download of \(url.lastPathComponent).") }
+            return .cancel
+        }
         return allows(url, isMainFrame: isMainFrame) ? .allow : .cancel
+    }
+
+    /// The preview shows pages; it never saves files. A response it cannot
+    /// display (a download) is cancelled.
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        guard navigationResponse.canShowMIMEType else {
+            if isAgentActing {
+                agentNotes.append("Blocked a download of \(navigationResponse.response.url?.lastPathComponent ?? "a file").")
+            }
+            return .cancel
+        }
+        return .allow
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -233,6 +299,11 @@ extension PreviewController: WKUIDelegate {
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async {
+        // A modal would stall the agent's action until the user noticed it.
+        if isAgentActing {
+            agentNotes.append("The page showed an alert: \(message.prefix(300))")
+            return
+        }
         let alert = NSAlert()
         alert.messageText = message
         alert.addButton(withTitle: "OK")
@@ -241,6 +312,10 @@ extension PreviewController: WKUIDelegate {
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        if isAgentActing {
+            agentNotes.append("The page asked to confirm \"\(message.prefix(300))\"; it was answered Cancel.")
+            return false
+        }
         let alert = NSAlert()
         alert.messageText = message
         alert.addButton(withTitle: "OK")

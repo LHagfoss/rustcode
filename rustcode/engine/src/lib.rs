@@ -19,6 +19,7 @@ pub mod model_defaults;
 pub mod network;
 mod notifications;
 mod platform;
+pub mod preview;
 pub mod prompt_commands;
 pub mod provider_auth;
 pub mod raw_cli;

@@ -140,6 +140,8 @@ pub struct ToolSchemaPolicy {
     pub(crate) include_agent_tools: bool,
     pub(crate) include_mcp_tools: bool,
     pub(crate) include_session_title_tool: bool,
+    /// `localhost_preview`, offered only when the client has a preview (#2138).
+    pub(crate) include_preview_tool: bool,
     pub(crate) profile: ToolSchemaProfile,
     pub(crate) compact_text_prompt: bool,
 }
@@ -191,6 +193,7 @@ impl ToolSchemaPolicy {
             include_agent_tools,
             include_mcp_tools: true,
             include_session_title_tool: false,
+            include_preview_tool: false,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
         }
@@ -209,6 +212,7 @@ impl ToolSchemaPolicy {
             include_agent_tools: false,
             include_mcp_tools: false,
             include_session_title_tool: false,
+            include_preview_tool: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
         }
@@ -219,6 +223,7 @@ impl ToolSchemaPolicy {
             include_agent_tools: false,
             include_mcp_tools: false,
             include_session_title_tool: false,
+            include_preview_tool: false,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
         }
@@ -233,6 +238,13 @@ impl ToolSchemaPolicy {
 
     pub(crate) const fn with_session_title_tool(mut self) -> Self {
         self.include_session_title_tool = true;
+        self
+    }
+
+    /// Offer `localhost_preview`. Only the root coding profile can use it:
+    /// Plan mode and subagents never drive the user's preview.
+    pub(crate) fn with_preview_tool(mut self) -> Self {
+        self.include_preview_tool = self.profile == ToolSchemaProfile::Coding;
         self
     }
 
@@ -703,6 +715,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         }
     };
     !((tool.name == "set_session_title" && !policy.include_session_title_tool)
+        || (tool.name == crate::preview::PREVIEW_TOOL_NAME && !policy.include_preview_tool)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools
@@ -2055,6 +2068,13 @@ pub(crate) fn append_visualization_hint(
     }
 }
 
+/// Append the `localhost_preview` guidance for a request that offers the tool.
+pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy) {
+    if policy.include_preview_tool {
+        prompt.push_str(crate::preview::PREVIEW_PROMPT_HINT);
+    }
+}
+
 pub(crate) fn tool_system_prompt_for_policy(
     policy: ToolSchemaPolicy,
     protocol: crate::config::ToolProtocol,
@@ -2064,8 +2084,12 @@ pub(crate) fn tool_system_prompt_for_policy(
     // prompt: a turn-1/turn-2 difference here invalidates the whole cached
     // prefix. Its guidance (and, for text protocols, its call shape) rides in
     // the per-turn context tail instead; see `session_title_turn_hint`.
+    // `localhost_preview` is described by its own hint, appended only for
+    // sessions that have it (`append_preview_hint`), so the shared prompt
+    // never lists a tool most clients cannot run.
     let policy = ToolSchemaPolicy {
         include_session_title_tool: false,
+        include_preview_tool: false,
         ..policy
     };
     let mut p = String::new();
