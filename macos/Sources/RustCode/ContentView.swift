@@ -551,57 +551,57 @@ private struct ChatView: View {
         // Found once per redraw: asked per row, every row searched the chat.
         let currentMatch = model.showsFind ? model.currentMatch : nil
         let lastId = transcript.items.last?.id
+        // Older rows are lazy: laid out eagerly, every resize re-measured the
+        // whole chat (170 ms a step in a 250-message session). The newest rows
+        // stay eager, so the part being read never changes height under the
+        // reader while scrolling near the end.
+        let split = max(transcript.items.count - Self.eagerTail, 0)
         ScrollViewReader { proxy in
             ScrollView {
-                // The Latest button is a pinned footer, inside the scroll view,
-                // so the wheel still scrolls the chat while the pointer is on it.
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionFooters) {
-                    Section {
-                        // Rows are laid out eagerly: lazy rows took their real
-                        // height only on screen, so scrolling up made the chat
-                        // jump and the scroller resize under the pointer. Rows
-                        // are equatable, so only the one that changed redraws.
-                        VStack(spacing: 0) {
-                            VStack(alignment: .leading, spacing: 18) {
-                                ForEach(transcript.items) { item in
-                                    TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                                                  isStreaming: isReplyStreaming && item.id == lastId)
-                                        .equatable()
-                                        .id(item.id)
-                                }
-                                // Up for the whole turn, also while a reply streams or the
-                                // model plans its next step, so a live turn always says so.
-                                if isReplyStreaming {
-                                    WorkingIndicator()
-                                }
-                            }
-                            .frame(maxWidth: 760)
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 20)
-                            .frame(maxWidth: .infinity)
-                            // The very end of the chat, below its padding: a jump
-                            // here leaves nothing further to scroll, so one press
-                            // of Latest always lands where following resumes.
-                            Color.clear.frame(height: 1).id(bottomAnchor)
-                        }
-                    } footer: {
-                        // No height of its own: the button floats over the
-                        // chat's end, so showing or hiding it never changes how
-                        // far the chat scrolls or moves its end under the reader.
-                        Color.clear
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 0)
-                            .overlay(alignment: .bottomTrailing) {
-                                if !followsLatest, !transcript.isEmpty {
-                                    LatestButton { jumpToLatest(proxy) }
-                                        .padding(.bottom, 12)
-                                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                                }
-                            }
-                            .frame(maxWidth: 760)
-                            .padding(.horizontal, 28)
-                            .frame(maxWidth: .infinity)
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    ForEach(transcript.items[..<split]) { item in
+                        TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch)
+                            .equatable()
+                            .id(item.id)
                     }
+                    VStack(spacing: 0) {
+                        VStack(alignment: .leading, spacing: 18) {
+                            ForEach(transcript.items[split...]) { item in
+                                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
+                                              isStreaming: isReplyStreaming && item.id == lastId)
+                                    .equatable()
+                                    .id(item.id)
+                            }
+                            // Up for the whole turn, also while a reply streams or the
+                            // model plans its next step, so a live turn always says so.
+                            if isReplyStreaming {
+                                WorkingIndicator()
+                            }
+                        }
+                        .padding(.bottom, 20)
+                        // The very end of the chat, below its padding: a jump
+                        // here leaves nothing further to scroll, so one press
+                        // of Latest always lands where following resumes.
+                        Color.clear.frame(height: 1).id(bottomAnchor)
+                    }
+                }
+                .frame(maxWidth: 760)
+                .padding(.horizontal, 28)
+                .padding(.top, 20)
+                .frame(maxWidth: .infinity)
+            }
+            // Over the chat rather than a pinned footer inside it: a pinned
+            // view re-lays out its whole section on every scrolled frame.
+            .overlay(alignment: .bottom) {
+                if !followsLatest, !transcript.isEmpty {
+                    HStack {
+                        Spacer(minLength: 0)
+                        LatestButton { jumpToLatest(proxy) }
+                    }
+                    .frame(maxWidth: 760)
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 12)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottomTrailing)))
                 }
             }
             .overlay {
@@ -748,6 +748,8 @@ private struct ChatView: View {
     }
 
     private let bottomAnchor = "bottom"
+    /// Newest rows laid out eagerly; everything older is lazy.
+    private static let eagerTail = 20
 
     /// Rows below the fold get their real height only once laid out, so one
     /// jump can land short of the end; a second one after layout reaches it.
@@ -855,16 +857,29 @@ private extension View {
             } action: { old, new in
                 let input = ChatScrollInput.shared
                 input.canScroll = new.canScroll
-                // Only the reader's own input decides: output growing, rows
-                // settling, a resize or a jump to a find match move the
-                // geometry too, and must neither stop nor restart following.
-                guard input.isActive, old.containerHeight == new.containerHeight else { return }
                 let atEnd = new.distanceFromBottom <= ScrollFollowGeometry.threshold
+                input.atEnd = atEnd
+                // Being at the end always means following, however the chat
+                // got there. Requiring live input here missed scrolls whose
+                // last events landed short of the end and settled after them,
+                // which left Latest up with the chat already at its end.
                 if atEnd, !input.scrolledUpJustNow {
                     if !follows.wrappedValue { follows.wrappedValue = true }
-                } else if new.offset < old.offset - 0.5, follows.wrappedValue {
+                    return
+                }
+                // Only the reader lets go: output growing, rows settling, a
+                // resize or a jump to a find match move the geometry too.
+                guard input.isActive, old.containerHeight == new.containerHeight else { return }
+                if new.offset < old.offset - 0.5, follows.wrappedValue {
                     // Dragging the scroller up.
                     follows.wrappedValue = false
+                }
+            }
+            .onScrollPhaseChange { _, phase in
+                // Momentum and the bounce at the end finish after the last
+                // input event; check once more where the scroll came to rest.
+                if phase == .idle, ChatScrollInput.shared.atEnd, !follows.wrappedValue {
+                    follows.wrappedValue = true
                 }
             }
             .onAppear {
@@ -887,6 +902,8 @@ private final class ChatScrollInput {
     /// The chat's scroll view in window coordinates, top-left origin.
     var chatFrame: CGRect = .zero
     var canScroll = false
+    /// The chat was within the follow threshold of its end at the last geometry change.
+    var atEnd = true
     var onScrollUp: () -> Void = {}
     private var lastInput = Date.distantPast
     private var lastScrollUp = Date.distantPast
