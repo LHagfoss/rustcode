@@ -33,6 +33,23 @@ pub(crate) fn extend_bounded_cache(
     }
 }
 
+/// Image messages, newest first, whose uncached images are still sent to the
+/// vision model. Older ones keep a placeholder: re-describing a long session's
+/// whole image history one by one stalled a model switch for minutes.
+const ANALYZED_IMAGE_MESSAGES: usize = 4;
+/// Vision requests in flight at once.
+const VISION_CONCURRENCY: usize = 4;
+const CANCELLED: &str = "cancelled";
+const IMAGE_MISSING: &str = "[Attached image analysis unavailable: image missing]";
+const EARLIER_IMAGE_SKIPPED: &str =
+    "[Earlier image not analyzed: only the most recent images are described for this model]";
+
+struct Marker {
+    message: usize,
+    range: std::ops::Range<usize>,
+    hash: Option<String>,
+}
+
 pub async fn preprocess_history_with<F, Fut>(
     history: &mut [ChatMessage],
     active_profile: &ModelProfile,
@@ -44,6 +61,8 @@ where
     F: FnMut(&ModelProfile, Vec<u8>) -> Fut,
     Fut: Future<Output = Result<String, String>>,
 {
+    use futures_util::StreamExt;
+
     if active_profile.image_input_supported() == Some(true) {
         return Ok(());
     }
@@ -51,80 +70,131 @@ where
         return Ok(());
     }
 
-    let mut rewritten = Vec::new();
-    let mut pending_cache = HashMap::new();
-    let mut image_number = 0usize;
+    // A text-only model named as its own vision_model can only fail, one slow
+    // request per image.
+    let vision_usable = match vision_profile.image_input_supported() {
+        Some(supported) => supported,
+        None => vision_profile.name != active_profile.name,
+    };
+    let latest = history.len() - 1;
+    let image_messages: Vec<usize> = history
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.role == "user" && message.content.contains(IMAGE_MARKER))
+        .map(|(index, _)| index)
+        .collect();
+    let analyzed_from = image_messages
+        .iter()
+        .rev()
+        .nth(ANALYZED_IMAGE_MESSAGES - 1)
+        .copied()
+        .unwrap_or(0);
 
-    for (msg_idx, message) in history.iter().enumerate() {
-        let is_latest = msg_idx == history.len() - 1;
-        if message.role != "user" || !message.content.contains(IMAGE_MARKER) {
-            continue;
-        }
-
-        let mut output = String::new();
-        let mut remaining = message.content.as_str();
-        while let Some(start) = remaining.find(IMAGE_MARKER) {
-            output.push_str(&remaining[..start]);
-            let after_marker = &remaining[start + IMAGE_MARKER.len()..];
-            let Some(end) = after_marker.find(')') else {
-                output.push_str(&remaining[start..]);
-                remaining = "";
+    let mut markers = Vec::new();
+    let mut pending: Vec<(String, Vec<u8>)> = Vec::new();
+    for &message_index in &image_messages {
+        let content = &history[message_index].content;
+        let mut offset = 0;
+        while let Some(found) = content[offset..].find(IMAGE_MARKER) {
+            let start = offset + found;
+            let path_start = start + IMAGE_MARKER.len();
+            let Some(path_len) = content[path_start..].find(')') else {
                 break;
             };
-            let path = &after_marker[..end];
-            let bytes_res = std::fs::read(path);
-            let bytes = match bytes_res {
-                Ok(b) => b,
-                Err(e) => {
-                    if is_latest {
-                        return Err(format!("image analysis failed: could not read image: {e}"));
-                    } else {
-                        output.push_str("[Attached image analysis unavailable: image missing]");
-                        remaining = &after_marker[end + 1..];
-                        continue;
+            let end = path_start + path_len + 1;
+            let is_latest = message_index == latest;
+            let hash = match std::fs::read(&content[path_start..end - 1]) {
+                Ok(bytes) => {
+                    let hash = image_hash(&bytes);
+                    let wanted = is_latest || message_index >= analyzed_from;
+                    if is_latest && !vision_usable {
+                        return Err(unusable_vision_error(active_profile, vision_profile));
                     }
+                    if wanted
+                        && vision_usable
+                        && cached(cache, &hash).is_none()
+                        && !pending.iter().any(|(queued, _)| queued == &hash)
+                    {
+                        pending.push((hash.clone(), bytes));
+                    }
+                    Some(hash)
                 }
-            };
-            let hash = image_hash(&bytes);
-            let analysis = if let Some(value) =
-                cache.get(&hash).or_else(|| pending_cache.get(&hash))
-            {
-                value.clone()
-            } else {
-                match request(vision_profile, bytes).await {
-                    Ok(value) if !value.trim().is_empty() => {
-                        pending_cache.insert(hash.clone(), value.clone());
-                        value
-                    }
-                    Ok(_) => {
-                        if is_latest {
-                            return Err(
-                                "image analysis failed: vision model returned empty output"
-                                    .to_string(),
-                            );
-                        } else {
-                            let fallback = "[Attached image analysis unavailable]".to_string();
-                            pending_cache.insert(hash.clone(), fallback.clone());
-                            fallback
-                        }
-                    }
-                    Err(e) => {
-                        if is_latest {
-                            return Err(format!("image analysis failed: {e}"));
-                        } else {
-                            let fallback = format!("[Attached image analysis unavailable: {e}]");
-                            pending_cache.insert(hash.clone(), fallback.clone());
-                            fallback
-                        }
-                    }
+                Err(e) if is_latest => {
+                    return Err(format!("image analysis failed: could not read image: {e}"));
                 }
+                Err(_) => None,
             };
-            image_number += 1;
-            output.push_str(&format_analysis(image_number, &analysis));
-            remaining = &after_marker[end + 1..];
+            markers.push(Marker {
+                message: message_index,
+                range: start..end,
+                hash,
+            });
+            offset = end;
         }
-        output.push_str(remaining);
-        rewritten.push((msg_idx, output));
+    }
+
+    let latest_hashes: Vec<&String> = markers
+        .iter()
+        .filter(|marker| marker.message == latest)
+        .filter_map(|marker| marker.hash.as_ref())
+        .collect();
+    let requests = pending.into_iter().map(|(hash, bytes)| {
+        let analysis = request(vision_profile, bytes);
+        async move { (hash, analysis.await) }
+    });
+    let results: Vec<(String, Result<String, String>)> = futures_util::stream::iter(requests)
+        .buffered(VISION_CONCURRENCY)
+        .collect()
+        .await;
+
+    let mut pending_cache = HashMap::new();
+    for (hash, result) in results {
+        let for_latest = latest_hashes.contains(&&hash);
+        let analysis = match result {
+            Ok(value) if !value.trim().is_empty() => value,
+            Ok(_) if for_latest => {
+                return Err("image analysis failed: vision model returned empty output".to_string());
+            }
+            Ok(_) => "[Attached image analysis unavailable]".to_string(),
+            // A cancelled turn says nothing about the image; caching it would
+            // hide the image from every later turn.
+            Err(e) if for_latest || e == CANCELLED => {
+                return Err(format!("image analysis failed: {e}"));
+            }
+            Err(e) => format!("[Attached image analysis unavailable: {e}]"),
+        };
+        pending_cache.insert(hash, analysis);
+    }
+
+    let mut rewritten: Vec<(usize, String)> = Vec::new();
+    let mut image_number = 0usize;
+    let mut cursor = 0;
+    for (position, marker) in markers.iter().enumerate() {
+        let content = &history[marker.message].content;
+        if position == 0 || markers[position - 1].message != marker.message {
+            rewritten.push((marker.message, String::new()));
+            cursor = 0;
+        }
+        let output = &mut rewritten.last_mut().expect("pushed above").1;
+        output.push_str(&content[cursor..marker.range.start]);
+        cursor = marker.range.end;
+        if let Some(hash) = &marker.hash {
+            let analysis = pending_cache
+                .get(hash)
+                .or_else(|| cached(cache, hash))
+                .map(String::as_str)
+                .unwrap_or(EARLIER_IMAGE_SKIPPED);
+            image_number += 1;
+            output.push_str(&format_analysis(image_number, analysis));
+        } else {
+            output.push_str(IMAGE_MISSING);
+        }
+        let is_last_in_message = markers
+            .get(position + 1)
+            .is_none_or(|next| next.message != marker.message);
+        if is_last_in_message {
+            output.push_str(&content[cursor..]);
+        }
     }
 
     extend_bounded_cache(cache, pending_cache);
@@ -132,6 +202,28 @@ where
         history[message_index].content = content;
     }
     Ok(())
+}
+
+/// A cached analysis, ignoring cancellations that older builds stored as if
+/// they described the image.
+fn cached<'a>(cache: &'a HashMap<String, String>, hash: &str) -> Option<&'a String> {
+    cache
+        .get(hash)
+        .filter(|value| !value.ends_with(&format!("unavailable: {CANCELLED}]")))
+}
+
+fn unusable_vision_error(active: &ModelProfile, vision: &ModelProfile) -> String {
+    if vision.name == active.name {
+        format!(
+            "image analysis failed: '{}' cannot read images and is also the configured vision_model. Set vision_model to a vision-capable profile.",
+            active.name
+        )
+    } else {
+        format!(
+            "image analysis failed: vision_model '{}' does not support images. Set vision_model to a vision-capable profile.",
+            vision.name
+        )
+    }
 }
 
 fn image_hash(bytes: &[u8]) -> String {
@@ -661,6 +753,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_aborts_without_caching_the_image() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "older.png", b"older");
+        let mut history = vec![
+            ChatMessage::new("user", marker),
+            ChatMessage::new("user", "What time is it?"),
+        ];
+        let mut cache = HashMap::new();
+
+        let result = preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| async { Err(CANCELLED.to_string()) },
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err(), "image analysis failed: cancelled");
+        assert!(cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stale_cancelled_cache_entries_are_analyzed_again() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "one.png", b"one");
+        let mut history = vec![ChatMessage::new("user", marker)];
+        let mut cache = HashMap::from([(
+            image_hash(b"one"),
+            "[Attached image analysis unavailable: cancelled]".to_string(),
+        )]);
+
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| async { Ok("fresh analysis".to_string()) },
+        )
+        .await
+        .unwrap();
+
+        assert!(history[0].content.contains("fresh analysis"));
+        assert_eq!(cache[&image_hash(b"one")], "fresh analysis");
+    }
+
+    #[tokio::test]
+    async fn only_recent_image_messages_are_sent_for_analysis() {
+        let dir = tempdir().unwrap();
+        let mut history = Vec::new();
+        for index in 0..ANALYZED_IMAGE_MESSAGES + 2 {
+            let name = format!("{index}.png");
+            let marker = image(dir.path(), &name, name.as_bytes());
+            history.push(ChatMessage::new("user", format!("shot {index} {marker}")));
+        }
+        history.push(ChatMessage::new("user", "Summarize"));
+        let mut cache = HashMap::new();
+        let mut seen = Vec::new();
+
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, bytes| {
+                seen.push(String::from_utf8_lossy(&bytes).to_string());
+                async { Ok("analysis".to_string()) }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(seen, vec!["2.png", "3.png", "4.png", "5.png"]);
+        assert!(history[0].content.contains(EARLIER_IMAGE_SKIPPED));
+        assert!(history[0].content.starts_with("shot 0 "));
+        assert!(history[5].content.contains("analysis"));
+        assert!(!history[5].content.contains("file://"));
+    }
+
+    #[tokio::test]
+    async fn text_only_model_as_its_own_vision_model_fails_fast() {
+        let dir = tempdir().unwrap();
+        let older = image(dir.path(), "older.png", b"older");
+        let latest = image(dir.path(), "latest.png", b"latest");
+        let main = profile(None);
+        let mut calls = 0;
+
+        let mut history = vec![
+            ChatMessage::new("user", older.clone()),
+            ChatMessage::new("user", "Continue"),
+        ];
+        preprocess_history_with(&mut history, &main, &main, &mut HashMap::new(), |_, _| {
+            calls += 1;
+            async { Ok("unused".to_string()) }
+        })
+        .await
+        .unwrap();
+        assert!(history[0].content.contains(EARLIER_IMAGE_SKIPPED));
+
+        let mut history = vec![ChatMessage::new("user", latest)];
+        let error =
+            preprocess_history_with(&mut history, &main, &main, &mut HashMap::new(), |_, _| {
+                calls += 1;
+                async { Ok("unused".to_string()) }
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("is also the configured vision_model"),
+            "{error}"
+        );
+        assert_eq!(calls, 0);
+    }
+
+    #[tokio::test]
     async fn vision_failure_in_older_history_does_not_abort_the_new_turn() {
         let dir = tempdir().unwrap();
         let marker = image(dir.path(), "older.png", b"older");
@@ -678,18 +885,16 @@ mod tests {
             &mut cache,
             |_, _| {
                 calls += 1;
-                async { Err("cancelled".to_string()) }
+                async { Err("vision provider returned no text content".to_string()) }
             },
         )
         .await
         .unwrap();
 
         assert_eq!(calls, 1);
-        assert!(
-            history[0]
-                .content
-                .contains("[Attached image analysis unavailable: cancelled]")
-        );
+        assert!(history[0].content.contains(
+            "[Attached image analysis unavailable: vision provider returned no text content]"
+        ));
         assert_eq!(history[1].content, "What time is it?");
         assert_eq!(cache.len(), 1);
     }
