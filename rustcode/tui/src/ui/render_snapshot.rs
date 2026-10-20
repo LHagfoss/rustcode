@@ -139,7 +139,7 @@ struct OverlaySnapshot {
     mcp_picker_index: usize,
     mcp_edit_state: Option<McpEditState>,
     mcp_live_labels: Vec<String>,
-    skills_panel: Option<rustcode::capabilities::SkillsPanel>,
+    skills_panel: Option<rustcode::controller::SkillsPanel>,
     modal_scroll_row: u16,
     tool_confirmation_selected: usize,
 }
@@ -577,7 +577,7 @@ impl RenderSnapshot {
     pub(crate) fn mcp_live_label(&self, index: usize) -> Option<&str> {
         self.overlay.mcp_live_labels.get(index).map(String::as_str)
     }
-    pub(crate) fn skills_panel(&self) -> Option<&rustcode::capabilities::SkillsPanel> {
+    pub(crate) fn skills_panel(&self) -> Option<&rustcode::controller::SkillsPanel> {
         self.overlay.skills_panel.as_ref()
     }
     pub(crate) fn generation_start_time(&self) -> Option<std::time::Instant> {

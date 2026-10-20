@@ -52,6 +52,7 @@ mod tests;
 
 /// Editing operations every frontend text field shares.
 pub use crate::app::text_edit;
+pub use crate::capabilities::{SkillEntry, SkillsPanel, apply_mcp_toggle, redacted_target};
 pub use crate::config::{SCROLL_LINES_RANGE, effective_scroll_lines, scroll_speed_notice};
 pub use crate::provider_auth::{
     AuthMethod, CredentialRef, ProviderRateLimits, RateLimitWindow, provider_summary,

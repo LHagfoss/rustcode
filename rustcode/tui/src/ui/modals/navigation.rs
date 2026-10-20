@@ -701,7 +701,7 @@ pub(in crate::ui) fn render_mcp_config_modal(
                 Style::default().fg(COLOR_MUTED())
             };
 
-            let cmd_text = rustcode::capabilities::redacted_target(srv);
+            let cmd_text = rustcode::controller::redacted_target(srv);
 
             let line = if is_selected {
                 let left_text = format!("› {}", srv.name);

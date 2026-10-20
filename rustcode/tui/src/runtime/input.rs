@@ -1669,7 +1669,7 @@ pub(super) async fn handle_app_event(
                                     let enabled = srv.enabled;
                                     rustcode::controller::save_config(&s.config);
                                     tokio::spawn(async move {
-                                        rustcode::capabilities::apply_mcp_toggle(
+                                        rustcode::controller::apply_mcp_toggle(
                                             &name_clone,
                                             enabled,
                                         )

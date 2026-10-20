@@ -937,15 +937,15 @@ fn picker_panel_never_exceeds_the_space_above_the_composer() {
     assert_eq!(buffer[(79, 5)].bg, COLOR_PANEL());
 }
 
-fn skills_panel() -> rustcode::capabilities::SkillsPanel {
-    let entry = |name: &str, enabled: bool| rustcode::capabilities::SkillEntry {
+fn skills_panel() -> rustcode::controller::SkillsPanel {
+    let entry = |name: &str, enabled: bool| rustcode::controller::SkillEntry {
         name: name.to_owned(),
         description: format!("What {name} does"),
         path: format!("/skills/{name}"),
         source: "universal",
         enabled,
     };
-    rustcode::capabilities::SkillsPanel {
+    rustcode::controller::SkillsPanel {
         entries: vec![entry("deploy", true), entry("review", false)],
         selected: 1,
         notice: None,
