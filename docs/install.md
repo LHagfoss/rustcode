@@ -91,6 +91,13 @@ to Developer ID signing and notarization once its signing secrets are set
 (see [macOS release signing](macos-release-signing.md)); this workaround is
 removed from here with the first notarized release.
 
+Long chats can be read from the keyboard: Page Up and Page Down (fn-↑ and
+fn-↓ on a laptop) scroll the chat by a screen, Home goes to its first message
+and End to the latest, following new output again like the Latest button. The
+keys work while the composer or chat search has focus, since they do not edit
+text there; with Shift, Option, Control or Command they are left to the text
+field, and they stay with the terminal, the preview and open sheets.
+
 Questions the agent asks (`ask_question`) appear as cards: one button per
 option, ticks and Submit for multi-select questions, and a free-text answer.
 
