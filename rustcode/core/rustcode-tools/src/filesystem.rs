@@ -43,26 +43,26 @@ pub fn view_file_schema() -> Value {
 }
 
 pub fn replace_file_content_schema() -> Value {
+    // Only the canonical names and the common `old_string`/`new_string` pair
+    // are properties: models fill in every declared property, and a dozen
+    // empty aliases per edit cost tokens and invite ambiguity. The handler's
+    // other aliases (EDIT_TARGET_ALIASES / EDIT_REPLACEMENT_ALIASES) are
+    // accepted through `patternProperties`, which models do not fill in.
+    let aliases = serde_json::json!({
+        "^(target|replacement|old_text|new_text|oldString|newString|oldText|newText)$": { "type": "string" }
+    });
     serde_json::json!({
-        "type": "object", "additionalProperties": false, "properties": {
+        "type": "object", "additionalProperties": false, "patternProperties": aliases.clone(), "properties": {
             "path": { "type": "string" },
-            "target_content": { "type": "string" },
-            "replacement_content": { "type": "string" },
-            "old_string": { "type": "string" },
-            "new_string": { "type": "string" },
-            "target": { "type": "string" }, "replacement": { "type": "string" },
-            "old_text": { "type": "string" }, "new_text": { "type": "string" },
-            "oldString": { "type": "string" }, "newString": { "type": "string" },
-            "oldText": { "type": "string" }, "newText": { "type": "string" },
+            "target_content": { "type": "string", "description": "Exact block to replace" },
+            "replacement_content": { "type": "string", "description": "Its replacement; empty deletes it" },
+            "old_string": { "type": "string", "description": "Alias of target_content; send one or the other" },
+            "new_string": { "type": "string", "description": "Alias of replacement_content" },
             "start_line": { "type": "integer", "minimum": 1, "description": "1-indexed line anchoring the edit" },
             "end_line": { "type": "integer", "minimum": 1 },
-            "edits": { "type": "array", "items": { "type": "object", "properties": {
+            "edits": { "type": "array", "items": { "type": "object", "patternProperties": aliases, "properties": {
                 "target_content": { "type": "string" }, "replacement_content": { "type": "string" },
                 "old_string": { "type": "string" }, "new_string": { "type": "string" },
-                "target": { "type": "string" }, "replacement": { "type": "string" },
-                "old_text": { "type": "string" }, "new_text": { "type": "string" },
-                "oldString": { "type": "string" }, "newString": { "type": "string" },
-                "oldText": { "type": "string" }, "newText": { "type": "string" },
                 "start_line": { "type": "integer" }, "end_line": { "type": "integer" }
             } } }
         }, "required": ["path"]

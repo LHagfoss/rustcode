@@ -820,6 +820,10 @@ impl McpClient {
         if let Some(workspace) = workspace {
             process.current_dir(workspace);
         }
+        // An engine started by a GUI app inherits a minimal PATH, and a
+        // server that shells out (`glab`, `gh`, `bunx`, …) would not find
+        // its tools. The server's own `env` still overrides it.
+        process.env("PATH", crate::platform::augmented_path());
         let mut child = process
             .args(&args)
             .envs(&env)

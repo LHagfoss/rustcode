@@ -394,10 +394,14 @@ final class DesktopModel: ObservableObject {
     func start() async {
         guard engine == nil else { return }
         do {
-            let location = try EngineLocator(userSetting: UserDefaults.standard.string(forKey: "enginePath")).locate()
+            let locator = EngineLocator(userSetting: UserDefaults.standard.string(forKey: "enginePath"))
+            let location = try locator.locate()
             engineLocation = location
             var launched: EngineProcess?
-            let process = EngineProcess(executable: location.url, workingDirectory: workspace) { [weak self] exit in
+            // A Finder-launched app has a minimal PATH; the engine's MCP
+            // servers and their tools (glab, bunx, …) need the usual ones.
+            let process = EngineProcess(executable: location.url, workingDirectory: workspace,
+                                        environment: locator.engineEnvironment()) { [weak self] exit in
                 Task { @MainActor in
                     // A late exit of an engine replaced by a project switch
                     // must not touch the state of the one now running.

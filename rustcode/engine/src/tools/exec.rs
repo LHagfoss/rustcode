@@ -312,7 +312,7 @@ fn format_command_status(success: bool, status: &rustcode_core::CommandResultMet
 fn run_command_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": {
-            "command": { "type": "string" }, "cwd": { "type": "string" },
+            "command": { "type": "string" }, "cwd": { "type": "string", "description": "\"sandbox\" is the session scratch directory, also $RUSTCODE_SANDBOX in the command" },
             "timeout_ms": { "type": "integer", "minimum": 1 },
             "background": { "type": "boolean", "default": false },
             "detached": { "type": "boolean", "default": false },
@@ -510,11 +510,16 @@ fn command_manages_own_background_jobs(_command: &str) -> bool {
 /// child inherits RustCode's output pipes. The shell remains the process-group
 /// leader (the process-tree root on Windows), so the task manager can still
 /// terminate everything it started.
-fn detached_shell_command(command: &str, has_background_operator: bool) -> String {
-    rustcode_command::detached_command(
+fn detached_shell_command(
+    command: &str,
+    has_background_operator: bool,
+    log: Option<&std::path::Path>,
+) -> String {
+    rustcode_command::detached_command_with_log(
         rustcode_command::host_shell(),
         command,
         has_background_operator,
+        log,
     )
 }
 
@@ -739,13 +744,37 @@ fn run_command_output_inner(
         .get("notify_on_complete")
         .and_then(parse_json_bool)
         .unwrap_or(!detached);
+    // A detached command writes its output straight to its task log (its
+    // pipes are cut), so the task identity and log are fixed before the
+    // wrapper is built.
+    let detached_task = if detached {
+        let task_id = next_task_id();
+        let session_id = get_active_session_id().unwrap_or_default();
+        let log = task_output_log_path(&session_id, &task_id)?;
+        Some((task_id, log))
+    } else {
+        None
+    };
+    let detached_log = detached_task.as_ref().and_then(|(_, log)| log.as_deref());
     let shell_command = if detached {
-        detached_shell_command(command_str, has_background_operator)
+        detached_shell_command(command_str, has_background_operator, detached_log)
     } else {
         command_str.to_owned()
     };
     let session_scratch = get_active_session_id()
         .and_then(|session_id| crate::config::get_active_session_sandbox_dir(&session_id));
+    // The file tools' `sandbox/` is the session scratch directory; name it
+    // for the shell too, so a command can reach what those tools wrote. It
+    // goes right after PATH so an explicit `env` entry still wins.
+    if let Some(scratch) = session_scratch.as_ref() {
+        command_env.insert(
+            1,
+            (
+                std::ffi::OsString::from("RUSTCODE_SANDBOX"),
+                scratch.as_os_str().to_owned(),
+            ),
+        );
+    }
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     let workspace_root = if !has_explicit_workspace_root {
         workspace_root.or_else(|| {
@@ -766,6 +795,12 @@ fn run_command_output_inner(
     let mut writable_roots = workspace_root.iter().cloned().collect::<Vec<_>>();
     let session_scratch_roots = session_scratch.iter().cloned().collect::<Vec<_>>();
     writable_roots.extend(session_scratch_roots.iter().cloned());
+    // The detached wrapper appends to its task log from inside the sandbox.
+    if let Some(log_dir) = detached_log.and_then(std::path::Path::parent)
+        && !writable_roots.iter().any(|root| root == log_dir)
+    {
+        writable_roots.push(log_dir.to_path_buf());
+    }
     // A user-authorized task worktree outside the original checkout stays
     // writable for the task/session lifetime (#1496). It is part of the
     // active tool context (set by ACP, CLI workspace, or /workspace), not a
@@ -841,7 +876,10 @@ fn run_command_output_inner(
     if run_in_bg {
         let session_id = get_active_session_id().unwrap_or_default();
         let cmd_str = command_str.to_string();
-        let task_id = next_task_id();
+        let (task_id, detached_output_log) = match detached_task {
+            Some((task_id, log)) => (task_id, Some(log)),
+            None => (next_task_id(), None),
+        };
 
         let task_manager = background_task_manager();
         let mut task_spec = TaskSpec::new(SessionId::new(session_id.clone()), command_request);
@@ -849,7 +887,10 @@ fn run_command_output_inner(
         // request uses an internal shell wrapper for pipe/process safety.
         task_spec.command = cmd_str.clone();
         task_spec.notify_on_complete = notify_on_complete;
-        task_spec.output_log = task_output_log_path(&session_id, &task_id)?;
+        task_spec.output_log = match detached_output_log {
+            Some(log) => log,
+            None => task_output_log_path(&session_id, &task_id)?,
+        };
         let task_spec = call_id
             .map(|call_id| task_spec.clone().with_call_id(call_id))
             .unwrap_or(task_spec);

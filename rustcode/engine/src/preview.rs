@@ -104,7 +104,9 @@ pub(crate) fn operation_schema() -> Value {
 
 /// System prompt guidance, added only for sessions that can use the tool.
 pub(crate) const PREVIEW_PROMPT_HINT: &str = "\n# Localhost preview\n\
-The user's RustCode app shows a local web app in a preview panel, and `localhost_preview` lets you use it: `inspect` (URL, title, visible text, interactive elements with selectors), `screenshot` (the image is attached after the tool result), `navigate` (a path or local URL on the approved origin), `click`/`fill`/`select` (a CSS selector from inspect) and `scroll`. \
+The user's RustCode app has a live preview panel for local web apps, and `localhost_preview` drives it. It is a built-in tool, not an MCP tool: never look for it with `list_mcp_tools`. \
+To show the user a page (\"open it in my preview\", \"live preview\"), start the dev server, then call `navigate` with its full URL (e.g. http://localhost:5173): that opens the panel and loads the page even when nothing is shown yet. \
+Actions: `inspect` (URL, title, visible text, interactive elements with selectors), `screenshot` (the image is attached after the tool result), `navigate` (a path or local URL on the approved origin), `click`/`fill`/`select` (a CSS selector from inspect) and `scroll`. \
 The user approves access before the first action and can deny or revoke it at any time; the user watches every action. Only the approved localhost origin is reachable, never external sites. \
 A denied, failed or timed-out action did nothing you may rely on: never claim to have seen or changed the page unless the result says so. Use it to check UI work once the dev server runs.\n\
 Call shape: {\"action\": \"inspect\"} or {\"action\": \"click\", \"selector\": \"#save\"}.\n";

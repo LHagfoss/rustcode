@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 mod shell;
 
 pub use shell::{
-    ShellArguments, ShellKind, command_length_error, detached_command, host_shell,
-    powershell_script, select_windows_shell, shell_arguments, shell_label,
+    ShellArguments, ShellKind, command_length_error, detached_command, detached_command_with_log,
+    host_shell, powershell_script, select_windows_shell, shell_arguments, shell_label,
 };
 
 /// Maximum bytes retained for each output stream.

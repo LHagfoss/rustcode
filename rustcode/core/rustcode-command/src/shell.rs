@@ -209,11 +209,29 @@ pub fn command_length_error(kind: ShellKind, command: &str) -> Option<String> {
 /// Wrap a detached command so the shell stays alive as the process-tree root
 /// while nothing it starts inherits RustCode's output pipes.
 pub fn detached_command(kind: ShellKind, command: &str, has_background_operator: bool) -> String {
+    detached_command_with_log(kind, command, has_background_operator, None)
+}
+
+/// [`detached_command`], appending the command's output to `log` instead of
+/// discarding it, so a detached dev server's startup lines (its URL, an early
+/// failure) stay readable. The log is a file, not a pipe, so nothing the
+/// command starts can hold RustCode's output open. Only POSIX shells take the
+/// log; the Windows shells keep discarding output.
+pub fn detached_command_with_log(
+    kind: ShellKind,
+    command: &str,
+    has_background_operator: bool,
+    log: Option<&std::path::Path>,
+) -> String {
+    let posix_target = log
+        .and_then(|path| path.to_str())
+        .map(|path| format!(">>'{}'", path.replace('\'', "'\\''")))
+        .unwrap_or_else(|| ">/dev/null".to_owned());
     match kind {
         ShellKind::Posix if has_background_operator => {
-            format!("{{ {command}; wait; }} </dev/null >/dev/null 2>&1")
+            format!("{{ {command}; wait; }} </dev/null {posix_target} 2>&1")
         }
-        ShellKind::Posix => format!("{{ {command}; }} </dev/null >/dev/null 2>&1"),
+        ShellKind::Posix => format!("{{ {command}; }} </dev/null {posix_target} 2>&1"),
         // The status of a script block call does not reflect what ran inside
         // it, so the exit code is decided before the block returns.
         ShellKind::Pwsh | ShellKind::WindowsPowerShell => {
@@ -450,6 +468,19 @@ mod tests {
             assert!(wrapped.ends_with("exit 1\n} *> $null"));
             assert!(!wrapped.contains("nul "), "no cmd redirection: {wrapped}");
         }
+    }
+
+    #[test]
+    fn detached_posix_output_goes_to_the_task_log() {
+        let log = std::path::Path::new("/tmp/it's/task.log");
+        assert_eq!(
+            detached_command_with_log(ShellKind::Posix, "server", false, Some(log)),
+            "{ server; } </dev/null >>'/tmp/it'\\''s/task.log' 2>&1"
+        );
+        assert_eq!(
+            detached_command_with_log(ShellKind::Cmd, "server", false, Some(log)),
+            "(server) <nul >nul 2>&1"
+        );
     }
 
     #[test]

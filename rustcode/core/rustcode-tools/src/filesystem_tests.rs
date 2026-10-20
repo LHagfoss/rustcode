@@ -1725,37 +1725,50 @@ fn replace_file_content_schema_has_root_old_and_new_string() {
 }
 
 #[test]
-fn replace_file_content_schema_declares_every_handler_alias() {
-    // The handler accepts every key in EDIT_TARGET_ALIASES /
-    // EDIT_REPLACEMENT_ALIASES at root and inside edits[] items; with
-    // additionalProperties: false the schema must declare all of them or
-    // strict validators reject calls the handler would accept.
+fn replace_file_content_schema_advertises_few_names_but_accepts_every_alias() {
+    // Models fill in every declared property, so only the canonical names
+    // and old_string/new_string are properties. The handler accepts the
+    // other aliases too, so `patternProperties` must admit each of them.
     let schema = replace_file_content_schema();
     let root = &schema["properties"];
     let items = &schema["properties"]["edits"]["items"]["properties"];
-    for alias in [
+    for name in [
         "target_content",
-        "target",
-        "old_string",
-        "old_text",
-        "oldString",
-        "oldText",
         "replacement_content",
-        "replacement",
+        "old_string",
         "new_string",
+    ] {
+        assert!(root.get(name).is_some(), "schema missing root {name}");
+        assert!(items.get(name).is_some(), "schema missing edits[] {name}");
+    }
+    let pattern = schema["patternProperties"]
+        .as_object()
+        .and_then(|patterns| patterns.keys().next())
+        .expect("alias pattern");
+    let alternatives = pattern
+        .strip_prefix("^(")
+        .and_then(|rest| rest.strip_suffix(")$"))
+        .expect("anchored alias alternation")
+        .split('|')
+        .collect::<Vec<_>>();
+    for alias in [
+        "target",
+        "replacement",
+        "old_text",
         "new_text",
+        "oldString",
         "newString",
+        "oldText",
         "newText",
     ] {
-        assert!(
-            root.get(alias).is_some(),
-            "schema missing root alias {alias}"
-        );
-        assert!(
-            items.get(alias).is_some(),
-            "schema missing edits[] item alias {alias}"
-        );
+        assert!(root.get(alias).is_none(), "schema still declares {alias}");
+        assert!(alternatives.contains(&alias), "pattern rejects {alias}");
     }
+    assert!(!alternatives.contains(&"replacements"));
+    assert_eq!(
+        schema["properties"]["edits"]["items"]["patternProperties"],
+        schema["patternProperties"]
+    );
     // edits[] items must not require old_string/new_string specifically: any
     // alias pair is valid for the handler.
     assert!(
