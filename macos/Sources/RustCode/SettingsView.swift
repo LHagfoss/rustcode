@@ -180,6 +180,7 @@ private struct GeneralSettings: View {
     @AppStorage(AppearanceSetting.key) private var appearance = ""
     @AppStorage(TurnNotifier.enabledKey) private var notifyTurns = true
     @AppStorage(DesktopModel.autoApproveKey) private var autoApprove = false
+    @AppStorage(StreamingProse.revealKey) private var revealsText = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -204,6 +205,13 @@ private struct GeneralSettings: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .onChange(of: notifyTurns) { _, on in if on { TurnNotifier.shared.start() } }
+                }
+                RowDivider()
+                SettingsRow(title: "Fade in new text",
+                            subtitle: "Replies fade in softly as they stream. Off with Reduce Motion") {
+                    Toggle("Fade in new text", isOn: $revealsText)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
                 RowDivider()
                 SettingsRow(title: "Auto-approve tools",
