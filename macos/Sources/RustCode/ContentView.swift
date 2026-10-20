@@ -38,6 +38,7 @@ struct ContentView: View {
         .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0) }
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
+        .overlay { SessionSwitcherOverlay(model: model) }
         .overlay { ToastStack(model: model) }
     }
 }
@@ -485,7 +486,7 @@ struct RenameSheet: View {
 
 /// "All" or "Project": which chats the sidebar lists. The native segmented
 /// control, which is Liquid Glass on macOS 26.
-private struct ScopeToggle: View {
+struct ScopeToggle: View {
     @Binding var showsAll: Bool
     @Namespace private var selection
 
@@ -521,7 +522,7 @@ private struct ScopeToggle: View {
     }
 }
 
-private struct SessionRow: View {
+struct SessionRow: View {
     let session: SessionSummary
     var showsProject = false
     let isSelected: Bool

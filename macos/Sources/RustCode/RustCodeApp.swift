@@ -40,6 +40,10 @@ struct RustCodeApp: App {
                 Button("New Chat") { Task { await model.newSession() } }
                     .keyboardShortcut("n", modifiers: .command)
             }
+            CommandGroup(after: .newItem) {
+                Button("Switch Chat…") { model.toggleSwitcher() }
+                    .keyboardShortcut("k", modifiers: .command)
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     model.settingsSection = .about
@@ -193,6 +197,12 @@ final class DesktopModel: ObservableObject {
         retry: { [weak self] text in Task { await self?.retry(text) } })
     @Published var showsSidebar = true
     @Published var showsSettings = false
+    /// ⌘K: the chat switcher over the window.
+    @Published var showsSwitcher = false
+    /// The switcher has text typed, so it searches the whole history.
+    var switcherSearches = false {
+        didSet { if switcherSearches { readAllSessionsForFilter() } }
+    }
     /// ⌘F: the find bar over the chat. Its query and matches live in `find`,
     /// so typing in it redraws the find bar, not every view watching the model.
     @Published var showsFind = false
@@ -474,15 +484,37 @@ final class DesktopModel: ObservableObject {
             contentMatches = []
             return
         }
-        let arguments = SessionContentSearch.arguments(query: query, allProjects: showsAllProjects)
         contentSearchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled, let self else { return }
-            let output = await self.runEngine(arguments)
+            let matches = await self.searchContents(query)
             guard !Task.isCancelled else { return }
-            self.contentMatches = output.flatMap { try? SessionContentSearch.parse($0) } ?? []
+            self.contentMatches = matches
             self.contentQuery = query
         }
+    }
+
+    /// Chats whose messages contain `query`, in the sidebar's scope.
+    func searchContents(_ query: String) async -> [SessionContentMatch] {
+        let output = await runEngine(SessionContentSearch.arguments(query: query, allProjects: showsAllProjects))
+        return output.flatMap { try? SessionContentSearch.parse($0) } ?? []
+    }
+
+    /// ⌘K opens the switcher, and closes it again. Not over Settings or
+    /// another panel, which has the keyboard.
+    func toggleSwitcher() {
+        if showsSwitcher {
+            showsSwitcher = false
+        } else if !coversChat {
+            showsSwitcher = true
+        }
+    }
+
+    /// Open the chat picked in the switcher.
+    func switchTo(_ session: SessionSummary) {
+        showsSwitcher = false
+        guard session.id != selectedSession else { return }
+        Task { await select(session) }
     }
 
     /// Commands matching the draft while its first word is being typed.
@@ -950,7 +982,8 @@ final class DesktopModel: ObservableObject {
         guard readAllTask == nil else { return }
         readAllTask = Task { [weak self] in
             while let self, !Task.isCancelled, self.hasMoreSessions, !self.moreSessionsFailed,
-                  !self.sessionFilter.trimmingCharacters(in: .whitespaces).isEmpty || self.showsArchived {
+                  !self.sessionFilter.trimmingCharacters(in: .whitespaces).isEmpty || self.showsArchived
+                    || self.switcherSearches {
                 await self.loadMoreSessions()
                 // Another page load may be running; wait for it, not spin.
                 if self.loadingMoreSessions { try? await Task.sleep(for: .milliseconds(50)) }
@@ -993,6 +1026,7 @@ final class DesktopModel: ObservableObject {
     /// A sheet or panel is open over the chat, which keeps its keys.
     var coversChat: Bool {
         showsSettings || renamingSession != nil || contextSheet != nil || commandResult != nil || composerPanel != nil
+            || showsSwitcher
     }
 
     /// The request shown for the selected session, if any.
