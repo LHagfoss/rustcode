@@ -6,7 +6,7 @@ import SwiftUI
 /// same breakdown the terminal's context panel shows.
 struct ContextSheet: View {
     let context: ContextBreakdown
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.closePanel) private var dismiss
 
     /// One colour per category, in the engine's legend order.
     static let palette: [Color] = [.blue, .purple, .orange, .teal, .indigo, .pink, .green]
@@ -32,8 +32,8 @@ struct ContextSheet: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
-        .frame(width: 440)
+        .padding(22)
+        .frame(width: 500)
     }
 
     private var header: some View {

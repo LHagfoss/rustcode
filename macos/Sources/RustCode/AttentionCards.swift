@@ -44,8 +44,7 @@ struct PermissionCard: View {
             .controlSize(.large)
         }
         .padding(16)
-        .floatingSurface(in: .rect(cornerRadius: 20))
-        .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Color.attention.opacity(0.5), lineWidth: 1) }
+        .attentionCard()
     }
 }
 
@@ -60,9 +59,10 @@ struct QuestionCard: View {
     var body: some View {
         let question = request.question!
         VStack(alignment: .leading, spacing: 12) {
+            // A question is a conversation, not a warning: the brand, not amber.
             Label(question.header.isEmpty ? "RustCode has a question" : question.header, systemImage: "questionmark.bubble.fill")
                 .font(.headline)
-                .foregroundStyle(Color.attention)
+                .foregroundStyle(Color.brand)
             Text(question.text).textSelection(.enabled)
             if question.multiple {
                 VStack(alignment: .leading, spacing: 6) {
@@ -74,13 +74,9 @@ struct QuestionCard: View {
                     }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     ForEach(request.answerOptions) { option in
-                        Button { Task { await model.answer(request, with: option) } } label: {
-                            Text(option.name).frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
+                        AnswerRow(title: option.name) { Task { await model.answer(request, with: option) } }
                     }
                 }
             }
@@ -108,7 +104,42 @@ struct QuestionCard: View {
             }
         }
         .padding(16)
-        .floatingSurface(in: .rect(cornerRadius: 20))
-        .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Color.attention.opacity(0.5), lineWidth: 1) }
+        .attentionCard()
+    }
+}
+
+/// One choice of a question: a full-width row that lights under the pointer.
+private struct AnswerRow: View {
+    let title: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title).multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                Image(systemName: "arrow.up.circle.fill")
+                    .foregroundStyle(Color.brand)
+                    .opacity(isHovered ? 1 : 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isHovered ? AnyShapeStyle(Color.brand.opacity(0.14)) : AnyShapeStyle(.fill.quaternary),
+                        in: .rect(cornerRadius: 12))
+            .contentShape(.rect(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private extension View {
+    /// An approval or question above the composer: Liquid Glass with a
+    /// neutral hairline. The header's symbol carries the state, not the edge.
+    func attentionCard() -> some View {
+        glassSurface(in: .rect(cornerRadius: 20))
+            .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.1), lineWidth: 1) }
     }
 }

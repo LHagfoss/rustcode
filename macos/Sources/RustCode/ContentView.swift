@@ -32,10 +32,10 @@ struct ContentView: View {
         .ignoresSafeArea()
         .tint(.brand)
         .background(WindowChrome())
-        .sheet(isPresented: $model.showsSettings) { SettingsView(model: model) }
-        .sheet(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
-        .sheet(item: $model.contextSheet) { ContextSheet(context: $0) }
-        .sheet(item: $model.commandResult) { CommandResultSheet(result: $0) }
+        .clickAwayPanel(isPresented: $model.showsSettings) { SettingsView(model: model) }
+        .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
+        .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0) }
+        .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
         .overlay { ToastStack(model: model) }
     }
 }
@@ -362,7 +362,7 @@ struct RenameSheet: View {
     let session: SessionSummary
     @State private var title: String
     @FocusState private var focused: Bool
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.closePanel) private var dismiss
 
     init(model: DesktopModel, session: SessionSummary) {
         self.model = model
@@ -384,15 +384,14 @@ struct RenameSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .buttonStyle(PillButtonStyle())
-                    .keyboardShortcut(.cancelAction)
                 Button("Rename", action: save)
                     .buttonStyle(PillButtonStyle(prominent: true))
                     .keyboardShortcut(.defaultAction)
                     .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .padding(20)
-        .frame(width: 380)
+        .padding(22)
+        .frame(width: 420)
         .onAppear { focused = true }
     }
 
@@ -760,7 +759,7 @@ private struct ChatView: View {
                         }
                     }
                     .padding(6)
-                    .frame(width: panel == .model ? 340 : panel == .effort ? 300 : 260, alignment: .leading)
+                    .frame(width: panel == .model ? 380 : panel == .effort ? 330 : 290, alignment: .leading)
                     .glassSurface(in: .rect(cornerRadius: 20))
                     if panel == .add { Spacer(minLength: 0) }
                 }
@@ -1746,7 +1745,7 @@ struct PopoverRow: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isHighlighted ? AnyShapeStyle(Color.brand.opacity(0.2))
                         : isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 14))

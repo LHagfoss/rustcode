@@ -176,7 +176,7 @@ private struct ToastView: View {
 /// A host command's full answer in a sheet, with its Markdown rendered.
 struct CommandResultSheet: View {
     let result: CommandResult
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.closePanel) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -199,6 +199,6 @@ struct CommandResultSheet: View {
                     .padding(16)
             }
         }
-        .frame(minWidth: 520, idealWidth: 620, minHeight: 280, idealHeight: 480)
+        .frame(maxWidth: 700, maxHeight: 560)
     }
 }
