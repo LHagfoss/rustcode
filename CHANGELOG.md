@@ -1,3 +1,13 @@
+## [v0.82.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.82.0) - 2026-10-20
+
+### Features
+- **Skills & MCP:** `/skills` is a toggle panel and `/mcp` shows live connection state; macOS Settings gains Skills and MCP Servers sections with search and switches. Toggles persist in the user `config.toml` and apply from the next message (#2174)
+- **Engine:** the macOS app's engine imports the login-shell environment, so MCP servers and tool shells see variables exported in zsh startup files (#2173)
+- **macOS:** read-only slash commands (`/status`, `/usage`, `/context`, `/mcp`…) answer during a running turn and `/cancel` stops it at once instead of waiting in the chat queue (#2171)
+- **macOS:** switching the sidebar between All and Project always shows the right sessions (#2167)
+- **macOS:** the transcript no longer goes blank after opening a session or sending, and scrolling up right after Latest no longer gets pulled back to the end (#2170)
+- **macOS:** ⌘F search stays responsive while typing in long chats (#2169)
+- **macOS:** toasts use Liquid Glass, swipe to dismiss, and the close button no longer resizes them on hover (#2168)
 ## [v0.81.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.81.1) - 2026-10-20
 
 ### Fixes
