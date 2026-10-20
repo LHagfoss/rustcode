@@ -260,6 +260,22 @@ final class DesktopModel: ObservableObject {
     private var engine: EngineProcess?
     /// The running engine's connection, for Settings' skills and MCP pages.
     var engineConnection: ACPConnection? { engine?.connection }
+    /// Discord Rich Presence, as the engine last reported it.
+    @Published private(set) var presence: PresenceStatus?
+
+    func loadPresence() async {
+        guard let connection = engine?.connection else { return }
+        let result = try? await connection.request(PresenceRequests.status, params: PresenceRequests.status(cwd: workspace), timeout: .seconds(10))
+        presence = result.flatMap(PresenceStatus.init(result:))
+    }
+
+    func setPresence(_ enabled: Bool) async {
+        guard let connection = engine?.connection else { return }
+        do {
+            let result = try await connection.request(PresenceRequests.set, params: PresenceRequests.set(enabled: enabled, cwd: workspace), timeout: .seconds(10))
+            presence = PresenceStatus(result: result)
+        } catch { self.error = "Could not change Discord Rich Presence: \(error)" }
+    }
     private var inboundTask: Task<Void, Never>?
     /// Inbound messages handled from the running engine, and who waits for a count.
     private var handledInbound = 0

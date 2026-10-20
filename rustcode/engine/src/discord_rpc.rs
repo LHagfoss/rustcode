@@ -34,6 +34,19 @@ pub struct DiscordPresence {
 }
 
 impl DiscordPresence {
+    /// Presence for a client that shares only which project is open and
+    /// whether it is working, such as the macOS app.
+    pub fn for_project(working: bool, project: &str) -> Self {
+        Self {
+            state: sanitize(if working { "Working" } else { "Idle" }),
+            details: sanitize(if project.trim().is_empty() {
+                "RustCode session"
+            } else {
+                project
+            }),
+        }
+    }
+
     pub fn from_activity_with_usage(
         activity: &ActivitySnapshot,
         session_title: &str,
