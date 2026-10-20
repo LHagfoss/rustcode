@@ -1,3 +1,8 @@
+## [v0.83.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.83.1) - 2026-10-20
+
+### Fixes
+- macOS: opened chats draw at once instead of showing blank until scrolled; each chat gets its own scroll view that opens at its latest message.
+- macOS: a chat pinned while open no longer stays highlighted after another chat is opened.
 ## [v0.83.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.83.0) - 2026-10-20
 
 ### Features
