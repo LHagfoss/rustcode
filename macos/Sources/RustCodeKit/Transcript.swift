@@ -60,6 +60,10 @@ public struct Transcript: Equatable, Sendable {
     /// transcript so each chat keeps its own while another is shown.
     public private(set) var usage: SessionUsage?
     private var nextId = 0
+    /// Which conversation this is. Item ids count from 0 in every chat, so a
+    /// view showing another chat must key on this too: keyed on ids alone,
+    /// the chat kept the last chat's row heights and drew nothing until scrolled.
+    public private(set) var identity = UUID()
 
     public init() {}
 
@@ -73,6 +77,7 @@ public struct Transcript: Equatable, Sendable {
     public mutating func removeAll() {
         items.removeAll()
         usage = nil
+        identity = UUID()
     }
 
     /// A prompt the user sent. The engine echoes user messages only when it

@@ -26,6 +26,9 @@ struct RustCodeApp: App {
                     ContentView(model: model)
                         .task { await model.start() }
                         .task { model.updater.startPolling() }
+                        #if DEBUG
+                        .task { DebugDriver.start(model) }
+                        #endif
                         .onDisappear { model.stop() }
                 }
             }
