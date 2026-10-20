@@ -1,3 +1,11 @@
+## [v0.83.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.83.0) - 2026-10-20
+
+### Features
+- macOS: Discord Rich Presence in the native app, opt-in per ACP client and limited to the project folder name and Working/Idle; toggle in Settings → General (#2179).
+- macOS: streamed replies fade in from a light blur, with a Settings toggle and Reduce Motion fallback (#2181).
+- macOS: opened chats no longer show blank or partial history when switching chats mid-load or when updates trail a response.
+- macOS: sidebar times follow the last message and keep updating, so idle chats stop reading "now"; sturdier row spinner and selection (#2178).
+- macOS: Settings, rename, /context and command answers close on a click outside or Esc; larger Settings, plain SF Symbol section icons, calmer approval and question cards (#2180).
 ## [v0.82.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.82.0) - 2026-10-20
 
 ### Features
