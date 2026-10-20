@@ -10,6 +10,12 @@ import Foundation
 public struct ChatFollow: Equatable, Sendable {
     /// How close to the end still counts as being at the newest output.
     public static let threshold: Double = 24
+    /// How close to the end a chat the reader let go of must rest to follow
+    /// again without the reader scrolling back down. Near the end is not
+    /// enough: right after Latest, every small scroll up rested within the
+    /// threshold, followed again and was pulled back to the end, so the chat
+    /// seemed stuck there until dragged away with its scroller.
+    public static let restingSlack: Double = 2
 
     /// What the chat's scroll view measures.
     public struct Geometry: Equatable, Sendable {
@@ -35,6 +41,8 @@ public struct ChatFollow: Equatable, Sendable {
         }
 
         public var isAtEnd: Bool { !canScroll || distanceFromBottom <= ChatFollow.threshold }
+        /// Resting at the end itself, not just near it.
+        public var isRestingAtEnd: Bool { !canScroll || distanceFromBottom <= ChatFollow.restingSlack }
     }
 
     /// The chat stays anchored to its end as output grows.
@@ -78,11 +86,10 @@ public struct ChatFollow: Equatable, Sendable {
             if new.isAtEnd, (movedDown && towardEnd) || follows { follows = true }
             return false
         }
-        // At the end means following, however the chat got there.
-        if new.isAtEnd {
-            follows = true
-            return false
-        }
+        // At the end means following, however the chat got there; near it,
+        // a chat the reader let go of stays let go.
+        if new.isRestingAtEnd { follows = true }
+        if new.isAtEnd { return false }
         return follows
     }
 
@@ -94,14 +101,14 @@ public struct ChatFollow: Equatable, Sendable {
 
     /// A scroll came to rest, after momentum or the bounce at the end.
     public mutating func scrollSettled() {
-        if geometry?.isAtEnd ?? true { follows = true }
+        if geometry?.isRestingAtEnd ?? true { follows = true }
     }
 
     /// The transcript changed. A chat left resting at its end follows again,
     /// so output never piles up below a reader who is already at the bottom.
     /// Returns whether the chat should scroll to its end.
     public mutating func transcriptChanged(readerScrolling: Bool) -> Bool {
-        if !follows, !readerScrolling, geometry?.isAtEnd ?? true { follows = true }
+        if !follows, !readerScrolling, geometry?.isRestingAtEnd ?? true { follows = true }
         return follows
     }
 

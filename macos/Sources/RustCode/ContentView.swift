@@ -15,7 +15,7 @@ struct ContentView: View {
                     .frame(width: 270)
                     .transition(.move(edge: .leading))
             }
-            ChatView(model: model, chat: model.chat)
+            ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
                 .terminalDrawer(model.terminal)
             if model.showsPreview {
@@ -536,6 +536,8 @@ private struct ChatView: View {
     /// The transcript publishes on its own, so streaming redraws the chat
     /// but not the sidebar or the composer.
     @ObservedObject var chat: LiveTranscript
+    /// Publishes once the matches for a query arrive, not per keystroke.
+    @ObservedObject var find: ChatFind
     @State private var composerHeight: CGFloat = 60
     /// The chat keeps the newest output in view. Scrolling up hands control to
     /// the reader and shows the Latest button; scrolling back down follows again.
@@ -556,8 +558,7 @@ private struct ChatView: View {
 
     var body: some View {
         let transcript = chat.transcript
-        // Found once per redraw: asked per row, every row searched the chat.
-        let currentMatch = model.showsFind ? model.currentMatch : nil
+        let currentMatch = model.showsFind ? find.currentMatch : nil
         let lastId = transcript.items.last?.id
         // Older rows are lazy: laid out eagerly, every resize re-measured the
         // whole chat (170 ms a step in a 250-message session). The newest rows
@@ -595,12 +596,17 @@ private struct ChatView: View {
                     // children unlaid, but not ids inside a child it has not
                     // laid out, so a jump from far up did nothing.
                     Color.clear.frame(height: 1).id(bottomAnchor)
+                        // The probe for the AppKit scroll view sits under this
+                        // last, empty row. Behind the whole stack, every row
+                        // drawn over it went into one layer as tall as the
+                        // chat, and a layer much taller than the window draws
+                        // nothing: the chat showed blank until scrolled.
+                        .background(EnclosingScrollView { [scroll] in scroll.scrollView = $0 })
                 }
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28)
                 .padding(.top, 20)
                 .frame(maxWidth: .infinity)
-                .background(EnclosingScrollView { [scroll] in scroll.scrollView = $0 })
             }
             .chatScroller(scroll) { delta, animated in
                 // Paging or dragging up is the reader leaving the end.
@@ -648,6 +654,7 @@ private struct ChatView: View {
                 scroll.setRows(rows)
             }
             .onChange(of: chat.transcript) { old, new in
+                find.transcriptChanged(new)
                 // Sending a message always brings the chat back to its end.
                 if new.items.count > old.items.count, case .user = new.items.last?.content { follow.jumpToLatest() }
                 if follow.transcriptChanged(readerScrolling: ChatScrollInput.shared.isActive), !model.showsFind {
@@ -658,6 +665,7 @@ private struct ChatView: View {
                 if follow.follows, !model.showsFind { scrollToEnd(proxy) }
             }
             .onChange(of: model.selectedSession) { _, _ in
+                find.transcriptChanged(chat.transcript, sessionChanged: true)
                 follow.jumpToLatest()
                 scrollToEnd(proxy)
             }
@@ -667,14 +675,14 @@ private struct ChatView: View {
                 withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(match, anchor: .center) }
             }
         }
-        .environment(\.findQuery, model.showsFind ? model.findQuery : "")
+        .environment(\.findQuery, model.showsFind ? find.appliedQuery : "")
         .environment(\.projectRoot, selected.map(\.cwd).flatMap { $0.isEmpty ? nil : $0 } ?? model.workspace.path)
         .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 header
                 if model.showsFind {
-                    FindBar(model: model, chat: chat)
+                    FindBar(model: model, find: find)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -988,15 +996,18 @@ private final class ChatScrollInput {
 /// ⌘F: find in the chat. ⏎ and ⌘G go to the next match, ⇧⏎ and ⇧⌘G back, Esc closes.
 private struct FindBar: View {
     @ObservedObject var model: DesktopModel
-    /// Matches change as the transcript does.
-    @ObservedObject var chat: LiveTranscript
+    /// Matches change as the query and the transcript do.
+    @ObservedObject var find: ChatFind
+    /// The field's own text: a keystroke redraws only this bar, and the
+    /// search for it runs off the main actor.
+    @State private var text = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        let count = model.findMatches.count
+        let count = find.matches.count
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find in chat", text: $model.findQuery)
+            TextField("Find in chat", text: $text)
                 .textFieldStyle(.plain)
                 .focused($focused)
                 .onKeyPress(.return, phases: .down) { press in
@@ -1004,11 +1015,12 @@ private struct FindBar: View {
                     return .handled
                 }
                 .onKeyPress(.escape) {
-                    if model.findQuery.isEmpty { close() } else { model.findQuery = "" }
+                    if text.isEmpty { close() } else { text = "" }
                     return .handled
                 }
-            if !model.findQuery.isEmpty {
-                Text(count == 0 ? "No matches" : "\(min(model.findIndex, count - 1) + 1) of \(count)")
+                .onChange(of: text) { _, text in find.setQuery(text) }
+            if !find.appliedQuery.isEmpty {
+                Text(count == 0 ? "No matches" : "\(min(find.index, count - 1) + 1) of \(count)")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -1032,7 +1044,11 @@ private struct FindBar: View {
         .frame(maxWidth: 560)
         .padding(.horizontal, 28)
         .padding(.bottom, 8)
-        .onAppear { focused = true }
+        .onAppear {
+            text = find.query
+            find.transcriptChanged(model.transcript)
+            focused = true
+        }
         .onChange(of: model.showsFind) { _, shown in if shown { focused = true } }
     }
 

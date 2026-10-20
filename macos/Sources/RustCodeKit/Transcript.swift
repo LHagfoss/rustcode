@@ -67,11 +67,7 @@ public struct Transcript: Equatable, Sendable {
 
     /// Ids of the items containing `query`, ignoring case and diacritics, in order.
     public func matches(_ query: String) -> [Int] {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
-        return items.filter {
-            $0.searchableText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-        }.map(\.id)
+        ChatFind.matches(in: items, query: query)
     }
 
     public mutating func removeAll() {
