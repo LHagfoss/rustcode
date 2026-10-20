@@ -657,6 +657,11 @@ private struct ChatView: View {
     /// Real row heights for the chat's own scroller. Held, not observed:
     /// measuring redraws only the scroller.
     @State private var scroll = ChatScrollState()
+    /// How much of a long chat is laid out: its newest items, and older ones
+    /// as the reader scrolls back (`TranscriptWindow`).
+    @State private var window = TranscriptWindow()
+    /// The row in view when older rows were asked for, and where it was.
+    @State private var pendingTop: (row: Int, minY: Double)?
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
@@ -672,18 +677,23 @@ private struct ChatView: View {
         let transcript = chat.transcript
         let currentMatch = model.showsFind ? find.currentMatch : nil
         let lastId = transcript.items.last?.id
+        let first = window.firstShown(identity: transcript.identity, count: transcript.items.count)
         // Older rows are lazy: laid out eagerly, every resize re-measured the
         // whole chat (170 ms a step in a 250-message session). The newest rows
         // stay eager, so the part being read never changes height under the
         // reader while scrolling near the end.
-        let split = max(transcript.items.count - Self.eagerTail, 0)
+        let split = max(transcript.items.count - Self.eagerTail, first)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     // Home's target: always the stack's first child, so the
                     // jump finds it however far down the chat is.
                     Color.clear.frame(height: 0).id(topAnchor)
-                    ForEach(transcript.items[..<split]) { item in
+                    if first > 0 {
+                        EarlierMessages(count: first)
+                            .reportsChatRow(Self.earlierRow, to: scroll)
+                    }
+                    ForEach(transcript.items[first..<split]) { item in
                         TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch)
                             .equatable()
                             .reportsChatRow(item.id, to: scroll)
@@ -761,6 +771,8 @@ private struct ChatView: View {
             }
             .followsLatest($follow, scroll: scroll) { scrollToEnd(proxy) }
             .onAppear {
+                scroll.earlierRow = Self.earlierRow
+                scroll.nearTop = { showEarlier(proxy) }
                 TranscriptKeyInput.shared.start()
                 TranscriptKeyInput.shared.isCovered = { [model] in model.coversChat }
                 TranscriptKeyInput.shared.perform = { action in perform(action, proxy) }
@@ -774,7 +786,12 @@ private struct ChatView: View {
                 return CGRect(x: frame.minX, y: frame.minY + insets.top, width: frame.width,
                               height: max(frame.height - insets.top - insets.bottom, 0))
             } action: { ChatScrollInput.shared.chatFrame = $0 }
-            .onChange(of: transcript.items.map(\.id) + (isReplyStreaming ? [Self.workingRow] : []), initial: true) { _, rows in
+            .onChange(of: first) { _, _ in restoreTop(proxy) }
+            .onChange(of: transcript.identity, initial: true) { _, identity in
+                window.open(identity: identity, count: chat.transcript.items.count)
+            }
+            .onChange(of: (first > 0 ? [Self.earlierRow] : []) + transcript.items[first...].map(\.id)
+                        + (isReplyStreaming ? [Self.workingRow] : []), initial: true) { _, rows in
                 scroll.setRows(rows)
             }
             .onChange(of: chat.transcript) { old, new in
@@ -796,7 +813,15 @@ private struct ChatView: View {
             .onChange(of: currentMatch) { _, match in
                 guard let match else { return }
                 follow.letGo()
-                withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(match, anchor: .center) }
+                // A match older than the window joins it first, then is
+                // scrolled to once its row exists.
+                let items = chat.transcript.items
+                if let index = items.firstIndex(where: { $0.id == match }),
+                   window.reveal(index, identity: chat.transcript.identity, count: items.count) {
+                    DispatchQueue.main.async { proxy.scrollTo(match, anchor: .center) }
+                } else {
+                    withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(match, anchor: .center) }
+                }
             }
         }
         .environment(\.findQuery, model.showsFind ? find.appliedQuery : "")
@@ -919,6 +944,31 @@ private struct ChatView: View {
     private let topAnchor = "top"
     /// The working indicator's place in the scroller's map, after every row.
     private static let workingRow = Int.max
+    /// The earlier-messages row's place, before every row.
+    private static let earlierRow = Int.min
+
+    /// The reader neared the top of the rows shown: add the page before them,
+    /// keeping the row in view where it is.
+    /// The lazy stack places rows added above at guessed heights and moves
+    /// the rows in view with every guess, so the row in view is found again
+    /// by id once they are in, and put back where it was.
+    private func showEarlier(_ proxy: ScrollViewProxy) {
+        let transcript = chat.transcript
+        guard window.hasEarlier(identity: transcript.identity, count: transcript.items.count) else { return }
+        pendingTop = scroll.topRow()
+        scroll.pauseNearTop()
+        window.showEarlier(identity: transcript.identity, count: transcript.items.count)
+    }
+
+    /// The older rows are in: go back to the row that was in view.
+    private func restoreTop(_ proxy: ScrollViewProxy) {
+        guard let top = pendingTop else { return }
+        pendingTop = nil
+        DispatchQueue.main.async {
+            proxy.scrollTo(top.row, anchor: .top)
+            scroll.hold(top.row, at: top.minY)
+        }
+    }
     /// Newest rows laid out eagerly; everything older is lazy.
     private static let eagerTail = 20
 
@@ -955,7 +1005,11 @@ private struct ChatView: View {
             scroll.scroll(by: page, animated: true)
         case .top:
             follow.letGo()
-            proxy.scrollTo(topAnchor, anchor: .top)
+            if window.showAll(identity: chat.transcript.identity, count: chat.transcript.items.count) {
+                DispatchQueue.main.async { proxy.scrollTo(topAnchor, anchor: .top) }
+            } else {
+                proxy.scrollTo(topAnchor, anchor: .top)
+            }
         case .end:
             jumpToLatest(proxy)
         }
@@ -1011,6 +1065,24 @@ private struct CommandSuggestions: View {
             }
             .transition(.opacity)
         }
+    }
+}
+
+/// Above the oldest message laid out while older ones wait: they join as
+/// the reader scrolls up to here.
+private struct EarlierMessages: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(count == 1 ? "1 earlier message" : "\(count) earlier messages")
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
     }
 }
 

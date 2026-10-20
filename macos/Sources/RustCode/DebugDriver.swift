@@ -29,17 +29,102 @@ enum DebugDriver {
         Int(index).flatMap { model.visibleSessions.indices.contains($0) ? model.visibleSessions[$0] : nil }
     }
 
+    private static func ms(_ from: Date, _ to: Date) -> Int { Int(to.timeIntervalSince(from) * 1000) }
+
+    /// Appends a line to `<dir>/time`.
+    private static func report(_ line: String) {
+        let path = (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/time"
+        let old = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        try? (old + line + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
     private static func run(_ line: String, _ model: DesktopModel) async {
         let parts = line.split(separator: " ").map(String.init)
         switch parts.first {
         case "select": if let s = session(parts[1], model) { await model.select(s) }
         case "open":
-            if let s = model.sessions.first(where: { $0.id == parts[1] }) { await model.select(s) }
+            await model.select(model.sessions.first { $0.id == parts[1] } ?? SessionSummary(id: parts[1], cwd: model.workspace.path))
+        case "timeopen":
+            // How long a chat takes to open and to draw its first frame.
+            let start = Date()
+            await model.select(model.sessions.first { $0.id == parts[1] } ?? SessionSummary(id: parts[1], cwd: model.workspace.path))
+            let loaded = Date()
+            let window = NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+            window?.contentView?.layoutSubtreeIfNeeded()
+            window?.displayIfNeeded()
+            let drawn = Date()
+            report("open items \(model.transcript.items.count) load \(ms(start, loaded)) ms first frame \(ms(loaded, drawn)) ms")
+        case "synth":
+            // `synth <items>`: a long chat of mixed messages, shown at once.
+            let count = Int(parts[1]) ?? 3000
+            var transcript = Transcript()
+            for index in 0..<count {
+                switch index % 4 {
+                case 0: transcript.apply(.userText("Question \(index): how does the parser handle nested blocks?"))
+                case 1: transcript.apply(.toolCall(id: "t\(index)", title: "Read src/file\(index).rs", kind: "read", status: .completed,
+                                                   input: nil, detail: "src/file\(index).rs"))
+                default: transcript.apply(.agentText("Answer \(index). " + String(repeating: "The parser walks each block and **keeps** its `state` for the next one. ", count: 1 + index % 7) + "\n\n- one\n- two\n\n```swift\nlet x = \(index)\n```\n"))
+                }
+            }
+            let start = Date()
+            model.transcript = transcript
+            // The chat publishes on its next frame.
+            try? await Task.sleep(for: .milliseconds(40))
+            let window = NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+            window?.contentView?.layoutSubtreeIfNeeded()
+            window?.displayIfNeeded()
+            report("synth items \(model.transcript.items.count) first frame \(ms(start, Date())) ms")
+        case "timescroll":
+            // `timescroll <steps> <points>`: scroll the chat up step by step,
+            // laying out and drawing each, as a reader paging back would.
+            let steps = Int(parts[1]) ?? 40
+            let delta = Double(parts.count > 2 ? parts[2] : "800") ?? 800
+            func find(_ view: NSView) -> NSScrollView? {
+                if let scroll = view as? NSScrollView, scroll.frame.width > 400 { return scroll }
+                return view.subviews.lazy.compactMap(find).first
+            }
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let scroll = window.contentView.flatMap(find) else { break }
+            var worst = 0.0, total = 0.0
+            for _ in 0..<steps {
+                let start = Date()
+                var bounds = scroll.contentView.bounds
+                bounds.origin.y -= delta
+                scroll.contentView.setBoundsOrigin(scroll.contentView.constrainBoundsRect(bounds).origin)
+                scroll.reflectScrolledClipView(scroll.contentView)
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                let step = Date().timeIntervalSince(start) * 1000
+                if parts.contains("trace") { report("  y \(Int(scroll.contentView.bounds.minY)) \(ChatScrollState.current?.debugDescription ?? "-")") }
+                worst = max(worst, step)
+                total += step
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            report("timescroll \(steps)x\(Int(delta)) avg \(Int(total / Double(steps))) ms worst \(Int(worst)) ms, at y \(Int(scroll.contentView.bounds.minY)) of \(Int(scroll.documentView?.frame.height ?? 0))")
+        case "diff":
+            // An edit whose diff ends in added lines, at the end of the chat.
+            let old = (0..<12).map { "line \($0)" }.joined(separator: "\n")
+            let new = (0..<4).map { "line \($0)" }.joined(separator: "\n") + "\n.added {\n  display: grid;\n  gap: 12px;\n}\n"
+            model.transcript.apply(.toolCall(id: "diff", title: "Edit styles.css", kind: "edit", status: .completed, input: nil))
+            model.transcript.apply(.toolCallUpdate(id: "diff", title: nil, status: .completed, output: nil,
+                                                   diffs: [FileDiff(path: "/tmp/styles.css", oldText: old, newText: new)]))
+        case "stream":
+            // `stream <chunks>`: a reply streamed into the shown chat at 30 ms
+            // a chunk; the time beyond that is what drawing it cost.
+            let chunks = Int(parts[1]) ?? 100
+            let start = Date()
+            for index in 0..<chunks {
+                model.transcript.apply(.agentText(index % 12 == 0 ? "\n\nNext paragraph with `code` and **bold** " : "word "))
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            let elapsed = Date().timeIntervalSince(start) * 1000
+            report("stream \(chunks) chunks over \(model.transcript.items.count) items: \(Int(elapsed)) ms, overhead \(Int(elapsed) - chunks * 30) ms")
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
         case "dump":
             var lines = ["items \(model.transcript.items.count) selected \(model.selectedSession ?? "-")",
-                         "sessions \(model.sessions.count) visible \(model.visibleSessions.count) more \(model.hasMoreSessions)"]
+                         "sessions \(model.sessions.count) visible \(model.visibleSessions.count) more \(model.hasMoreSessions)",
+                         "chat \(ChatScrollState.current?.debugDescription ?? "-")"]
             func walk(_ view: NSView) {
                 if let scroll = view as? NSScrollView, scroll.frame.width > 400 {
                     let doc = scroll.documentView
@@ -54,7 +139,8 @@ enum DebugDriver {
             // A key press as the keyboard sends it: `key <code> [shift|cmd|opt]`.
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
                   let code = UInt16(parts[1]) else { break }
-            var flags: NSEvent.ModifierFlags = [.function]
+            // Page, Home, End and the arrows come with the Function flag.
+            var flags: NSEvent.ModifierFlags = (115...126).contains(code) ? [.function] : []
             if parts.contains("shift") { flags.insert(.shift) }
             if parts.contains("cmd") { flags.insert(.command) }
             if parts.contains("opt") { flags.insert(.option) }
@@ -74,6 +160,16 @@ enum DebugDriver {
                 let y = document.isFlipped ? document.frame.height - scroll.contentView.bounds.height : 0
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
                 scroll.reflectScrolledClipView(scroll.contentView)
+            }
+        case "type":
+            // Text typed into whatever has focus, a key press per character.
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { break }
+            for character in line.dropFirst(5) {
+                if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                windowNumber: window.windowNumber, context: nil, characters: String(character),
+                                                charactersIgnoringModifiers: String(character), isARepeat: false, keyCode: 0) {
+                    NSApp.postEvent(event, atStart: false)
+                }
             }
         case "scope": model.showsAllProjects = parts[1] == "all"
         case "filter":
