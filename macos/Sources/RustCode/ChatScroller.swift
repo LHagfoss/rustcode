@@ -30,6 +30,9 @@ final class ChatScrollState: ObservableObject {
     var track: Double { max(visible - 2 * Self.trackMargin, 0) }
 
     func setRows(_ rows: [Int]) {
+        #if DEBUG
+        Self.current = self
+        #endif
         map.setRows(rows)
         setNeedsUpdate()
     }
@@ -37,7 +40,89 @@ final class ChatScrollState: ObservableObject {
     func rowFrame(_ row: Int, _ frame: CGRect) {
         frames[row] = frame
         map.measured(row, height: frame.height)
+        holdAnchor(row, frame)
         setNeedsUpdate()
+    }
+
+    // MARK: Older rows joining at the top (`TranscriptWindow`)
+
+    #if DEBUG
+    /// The open chat's state, for the debug driver.
+    static weak var current: ChatScrollState?
+    /// The row at the top of the view, where it is, and the rows mapped.
+    var debugDescription: String {
+        let top = reference.map { "top row \($0.key) at \(Int($0.value.minY))" } ?? "no rows"
+        return "\(top), rows \(map.rows.count) first \(map.rows.first.map(String.init) ?? "-")"
+    }
+    #endif
+
+    /// The chat's view is near the top of the rows it has: it adds older
+    /// ones. Set by the chat.
+    var nearTop: () -> Void = {}
+    /// Rows this close to the top, in screens, ask for older ones.
+    static let nearTopScreens: Double = 1.5
+    /// A row kept where it was on screen while rows are added above it:
+    /// where it was in the view, the scroll offset then, and until when.
+    /// Rows added above a lazy stack take a guessed height, then their real
+    /// one over the next passes, and each pass pushed the reader's message
+    /// down: until the window closes, every move of the row that the
+    /// reader's own scrolling does not explain is scrolled back.
+    private var anchor: (row: Int, minY: Double, offset: Double?, until: Date)?
+    /// How long rows added above keep being corrected for.
+    static let anchorDuration: TimeInterval = 1.5
+    /// The row that marks earlier messages; never an anchor, as it stays on top.
+    var earlierRow: Int?
+
+    private var clipOffset: Double? { scrollView.map { Double($0.contentView.bounds.minY) } }
+
+    /// The row at the top of the view and where it is, other than the
+    /// earlier-messages row.
+    func topRow() -> (row: Int, minY: Double)? {
+        frames.filter { $0.key != earlierRow }.min { distance($0.value) < distance($1.value) }
+            .map { ($0.key, Double($0.value.minY)) }
+    }
+
+    /// Rows are about to be added above the view: ask for no more until the
+    /// row in view is held again.
+    private var pausedUntil = Date.distantPast
+
+    func pauseNearTop() {
+        pausedUntil = Date().addingTimeInterval(Self.anchorDuration)
+    }
+
+    /// Hold `row` at `minY` in the view, as it was before rows were added
+    /// above it and the chat was scrolled back to it.
+    func hold(_ row: Int, at minY: Double) {
+        let until = Date().addingTimeInterval(Self.anchorDuration)
+        // The scroll back to the row lands with its first report; only
+        // scrolling after that is the reader's.
+        anchor = (row, minY, nil, until)
+        pausedUntil = until
+        // Look again once the hold ends, in case the view is still near the top.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.anchorDuration + 0.1))
+            self?.setNeedsUpdate()
+        }
+    }
+
+    /// Rows are being added above the view, so nothing more is asked for.
+    var isAnchoring: Bool { Date() < pausedUntil }
+
+    private func holdAnchor(_ row: Int, _ frame: CGRect) {
+        guard let anchor, anchor.row == row, let offset = clipOffset else { return }
+        guard Date() < anchor.until else {
+            self.anchor = nil
+            return
+        }
+        // The reader scrolling down by d moves the row up by d.
+        let expected = anchor.minY - (anchor.offset.map { offset - $0 } ?? 0)
+        let moved = frame.minY - expected
+        guard abs(moved) > 0.5 else {
+            if anchor.offset == nil { self.anchor = (row, expected, offset, anchor.until) }
+            return
+        }
+        scroll(by: moved, animated: false)
+        self.anchor = (row, expected, clipOffset ?? offset + moved, anchor.until)
     }
 
     func rowGone(_ row: Int) {
@@ -122,6 +207,7 @@ final class ChatScrollState: ObservableObject {
         // from the visible area; wait for one that spans its top.
         guard let (row, frame) = reference, distance(frame) <= visible, let top = map.top(of: row) else { return }
         let offset = top - frame.minY
+        if offset < visible * Self.nearTopScreens, !isAnchoring { nearTop() }
         let content = map.contentHeight()
         guard let target = ChatScrollerKnob(offset: offset, contentHeight: content, visible: visible, track: track) else {
             if knob != nil { knob = nil }
