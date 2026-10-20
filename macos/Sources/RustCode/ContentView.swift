@@ -19,11 +19,11 @@ struct ContentView: View {
             }
             ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
-                .terminalDrawer(model.terminal)
+                .terminalDrawer(model.terminal, keybindings: model.keybindings)
             if model.showsPreview {
                 HStack(spacing: 0) {
                     PreviewResizeHandle(width: $previewWidth)
-                    PreviewPanel(preview: model.preview) { model.togglePreview() }
+                    PreviewPanel(preview: model.preview, keybindings: model.keybindings) { model.togglePreview() }
                         .frame(width: CGFloat(previewWidth))
                 }
                 .background(Color.chatBackground)
@@ -140,12 +140,12 @@ private struct SessionSidebar: View {
             HStack(spacing: 2) {
                 Spacer()
                 ToolbarCluster {
-                    ClusterButton(systemImage: "sidebar.left", help: "Hide sidebar (⌘B)") { model.toggleSidebar() }
+                    ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Hide sidebar", .toggleSidebar)) { model.toggleSidebar() }
                     ClusterButton(systemImage: "archivebox", help: model.showsArchived ? "Back to chats" : "Archived chats",
                                   isOn: model.showsArchived) {
                         withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
                     }
-                    ClusterButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
+                    ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New chat", .newChat)) { Task { await model.newSession() } }
                 }
             }
             .padding(.leading, 80)
@@ -305,8 +305,8 @@ private struct SessionSidebar: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .help("Choose project folder (⌘O)")
-                ChromeButton(systemImage: "gearshape", help: "Settings (⌘,)") { model.showsSettings = true }
+                .help(model.keybindings.help("Choose project folder", .chooseProject))
+                ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.showsSettings = true }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 10)
@@ -898,8 +898,8 @@ private struct ChatView: View {
         HStack(spacing: 10) {
             if !model.showsSidebar {
                 ToolbarCluster {
-                    ClusterButton(systemImage: "sidebar.left", help: "Show sidebar (⌘B)") { model.toggleSidebar() }
-                    ClusterButton(systemImage: "square.and.pencil", help: "New chat (⌘N)") { Task { await model.newSession() } }
+                    ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Show sidebar", .toggleSidebar)) { model.toggleSidebar() }
+                    ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New chat", .newChat)) { Task { await model.newSession() } }
                 }
                 .padding(.leading, 70)
             }
@@ -915,21 +915,21 @@ private struct ChatView: View {
             }
             if let session = model.sessions.first(where: { $0.id == model.selectedSession }) {
                 ToolbarCluster {
-                    ClusterButton(systemImage: "magnifyingglass", help: "Find in chat (⌘F)", isOn: model.showsFind) {
+                    ClusterButton(systemImage: "magnifyingglass", help: model.keybindings.help("Find in chat", .findInChat), isOn: model.showsFind) {
                         model.showsFind.toggle()
                     }
                     ClusterButton(systemImage: model.pinnedSessions.contains(session.id) ? "pin.fill" : "pin",
-                                  help: model.pinnedSessions.contains(session.id) ? "Unpin chat" : "Pin chat",
+                                  help: model.keybindings.help(model.pinnedSessions.contains(session.id) ? "Unpin chat" : "Pin chat", .pinChat),
                                   isOn: model.pinnedSessions.contains(session.id)) { model.togglePin(session) }
                     ClusterButton(systemImage: "folder", help: "Show chat in Finder") {
                         Task { await model.revealInFinder(session) }
                     }
                 }
             }
-            TerminalToolbarButton(terminal: model.terminal)
+            TerminalToolbarButton(terminal: model.terminal, keybindings: model.keybindings)
             if !model.showsPreview {
                 ToolbarCluster {
-                    ClusterButton(systemImage: "globe", help: "Show localhost preview (⇧⌘P)") { model.togglePreview() }
+                    ClusterButton(systemImage: "globe", help: model.keybindings.help("Show localhost preview", .togglePreview)) { model.togglePreview() }
                 }
             }
         }
@@ -1283,9 +1283,9 @@ private struct FindBar: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            ChromeButton(systemImage: "chevron.up", help: "Previous (⇧⌘G)") { model.findNext(-1) }
+            ChromeButton(systemImage: "chevron.up", help: model.keybindings.help("Previous", .findPrevious)) { model.findNext(-1) }
                 .disabled(count == 0)
-            ChromeButton(systemImage: "chevron.down", help: "Next (⌘G)") { model.findNext() }
+            ChromeButton(systemImage: "chevron.down", help: model.keybindings.help("Next", .findNext)) { model.findNext() }
                 .disabled(count == 0)
             Button("Done") { close() }
                 .buttonStyle(.plain)
@@ -1613,8 +1613,7 @@ private struct Composer: View {
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
-            .help("Stop turn (⌘.)")
-            .keyboardShortcut(".", modifiers: .command)
+            .help(model.keybindings.help("Stop turn", .stopTurn))
         } else {
             Button { Task { await model.submit() } } label: {
                 Image(systemName: "arrow.up")

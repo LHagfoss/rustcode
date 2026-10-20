@@ -172,6 +172,25 @@ enum DebugDriver {
                 }
             }
         case "scope": model.showsAllProjects = parts[1] == "all"
+        case "settings":
+            if parts.count > 1, let section = SettingsSection(rawValue: parts.dropFirst().joined(separator: " ")) {
+                model.settingsSection = section
+            }
+            model.showsSettings = true
+        case "keybind":
+            // `keybind <action> <key> [cmd|opt|shift|ctrl]...`
+            guard parts.count > 2, let action = KeybindingAction(rawValue: parts[1]) else { break }
+            var modifiers: KeyModifiers = []
+            for part in parts.dropFirst(3) {
+                switch part {
+                case "cmd": modifiers.insert(.command)
+                case "opt": modifiers.insert(.option)
+                case "shift": modifiers.insert(.shift)
+                case "ctrl": modifiers.insert(.control)
+                default: break
+                }
+            }
+            _ = model.keybindings.assign(KeyCombo(key: parts[2], modifiers: modifiers), to: action)
         case "filter":
             model.sessionFilter = parts.dropFirst().joined(separator: " ")
         case "size":

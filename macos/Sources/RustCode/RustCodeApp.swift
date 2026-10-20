@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import RustCodeKit
 import RustCodeTerminal
@@ -38,11 +39,14 @@ struct RustCodeApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { Task { await model.newSession() } }
-                    .keyboardShortcut("n", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .newChat))
             }
             CommandGroup(after: .newItem) {
                 Button("Switch Chat…") { model.toggleSwitcher() }
-                    .keyboardShortcut("k", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .switchChat))
+                Button("Stop Turn") { Task { await model.cancel() } }
+                    .keyboardShortcut(model.keybindings.shortcut(for: .stopTurn))
+                    .disabled(!model.busy)
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
@@ -51,35 +55,35 @@ struct RustCodeApp: App {
                     Task { await model.updater.check() }
                 }
                 Button("Choose Project…") { model.chooseWorkspace() }
-                    .keyboardShortcut("o", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .chooseProject))
             }
             // Settings open as a sheet in the main window, not a window of their own.
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { model.settingsSection = .general; model.showsSettings = true }
-                    .keyboardShortcut(",", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .settings))
             }
             CommandGroup(after: .textEditing) {
                 Button("Find in Chat…") { model.showsFind = true }
-                    .keyboardShortcut("f", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .findInChat))
                 Button("Find Next") { model.findNext() }
-                    .keyboardShortcut("g", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .findNext))
                 Button("Find Previous") { model.findNext(-1) }
-                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .keyboardShortcut(model.keybindings.shortcut(for: .findPrevious))
             }
             CommandGroup(replacing: .printItem) {
                 Button(model.isSelectedPinned ? "Unpin Chat" : "Pin Chat") { model.togglePinSelected() }
-                    .keyboardShortcut("p", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .pinChat))
                     .disabled(model.selectedSession == nil)
             }
             CommandGroup(before: .sidebar) {
                 Button(model.showsSidebar ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
-                    .keyboardShortcut("b", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .toggleSidebar))
                 Button(model.showsPreview ? "Hide Preview" : "Show Preview") { model.togglePreview() }
-                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .keyboardShortcut(model.keybindings.shortcut(for: .togglePreview))
                 Button("Reload Preview") { model.preview.reload() }
-                    .keyboardShortcut("r", modifiers: .command)
+                    .keyboardShortcut(model.keybindings.shortcut(for: .reloadPreview))
                     .disabled(!model.showsPreview)
-                TerminalMenuItems(terminal: model.terminal)
+                TerminalMenuItems(terminal: model.terminal, keybindings: model.keybindings)
             }
         }
     }
@@ -125,6 +129,10 @@ final class ComposerDraft: ObservableObject {
 @MainActor
 final class DesktopModel: ObservableObject {
     let updater = Updater()
+    /// The user's app shortcuts, shared by the menus and Settings.
+    let keybindings = KeybindingStore()
+    /// Keeps the real menu's key equivalents in step with `keybindings`.
+    private lazy var keybindingMenuSync = KeybindingMenuSync(store: keybindings)
     @Published var composerPanel: ComposerPanel?
     /// The `/context` breakdown shown in its sheet.
     @Published var contextSheet: ContextBreakdown?
@@ -312,6 +320,8 @@ final class DesktopModel: ObservableObject {
         } catch { self.error = "Could not change Discord Rich Presence: \(error)" }
     }
     private var inboundTask: Task<Void, Never>?
+    /// A shortcut change in Settings redraws the window's menus and tooltips.
+    private var keybindingChanges: AnyCancellable?
     /// Inbound messages handled from the running engine, and who waits for a count.
     private var handledInbound = 0
     private var inboundWaiters: [(count: Int, resume: CheckedContinuation<Void, Never>)] = []
@@ -337,6 +347,10 @@ final class DesktopModel: ObservableObject {
             Task { await self.select(session) }
         }
         TurnNotifier.shared.start()
+        keybindingChanges = keybindings.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        _ = keybindingMenuSync
     }
 
     private func chatTitle(_ session: String) -> String {
