@@ -110,6 +110,13 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(SessionSummary.list(from: page).first?.projectName, "app")
     }
 
+    func testMergedSessionListHasEachChatOnce() {
+        let listed = [SessionSummary(id: "a", cwd: "/p"), SessionSummary(id: "b", cwd: "/p"), SessionSummary(id: "a", cwd: "/p")]
+        let started = [SessionSummary.started(id: "new", cwd: "/p", prompt: "hi", model: nil),
+                       SessionSummary.started(id: "b", cwd: "/p", prompt: "b", model: nil)]
+        XCTAssertEqual(SessionSummary.merging(listed, started: started).map(\.id), ["new", "a", "b"])
+    }
+
     func testAvailableCommandsCarryActionAndArguments() {
         let update = SessionUpdate(notificationParams: ["sessionId": "s", "update": [
             "sessionUpdate": "available_commands_update",
@@ -167,5 +174,22 @@ final class ProtocolTests: XCTestCase {
         let locator = EngineLocator(userSetting: nil, environment: [:], bundleURL: app,
                                     homeDirectory: root, isExecutable: EngineLocator.isExecutableFile)
         XCTAssertEqual(try locator.locate().source, .bundled)
+    }
+}
+
+final class ACPConnectionOrderTests: XCTestCase {
+    /// A response resolves at once while the updates sent before it may
+    /// still be queued, so the connection counts what it delivered.
+    func testInboundCountCoversUpdatesSentBeforeAResponse() async throws {
+        let connection = ACPConnection(writer: { _ in })
+        let pending = Task { try await connection.request("session/load", params: [:]) }
+        while await connection.inboundCount == 0, !(await connection.hasPending) { await Task.yield() }
+        for index in 0..<3 {
+            await connection.receive(line: Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"n":\#(index)}}"#.utf8))
+        }
+        await connection.receive(line: Data(#"{"jsonrpc":"2.0","id":1,"result":{}}"#.utf8))
+        _ = try await pending.value
+        let delivered = await connection.inboundCount
+        XCTAssertEqual(delivered, 3)
     }
 }

@@ -210,6 +210,9 @@ private struct SessionSidebar: View {
             // pointer, and none of them hears it leave: forget the hover so
             // only the row the pointer next moves over lights up.
             .onChange(of: (pinned + unpinned).map(\.id)) { _, _ in hoveredSession = nil }
+            // A chat opened from the keyboard, a toast or a notification
+            // leaves the pointer's row lit beside the new selection.
+            .onChange(of: model.selectedSession) { _, _ in hoveredSession = nil }
             .overlay {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
@@ -476,9 +479,13 @@ private struct SessionRow: View {
                             }
                             Spacer(minLength: 6)
                             if let updated = session.updatedAt {
-                                Text(updated, format: .relative(presentation: .named))
-                                    .lineLimit(1)
-                                    .layoutPriority(1)
+                                // Redrawn each minute: formatted once, a chat
+                                // read "now" for as long as its row stood still.
+                                TimelineView(.periodic(from: .now, by: 30)) { context in
+                                    Text(SessionRow.age(of: updated, now: context.date))
+                                        .lineLimit(1)
+                                }
+                                .layoutPriority(1)
                             }
                         }
                         .font(.caption)
@@ -491,7 +498,7 @@ private struct SessionRow: View {
                         .foregroundStyle(Color.attention)
                         .help("Waiting for your answer")
                 } else if isRunning {
-                    ProgressView().controlSize(.small)
+                    RowSpinner()
                 }
             }
             .padding(.horizontal, 10)
@@ -524,10 +531,34 @@ private struct SessionRow: View {
         return text
     }
 
+    /// "now" for the last minute, then "5 min. ago", "3 hours ago"…
+    static func age(of date: Date, now: Date) -> String {
+        guard now.timeIntervalSince(date) >= 60 else { return "now" }
+        return date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+    }
+
     /// Selection is the one strong fill; hover is a faint wash so a hovered
     /// row never reads as a second selection.
     private var rowFill: Color {
         isSelected ? Color.primary.opacity(0.1) : isHovered ? Color.primary.opacity(0.035) : .clear
+    }
+}
+
+/// A chat's running turn in the sidebar. Drawn by SwiftUI rather than an
+/// AppKit progress indicator, which a lazy list could leave spinning on a row
+/// after it was taken away.
+private struct RowSpinner: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
+            Circle()
+                .trim(from: 0, to: 0.7)
+                .stroke(.secondary, style: StrokeStyle(lineWidth: 1.75, lineCap: .round))
+                .rotationEffect(.degrees(turn * 360))
+        }
+        .frame(width: 12, height: 12)
+        .padding(2)
+        .accessibilityLabel("Working")
     }
 }
 
@@ -634,7 +665,7 @@ private struct ChatView: View {
                 .animation(.snappy(duration: 0.2), value: showsLatest)
             }
             .overlay {
-                if model.loadingSession != nil, model.loadingSession == model.selectedSession {
+                if model.isLoadingSelected {
                     ProgressView("Loading chat…").controlSize(.small).foregroundStyle(.secondary)
                 } else if transcript.isEmpty, !model.busy {
                     EmptyChat(workspace: model.workspace)

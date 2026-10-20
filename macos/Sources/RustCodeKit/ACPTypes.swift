@@ -170,10 +170,13 @@ public struct SessionSummary: Identifiable, Equatable, Sendable {
     }
 
     /// The engine's list, with every started chat it does not list yet on top.
+    /// Each chat appears once: the sidebar keys its rows by id, and a repeated
+    /// id drew two rows that shared one row's selection and spinner.
     public static func merging(_ listed: [SessionSummary], started: [SessionSummary]) -> [SessionSummary] {
         let known = Set(listed.map(\.id))
-        return started.filter { !known.contains($0.id) }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
-            + listed
+        var seen = Set<String>()
+        return (started.filter { !known.contains($0.id) }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+            + listed).filter { seen.insert($0.id).inserted }
     }
 
     /// `provider/model` reads as just the model.

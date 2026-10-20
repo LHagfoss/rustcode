@@ -12,9 +12,10 @@ final class TurnNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// Opens the chat a clicked notification is about.
     var openSession: ((String) -> Void)?
 
-    /// Notifications need a bundled app; `swift run` has none.
+    /// Notifications need a bundled app; `swift run` and the test runner have none.
     private var center: UNUserNotificationCenter? {
-        Bundle.main.bundleIdentifier == nil ? nil : UNUserNotificationCenter.current()
+        Bundle.main.bundleIdentifier == nil || Bundle.main.bundleURL.pathExtension != "app"
+            ? nil : UNUserNotificationCenter.current()
     }
 
     var isEnabled: Bool {

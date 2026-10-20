@@ -121,9 +121,13 @@ final class DesktopModel: ObservableObject {
     @Published var composerPanel: ComposerPanel?
     /// The `/context` breakdown shown in its sheet.
     @Published var contextSheet: ContextBreakdown?
-    /// The chat being opened, and its replayed transcript until it is in.
-    @Published private(set) var loadingSession: String?
-    private var replay = Transcript()
+    /// Chats being opened, each with its replayed transcript until it is in.
+    /// Kept per chat: picking another chat mid-load used to drop the replay
+    /// and remember the chat as empty, and it stayed blank until a restart.
+    @Published private(set) var loadingSessions: Set<String> = []
+    private var replays: [String: Transcript] = [:]
+    /// The shown chat is still being opened.
+    var isLoadingSelected: Bool { selectedSession.map(loadingSessions.contains) ?? false }
     /// A host command's long answer, shown in its sheet.
     @Published var commandResult: CommandResult?
     @Published private(set) var toasts: [Toast] = []
@@ -257,6 +261,9 @@ final class DesktopModel: ObservableObject {
     /// The running engine's connection, for Settings' skills and MCP pages.
     var engineConnection: ACPConnection? { engine?.connection }
     private var inboundTask: Task<Void, Never>?
+    /// Inbound messages handled from the running engine, and who waits for a count.
+    private var handledInbound = 0
+    private var inboundWaiters: [(count: Int, resume: CheckedContinuation<Void, Never>)] = []
     private var capabilities: AgentInfo?
 
     init() {
@@ -350,6 +357,7 @@ final class DesktopModel: ObservableObject {
                     // new one; its waiting requests can no longer be answered.
                     self.inboundTask?.cancel()
                     self.inboundTask = nil
+                    self.releaseInboundWaiters()
                     self.engine = nil
                     self.capabilities = nil
                     self.permissionQueue = []
@@ -366,6 +374,7 @@ final class DesktopModel: ObservableObject {
             inboundTask = Task { [weak self] in
                 for await inbound in process.connection.inbound {
                     await self?.handle(inbound)
+                    await self?.inboundHandled(from: process.connection)
                 }
             }
             let result = try await process.connection.request(ACPMethod.initialize, params: ACPRequests.initialize(appVersion: "0.1.0"), timeout: .seconds(10))
@@ -692,6 +701,33 @@ final class DesktopModel: ObservableObject {
         return (text.isEmpty ? "" : text + "\n\n") + "Attached files:\n" + list
     }
 
+    private func inboundHandled(from connection: ACPConnection) {
+        // A replaced engine's last message does not count for the new one.
+        guard engine?.connection === connection else { return }
+        handledInbound += 1
+        let ready = inboundWaiters.filter { $0.count <= handledInbound }
+        inboundWaiters.removeAll { $0.count <= handledInbound }
+        for waiter in ready { waiter.resume.resume() }
+    }
+
+    /// Wait until every message the engine sent before now is handled. A
+    /// response resolves ahead of the updates queued before it: without this,
+    /// a chat opened with only part of its replay, and a finished turn read
+    /// its reply before the last chunk.
+    private func catchUpInbound(on connection: ACPConnection) async {
+        let target = await connection.inboundCount
+        guard engine?.connection === connection, handledInbound < target else { return }
+        await withCheckedContinuation { inboundWaiters.append((target, $0)) }
+    }
+
+    /// The engine is gone: nothing more will be handled from it.
+    private func releaseInboundWaiters() {
+        handledInbound = 0
+        let waiters = inboundWaiters
+        inboundWaiters = []
+        for waiter in waiters { waiter.resume.resume() }
+    }
+
     /// Start a fresh engine, e.g. after its path changed in Settings.
     func restartEngine() async {
         error = nil
@@ -710,7 +746,8 @@ final class DesktopModel: ObservableObject {
     private var openSessions: [String: OpenSession] = [:]
 
     private func stashSelectedSession() {
-        guard let current = selectedSession else { return }
+        // A chat still loading has no transcript yet; its load stores it.
+        guard let current = selectedSession, !loadingSessions.contains(current) else { return }
         openSessions[current] = OpenSession(transcript: transcript, models: models, selectedModel: selectedModel)
     }
 
@@ -849,35 +886,40 @@ final class DesktopModel: ObservableObject {
             selectedModel = open.selectedModel
             return
         }
-        // `session/load` replays the transcript as `session/update`
-        // notifications before it answers, so select the session first or
-        // the replay is filtered out as belonging to another session.
         selectedSession = session.id
         transcript.removeAll()
-        // The replay builds off screen and shows at once: applied line by
-        // line, every replayed chunk redrew the whole chat.
-        loadingSession = session.id
-        replay = Transcript()
+        // Picked again while its first load is still running: that load
+        // shows it when it is in.
+        guard !loadingSessions.contains(session.id) else { return }
+        // `session/load` replays the transcript as `session/update`
+        // notifications before it answers. The replay builds off screen and
+        // shows at once: applied line by line, every replayed chunk redrew
+        // the whole chat.
+        loadingSessions.insert(session.id)
+        replays[session.id] = Transcript()
         defer {
-            if loadingSession == session.id {
-                if selectedSession == session.id { transcript = replay }
-                loadingSession = nil
+            // A stopped engine already cleared these, and a new one may be
+            // loading this chat again.
+            if engine?.connection === connection {
+                replays[session.id] = nil
+                loadingSessions.remove(session.id)
             }
         }
         do {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
-            if loadingSession == session.id {
-                transcript = replay
-                loadingSession = nil
-            }
-            // Another session may have been picked while this one loaded.
-            guard selectedSession == session.id else {
-                openSessions[session.id] = openSessions[session.id] ?? OpenSession(transcript: Transcript(), models: .empty)
-                return
-            }
+            await catchUpInbound(on: connection)
+            // The engine replaced while this loaded has not opened it.
+            guard engine?.connection === connection else { return }
+            let options = result["configOptions"].map(ModelOptions.init(configOptions:)) ?? .empty
+            let loaded = OpenSession(transcript: replays[session.id] ?? Transcript(), models: options, selectedModel: options.current)
+            openSessions[session.id] = loaded
+            // Another chat may have been picked while this one loaded.
+            guard selectedSession == session.id else { return }
+            transcript = loaded.transcript
             applyConfig(result["configOptions"])
-            stashSelectedSession()
-        } catch { self.error = String(describing: error) }
+        } catch {
+            self.error = String(describing: error)
+        }
     }
 
     /// A message written while a turn runs. It waits here and is sent when
@@ -1049,6 +1091,7 @@ final class DesktopModel: ObservableObject {
         var stopped = false
         do {
             let result = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: prompt.text, images: prompt.images))
+            await catchUpInbound(on: connection)
             stopped = result["stopReason"]?.stringValue == "cancelled"
         } catch {
             self.error = String(describing: error)
@@ -1244,7 +1287,10 @@ final class DesktopModel: ObservableObject {
     }
 
     func stop() {
+        releaseInboundWaiters()
         openSessions = [:]
+        replays = [:]
+        loadingSessions = []
         inboundTask?.cancel()
         inboundTask = nil
         if let engine { DispatchQueue.global().async { engine.stop() } }
@@ -1308,6 +1354,14 @@ final class DesktopModel: ObservableObject {
                 return
             }
             if captureCommandUpdate(SessionUpdate(notificationParams: params), in: sessionId) { return }
+            // A chat being opened collects its replay off screen, shown or not.
+            if replays[sessionId] != nil, !SessionUpdate.isReport(notificationParams: params) {
+                let update = SessionUpdate(notificationParams: params)
+                if case .notice = update {} else {
+                    replays[sessionId]?.apply(update)
+                    return
+                }
+            }
             if case .notice(let text) = SessionUpdate(notificationParams: params) {
                 showToast(Toast(style: .warning, systemImage: "exclamationmark.octagon.fill", title: text,
                                 message: sessionId == selectedSession ? nil : chatTitle(sessionId),
@@ -1330,7 +1384,7 @@ final class DesktopModel: ObservableObject {
                 transcript.apply(update, at: Date())
                 contextSheet = context
             default:
-                if loadingSession == sessionId { replay.apply(update) } else { transcript.apply(update, at: Date()) }
+                transcript.apply(update, at: Date())
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
             if let request = PermissionRequest(rpcId: id, params: params) {
