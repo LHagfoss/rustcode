@@ -4,13 +4,14 @@ import SwiftUI
 
 extension View {
     /// The workspace terminal as a resizable drawer under this view.
-    func terminalDrawer(_ terminal: TerminalController) -> some View {
-        modifier(TerminalDrawer(terminal: terminal))
+    func terminalDrawer(_ terminal: TerminalController, keybindings: KeybindingStore) -> some View {
+        modifier(TerminalDrawer(terminal: terminal, keybindings: keybindings))
     }
 }
 
 private struct TerminalDrawer: ViewModifier {
     @ObservedObject var terminal: TerminalController
+    @ObservedObject var keybindings: KeybindingStore
     @AppStorage("terminalHeight") private var height: Double = 260
 
     func body(content: Content) -> some View {
@@ -20,7 +21,7 @@ private struct TerminalDrawer: ViewModifier {
                 if terminal.isShown {
                     VStack(spacing: 0) {
                         TerminalResizeHandle(height: $height, maximum: max(160, proxy.size.height - 220))
-                        TerminalPanel(terminal: terminal, manager: terminal.manager)
+                        TerminalPanel(terminal: terminal, manager: terminal.manager, keybindings: keybindings)
                             .frame(height: min(CGFloat(height), max(160, proxy.size.height - 220)))
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -34,6 +35,7 @@ private struct TerminalDrawer: ViewModifier {
 struct TerminalPanel: View {
     let terminal: TerminalController
     @ObservedObject var manager: TerminalSessionManager
+    @ObservedObject var keybindings: KeybindingStore
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,7 +70,7 @@ struct TerminalPanel: View {
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
-            ChromeButton(systemImage: "plus", help: "New terminal tab") { terminal.newSession() }
+            ChromeButton(systemImage: "plus", help: keybindings.help("New terminal tab", .newTerminalTab)) { terminal.newSession() }
                 .disabled(!manager.canOpenSession)
                 .accessibilityLabel("New terminal tab")
             Spacer(minLength: 8)
@@ -87,7 +89,7 @@ struct TerminalPanel: View {
                 .truncationMode(.head)
                 .help("Terminals of \(projectName). \(Self.boundary)")
                 .accessibilityLabel("Project \(projectName), \(manager.project ?? "")")
-            ChromeButton(systemImage: "chevron.down", help: "Hide terminal (⇧⌘T). Shells keep running.") {
+            ChromeButton(systemImage: "chevron.down", help: keybindings.help("Hide terminal. Shells keep running", .toggleTerminal)) {
                 terminal.hide()
             }
             .accessibilityLabel("Hide terminal")
@@ -290,10 +292,12 @@ private struct TerminalResizeHandle: View {
 /// The title bar button that shows or hides the terminal.
 struct TerminalToolbarButton: View {
     @ObservedObject var terminal: TerminalController
+    @ObservedObject var keybindings: KeybindingStore
 
     var body: some View {
         ToolbarCluster {
-            ClusterButton(systemImage: "terminal", help: terminal.isShown ? "Hide terminal (⇧⌘T)" : "Show terminal (⇧⌘T)",
+            ClusterButton(systemImage: "terminal",
+                          help: keybindings.help(terminal.isShown ? "Hide terminal" : "Show terminal", .toggleTerminal),
                           isOn: terminal.isShown) { terminal.toggle() }
         }
     }

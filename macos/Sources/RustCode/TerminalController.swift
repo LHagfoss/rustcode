@@ -188,11 +188,13 @@ final class SessionTerminalView: TerminalView, TerminalViewDelegate {
 /// View > Show Terminal (⇧⌘T) and New Terminal Tab.
 struct TerminalMenuItems: View {
     @ObservedObject var terminal: TerminalController
+    @ObservedObject var keybindings: KeybindingStore
 
     var body: some View {
         Button(terminal.isShown ? "Hide Terminal" : "Show Terminal") { terminal.toggle() }
-            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .keyboardShortcut(keybindings.shortcut(for: .toggleTerminal))
         Button("New Terminal Tab") { terminal.newSession() }
+            .keyboardShortcut(keybindings.shortcut(for: .newTerminalTab))
             .disabled(!terminal.manager.canOpenSession)
     }
 }

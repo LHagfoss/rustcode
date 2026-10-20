@@ -56,6 +56,7 @@ struct SettingsView: View {
                     Group {
                         switch section {
                         case .general: GeneralSettings(model: model)
+                        case .keybinds: KeybindingsSettings(store: model.keybindings)
                         case .skills: SkillsSettings(model: model, store: capabilities)
                         case .mcp: MCPSettings(model: model, store: capabilities)
                         case .engine: EngineSettings(model: model)
@@ -334,6 +335,290 @@ private struct MiniWindow: View {
     }
 }
 
+// MARK: - Keybinds
+
+private struct KeybindingsSettings: View {
+    @ObservedObject var store: KeybindingStore
+    @State private var query = ""
+    @State private var recording: KeybindingAction?
+    @State private var note: Note?
+    @State private var noteTask: Task<Void, Never>?
+
+    private struct Note: Equatable {
+        let text: String
+        let isError: Bool
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                search
+                Spacer(minLength: 8)
+                Button("Reset All", action: resetAll)
+                    .buttonStyle(PillButtonStyle())
+                    .disabled(!store.hasCustomizations)
+                    .opacity(store.hasCustomizations ? 1 : 0.55)
+                    .help("Restore every shortcut to its default")
+            }
+            .padding(.bottom, 12)
+
+            if let note {
+                Label(note.text, systemImage: note.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(note.isError ? Color.attention : Color.brand)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background((note.isError ? Color.attention : Color.brand).opacity(0.1),
+                                in: .rect(cornerRadius: 8))
+                    .padding(.bottom, 12)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            ForEach(KeybindingCategory.allCases) { category in
+                let actions = category.actions.filter(matches)
+                if !actions.isEmpty {
+                    SettingsGroup(title: category.rawValue) {
+                        ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
+                            if index > 0 { RowDivider() }
+                            KeybindingRow(action: action, store: store, recording: $recording, report: show)
+                        }
+                    }
+                }
+            }
+
+            if KeybindingAction.allCases.allSatisfy({ !matches($0) }) {
+                VStack(spacing: 8) {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 24, weight: .light))
+                        .foregroundStyle(.secondary)
+                    Text("No shortcuts match “\(query)”.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button("Clear Search") { query = "" }
+                        .buttonStyle(PillButtonStyle())
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 36)
+            }
+
+            Text("Shortcuts save automatically on this Mac. Click one to record a new key, press Delete to clear it, or Esc to cancel. Assigning a shortcut another action uses unbinds it there.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+                .padding(.top, 2)
+        }
+        .onDisappear {
+            recording = nil
+            noteTask?.cancel()
+        }
+    }
+
+    private var search: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search shortcuts", text: $query)
+                .textFieldStyle(.plain)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .background(Color.primary.opacity(0.045), in: .capsule)
+        .frame(maxWidth: 280)
+        .simultaneousGesture(TapGesture().onEnded { recording = nil })
+    }
+
+    private func matches(_ action: KeybindingAction) -> Bool {
+        guard !query.isEmpty else { return true }
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return true }
+        return action.title.localizedCaseInsensitiveContains(needle)
+            || action.detail.localizedCaseInsensitiveContains(needle)
+            || action.category.rawValue.localizedCaseInsensitiveContains(needle)
+            || store.display(for: action).localizedCaseInsensitiveContains(needle)
+    }
+
+    private func resetAll() {
+        withAnimation(.snappy(duration: 0.2)) {
+            recording = nil
+            store.resetAll()
+        }
+        show("All shortcuts are back to their defaults.", isError: false)
+    }
+
+    private func show(_ text: String, isError: Bool) {
+        noteTask?.cancel()
+        withAnimation(.snappy(duration: 0.2)) { note = Note(text: text, isError: isError) }
+        noteTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { note = nil }
+        }
+    }
+}
+
+private struct KeybindingRow: View {
+    let action: KeybindingAction
+    @ObservedObject var store: KeybindingStore
+    @Binding var recording: KeybindingAction?
+    let report: (String, Bool) -> Void
+
+    var body: some View {
+        SettingsRow(title: action.title, subtitle: action.detail) {
+            HStack(spacing: 6) {
+                if store.isCustomized(action) {
+                    Button { store.reset(action) } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 24, height: 24)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Reset to \(action.defaultCombo?.display ?? "no shortcut")")
+                }
+                ShortcutRecorder(action: action, store: store, recording: $recording, report: report)
+            }
+        }
+    }
+}
+
+/// The keycap that records the next shortcut. While it is on, a local event
+/// monitor takes key presses before they reach a menu or a text field.
+private struct ShortcutRecorder: View {
+    let action: KeybindingAction
+    @ObservedObject var store: KeybindingStore
+    @Binding var recording: KeybindingAction?
+    let report: (String, Bool) -> Void
+    @State private var monitor: Any?
+    @State private var held: KeyModifiers = []
+
+    private var isRecording: Bool { recording == action }
+    private var combo: KeyCombo? { store.combo(for: action) }
+
+    var body: some View {
+        Button { recording = isRecording ? nil : action } label: {
+            ShortcutKeycap(text: labelText, isRecording: isRecording, hasShortcut: combo != nil)
+        }
+        .buttonStyle(.plain)
+        .help(isRecording
+              ? "Press a shortcut. Delete clears it, Esc cancels."
+              : "Click to record a shortcut")
+        .accessibilityLabel("Shortcut for \(action.title)")
+        .accessibilityValue(isRecording ? "Recording" : combo?.display ?? "Not set")
+        .onChange(of: isRecording) { _, on in
+            if on { start() } else { stop() }
+        }
+        .onDisappear { stop() }
+    }
+
+    private var labelText: String {
+        if isRecording {
+            return held.symbols.isEmpty ? "Press keys…" : held.symbols + "…"
+        }
+        return combo?.display ?? "Not set"
+    }
+
+    private func start() {
+        held = []
+        stopMonitor()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            handle(event)
+        }
+    }
+
+    private func stop() {
+        stopMonitor()
+        held = []
+    }
+
+    private func stopMonitor() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard isRecording else { return event }
+
+        if event.type == .flagsChanged {
+            held = KeyModifiers(event.modifierFlags)
+            return nil
+        }
+        // Esc leaves the old shortcut alone.
+        if event.keyCode == 53 {
+            recording = nil
+            return nil
+        }
+        let modifiers = KeyModifiers(event.modifierFlags)
+        // Delete with no command modifier takes the shortcut away.
+        if (event.keyCode == 51 || event.keyCode == 117) && !modifiers.hasCommandModifier {
+            store.clear(action)
+            recording = nil
+            report("\(action.title) has no shortcut now.", false)
+            return nil
+        }
+        guard let combo = KeyCombo(event: event) else {
+            report("That key can't be used. Try a letter, number, arrow or punctuation key.", true)
+            return nil
+        }
+        switch store.assign(combo, to: action) {
+        case .assigned(let displaced):
+            recording = nil
+            if let displaced {
+                report("\(combo.display) is now \(action.title). \(displaced.title) has no shortcut.", false)
+            } else {
+                report("\(action.title) is now \(combo.display).", false)
+            }
+        case .rejected(let reason):
+            report(reason, true)
+        }
+        return nil
+    }
+}
+
+private struct ShortcutKeycap: View {
+    let text: String
+    let isRecording: Bool
+    let hasShortcut: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 9)
+            .frame(minWidth: 64, minHeight: 26)
+            .background { RoundedRectangle(cornerRadius: 7, style: .continuous).fill(fill) }
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(stroke, lineWidth: isRecording ? 1.5 : 1)
+            }
+            .contentShape(.rect)
+    }
+
+    private var fill: Color {
+        isRecording ? Color.brand.opacity(0.14) : Color.primary.opacity(0.055)
+    }
+
+    private var stroke: Color {
+        isRecording ? Color.brand : Color.primary.opacity(0.12)
+    }
+
+    private var foreground: Color {
+        isRecording || !hasShortcut ? .secondary : .primary
+    }
+}
+
 private struct EngineSettings: View {
     @ObservedObject var model: DesktopModel
     @AppStorage("enginePath") private var enginePath = ""
@@ -415,13 +700,14 @@ private struct AboutSettings: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general = "General", skills = "Skills", mcp = "MCP Servers", engine = "Engine", about = "About"
+    case general = "General", keybinds = "Keybinds", skills = "Skills", mcp = "MCP Servers", engine = "Engine", about = "About"
 
     var id: Self { self }
 
     var systemImage: String {
         switch self {
         case .general: "gearshape"
+        case .keybinds: "keyboard"
         case .skills: "sparkles"
         case .mcp: "point.3.connected.trianglepath.dotted"
         case .engine: "terminal"

@@ -8,6 +8,7 @@ import WebKit
 /// or hides it.
 struct PreviewPanel: View {
     @ObservedObject var preview: PreviewController
+    @ObservedObject var keybindings: KeybindingStore
     let close: () -> Void
     @FocusState private var addressFocused: Bool
 
@@ -38,7 +39,7 @@ struct PreviewPanel: View {
                 ClusterButton(systemImage: "chevron.right", help: "Forward") { preview.goForward() }
                     .disabled(!preview.canGoForward)
                 ClusterButton(systemImage: preview.state.isLoading ? "xmark" : "arrow.clockwise",
-                              help: preview.state.isLoading ? "Stop loading" : "Reload (⌘R)") { preview.reloadOrStop() }
+                              help: preview.state.isLoading ? "Stop loading" : keybindings.help("Reload", .reloadPreview)) { preview.reloadOrStop() }
             }
             HStack(spacing: 6) {
                 Image(systemName: "network").foregroundStyle(.secondary)
@@ -72,7 +73,7 @@ struct PreviewPanel: View {
             }
             ToolbarCluster {
                 ClusterButton(systemImage: "safari", help: "Open in browser") { preview.openInBrowser() }
-                ClusterButton(systemImage: "xmark", help: "Hide preview (⇧⌘P)", action: close)
+                ClusterButton(systemImage: "xmark", help: keybindings.help("Hide preview", .togglePreview), action: close)
             }
         }
         .padding(.horizontal, 12)
