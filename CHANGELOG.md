@@ -1,3 +1,11 @@
+## [v0.84.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.84.0) - 2026-10-20
+
+### Features
+- macOS: ⌘K opens a Liquid Glass chat switcher: search titles, projects, models and message text, ↑↓ to move, ⏎ to open, Esc to close; follows the sidebar's All/Project scope (#2195).
+- macOS: Page Up/Page Down scroll the chat by a screen, Home/End jump to the first and latest message; the chat's scrollbar can be dragged and its track clicked again (#2193).
+- macOS: the sidebar loads chats a page at a time as you scroll (1,132 chats: 1.3 s → under 70 ms to first list), with search, the archive and pinned chats still covering the whole history (#2194).
+- macOS: long chats open on their newest 150 messages and load older ones as you scroll up, keeping your place; scrolling and streaming in a 3,000-message chat are about twice as fast (#2197).
+- macOS: added and removed lines in diffs are drawn as one square block instead of rounded pills (#2196).
 ## [v0.83.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.83.1) - 2026-10-20
 
 ### Fixes
