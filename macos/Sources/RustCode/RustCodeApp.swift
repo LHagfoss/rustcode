@@ -131,6 +131,9 @@ final class DesktopModel: ObservableObject {
     /// shown natively instead of in the chat.
     @Published private var runningCommands: [String: RunningCommand] = [:]
 
+    /// Report commands sent beside a turn, whose answers are not the turn's.
+    private var pendingReports = PendingReports()
+
     private struct RunningCommand {
         let input: String
         var output = ""
@@ -962,10 +965,23 @@ final class DesktopModel: ObservableObject {
             error = "This RustCode engine cannot take images. Update RustCode to attach them."
             return
         }
-        if let command = SlashCommand.invoked(by: typed, in: commands), command.action != .execute {
+        // Commands that need no turn run now, even while the chat is busy;
+        // the rest queue behind its turn like a message.
+        switch SlashCommand.dispatch(typed, in: commands, plain: attachments.isEmpty && images.isEmpty) {
+        case .app(let command):
             draft = ""
             await perform(command)
             return
+        case .cancel:
+            draft = ""
+            if busy { await cancel() } else { confirm("Nothing to cancel", systemImage: "xmark.circle.fill") }
+            return
+        case .report where !startingChat && selectedSession != nil:
+            draft = ""
+            await runReport(typed, in: selectedSession!)
+            return
+        case .report, .prompt:
+            break
         }
         let text = Self.prompt(typed, attaching: attachments, in: workspace)
         let sentImages = images
@@ -1057,15 +1073,46 @@ final class DesktopModel: ObservableObject {
         await run(next)
     }
 
+    /// Send a report command now, beside any running turn: it never joins
+    /// the queue, and its answer shows for the chat it was typed in.
+    private func runReport(_ typed: String, in session: String) async {
+        guard let connection = engine?.connection else { return }
+        let id = pendingReports.begin(typed, in: session)
+        var failed = false
+        do {
+            _ = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: session, text: typed), timeout: .seconds(30))
+        } catch {
+            self.error = String(describing: error)
+            failed = true
+        }
+        guard let report = pendingReports.finish(id, in: session), !report.answered, !failed else { return }
+        confirm("\(typed) done", systemImage: "checkmark.circle.fill")
+    }
+
+    /// Show a report's answer, which may arrive mid-turn: it never reaches the chat.
+    private func showReport(_ update: SessionUpdate, input: String, in session: String) {
+        switch update {
+        case .contextReport(_, let context):
+            if session == selectedSession { contextSheet = context }
+        case .agentText(let text):
+            showCommandResult(CommandResult(input: input, output: text), in: session)
+        default:
+            break
+        }
+    }
+
     /// Show a host command's answer: a toast when it is one short line, its
     /// sheet when longer, unless it already opened natively.
     private func finishCommand(in session: String) {
         guard let command = runningCommands.removeValue(forKey: session) else { return }
         dismissToast(command.toast)
         guard !command.answered else { return }
-        let result = CommandResult(input: command.input, output: command.output)
+        showCommandResult(CommandResult(input: command.input, output: command.output), in: session)
+    }
+
+    private func showCommandResult(_ result: CommandResult, in session: String) {
         if result.content.isEmpty {
-            confirm("\(command.input) done", systemImage: "checkmark.circle.fill")
+            confirm("\(result.input) done", systemImage: "checkmark.circle.fill")
         } else if result.isBrief {
             showToast(Toast(style: .success, systemImage: "terminal", title: result.title, message: result.content))
         } else if session == selectedSession, NSApp.isActive {
@@ -1254,6 +1301,10 @@ final class DesktopModel: ObservableObject {
             if case .availableCommands(let list) = SessionUpdate(notificationParams: params) { commands = SlashCommand.withAppCommands(list) }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate:
             guard let sessionId = params["sessionId"]?.stringValue else { return }
+            if SessionUpdate.isReport(notificationParams: params), let input = pendingReports.answer(in: sessionId) {
+                showReport(SessionUpdate(notificationParams: params), input: input, in: sessionId)
+                return
+            }
             if captureCommandUpdate(SessionUpdate(notificationParams: params), in: sessionId) { return }
             if case .notice(let text) = SessionUpdate(notificationParams: params) {
                 showToast(Toast(style: .warning, systemImage: "exclamationmark.octagon.fill", title: text,
