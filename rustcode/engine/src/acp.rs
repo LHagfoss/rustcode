@@ -973,6 +973,24 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         })?
                         .text;
 
+                    // A report only reads the session, so it answers now, beside
+                    // a running turn, instead of queueing at the turn gate.
+                    if !has_images && commands::is_report(&text) {
+                        let task_connection = connection.clone();
+                        connection.spawn(async move {
+                            match prompt::run_report(&state, &session_id, &text, &task_connection)
+                                .await
+                            {
+                                Ok(stop_reason) => {
+                                    responder.respond(PromptResponse::new(stop_reason))?
+                                }
+                                Err(error) => responder.respond_with_error(error)?,
+                            }
+                            Ok(())
+                        })?;
+                        return Ok(());
+                    }
+
                     // Request handlers run on ACP's dispatch loop. A model turn can
                     // perform many network and tool operations, so awaiting it here
                     // prevents the connection from processing any other messages.
@@ -1754,6 +1772,33 @@ mod tests {
         drop(first);
         let second = second.await.expect("queued prompt task");
         assert!(!second.cancel_token().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn a_report_answers_while_a_turn_holds_the_session() {
+        let turn_state = SessionTurnState::new();
+        let _running = turn_state.begin().await;
+        let state = Mutex::new(crate::app::AppState::new());
+        let updates = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            prompt::report_updates(&state, "/status"),
+        )
+        .await
+        .expect("a report must not wait for the running turn");
+        assert!(matches!(
+            updates.as_slice(),
+            [SessionUpdate::AgentMessageChunk(chunk), SessionUpdate::UsageUpdate(_)]
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text.starts_with("**Status**"))
+                    && chunk.meta.as_ref().unwrap()["rustcode"]["report"] == true
+        ));
+        assert!(state.lock().await.history.is_empty());
+        let context = prompt::report_updates(&state, "/context").await;
+        let SessionUpdate::AgentMessageChunk(chunk) = &context[0] else {
+            panic!("expected the context reply");
+        };
+        let meta = &chunk.meta.as_ref().unwrap()["rustcode"];
+        assert_eq!(meta["kind"], "context");
+        assert_eq!(meta["report"], true);
     }
 
     #[tokio::test]

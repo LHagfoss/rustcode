@@ -26,6 +26,39 @@ const ACP_COMMANDS: &[(&str, bool)] = &[
     ("/refresh", true),
 ];
 
+/// Bare host commands that only read the session. They answer beside a
+/// running turn instead of waiting behind it at the session's turn gate, and
+/// are advertised with `_meta.rustcode.report` so a client sends them at once.
+const REPORT_COMMANDS: &[&str] = &[
+    "/about",
+    "/agents",
+    "/changelog",
+    "/context",
+    "/help",
+    "/info",
+    "/mcp",
+    "/perf",
+    "/prompts",
+    "/ps",
+    "/pwd",
+    "/session",
+    "/skills",
+    "/stats",
+    "/status",
+    "/tasks",
+    "/tools",
+    "/usage",
+    "/workspace",
+];
+
+/// Whether `text` is a bare report command, safe to run during a turn.
+pub(crate) fn is_report(text: &str) -> bool {
+    let text = text.trim();
+    REPORT_COMMANDS
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(text))
+}
+
 /// The remote catalog with the ACP-only commands made host commands.
 fn catalog() -> Vec<RemoteCommandInfo> {
     crate::remote::ops::command_catalog()
@@ -63,6 +96,9 @@ fn available_command(command: RemoteCommandInfo) -> AvailableCommand {
     let takes_arguments = command.insertion.ends_with(' ');
     let mut rustcode = serde_json::Map::new();
     rustcode.insert("action".into(), command.action.clone().into());
+    if command.action == "execute" && is_report(&command.name) {
+        rustcode.insert("report".into(), true.into());
+    }
     let mut meta = serde_json::Map::new();
     meta.insert("rustcode".into(), serde_json::Value::Object(rustcode));
     AvailableCommand::new(
@@ -468,6 +504,49 @@ mod tests {
         assert!(classify(&mut state, "/Users/me/x.rs fix this").is_none());
         assert!(classify(&mut state, "explain /help").is_none());
         assert!(state.history.is_empty());
+    }
+
+    #[test]
+    fn only_bare_read_only_commands_are_reports() {
+        for text in ["/help", " /STATUS ", "/context", "/tasks", "/usage"] {
+            assert!(is_report(text), "{text}");
+        }
+        for text in [
+            "/context 256k",
+            "/compact",
+            "/fork",
+            "/goal ship it",
+            "/title new name",
+            "/yolo on",
+            "/stop",
+            "/diff",
+            "/help me",
+            "status",
+        ] {
+            assert!(!is_report(text), "{text}");
+        }
+        // Every report is a host command whose bare form replies at once.
+        let mut state = crate::app::AppState::new();
+        for name in REPORT_COMMANDS {
+            assert!(
+                matches!(classify(&mut state, name), Some(AcpCommand::Reply(_))),
+                "{name}"
+            );
+        }
+        assert!(state.history.is_empty());
+        let SessionUpdate::AvailableCommandsUpdate(update) = available_commands_update() else {
+            panic!("expected an available_commands_update");
+        };
+        let report = |name: &str| {
+            update
+                .available_commands
+                .iter()
+                .find(|command| command.name == name)
+                .and_then(|command| command.meta.as_ref())
+                .and_then(|meta| meta["rustcode"].get("report").cloned())
+        };
+        assert_eq!(report("status"), Some(true.into()));
+        assert_eq!(report("compact"), None);
     }
 
     #[test]

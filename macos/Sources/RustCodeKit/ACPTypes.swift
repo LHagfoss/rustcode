@@ -324,6 +324,12 @@ public enum SessionUpdate: Equatable, Sendable {
         }
     }
 
+    /// The update is a report command's answer, which can arrive while a
+    /// turn streams into the same session.
+    public static func isReport(notificationParams params: JSONValue) -> Bool {
+        params["update"]?["_meta"]?["rustcode"]?["report"]?.boolValue == true
+    }
+
     static func text(_ content: JSONValue?) -> String {
         guard let content else { return "" }
         if content["type"]?.stringValue == "text" { return content["text"]?.stringValue ?? "" }
@@ -445,14 +451,19 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
     public var description: String
     public var action: Action
     public var takesArguments: Bool
+    /// A host command whose bare form only reads the session. The engine
+    /// answers it beside a running turn, so it is sent at once, not queued.
+    public var report: Bool
 
     public var id: String { name }
 
-    public init(name: String, description: String, action: Action = .execute, takesArguments: Bool = false) {
+    public init(name: String, description: String, action: Action = .execute, takesArguments: Bool = false,
+                report: Bool = false) {
         self.name = name
         self.description = description
         self.action = action
         self.takesArguments = takesArguments
+        self.report = report
     }
 
     init?(json: JSONValue) {
@@ -461,6 +472,7 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
         description = json["description"]?.stringValue ?? ""
         action = json["_meta"]?["rustcode"]?["action"]?.stringValue.flatMap(Action.init(rawValue:)) ?? .execute
         takesArguments = json["input"]?["hint"] != nil
+        report = action == .execute && json["_meta"]?["rustcode"]?["report"]?.boolValue == true
     }
 
     /// What completing the command puts in the composer.
@@ -492,6 +504,30 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
     public static func appCommand(chip: SlashCommand?, draft: String) -> SlashCommand? {
         if let chip { return appCommands.contains(chip) ? chip : nil }
         return invoked(by: draft, in: appCommands)
+    }
+
+    /// How a sent draft runs while its chat may be busy with a turn.
+    public enum Dispatch: Equatable, Sendable {
+        /// Answered by the app itself, at once.
+        case app(SlashCommand)
+        /// `/cancel`: stops the chat's running turn, at once.
+        case cancel
+        /// A bare report: sent to the engine at once, beside a running turn.
+        case report(SlashCommand)
+        /// A prompt, or a command that changes or needs the session's turn:
+        /// it queues behind a running turn.
+        case prompt
+    }
+
+    /// Classify a sent draft. `plain` is false when files or images ride
+    /// along, which makes it a prompt.
+    public static func dispatch(_ typed: String, in commands: [SlashCommand], plain: Bool = true) -> Dispatch {
+        guard let command = invoked(by: typed, in: commands) else { return .prompt }
+        if command.action != .execute { return .app(command) }
+        let bare = plain && typed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == command.name.lowercased()
+        if bare, command.name.lowercased() == "/cancel" { return .cancel }
+        if bare, command.report { return .report(command) }
+        return .prompt
     }
 
     /// The advertised command a draft invokes, if it is one.

@@ -219,6 +219,51 @@ fn prompt_input_with(
     Ok(PromptInput { text })
 }
 
+/// Answers a report command (`commands::is_report`) without taking the
+/// session's turn: reports only read the session, so they need not wait for a
+/// running turn to end. The reply, then the usage, as a command answers.
+pub(crate) async fn report_updates(
+    state: &Mutex<crate::app::AppState>,
+    text: &str,
+) -> Vec<SessionUpdate> {
+    use agent_client_protocol::schema::v1::{ContentChunk, TextContent};
+    let mut state = state.lock().await;
+    let reply = match super::commands::classify(&mut state, text) {
+        Some(super::commands::AcpCommand::Reply(reply)) => reply,
+        _ => format!("`{}` finished.", text.trim()),
+    };
+    // `report` tells a client this answer is the report's, not text of a
+    // turn that may be streaming into the same session at the same time.
+    let mut meta = if super::commands::is_context_report(text) {
+        super::usage::context_reply_meta(&state)
+    } else {
+        serde_json::Map::new()
+    };
+    if let Some(rustcode) = meta
+        .entry("rustcode")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    {
+        rustcode.insert("report".into(), true.into());
+    }
+    let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(reply))).meta(meta);
+    vec![
+        SessionUpdate::AgentMessageChunk(chunk),
+        super::usage::usage_update(&state),
+    ]
+}
+
+/// Sends a report's answer and ends its prompt.
+pub(crate) async fn run_report(
+    state: &Mutex<crate::app::AppState>,
+    session_id: &str,
+    text: &str,
+    connection: &ConnectionTo<Client>,
+) -> Result<StopReason, agent_client_protocol::Error> {
+    send_updates(connection, session_id, report_updates(state, text).await)?;
+    Ok(StopReason::EndTurn)
+}
+
 pub(crate) async fn run_prompt(
     state: Arc<Mutex<crate::app::AppState>>,
     cwd: PathBuf,
