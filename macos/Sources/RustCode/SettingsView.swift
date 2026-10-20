@@ -20,7 +20,7 @@ enum AppearanceSetting {
 /// ⌘, — a sheet over the chat: sections on the left, the chosen one on the right.
 struct SettingsView: View {
     @ObservedObject var model: DesktopModel
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.closePanel) private var dismiss
     @StateObject private var capabilities = CapabilitiesStore()
     typealias Section = SettingsSection
 
@@ -40,7 +40,7 @@ struct SettingsView: View {
             }
             .padding(12)
             .padding(.top, 8)
-            .frame(width: 200)
+            .frame(width: 220)
             .background(Color.sidebarBackground)
 
             VStack(alignment: .leading, spacing: 0) {
@@ -48,7 +48,6 @@ struct SettingsView: View {
                     Text(section.rawValue).font(.title2.weight(.semibold))
                     Spacer()
                     ChromeButton(systemImage: "xmark", help: "Close (Esc)") { dismiss() }
-                        .keyboardShortcut(.cancelAction)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 20)
@@ -70,7 +69,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color.chatBackground)
         }
-        .frame(width: 720, height: 480)
+        .frame(maxWidth: 880, maxHeight: 620)
         .tint(.brand)
         .task(id: section) {
             if section == .skills || section == .mcp { await capabilities.load(model.engineConnection) }
@@ -87,11 +86,12 @@ private struct SectionRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
+                // A plain symbol, as in the window's sidebar: no coloured tile.
                 Image(systemName: section.systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 24, height: 24)
-                    .background(section.tile.gradient, in: .rect(cornerRadius: 6))
+                    .font(.system(size: 14, weight: .medium))
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(isSelected ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
+                    .frame(width: 22, height: 22)
                 Text(section.rawValue)
                 Spacer()
             }
@@ -397,21 +397,11 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .general: "gearshape.fill"
+        case .general: "gearshape"
         case .skills: "sparkles"
         case .mcp: "point.3.connected.trianglepath.dotted"
-        case .engine: "terminal.fill"
-        case .about: "info.circle.fill"
-        }
-    }
-
-    var tile: Color {
-        switch self {
-        case .general: .gray
-        case .skills: .purple
-        case .mcp: .teal
-        case .engine: .orange
-        case .about: .blue
+        case .engine: "terminal"
+        case .about: "info.circle"
         }
     }
 }
