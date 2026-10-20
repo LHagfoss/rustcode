@@ -183,10 +183,10 @@ final class DesktopModel: ObservableObject {
         retry: { [weak self] text in Task { await self?.retry(text) } })
     @Published var showsSidebar = true
     @Published var showsSettings = false
-    /// ⌘F: the find bar over the chat, its text and which match is current.
+    /// ⌘F: the find bar over the chat. Its query and matches live in `find`,
+    /// so typing in it redraws the find bar, not every view watching the model.
     @Published var showsFind = false
-    @Published var findQuery = "" { didSet { findIndex = 0 } }
-    @Published var findIndex = 0
+    let find = ChatFind()
     /// The sidebar lists chats from every project, or only the open one.
     @Published var showsAllProjects = UserDefaults.standard.object(forKey: "showsAllProjects") as? Bool ?? true {
         didSet {
@@ -384,20 +384,11 @@ final class DesktopModel: ObservableObject {
         }
     }
 
-    var findMatches: [Int] { transcript.matches(findQuery) }
-
-    /// The transcript item the find bar is on, if any matched.
-    var currentMatch: Int? {
-        let matches = findMatches
-        return matches.isEmpty ? nil : matches[min(findIndex, matches.count - 1)]
-    }
-
     /// Step through the matches, wrapping at either end.
     func findNext(_ step: Int = 1) {
-        let count = findMatches.count
-        guard count > 0 else { return }
+        guard !find.matches.isEmpty else { return }
         showsFind = true
-        findIndex = ((findIndex + step) % count + count) % count
+        find.step(step)
     }
 
     var visibleSessions: [SessionSummary] {
