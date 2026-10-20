@@ -85,10 +85,17 @@ pub fn mcp_startup_warnings() -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn record_mcp_startup_failure(name: &str, reason: &str) {
+pub(crate) fn record_mcp_startup_failure(name: &str, reason: &str) {
     let slot = MCP_STARTUP_FAILURES.get_or_init(|| StdMutex::new(HashMap::new()));
     if let Ok(mut guard) = slot.lock() {
         guard.insert(name.to_owned(), reason.to_owned());
+    }
+}
+
+/// Forget a server's last failure once it has connected.
+fn clear_mcp_startup_failure(name: &str) {
+    if let Some(Ok(mut guard)) = MCP_STARTUP_FAILURES.get().map(StdMutex::lock) {
+        guard.remove(name);
     }
 }
 
@@ -2166,6 +2173,7 @@ pub(crate) async fn start_configured_server(
         )
         .await?
     };
+    clear_mcp_startup_failure(&name);
     if let Ok(mut reg) = get_mcp_registry().lock() {
         reg.insert(name, client);
     }

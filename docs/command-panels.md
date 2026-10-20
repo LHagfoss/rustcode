@@ -38,7 +38,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/refresh [provider] [account-id]` | Refreshes the selected provider's model catalog without browser sign-in. `/account refresh` is the same command. |
 | `/logout` | Signs out of the selected provider account asynchronously and reports its result in a Provider authentication panel. |
 | `/memory` | Scrollable Memory panel for RAM, project-memory inspection, updates and help. |
-| `/mcp` | Existing MCP configuration/editor panel. |
+| `/mcp` | MCP configuration/editor panel: each server's live state (connected with its tool count, not connected, disabled, failed), `enter` toggles it in the user config and starts or stops it. See [configuration](configuration.md#turning-skills-and-mcp-servers-on-and-off). |
 | `/model` | Existing model picker; direct profile/model arguments apply immediately and show panel feedback. |
 | `/models` | Alias of /model, including arguments. |
 | `/new` | Immediate new session. |
@@ -60,7 +60,7 @@ an open user panel and resumes its input surface after dismissal.
 | `/quota` | Scrollable Model quota panel; asynchronous data refresh preserves navigation and respects dismissal. |
 | `/resume` | Immediate latest-session restoration. |
 | `/session` | Existing session details panel, with the context budget (tokens in the window, window size, percent left) and the session token total. |
-| `/skills` | Scrollable Skills catalog panel. |
+| `/skills` | Skills toggle panel: every discovered skill with its root and on/off state; `enter`/`space` toggles it in the user config's `disabled_skills`. See [configuration](configuration.md#turning-skills-and-mcp-servers-on-and-off). |
 | `/stats` | Existing usage panel with the current turn, the session total and captured monthly data. |
 | `/stop` | Immediate background-terminal stop action. |
 | `/status` | Existing session status panel with the active provider account. |

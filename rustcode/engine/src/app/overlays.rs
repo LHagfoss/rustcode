@@ -21,6 +21,7 @@ pub struct OverlayState<'a> {
     show_mcp_config: &'a mut bool,
     pending_delete_session_idx: &'a mut Option<usize>,
     mcp_edit_state: &'a mut Option<crate::app::state::McpEditState>,
+    skills_panel: &'a mut Option<crate::capabilities::SkillsPanel>,
     pending_tool_confirmation: &'a mut Option<Vec<crate::app::state::ToolConfirmation>>,
     tool_confirmation_selected: &'a mut usize,
     auto_confirm: &'a mut bool,
@@ -51,6 +52,7 @@ impl<'a> OverlayState<'a> {
             show_mcp_config: &mut state.show_mcp_config,
             pending_delete_session_idx: &mut state.pending_delete_session_idx,
             mcp_edit_state: &mut state.mcp_edit_state,
+            skills_panel: &mut state.skills_panel,
             pending_tool_confirmation: &mut state.pending_tool_confirmation,
             tool_confirmation_selected: &mut state.tool_confirmation_selected,
             auto_confirm: &mut state.auto_confirm,
@@ -77,6 +79,7 @@ impl<'a> OverlayState<'a> {
             || *self.show_mcp_config
             || self.pending_delete_session_idx.is_some()
             || self.mcp_edit_state.is_some()
+            || self.skills_panel.is_some()
             || self.pending_tool_confirmation.is_some()
             || self.pending_question.is_some()
             || matches!(
@@ -105,6 +108,7 @@ impl<'a> OverlayState<'a> {
         *self.show_mcp_config = false;
         *self.pending_delete_session_idx = None;
         *self.mcp_edit_state = None;
+        *self.skills_panel = None;
         if matches!(
             *self.status,
             AppStatus::VerbosityPicker

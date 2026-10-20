@@ -528,7 +528,7 @@ pub fn build_help_text() -> String {
                 ("/logout", "Revoke or remove a provider account"),
                 ("/context", "Show context usage or set context window"),
                 ("/discord", "Toggle or configure Discord Rich Presence"),
-                ("/mcp", "Configure Model Context Protocol (MCP) servers"),
+                ("/mcp", "Manage MCP servers and see which are connected"),
                 ("/ollama", "Configure or list Ollama models"),
                 ("/provider", "Add or update model provider profile"),
                 ("/protocol", "Show or set current tool protocol"),
@@ -544,7 +544,7 @@ pub fn build_help_text() -> String {
                 ),
                 ("/yolo", "Show or set tool confirmation mode"),
                 ("/sandbox", "Show or set OS-enforced shell permissions"),
-                ("/skills", "Discover and list custom skills"),
+                ("/skills", "List skills and turn them on or off"),
                 (
                     "/sync",
                     "Sync config, skills, themes, and prompt commands with Git",

@@ -1,3 +1,4 @@
+mod capabilities;
 mod commands;
 mod config;
 mod edit_diff;
@@ -845,6 +846,26 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_receive_request(
             async move |request: ListSessionsRequest, responder, _connection| {
                 responder.respond(acp_list_sessions(request)?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: capabilities::CapabilitiesRequest, responder, _connection| {
+                responder.respond(capabilities::snapshot_value()?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: capabilities::SetCapabilityRequest, responder, connection| {
+                // Starting an MCP server can take seconds; keep the dispatch
+                // loop free while it does.
+                connection.spawn(async move {
+                    match capabilities::set_capability(request).await {
+                        Ok(snapshot) => responder.respond(snapshot)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )

@@ -1846,10 +1846,16 @@ pub fn use_skill(args: &Value) -> Result<String, String> {
     let skill = crate::skills::get_skill_content(name);
     crate::skills::bump_skill_catalog_generation();
     let skill = skill.ok_or_else(|| {
-        format!(
-            "Skill '{}' not found. Call list_skills to discover available skills.",
-            name
-        )
+        if crate::skills::disabled_skill_names().contains(name) {
+            format!(
+                "Skill '{name}' is turned off. The user can enable it with /skills or in Settings."
+            )
+        } else {
+            format!(
+                "Skill '{}' not found. Call list_skills to discover available skills.",
+                name
+            )
+        }
     })?;
 
     let files = crate::skills::list_skill_files(&skill.path);

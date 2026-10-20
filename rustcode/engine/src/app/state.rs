@@ -273,6 +273,8 @@ pub struct AppState {
     pub show_mcp_config: bool,
     pub mcp_picker_index: usize,
     pub mcp_edit_state: Option<McpEditState>,
+    /// The `/skills` toggle panel (#2165).
+    pub skills_panel: Option<crate::capabilities::SkillsPanel>,
 
     pub last_copy_text: Option<(String, std::time::Instant)>,
     /// Short-lived UI feedback; never part of the model conversation.
@@ -1573,6 +1575,7 @@ impl AppState {
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,
+            skills_panel: None,
             last_copy_text: None,
             transient_notice: None,
             transient_notice_queue: std::collections::VecDeque::new(),
@@ -1743,6 +1746,7 @@ impl AppState {
             || self.show_session_modal
             || self.show_update_prompt
             || self.show_mcp_config
+            || self.skills_panel.is_some()
             || matches!(
                 self.status,
                 AppStatus::VerbosityPicker

@@ -254,6 +254,8 @@ final class DesktopModel: ObservableObject {
     /// The engine binary in use and where it was found, shown in Settings.
     @Published private(set) var engineLocation: EngineLocation?
     private var engine: EngineProcess?
+    /// The running engine's connection, for Settings' skills and MCP pages.
+    var engineConnection: ACPConnection? { engine?.connection }
     private var inboundTask: Task<Void, Never>?
     private var capabilities: AgentInfo?
 

@@ -71,7 +71,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/mcp",
-        desc: "Configure Model Context Protocol (MCP) servers",
+        desc: "Manage MCP servers and see which are connected",
     },
     CommandInfo {
         name: "/model",
@@ -195,7 +195,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/skills",
-        desc: "Show available skills and their locations",
+        desc: "List skills and turn them on or off",
     },
     CommandInfo {
         name: "/stats",

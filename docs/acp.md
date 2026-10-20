@@ -90,6 +90,26 @@ client answers `{"ok": true, …}` or `{"ok": false, "error": {"code",
 call with a timeout and the turn's cancellation. The protocol, the client's
 approval and origin rules, and the limits are in [preview.md](preview.md).
 
+## Skills and MCP servers
+
+Two extension requests back the app's Settings pages:
+
+- `_rustcode/capabilities` (`{}`) answers with `{"skills": [...],
+  "mcpServers": [...], "configPath"}`. A skill has `name`, `description`,
+  `path`, `source` (`workspace`, `universal`, `rustcode` or `configured`) and
+  `enabled`. A server has `name`, `transport` (`stdio` or `http`), `target`
+  (credentials masked), `enabled`, `scope` (`user`, `project` or `session`),
+  `connection` (`connected`, `not_connected`, `disabled` or `failed`), `tools`
+  and `error`. Header and environment values are never sent.
+- `_rustcode/capabilities/set` (`{"kind": "skill" | "mcp", "name", "enabled"}`)
+  saves the toggle to the user config, starts or stops an MCP server in this
+  engine, and answers with the fresh snapshot. An unknown skill or a server the
+  user config does not declare is an `invalid_params` error; a server that
+  fails to start is reported as `failed` in the snapshot.
+
+Semantics and scope are described in
+[configuration.md](configuration.md#turning-skills-and-mcp-servers-on-and-off).
+
 ## Failure behavior
 
 Per-session completion delivery is bounded so a disconnected or stalled client

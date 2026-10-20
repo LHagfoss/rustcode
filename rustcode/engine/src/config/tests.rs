@@ -2145,3 +2145,67 @@ fn mcp_header_and_env_arguments_are_split_and_validated() {
     assert!(parse_mcp_env("TOKEN").is_err());
     assert!(parse_mcp_env("=value").is_err());
 }
+
+#[test]
+fn mcp_toggle_persists_in_the_user_config_and_keeps_secrets() {
+    let dir = TempDir::new().unwrap();
+    let server = remote_mcp_server("paral-x", "one");
+    mcp_servers::add_mcp_server_in(dir.path(), server.clone(), false).unwrap();
+
+    let off = mcp_servers::set_mcp_server_enabled_in(dir.path(), "paral-x", false).unwrap();
+    assert!(!off.enabled);
+    let saved = |dir: &std::path::Path| {
+        load_config_from(dir)
+            .2
+            .mcp_servers
+            .into_iter()
+            .find(|entry| entry.name == "paral-x")
+            .unwrap()
+    };
+    assert!(!saved(dir.path()).enabled);
+    assert_eq!(
+        saved(dir.path()).headers,
+        server.headers,
+        "a toggle must not drop the server's headers"
+    );
+
+    mcp_servers::set_mcp_server_enabled_in(dir.path(), "paral-x", true).unwrap();
+    assert!(saved(dir.path()).enabled);
+}
+
+#[test]
+fn mcp_toggle_rejects_a_server_the_user_config_does_not_declare() {
+    let dir = TempDir::new().unwrap();
+    let error =
+        mcp_servers::set_mcp_server_enabled_in(dir.path(), "project-only", false).unwrap_err();
+    assert!(error.contains("project config"), "{error}");
+}
+
+#[test]
+fn skill_toggles_round_trip_through_the_user_config() {
+    let dir = TempDir::new().unwrap();
+    assert_eq!(
+        mcp_servers::set_skill_enabled_in(dir.path(), "review", false).unwrap(),
+        vec!["review".to_owned()]
+    );
+    // Disabling twice keeps one entry; the list stays sorted.
+    mcp_servers::set_skill_enabled_in(dir.path(), "review", false).unwrap();
+    mcp_servers::set_skill_enabled_in(dir.path(), "deploy", false).unwrap();
+    assert_eq!(
+        load_config_from(dir.path()).2.disabled_skills,
+        vec!["deploy".to_owned(), "review".to_owned()]
+    );
+
+    mcp_servers::set_skill_enabled_in(dir.path(), "review", true).unwrap();
+    mcp_servers::set_skill_enabled_in(dir.path(), "deploy", true).unwrap();
+    let (_, _, config) = load_config_from(dir.path());
+    assert!(config.disabled_skills.is_empty());
+}
+
+#[test]
+fn a_project_file_cannot_disable_skills() {
+    let file: TomlConfig = toml::from_str("disabled_skills = [\"review\"]").unwrap();
+    let mut config = AppConfig::default();
+    apply_project_toml_config(&mut config, file);
+    assert!(config.disabled_skills.is_empty());
+}

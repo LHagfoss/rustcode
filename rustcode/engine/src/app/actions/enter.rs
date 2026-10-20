@@ -619,8 +619,12 @@ async fn handle_enter_inner(
                 should_exit = true;
             }
             "/skills" => {
-                let skills = crate::skills::discover_skills_for_catalog();
-                s.show_command_panel("Skills", crate::skills::format_skill_catalog(&skills));
+                let panel = crate::capabilities::SkillsPanel::load();
+                if panel.entries.is_empty() {
+                    s.show_command_panel("Skills", crate::skills::no_skills_message());
+                } else {
+                    s.skills_panel = Some(panel);
+                }
             }
             "/changelog" => {
                 let log_text = build_latest_changelog();
