@@ -36,7 +36,12 @@ struct ToastStack: View {
         VStack(alignment: .trailing, spacing: 8) {
             ForEach(model.toasts) { toast in
                 ToastView(toast: toast) { model.open(toast) } dismiss: { model.dismissToast(toast.id) }
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        // A swiped toast is already on its way out; closing
+                        // fades it where it is rather than sliding it back up.
+                        removal: .opacity.combined(with: .scale(scale: 0.96))
+                    ))
             }
         }
         // Below the chat header.
@@ -47,11 +52,49 @@ struct ToastStack: View {
     }
 }
 
+/// How a dragged toast moves and whether letting go dismisses it. Toasts sit
+/// in the top-right corner, so they leave to the right or upward; a drag the
+/// other way follows the pointer with resistance and springs back.
+enum ToastSwipe {
+    /// How far a toast must travel to go when released.
+    static let distance: CGFloat = 80
+    /// How far a quick flick must be heading when released.
+    static let flick: CGFloat = 180
+
+    /// Where the toast is drawn for a drag of `translation`.
+    static func offset(for translation: CGSize) -> CGSize {
+        CGSize(
+            width: translation.width > 0 ? translation.width : resisted(translation.width),
+            height: translation.height < 0 ? translation.height : resisted(translation.height)
+        )
+    }
+
+    /// Whether letting go of a drag dismisses the toast: far enough out, or a
+    /// flick heading out, to the right or upward.
+    static func dismisses(translation: CGSize, predicted: CGSize) -> Bool {
+        translation.width >= distance || -translation.height >= distance
+            || predicted.width >= flick || -predicted.height >= flick
+    }
+
+    /// The direction it leaves in once dismissed, along the drag's main axis.
+    static func exit(for translation: CGSize) -> CGSize {
+        -translation.height > translation.width ? CGSize(width: 0, height: -160) : CGSize(width: 420, height: 0)
+    }
+
+    /// A drag against the way out moves a fraction of the pointer, to a limit.
+    private static func resisted(_ value: CGFloat) -> CGFloat {
+        let limit: CGFloat = 24
+        let magnitude = limit * (1 - 1 / (abs(value) / limit + 1))
+        return value < 0 ? -magnitude : magnitude
+    }
+}
+
 private struct ToastView: View {
     let toast: Toast
     let open: () -> Void
     let dismiss: () -> Void
     @State private var isHovered = false
+    @State private var offset: CGSize = .zero
 
     private var opens: Bool { toast.session != nil || toast.result != nil }
 
@@ -68,25 +111,55 @@ private struct ToastView: View {
                 }
             }
             .frame(maxWidth: 280, alignment: .leading)
-            if isHovered, toast.style != .progress {
+            if toast.style != .progress {
+                // Always laid out, so showing it on hover fades it in place
+                // instead of widening the toast.
                 Button(action: dismiss) {
-                    Image(systemName: "xmark").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .help("Dismiss")
+                .opacity(isHovered ? 1 : 0)
+                .scaleEffect(isHovered ? 1 : 0.8)
+                .allowsHitTesting(isHovered)
+                .accessibilityHidden(!isHovered)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(.regularMaterial, in: .rect(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(.separator) }
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+        .glassSurface(in: .rect(cornerRadius: 14))
         .contentShape(.rect)
+        .offset(offset)
+        .opacity(1 - min(max(offset.width, -offset.height, 0) / (ToastSwipe.distance * 3), 0.6))
         .onTapGesture { if opens { open() } else { dismiss() } }
-        .onHover { isHovered = $0 }
+        .gesture(swipe)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering }
+        }
         .help(opens ? "Open" : "")
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(opens ? .isButton : [])
+        .accessibilityAction(named: "Dismiss", dismiss)
+    }
+
+    /// Drag right or up to dismiss; anything short of that springs back.
+    private var swipe: some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                offset = ToastSwipe.offset(for: value.translation)
+            }
+            .onEnded { value in
+                if ToastSwipe.dismisses(translation: value.translation, predicted: value.predictedEndTranslation) {
+                    withAnimation(.easeOut(duration: 0.18)) { offset = ToastSwipe.exit(for: value.translation) }
+                    dismiss()
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { offset = .zero }
+                }
+            }
     }
 
     @ViewBuilder
