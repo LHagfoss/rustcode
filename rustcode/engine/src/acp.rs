@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod edit_diff;
 mod permissions;
+mod presence;
 mod preview;
 mod prompt;
 mod questions;
@@ -690,6 +691,8 @@ struct AcpServer {
     /// The client advertised `_meta.rustcode.preview` (#2138), so its
     /// sessions get `localhost_preview`.
     client_has_preview: Arc<AtomicBool>,
+    /// Discord Rich Presence, for a client that asked for it (#2179).
+    presence: presence::Presence,
 }
 
 impl AcpServer {
@@ -720,6 +723,7 @@ impl AcpServer {
             task_routes,
             renders_visualizations: Arc::new(AtomicBool::new(false)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
+            presence: presence::Presence::default(),
         })
     }
 }
@@ -760,6 +764,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     ),
                     Ordering::Relaxed,
                 );
+                server
+                    .presence
+                    .set_client(presence::client_meta_wants_presence(
+                        request.client_capabilities.meta.as_ref(),
+                    ));
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(server_capabilities()),
@@ -850,6 +859,24 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: presence::PresenceRequest, responder, _connection| {
+                    responder.respond(server.presence.status(request.cwd))
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: presence::SetPresenceRequest, responder, _connection| {
+                    responder.respond(server.presence.set_enabled(request)?)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |_request: capabilities::CapabilitiesRequest, responder, _connection| {
                 responder.respond(capabilities::snapshot_value()?)
             },
@@ -894,6 +921,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     if let Some(session) = session {
                         session.turns.cancel_active().await;
                     }
+                    server.presence.session_closed(&session_id);
                     crate::tools::abort_background_starts(&session_id);
                     crate::tools::stop_background_tasks(&session_id);
                     responder.respond(CloseSessionResponse::new())
@@ -1018,6 +1046,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let scheduled_turn = turns.schedule();
                     let prompt_server = server.clone();
                     let task_connection = connection.clone();
+                    let presence_cwd = cwd.clone();
+                    server.presence.turn_started(&session_id, &presence_cwd);
                     connection.spawn(async move {
                         let result = prompt::run_prompt(
                             state,
@@ -1034,6 +1064,9 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             prompt_server.auto_approve,
                         )
                         .await;
+                        prompt_server
+                            .presence
+                            .turn_finished(&session_id, &presence_cwd);
 
                         match result {
                             Ok(stop_reason) => {
@@ -1297,6 +1330,7 @@ mod tests {
             task_routes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             renders_visualizations: Arc::new(AtomicBool::new(false)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
+            presence: presence::Presence::default(),
         };
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));

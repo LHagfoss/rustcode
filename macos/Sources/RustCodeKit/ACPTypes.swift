@@ -73,9 +73,12 @@ public enum ACPRequests {
                 // engine may teach the agent the format (docs/visualizations.md).
                 // The localhost preview answers `_rustcode/preview` requests,
                 // so the engine offers `localhost_preview` (docs/preview.md).
+                // Presence asks the engine for Discord Rich Presence, which
+                // it gives only clients that ask (docs/discord-rich-presence.md).
                 "_meta": ["rustcode": [
                     "visualizations": .number(Double(Visualization.version)),
                     "preview": .number(Double(rustcodePreviewCapabilityVersion)),
+                    "presence": .number(Double(rustcodePresenceCapabilityVersion)),
                 ]],
             ],
             "clientInfo": ["name": "rustcode-macos", "title": "RustCode", "version": .string(appVersion)],

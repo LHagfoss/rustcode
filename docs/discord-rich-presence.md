@@ -37,6 +37,22 @@ read-only check of RustCode's setting and the local IPC socket; it does not
 connect to or modify a Discord account. The setting is stored as
 `discord_rpc_enabled = true|false` in RustCode's normal `config.toml`.
 
+## macOS app
+
+The macOS app publishes presence through the engine it runs (`rustcode
+--acp`), using the same worker as the TUI. It asks for it in `initialize`
+(`_meta.rustcode.presence`); other ACP clients such as editors never publish
+presence. The app shares less than the TUI: the project's folder name as the
+details and `Working` or `Idle` as the state. It never shares prompts, chat
+titles, token counts or paths.
+
+Settings → General → Discord turns it on or off through
+`_rustcode/presence/set`, which saves `discord_rpc_enabled` where the
+project's config keeps it, else in the user config, and applies at once. The
+engine reads the setting again at every turn, so a change made with
+`rustcode discord` applies from the next turn. Presence clears when the app
+quits, and the panel says so when Discord's desktop app is not running.
+
 ## Discord application assets
 
 The built-in RustCode application/client ID is used for the IPC handshake.

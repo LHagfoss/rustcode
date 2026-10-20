@@ -73,6 +73,7 @@ struct SettingsView: View {
         .frame(width: 720, height: 480)
         .tint(.brand)
         .task(id: section) {
+            if section == .general { await model.loadPresence() }
             if section == .skills || section == .mcp { await capabilities.load(model.engineConnection) }
         }
     }
@@ -213,6 +214,21 @@ private struct GeneralSettings: View {
                         set: { on in Task { await model.setAutoApprove(on) } }))
                         .labelsHidden()
                         .toggleStyle(.switch)
+                }
+            }
+
+            if let presence = model.presence {
+                SettingsGroup(title: "Discord",
+                              footer: presence.enabled && !presence.discordDetected
+                                  ? "Discord's desktop app is not running; your status appears once it is." : nil) {
+                    SettingsRow(title: "Rich Presence",
+                                subtitle: "Show the project's folder name and whether RustCode is working. Never prompts or paths") {
+                        Toggle("Rich Presence", isOn: Binding(
+                            get: { presence.enabled },
+                            set: { on in Task { await model.setPresence(on) } }))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
                 }
             }
 
