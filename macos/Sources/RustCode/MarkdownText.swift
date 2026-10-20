@@ -259,17 +259,13 @@ struct QuietPressStyle: ButtonStyle {
 struct StreamingProse: View {
     let text: AttributedString
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Characters before this are fully shown.
-    @State private var settled = 0
-    /// Recent chunks: where each ends, in characters, and when it arrived.
-    @State private var arrivals: [Arrival] = []
+    /// Settings → General: new text fades in, or appears at once.
+    @AppStorage(StreamingProse.revealKey) private var reveals = true
+    /// What is settled and which chunks are still fading in.
+    @State private var arrivals = StreamingArrivals()
 
-    struct Arrival: Equatable {
-        var end: Int
-        var time: Date
-    }
-
-    static let fade: TimeInterval = 0.3
+    static let revealKey = "streamingTextReveal"
+    private var settled: Int { arrivals.settled }
 
     var body: some View {
         let count = text.characters.count
@@ -283,8 +279,8 @@ struct StreamingProse: View {
                 Text(AttributedString(text[text.startIndex..<index(head, count: count)]))
             }
             Group {
-                if #available(macOS 15, *), !reduceMotion {
-                    TimelineView(.animation(minimumInterval: 1.0 / 60, paused: arrivals.isEmpty)) { context in
+                if #available(macOS 15, *), reveals, !reduceMotion {
+                    TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !arrivals.isAnimating)) { context in
                         faded(from: head > 0 ? head + 1 : 0, count: count).textRenderer(FadeInRenderer(now: context.date))
                     }
                 } else {
@@ -292,27 +288,13 @@ struct StreamingProse: View {
                 }
             }
         }
-        .onAppear { arrivals = [Arrival(end: count, time: Date())] }
-        .onChange(of: count) { _, new in
-            let now = Date()
-            // Chunks that finished fading join the settled text.
-            while let first = arrivals.first, now.timeIntervalSince(first.time) >= Self.fade {
-                settled = first.end
-                arrivals.removeFirst()
-            }
-            // Styling can shorten the text, as `**bold**` loses its stars.
-            if new < (arrivals.last?.end ?? settled) {
-                arrivals.removeAll { $0.end > new }
-                settled = min(settled, new)
-            }
-            if new > (arrivals.last?.end ?? settled) { arrivals.append(Arrival(end: new, time: now)) }
-        }
+        .onAppear { arrivals = StreamingArrivals(appearingWith: count, at: Date()) }
+        .onChange(of: count) { _, new in arrivals.textChanged(to: new, at: Date()) }
         // Stop redrawing once the last chunk is fully in.
-        .task(id: arrivals.last?.time) {
-            try? await Task.sleep(for: .seconds(Self.fade))
-            guard !Task.isCancelled, let last = arrivals.last else { return }
-            settled = last.end
-            arrivals = []
+        .task(id: arrivals.pending.last?.time) {
+            try? await Task.sleep(for: .seconds(StreamingArrivals.fade))
+            guard !Task.isCancelled, arrivals.isAnimating else { return }
+            arrivals.settleAll()
         }
     }
 
@@ -323,7 +305,7 @@ struct StreamingProse: View {
     private func faded(from start: Int, count: Int) -> Text {
         var position = min(max(settled, start), count)
         var result = Text(AttributedString(text[index(start, count: count)..<index(position, count: count)]))
-        for piece in arrivals + [Arrival(end: count, time: .distantFuture)] where piece.end > position {
+        for piece in arrivals.pending + [.init(end: count, time: .distantFuture)] where piece.end > position {
             let end = min(piece.end, count)
             result = result + Text(AttributedString(text[index(position, count: count)..<index(end, count: count)]))
                 .customAttribute(FreshText(arrival: piece.time))
@@ -356,11 +338,13 @@ private struct FadeInRenderer: TextRenderer {
                     context.draw(run)
                     continue
                 }
-                let progress = min(max(now.timeIntervalSince(fresh.arrival) / StreamingProse.fade, 0), 1)
-                guard progress > 0 else { continue }
+                let reveal = StreamingArrivals.reveal(elapsed: now.timeIntervalSince(fresh.arrival), blurs: true)
+                guard reveal.opacity > 0 else { continue }
                 var faded = context
-                // Ease out: quick to show, gentle to settle.
-                faded.opacity = progress * (2 - progress)
+                // Fades in from a light blur to sharp; only the newest
+                // chunks are drawn this way, never the whole reply.
+                faded.opacity = reveal.opacity
+                if reveal.blur > 0.05 { faded.addFilter(.blur(radius: reveal.blur)) }
                 faded.draw(run)
             }
         }
