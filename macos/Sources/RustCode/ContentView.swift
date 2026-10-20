@@ -596,12 +596,17 @@ private struct ChatView: View {
                     // children unlaid, but not ids inside a child it has not
                     // laid out, so a jump from far up did nothing.
                     Color.clear.frame(height: 1).id(bottomAnchor)
+                        // The probe for the AppKit scroll view sits under this
+                        // last, empty row. Behind the whole stack, every row
+                        // drawn over it went into one layer as tall as the
+                        // chat, and a layer much taller than the window draws
+                        // nothing: the chat showed blank until scrolled.
+                        .background(EnclosingScrollView { [scroll] in scroll.scrollView = $0 })
                 }
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28)
                 .padding(.top, 20)
                 .frame(maxWidth: .infinity)
-                .background(EnclosingScrollView { [scroll] in scroll.scrollView = $0 })
             }
             .chatScroller(scroll) { delta, animated in
                 // Paging or dragging up is the reader leaving the end.

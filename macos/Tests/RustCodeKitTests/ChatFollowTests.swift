@@ -75,10 +75,12 @@ final class ChatFollowTests: XCTestCase {
         XCTAssertFalse(follow.showsLatest)
     }
 
-    func testRestingWithinTheThresholdFollowsOnceTheScrollSettles() {
+    func testRestingAtTheEndFollowsOnceTheScrollSettles() {
         var follow = atEnd()
         follow.readerScrolledUp()
         _ = follow.update(at(992, distance: 8), readerScrolling: true)
+        // The bounce brings the chat back to rest at the end itself.
+        _ = follow.update(at(1_000, distance: 0), readerScrolling: true)
         XCTAssertFalse(follow.follows)
         follow.scrollSettled()
         XCTAssertTrue(follow.follows)
@@ -87,10 +89,58 @@ final class ChatFollowTests: XCTestCase {
     func testOutputArrivingForAReaderLeftAtTheEndFollowsAgain() {
         var follow = atEnd()
         follow.readerScrolledUp()
-        _ = follow.update(at(992, distance: 8), readerScrolling: true)
+        _ = follow.update(at(999, distance: 1), readerScrolling: true)
         // No idle phase came, but the reader stopped at the end.
         XCTAssertTrue(follow.transcriptChanged(readerScrolling: false))
         XCTAssertTrue(follow.follows)
+    }
+
+    /// #2162: after Latest, a small scroll up stays let go instead of being
+    /// pulled back to the end once it settles or output arrives.
+    func testASmallScrollUpAfterLatestStaysLetGo() {
+        var follow = atEnd()
+        follow.readerScrolledUp()
+        _ = follow.update(at(0, distance: 5_000), readerScrolling: true)
+        follow.jumpToLatest()
+        XCTAssertFalse(follow.update(at(5_000, distance: 0), readerScrolling: false))
+        XCTAssertTrue(follow.follows)
+        // A gentle flick up, well within the threshold, then momentum stops.
+        follow.readerScrolledUp()
+        XCTAssertFalse(follow.update(at(4_992, distance: 8), readerScrolling: true))
+        follow.scrollSettled()
+        XCTAssertFalse(follow.follows)
+        // Output arrives, the geometry updates with nobody scrolling: still let go.
+        XCTAssertFalse(follow.transcriptChanged(readerScrolling: false))
+        XCTAssertFalse(follow.update(at(4_992, distance: 20), readerScrolling: false))
+        XCTAssertFalse(follow.follows)
+        // A second flick goes further up, and the reader reads on undisturbed.
+        follow.readerScrolledUp()
+        _ = follow.update(at(4_980, distance: 32), readerScrolling: true)
+        follow.scrollSettled()
+        XCTAssertFalse(follow.update(at(4_980, distance: 60), readerScrolling: false))
+        XCTAssertFalse(follow.follows)
+        XCTAssertTrue(follow.showsLatest)
+    }
+
+    /// #2162: rows above the end take their real height as a small scroll up
+    /// after Latest lays them out; that must not scroll the chat to the end.
+    func testLateRowHeightsAfterASmallScrollUpDoNotPullBack() {
+        var follow = atEnd()
+        follow.readerScrolledUp()
+        _ = follow.update(at(4_990, distance: 10), readerScrolling: true)
+        follow.scrollSettled()
+        XCTAssertFalse(follow.update(at(5_030, distance: 10), readerScrolling: false))
+        XCTAssertFalse(follow.update(at(5_030, distance: 40), readerScrolling: false))
+        XCTAssertFalse(follow.follows)
+    }
+
+    func testScrollingDownToTheEndStillFollowsWithinTheThreshold() {
+        var follow = atEnd()
+        follow.readerScrolledUp()
+        _ = follow.update(at(500, distance: 500), readerScrolling: true)
+        _ = follow.update(at(990, distance: 10), readerScrolling: true, towardEnd: true)
+        XCTAssertTrue(follow.follows)
+        XCTAssertFalse(follow.showsLatest)
     }
 
     func testOneLatestPressHidesTheButtonAndCatchesUpWithLateLayout() {
