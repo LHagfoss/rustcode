@@ -91,6 +91,11 @@ to Developer ID signing and notarization once its signing secrets are set
 (see [macOS release signing](macos-release-signing.md)); this workaround is
 removed from here with the first notarized release.
 
+⌘K (File > Switch Chat…) opens a switcher over the window: type part of a
+chat's title, project or model, or something said in it, move with ↑↓ and
+press ⏎ to open the highlighted chat, or Esc to close. It searches in the
+sidebar's All or Project scope, which it can also switch.
+
 Long chats can be read from the keyboard: Page Up and Page Down (fn-↑ and
 fn-↓ on a laptop) scroll the chat by a screen, Home goes to its first message
 and End to the latest, following new output again like the Latest button. The

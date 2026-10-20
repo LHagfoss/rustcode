@@ -119,6 +119,35 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// ⌘K: the chat picked in the switcher opens and the switcher closes;
+    /// picking the open chat only closes it. Not over Settings.
+    func testSwitcherOpensThePickedChat() async throws {
+        let model = try await started()
+        model.toggleSwitcher()
+        XCTAssertTrue(model.showsSwitcher)
+        XCTAssertTrue(model.coversChat, "the chat's keys stay out of the switcher's field")
+        let results = SessionSwitcher.results(sessions: model.sessions, query: "qui", pinned: [])
+        XCTAssertEqual(results.map(\.id), ["quick"])
+        model.switchTo(results[0].session)
+        XCTAssertFalse(model.showsSwitcher)
+        try await until { model.selectedSession == "quick" && !model.isLoadingSelected }
+        XCTAssertEqual(model.transcript.items.count, Self.replayed)
+
+        model.toggleSwitcher()
+        model.switchTo(results[0].session)
+        XCTAssertFalse(model.showsSwitcher)
+        XCTAssertEqual(model.selectedSession, "quick")
+        XCTAssertEqual(model.transcript.items.count, Self.replayed)
+
+        model.toggleSwitcher()
+        model.toggleSwitcher()
+        XCTAssertFalse(model.showsSwitcher, "⌘K again closes it")
+        model.showsSettings = true
+        model.toggleSwitcher()
+        XCTAssertFalse(model.showsSwitcher)
+        model.stop()
+    }
+
     /// An ACP engine with two stored chats of `replayed` messages, "slow" (its
     /// load takes a moment) and "quick", that answers each prompt with one
     /// short reply.
