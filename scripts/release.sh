@@ -990,11 +990,13 @@ phase_wait_for_build() {
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
         # List runs for the Build workflow, filtering by the exact tag SHA.
+        # The release PR's merge to main starts a Build run on the same SHA;
+        # only the tag's run publishes the release.
         run_id="$(gh run list \
             --workflow="$workflow_name" \
             --commit "$RELEASE_TAG_COMMIT" \
-            --json databaseId,status,conclusion \
-            --jq '.[0].databaseId' \
+            --json databaseId,headBranch \
+            --jq "[.[] | select(.headBranch == \"v$VERSION\")][0].databaseId // empty" \
             2>/dev/null | head -n1 || true)"
 
         if [[ -n "$run_id" ]]; then
