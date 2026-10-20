@@ -141,6 +141,58 @@ pub fn hydrate_provider_keys(configured: &[String]) {
     hydrate_missing(&names);
 }
 
+/// Import every login-shell variable this process lacks. For launches that
+/// inherit no shell environment at all, such as the macOS app starting the
+/// engine with `--acp`: MCP servers and tool shells read variables (e.g.
+/// `DAILY_DEV_API_KEY`) that no profile or `[mcp_servers.env]` names, so the
+/// provider-key list in [`hydrate_provider_keys`] cannot cover them.
+pub fn hydrate_all_missing() {
+    let cache = shell_import();
+    for (name, val) in missing_shell_vars(cache, |name| std::env::var_os(name).is_some()) {
+        // SAFETY: startup hydration before the session spawns tasks that
+        // read the environment; see `hydrate_missing`.
+        unsafe { std::env::set_var(name, val) };
+    }
+}
+
+fn missing_shell_vars<'a>(
+    shell: &'a HashMap<String, String>,
+    present: impl Fn(&str) -> bool,
+) -> Vec<(&'a str, &'a str)> {
+    let mut vars: Vec<_> = shell
+        .iter()
+        .filter(|(name, val)| inherit_from_shell(name) && !val.trim().is_empty() && !present(name))
+        .map(|(name, val)| (name.as_str(), val.as_str()))
+        .collect();
+    vars.sort_unstable();
+    vars
+}
+
+/// Variables describing the probe shell's own session, not the user's setup.
+fn inherit_from_shell(name: &str) -> bool {
+    const SESSION: &[&str] = &[
+        "_",
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "TERM",
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "TERM_SESSION_ID",
+        "COLORTERM",
+        "TTY",
+        "PS1",
+        "PS2",
+        "PS3",
+        "PS4",
+        "PROMPT",
+        "RPROMPT",
+        "ZSH_AUTOSUGGEST_MANUAL_REBIND",
+        PROBE_MARKER,
+    ];
+    !SESSION.contains(&name) && !name.starts_with("POWERLEVEL9K_") && !name.starts_with("ITERM_")
+}
+
 fn probe_ok() -> &'static OnceLock<bool> {
     static PROBE_OK: OnceLock<bool> = OnceLock::new();
     &PROBE_OK
@@ -530,6 +582,28 @@ mod tests {
             Some("from-process")
         );
         unsafe { std::env::remove_var("RUSTCODE_SHELL_ENV_TEST_KEY") };
+    }
+
+    #[test]
+    fn imports_missing_user_vars_but_not_shell_session_state() {
+        let shell: HashMap<String, String> = [
+            ("DAILY_DEV_API_KEY", "dd-123"),
+            ("HOME", "/Users/me"),
+            ("PWD", "/Users/me"),
+            ("SHLVL", "2"),
+            ("_", "/usr/bin/printenv"),
+            ("TERM", "xterm-256color"),
+            ("POWERLEVEL9K_INSTANT_PROMPT", "off"),
+            (PROBE_MARKER, "1"),
+            ("BLANK", "  "),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let imported = missing_shell_vars(&shell, |name| name == "HOME");
+
+        assert_eq!(imported, vec![("DAILY_DEV_API_KEY", "dd-123")]);
     }
 
     #[test]
