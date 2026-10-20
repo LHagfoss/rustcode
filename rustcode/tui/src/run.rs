@@ -743,6 +743,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let acp_subcommand = matches!(cli_args.command.as_ref(), Some(crate::cli::Commands::Acp));
     if cli_args.acp || acp_subcommand {
+        // The macOS app launches the engine with the bare launchd environment;
+        // give MCP servers and tool shells everything the login shell exports.
+        rustcode::shell_env::hydrate_all_missing();
         rustcode::acp::run_acp(cli_args.yolo).await?;
         rustcode::config::flush_history();
         return Ok(());
