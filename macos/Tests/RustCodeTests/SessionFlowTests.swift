@@ -93,12 +93,12 @@ final class SessionFlowTests: XCTestCase {
         let loading = Task { await model.select(slow) }
         try await until { model.isLoadingSelected }
         await model.select(quick)
-        XCTAssertEqual(model.transcript.items.count, 2)
+        XCTAssertEqual(model.transcript.items.count, Self.replayed)
         await loading.value
         XCTAssertEqual(model.selectedSession, "quick")
-        XCTAssertEqual(model.transcript.items.count, 2)
+        XCTAssertEqual(model.transcript.items.count, Self.replayed)
         await model.select(slow)
-        XCTAssertEqual(model.transcript.items.count, 2)
+        XCTAssertEqual(model.transcript.items.count, Self.replayed)
         XCTAssertFalse(model.isLoadingSelected)
         model.stop()
     }
@@ -115,12 +115,15 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertTrue(model.isLoadingSelected)
         await loading.value
         XCTAssertEqual(model.selectedSession, "slow")
-        XCTAssertEqual(model.transcript.items.count, 2)
+        XCTAssertEqual(model.transcript.items.count, Self.replayed)
         model.stop()
     }
 
-    /// An ACP engine with two stored chats, "slow" (its load takes a moment)
-    /// and "quick", that answers each prompt with one short reply.
+    /// An ACP engine with two stored chats of `replayed` messages, "slow" (its
+    /// load takes a moment) and "quick", that answers each prompt with one
+    /// short reply.
+    private static let replayed = 60
+
     private static let fakeEngine = #"""
     #!/usr/bin/env python3
     import json, sys, threading, time
@@ -134,7 +137,9 @@ final class SessionFlowTests: XCTestCase {
     def update(session, kind, text):
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session,
               "update": {"sessionUpdate": kind, "content": {"type": "text", "text": text}}}})
-    stored = {"slow": ["old question", "old answer"], "quick": ["hi", "hello"]}
+    # Long replays: their updates queue up ahead of the load's response.
+    history = [m for i in range(30) for m in ("question %d" % i, "answer %d" % i)]
+    stored = {"slow": list(history), "quick": list(history)}
     created = 0
     def handle(message):
         global created
@@ -155,9 +160,8 @@ final class SessionFlowTests: XCTestCase {
             sid = params["sessionId"]
             if sid == "slow":
                 time.sleep(0.4)
-            user, agent = stored[sid][0], stored[sid][1]
-            update(sid, "user_message_chunk", user)
-            update(sid, "agent_message_chunk", agent)
+            for index, text in enumerate(stored[sid]):
+                update(sid, "user_message_chunk" if index % 2 == 0 else "agent_message_chunk", text)
         elif method == "session/prompt":
             sid = params["sessionId"]
             text = params["prompt"][0]["text"]

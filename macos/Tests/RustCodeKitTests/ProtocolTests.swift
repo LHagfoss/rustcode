@@ -176,3 +176,20 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(try locator.locate().source, .bundled)
     }
 }
+
+final class ACPConnectionOrderTests: XCTestCase {
+    /// A response resolves at once while the updates sent before it may
+    /// still be queued, so the connection counts what it delivered.
+    func testInboundCountCoversUpdatesSentBeforeAResponse() async throws {
+        let connection = ACPConnection(writer: { _ in })
+        let pending = Task { try await connection.request("session/load", params: [:]) }
+        while await connection.inboundCount == 0, !(await connection.hasPending) { await Task.yield() }
+        for index in 0..<3 {
+            await connection.receive(line: Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"n":\#(index)}}"#.utf8))
+        }
+        await connection.receive(line: Data(#"{"jsonrpc":"2.0","id":1,"result":{}}"#.utf8))
+        _ = try await pending.value
+        let delivered = await connection.inboundCount
+        XCTAssertEqual(delivered, 3)
+    }
+}

@@ -32,6 +32,10 @@ public actor ACPConnection {
     private var nextId = 1
     private var pending: [Int: CheckedContinuation<JSONValue, Error>] = [:]
     private var closedReason: String?
+    /// Requests and notifications delivered on `inbound` so far. A response
+    /// resolves at once, ahead of notifications the agent sent before it that
+    /// are still queued, so a client counts what it handled against this.
+    public private(set) var inboundCount = 0
     private let continuation: AsyncStream<ACPInbound>.Continuation
     public nonisolated let inbound: AsyncStream<ACPInbound>
 
@@ -43,6 +47,9 @@ public actor ACPConnection {
     }
 
     public var isClosed: Bool { closedReason != nil }
+
+    /// A request is waiting for its response.
+    var hasPending: Bool { !pending.isEmpty }
 
     /// Send a request and wait for its result. `timeout` bounds handshake-style
     /// calls; prompts pass `nil` because a turn may legitimately run for hours.
@@ -98,8 +105,10 @@ public actor ACPConnection {
         }
         switch message {
         case .request(let id, let method, let params):
+            inboundCount += 1
             continuation.yield(.request(id: id, method: method, params: params))
         case .notification(let method, let params):
+            inboundCount += 1
             continuation.yield(.notification(method: method, params: params))
         case .response(let id, let result):
             if let key = id.intValue, let waiter = pending.removeValue(forKey: key) {

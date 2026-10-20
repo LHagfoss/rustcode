@@ -261,6 +261,9 @@ final class DesktopModel: ObservableObject {
     /// The running engine's connection, for Settings' skills and MCP pages.
     var engineConnection: ACPConnection? { engine?.connection }
     private var inboundTask: Task<Void, Never>?
+    /// Inbound messages handled from the running engine, and who waits for a count.
+    private var handledInbound = 0
+    private var inboundWaiters: [(count: Int, resume: CheckedContinuation<Void, Never>)] = []
     private var capabilities: AgentInfo?
 
     init() {
@@ -354,6 +357,7 @@ final class DesktopModel: ObservableObject {
                     // new one; its waiting requests can no longer be answered.
                     self.inboundTask?.cancel()
                     self.inboundTask = nil
+                    self.releaseInboundWaiters()
                     self.engine = nil
                     self.capabilities = nil
                     self.permissionQueue = []
@@ -370,6 +374,7 @@ final class DesktopModel: ObservableObject {
             inboundTask = Task { [weak self] in
                 for await inbound in process.connection.inbound {
                     await self?.handle(inbound)
+                    await self?.inboundHandled(from: process.connection)
                 }
             }
             let result = try await process.connection.request(ACPMethod.initialize, params: ACPRequests.initialize(appVersion: "0.1.0"), timeout: .seconds(10))
@@ -696,6 +701,33 @@ final class DesktopModel: ObservableObject {
         return (text.isEmpty ? "" : text + "\n\n") + "Attached files:\n" + list
     }
 
+    private func inboundHandled(from connection: ACPConnection) {
+        // A replaced engine's last message does not count for the new one.
+        guard engine?.connection === connection else { return }
+        handledInbound += 1
+        let ready = inboundWaiters.filter { $0.count <= handledInbound }
+        inboundWaiters.removeAll { $0.count <= handledInbound }
+        for waiter in ready { waiter.resume.resume() }
+    }
+
+    /// Wait until every message the engine sent before now is handled. A
+    /// response resolves ahead of the updates queued before it: without this,
+    /// a chat opened with only part of its replay, and a finished turn read
+    /// its reply before the last chunk.
+    private func catchUpInbound(on connection: ACPConnection) async {
+        let target = await connection.inboundCount
+        guard engine?.connection === connection, handledInbound < target else { return }
+        await withCheckedContinuation { inboundWaiters.append((target, $0)) }
+    }
+
+    /// The engine is gone: nothing more will be handled from it.
+    private func releaseInboundWaiters() {
+        handledInbound = 0
+        let waiters = inboundWaiters
+        inboundWaiters = []
+        for waiter in waiters { waiter.resume.resume() }
+    }
+
     /// Start a fresh engine, e.g. after its path changed in Settings.
     func restartEngine() async {
         error = nil
@@ -875,6 +907,7 @@ final class DesktopModel: ObservableObject {
         }
         do {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
+            await catchUpInbound(on: connection)
             // The engine replaced while this loaded has not opened it.
             guard engine?.connection === connection else { return }
             let options = result["configOptions"].map(ModelOptions.init(configOptions:)) ?? .empty
@@ -1058,6 +1091,7 @@ final class DesktopModel: ObservableObject {
         var stopped = false
         do {
             let result = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: prompt.text, images: prompt.images))
+            await catchUpInbound(on: connection)
             stopped = result["stopReason"]?.stringValue == "cancelled"
         } catch {
             self.error = String(describing: error)
@@ -1253,6 +1287,7 @@ final class DesktopModel: ObservableObject {
     }
 
     func stop() {
+        releaseInboundWaiters()
         openSessions = [:]
         replays = [:]
         loadingSessions = []
