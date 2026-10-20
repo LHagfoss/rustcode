@@ -889,6 +889,11 @@ final class DesktopModel: ObservableObject {
         }
     }
 
+    /// A sheet or panel is open over the chat, which keeps its keys.
+    var coversChat: Bool {
+        showsSettings || renamingSession != nil || contextSheet != nil || commandResult != nil || composerPanel != nil
+    }
+
     /// The request shown for the selected session, if any.
     var pendingPermission: PermissionRequest? {
         permissionQueue.first { $0.sessionId == selectedSession }

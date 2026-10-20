@@ -1,6 +1,8 @@
 import AppKit
 import RustCodeKit
+import class SwiftTerm.TerminalView
 import SwiftUI
+import WebKit
 
 /// The window has no title bar: a gray sidebar runs to the top edge beside the
 /// chat, with no split-view divider between them.
@@ -641,6 +643,9 @@ private struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                    // Home's target: always the stack's first child, so the
+                    // jump finds it however far down the chat is.
+                    Color.clear.frame(height: 0).id(topAnchor)
                     ForEach(transcript.items[..<split]) { item in
                         TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch)
                             .equatable()
@@ -718,6 +723,11 @@ private struct ChatView: View {
                 }
             }
             .followsLatest($follow, scroll: scroll) { scrollToEnd(proxy) }
+            .onAppear {
+                TranscriptKeyInput.shared.start()
+                TranscriptKeyInput.shared.isCovered = { [model] in model.coversChat }
+                TranscriptKeyInput.shared.perform = { action in perform(action, proxy) }
+            }
             .onGeometryChange(for: CGRect.self) { proxy in
                 // Only the part of the chat between the title bar and the
                 // composer: scrolling the composer or a card above it is not
@@ -869,6 +879,7 @@ private struct ChatView: View {
     }
 
     private let bottomAnchor = "bottom"
+    private let topAnchor = "top"
     /// The working indicator's place in the scroller's map, after every row.
     private static let workingRow = Int.max
     /// Newest rows laid out eagerly; everything older is lazy.
@@ -891,6 +902,28 @@ private struct ChatView: View {
     private func jumpToLatest(_ proxy: ScrollViewProxy) {
         follow.jumpToLatest()
         scrollToEnd(proxy)
+    }
+
+    /// Page Up, Page Down, Home or End over the chat (`TranscriptKeys`).
+    /// False when there is nothing to scroll, so the key goes on as usual.
+    private func perform(_ action: TranscriptKeys.Action, _ proxy: ScrollViewProxy) -> Bool {
+        guard !chat.transcript.isEmpty, !model.isLoadingSelected else { return false }
+        let visible = scroll.visible
+        let page = TranscriptKeys.pageDistance(visible: visible)
+        switch TranscriptKeys.resolved(action, distanceFromBottom: follow.geometry?.distanceFromBottom, visible: visible) {
+        case .pageUp:
+            follow.letGo()
+            scroll.scroll(by: -page, animated: true)
+        case .pageDown:
+            scroll.scroll(by: page, animated: true)
+        case .top:
+            follow.letGo()
+            proxy.scrollTo(topAnchor, anchor: .top)
+        case .end:
+            jumpToLatest(proxy)
+        }
+        scroll.flash()
+        return true
     }
 
     /// The shown chat has a turn in progress, so its last reply may still grow.
@@ -1067,6 +1100,45 @@ private final class ChatScrollInput {
         if event.type == .scrollWheel, event.scrollingDeltaY > 0, event.momentumPhase.isEmpty {
             onScrollUp()
         }
+    }
+}
+
+/// Page Up, Page Down, Home and End for the chat, caught before the focused
+/// view sees them. Which keys and when is `TranscriptKeys`; this only tells
+/// it where the focus is.
+@MainActor
+private final class TranscriptKeyInput {
+    static let shared = TranscriptKeyInput()
+    /// A sheet or panel is over the chat.
+    var isCovered: () -> Bool = { false }
+    /// Runs an action; false when the chat had nothing to scroll.
+    var perform: (TranscriptKeys.Action) -> Bool = { _ in false }
+    private var monitor: Any?
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            MainActor.assumeIsolated { TranscriptKeyInput.shared.handle(event) } ? nil : event
+        }
+    }
+
+    private func handle(_ event: NSEvent) -> Bool {
+        let modified = !event.modifierFlags.intersection([.shift, .option, .control, .command]).isEmpty
+        guard let window = event.window, window.attachedSheet == nil,
+              let action = TranscriptKeys.action(keyCode: event.keyCode, modified: modified,
+                                                 focus: focus(window.firstResponder)) else { return false }
+        return perform(action)
+    }
+
+    private func focus(_ responder: NSResponder?) -> TranscriptKeys.Focus {
+        if isCovered() { return .panel }
+        var view = responder as? NSView
+        while let current = view {
+            if current is TerminalView { return .terminal }
+            if current is WKWebView { return .web }
+            view = current.superview
+        }
+        return responder is NSText || responder is NSTextField ? .textField : .chat
     }
 }
 

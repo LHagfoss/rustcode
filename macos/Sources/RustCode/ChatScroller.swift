@@ -101,7 +101,7 @@ final class ChatScrollState: ObservableObject {
     }
 
     /// A page: the visible height, less a little kept for context.
-    var page: Double { max(visible - 40, 40) }
+    var page: Double { TranscriptKeys.pageDistance(visible: visible) }
 
     private var updatePending = false
 
@@ -267,7 +267,31 @@ struct EnclosingScrollView: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let scrollView = enclosingScrollView { found(scrollView) }
+            report()
+        }
+
+        /// SwiftUI can add the probe to a window before it puts it inside the
+        /// scroll view, so the scroller had none to move: look again once
+        /// the probe is laid out, and after the pass that placed it.
+        override func layout() {
+            super.layout()
+            report()
+        }
+
+        private weak var reported: NSScrollView?
+
+        private func report() {
+            if let scrollView = enclosingScrollView {
+                guard scrollView !== reported else { return }
+                reported = scrollView
+                found(scrollView)
+            } else if window != nil {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let scrollView = self.enclosingScrollView, scrollView !== self.reported else { return }
+                    self.reported = scrollView
+                    self.found(scrollView)
+                }
+            }
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }

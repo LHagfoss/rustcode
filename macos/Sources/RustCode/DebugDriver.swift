@@ -33,6 +33,8 @@ enum DebugDriver {
         let parts = line.split(separator: " ").map(String.init)
         switch parts.first {
         case "select": if let s = session(parts[1], model) { await model.select(s) }
+        case "open":
+            if let s = model.sessions.first(where: { $0.id == parts[1] }) { await model.select(s) }
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
         case "dump":
@@ -47,6 +49,20 @@ enum DebugDriver {
             }
             if let content = NSApp.windows.first?.contentView { walk(content) }
             try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/dump", atomically: true, encoding: .utf8)
+        case "key":
+            // A key press as the keyboard sends it: `key <code> [shift|cmd|opt]`.
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let code = UInt16(parts[1]) else { break }
+            var flags: NSEvent.ModifierFlags = [.function]
+            if parts.contains("shift") { flags.insert(.shift) }
+            if parts.contains("cmd") { flags.insert(.command) }
+            if parts.contains("opt") { flags.insert(.option) }
+            let characters = parts.count > 2 && !["shift", "cmd", "opt"].contains(parts[2]) ? parts[2] : ""
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: window.windowNumber, context: nil, characters: characters,
+                                            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) {
+                NSApp.postEvent(event, atStart: false)
+            }
         case "size":
             NSApp.windows.first?.setFrame(NSRect(x: 80, y: 80, width: Double(parts[1])!, height: Double(parts[2])!), display: true)
         default: break
