@@ -135,3 +135,20 @@ final class PresentationTests: XCTestCase {
         ])
     }
 }
+
+final class TranscriptIdentityTests: XCTestCase {
+    /// Item ids restart at 0 in every chat, so views key a chat on its identity.
+    func testEachChatHasItsOwnIdentity() {
+        var first = Transcript()
+        first.appendUser("hi")
+        var second = Transcript()
+        second.appendUser("hello")
+        XCTAssertEqual(first.items.first?.id, second.items.first?.id)
+        XCTAssertNotEqual(first.identity, second.identity)
+        let before = first.identity
+        first.appendUser("more")
+        XCTAssertEqual(first.identity, before, "a growing chat keeps its identity")
+        first.removeAll()
+        XCTAssertNotEqual(first.identity, before, "a cleared chat is a new one")
+    }
+}

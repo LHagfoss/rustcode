@@ -192,17 +192,24 @@ private struct SessionSidebar: View {
             let pinned = model.visibleSessions.filter { model.pinnedSessions.contains($0.id) }
             let unpinned = model.visibleSessions.filter { !model.pinnedSessions.contains($0.id) }
             ScrollView {
+                // One list keyed by chat: as two lists, a chat pinned while
+                // open moved into the pinned one and kept its selected fill
+                // after another chat was opened.
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if !pinned.isEmpty {
-                        Label("Pinned", systemImage: "pin.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.top, 2)
-                        ForEach(pinned) { row($0) }
-                        Divider().opacity(0.4).padding(.vertical, 6).padding(.horizontal, 10)
+                    ForEach(SidebarEntry.entries(pinned: pinned, unpinned: unpinned)) { entry in
+                        switch entry {
+                        case .pinnedHeader:
+                            Label("Pinned", systemImage: "pin.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 2)
+                        case .divider:
+                            Divider().opacity(0.4).padding(.vertical, 6).padding(.horizontal, 10)
+                        case .session(let session):
+                            row(session)
+                        }
                     }
-                    ForEach(unpinned) { row($0) }
                 }
                 .padding(.horizontal, 10)
             }
@@ -323,6 +330,42 @@ extension SessionSidebar {
         }
         }
         .contextMenu { SessionMenu(model: model, session: session) }
+    }
+}
+
+private extension View {
+    /// Start at the end of the content without pinning it there as it grows,
+    /// so a reader scrolled up stays put; the chat's own follow logic does
+    /// the rest. macOS 14 has only the anchor for every change, so it opens
+    /// at the top and is scrolled down when shown.
+    @ViewBuilder
+    func opensAtBottom() -> some View {
+        if #available(macOS 15, *) {
+            defaultScrollAnchor(.bottom, for: .initialOffset)
+        } else {
+            self
+        }
+    }
+}
+
+/// A line of the sidebar's chat list: the pinned chats under their header
+/// and a divider, then the rest.
+enum SidebarEntry: Identifiable {
+    case pinnedHeader
+    case divider
+    case session(SessionSummary)
+
+    var id: String {
+        switch self {
+        case .pinnedHeader: "\u{0}pinned"
+        case .divider: "\u{0}divider"
+        case .session(let session): session.id
+        }
+    }
+
+    static func entries(pinned: [SessionSummary], unpinned: [SessionSummary]) -> [SidebarEntry] {
+        guard !pinned.isEmpty else { return unpinned.map(SidebarEntry.session) }
+        return [.pinnedHeader] + pinned.map(SidebarEntry.session) + [.divider] + unpinned.map(SidebarEntry.session)
     }
 }
 
@@ -638,6 +681,10 @@ private struct ChatView: View {
                 .padding(.top, 20)
                 .frame(maxWidth: .infinity)
             }
+            // A new scroll view for each chat, laid out from its end: the
+            // lazy stack keeps row heights by id, and every chat's ids start at 0.
+            .opensAtBottom()
+            .id(transcript.identity)
             .chatScroller(scroll) { delta, animated in
                 // Paging or dragging up is the reader leaving the end.
                 if delta < 0 { follow.letGo() }
