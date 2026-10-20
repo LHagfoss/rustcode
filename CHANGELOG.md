@@ -1,3 +1,9 @@
+## [v0.81.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.81.1) - 2026-10-20
+
+### Fixes
+- **macOS:** the chat's scrollbar keeps a steady size and position while scrolling, can be dragged, and pages on a track click (#2157)
+- **macOS:** the Latest button hides once you scroll back to the end and uses interactive Liquid Glass (#2157)
+- **macOS:** scrolling during a streaming reply no longer gets pulled back down or jitters at the end (#2158)
 ## [v0.81.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.81.0) - 2026-10-19
 
 ### Features
