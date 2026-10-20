@@ -197,8 +197,13 @@ private struct SessionSidebar: View {
                 // One list keyed by chat: as two lists, a chat pinned while
                 // open moved into the pinned one and kept its selected fill
                 // after another chat was opened.
+                let entries = SidebarEntry.entries(pinned: pinned, unpinned: unpinned)
+                // The row whose appearance reads the next page of chats.
+                let prefetch = entries.indices.last.flatMap { last in
+                    entries.indices.first { SessionPages.isNearEnd($0, of: last + 1) }.map { entries[$0].id }
+                }
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(SidebarEntry.entries(pinned: pinned, unpinned: unpinned)) { entry in
+                    ForEach(entries) { entry in
                         switch entry {
                         case .pinnedHeader:
                             Label("Pinned", systemImage: "pin.fill")
@@ -210,7 +215,13 @@ private struct SessionSidebar: View {
                             Divider().opacity(0.4).padding(.vertical, 6).padding(.horizontal, 10)
                         case .session(let session):
                             row(session)
+                                .onAppear {
+                                    if session.id == prefetch { Task { await model.loadMoreSessions() } }
+                                }
                         }
+                    }
+                    if model.hasMoreSessions || model.moreSessionsFailed {
+                        MoreSessionsRow(model: model)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -368,6 +379,31 @@ enum SidebarEntry: Identifiable {
     static func entries(pinned: [SessionSummary], unpinned: [SessionSummary]) -> [SidebarEntry] {
         guard !pinned.isEmpty else { return unpinned.map(SidebarEntry.session) }
         return [.pinnedHeader] + pinned.map(SidebarEntry.session) + [.divider] + unpinned.map(SidebarEntry.session)
+    }
+}
+
+/// The end of the chats read so far: a spinner while the next page loads,
+/// or a retry when it failed. While it is in view it keeps reading pages, so
+/// a short list, such as a search or the archive, fills from the whole history.
+private struct MoreSessionsRow: View {
+    @ObservedObject var model: DesktopModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if model.moreSessionsFailed {
+                Text("Could not load more chats.").foregroundStyle(.secondary)
+                Button("Retry") { Task { await model.retryMoreSessions() } }
+                    .buttonStyle(.borderless)
+            } else {
+                ProgressView().controlSize(.small)
+                Text("Loading more chats…").foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .task(id: model.sessions.count) { await model.loadMoreSessions() }
+        .accessibilityElement(children: .combine)
     }
 }
 
