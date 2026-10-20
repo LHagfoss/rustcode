@@ -481,7 +481,10 @@ pub(crate) fn execute_command(
         ),
         "/skills" if arguments.is_empty() => (
             "Skills",
-            crate::skills::format_skill_catalog(&crate::skills::discover_skills_for_catalog()),
+            crate::skills::format_skill_catalog(
+                &crate::skills::discover_all_skills(),
+                &crate::skills::disabled_skill_names(),
+            ),
         ),
         "/tools" if arguments.is_empty() => (
             "Tools",

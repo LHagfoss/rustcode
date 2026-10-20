@@ -49,7 +49,8 @@ pub(in crate::ui) use context::{
 pub use navigation::{PALETTE_ITEMS, PaletteItem};
 pub(in crate::ui) use navigation::{
     render_command_picker_modal, render_history_picker_modal, render_mcp_config_modal,
-    render_model_picker_modal, render_subagent_picker_modal, tool_confirmation_height,
+    render_model_picker_modal, render_skills_panel_modal, render_subagent_picker_modal,
+    tool_confirmation_height,
 };
 #[cfg(test)]
 pub(super) use panel::COMMAND_PANEL_HEIGHT;
@@ -408,6 +409,7 @@ pub(super) const HISTORY_CONFIRM_HEIGHT: u16 = 10;
 pub(super) const SUBAGENT_PICKER_HEIGHT: u16 = 18;
 pub(super) const TASKS_PANEL_HEIGHT: u16 = 18;
 pub(super) const MCP_CONFIG_HEIGHT: u16 = 14;
+pub(super) const SKILLS_PANEL_HEIGHT: u16 = 16;
 pub(super) const COMMAND_PICKER_HEIGHT: u16 = 14;
 pub(super) const THEME_PICKER_HEIGHT: u16 = 12;
 pub(super) const CONTEXT_MODAL_HEIGHT: u16 = 14;
@@ -539,6 +541,8 @@ pub(super) fn open_modal_max_height(state: &RenderSnapshot) -> u16 {
         UPDATE_PROMPT_HEIGHT
     } else if state.show_mcp_config() {
         MCP_CONFIG_HEIGHT
+    } else if state.skills_panel().is_some() {
+        SKILLS_PANEL_HEIGHT
     } else {
         match state.settings_picker() {
             Some(rustcode::controller::SettingsPicker::Verbosity) => VERBOSITY_PICKER_HEIGHT,

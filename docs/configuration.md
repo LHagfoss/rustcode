@@ -247,10 +247,44 @@ cannot widen skill discovery:
 extra_skill_dirs = ["~/work/team-skills", "/opt/shared/skills"]
 ```
 
-Run `/skills` (or the `list_skills` tool) to see every root that was actually
-searched, and `rustcode doctor` to see which ones exist. `rustcode doctor
---fix` creates only the RustCode-owned root, never the universal or workspace
-roots.
+Run `/skills` to list and toggle the discovered skills, the `list_skills` tool
+to see every root that was actually searched, and `rustcode doctor` to see
+which ones exist. `rustcode doctor --fix` creates only the RustCode-owned root,
+never the universal or workspace roots.
+
+## Turning skills and MCP servers on and off
+
+The terminal's `/skills` and `/mcp` panels and the macOS app's **Settings →
+Skills** and **Settings → MCP Servers** list the same things and save to the
+same place:
+
+- **Skills.** Every discovered skill is listed (installed); a skill that is
+  turned off stays installed but is never offered to the model — routing hints,
+  `list_skills` and `use_skill` all skip it. Off skills are stored by name in
+  `disabled_skills` in the user `config.toml`, so the choice applies to every
+  project. A project `.rustcode/config.toml` cannot set it.
+
+  ```toml
+  disabled_skills = ["cloudflare", "wrangler"]
+  ```
+
+- **MCP servers.** Every configured server is listed with whether it is
+  actually connected in the engine (and how many tools it has), not connected,
+  turned off, or failed with its error. A toggle sets the server's `enabled`
+  flag in the user config and starts or stops it right away. A server that only
+  a project config file declares is shown but has to be changed in that file.
+  Header and environment values are never shown; credentials in a URL and
+  secret-looking arguments (`--token`, `API_KEY=…`) are masked.
+
+A toggle applies from the next message of every open session in the process
+that made it: the terminal you toggled in, or the macOS app's engine for all of
+its chats. A turn already running is not changed. Another RustCode process
+reads `disabled_skills` the next time it scans skills, but keeps its MCP
+servers as they are until it restarts or toggles them itself.
+
+The app reads and writes these through the ACP extension requests
+`_rustcode/capabilities` and `_rustcode/capabilities/set` (see
+[acp.md](acp.md#skills-and-mcp-servers)).
 
 ## YOLO by default
 

@@ -203,6 +203,51 @@ pub(crate) fn remove_mcp_server_in(dir: &Path, name: &str) -> Result<McpServerCo
     })
 }
 
+/// Turn the named user-config server on or off and return its entry. A
+/// server that only a project file declares cannot be toggled here: the user
+/// config is the one place a toggle is stored.
+pub(crate) fn set_mcp_server_enabled_in(
+    dir: &Path,
+    name: &str,
+    enabled: bool,
+) -> Result<McpServerConfig, String> {
+    edit_mcp_servers(dir, |servers| {
+        let server = servers
+            .iter_mut()
+            .find(|entry| entry.name == name)
+            .ok_or_else(|| {
+                format!(
+                    "MCP server '{name}' is not in the user config (a server only a project config file declares is changed in that file)"
+                )
+            })?;
+        server.enabled = enabled;
+        Ok(server.clone())
+    })
+}
+
+/// Turn a skill on or off in the user config's `disabled_skills` and return
+/// the new list.
+pub(crate) fn set_skill_enabled_in(
+    dir: &Path,
+    name: &str,
+    enabled: bool,
+) -> Result<Vec<String>, String> {
+    let (_, _, mut config) = load_config_from(dir);
+    if !config.is_valid {
+        return Err(format!(
+            "the config in {} could not be read; fix it before changing skills",
+            dir.display()
+        ));
+    }
+    config.disabled_skills.retain(|entry| entry != name);
+    if !enabled {
+        config.disabled_skills.push(name.to_owned());
+        config.disabled_skills.sort();
+    }
+    save_config_to_result(dir, &config)?;
+    Ok(config.disabled_skills)
+}
+
 /// Apply `edit` to the user config alone, so servers a project file overlays
 /// are never written back into the user file.
 fn edit_mcp_servers<T>(

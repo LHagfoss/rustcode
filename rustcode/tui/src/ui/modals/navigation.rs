@@ -686,14 +686,22 @@ pub(in crate::ui) fn render_mcp_config_modal(
         let mut list_lines = Vec::new();
         for (idx, srv) in servers.iter().enumerate() {
             let is_selected = selected_idx == idx;
-            let status = if srv.enabled { "Enabled" } else { "Disabled" };
-            let status_style = if srv.enabled {
+            // Enabled is what the config says; the live label says whether
+            // the server is actually connected in this process.
+            let status = state.mcp_live_label(idx).unwrap_or(if srv.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            });
+            let status_style = if status.starts_with("connected") {
                 Style::default().fg(Color::Green)
+            } else if status.starts_with("failed") {
+                Style::default().fg(Color::Red)
             } else {
                 Style::default().fg(COLOR_MUTED())
             };
 
-            let cmd_text = format!("{} {}", srv.command, srv.args.join(" "));
+            let cmd_text = rustcode::capabilities::redacted_target(srv);
 
             let line = if is_selected {
                 let left_text = format!("› {}", srv.name);
@@ -784,13 +792,139 @@ pub(in crate::ui) fn render_mcp_config_modal(
                     .fg(COLOR_TEXT())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" Toggle Enabled", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" Toggle (user config)", Style::default().fg(COLOR_MUTED())),
         ]);
         f.render_widget(
             Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
             modal_chunks[3],
         );
     }
+}
+
+/// `/skills`: every discovered skill with its toggle (#2165).
+pub(in crate::ui) fn render_skills_panel_modal(
+    f: &mut Frame,
+    state: &RenderSnapshot,
+    input_area: ratatui::layout::Rect,
+) {
+    let Some(panel) = state.skills_panel() else {
+        return;
+    };
+    let modal_area = input_anchor_rect(f, input_area, SKILLS_PANEL_HEIGHT);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // List
+            Constraint::Length(1), // Selected skill's description
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+    let width = inner_area.width as usize;
+
+    let enabled = panel.entries.iter().filter(|entry| entry.enabled).count();
+    let title_text = format!("Skills · {enabled} of {} enabled", panel.entries.len());
+    let right_esc = "esc";
+    let padding_header = picker_header_padding(width, &title_text, right_esc);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                title_text,
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ".repeat(padding_header), Style::default()),
+            Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
+        ]))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[0],
+    );
+
+    let selected = panel.selected.min(panel.entries.len().saturating_sub(1));
+    let lines = panel
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let check = if entry.enabled { "[x]" } else { "[ ]" };
+            let marker = if index == selected { "›" } else { " " };
+            let left = format!("{marker} {check} {}", entry.name);
+            let right = format!(" {}", entry.source);
+            let padding = picker_row_padding(width, &left, &right);
+            let style = if index == selected {
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .bg(COLOR_HOVER_BG())
+                    .add_modifier(Modifier::BOLD)
+            } else if entry.enabled {
+                Style::default().fg(COLOR_TEXT())
+            } else {
+                Style::default().fg(COLOR_MUTED())
+            };
+            Line::from(vec![
+                Span::styled(left, style),
+                Span::styled(" ".repeat(padding), style),
+                Span::styled(right, style.fg(COLOR_MUTED())),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let list_height = chunks[2].height as usize;
+    let scroll_y = picker_list_window(selected, lines.len(), list_height);
+    f.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll_y, 0))
+            .style(Style::default().bg(COLOR_PANEL())),
+        chunks[2],
+    );
+
+    let detail = panel
+        .notice
+        .clone()
+        .or_else(|| {
+            panel
+                .entries
+                .get(selected)
+                .map(|entry| entry.description.clone())
+        })
+        .unwrap_or_default();
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            crate::ui::composer_render::truncate_queue_prompt(&detail, width),
+            Style::default().fg(COLOR_MUTED()),
+        )))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[3],
+    );
+
+    let footer = crate::ui::composer_render::fit_hint_clauses(
+        "",
+        &[
+            "enter/space toggle",
+            "saved to user config",
+            "applies from the next message",
+        ],
+        width,
+    )
+    .unwrap_or_default();
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            footer,
+            Style::default().fg(COLOR_MUTED()),
+        )))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[4],
+    );
 }
 
 #[derive(Clone)]

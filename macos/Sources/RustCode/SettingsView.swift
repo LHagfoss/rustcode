@@ -21,6 +21,7 @@ enum AppearanceSetting {
 struct SettingsView: View {
     @ObservedObject var model: DesktopModel
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var capabilities = CapabilitiesStore()
     typealias Section = SettingsSection
 
     private var section: Section { model.settingsSection }
@@ -56,6 +57,8 @@ struct SettingsView: View {
                     Group {
                         switch section {
                         case .general: GeneralSettings(model: model)
+                        case .skills: SkillsSettings(model: model, store: capabilities)
+                        case .mcp: MCPSettings(model: model, store: capabilities)
                         case .engine: EngineSettings(model: model)
                         case .about: AboutSettings(updater: model.updater)
                         }
@@ -69,6 +72,9 @@ struct SettingsView: View {
         }
         .frame(width: 720, height: 480)
         .tint(.brand)
+        .task(id: section) {
+            if section == .skills || section == .mcp { await capabilities.load(model.engineConnection) }
+        }
     }
 }
 
@@ -103,7 +109,7 @@ private struct SectionRow: View {
 // MARK: - Building blocks
 
 /// Rows on one soft card; `RowDivider` goes between them.
-private struct SettingsGroup<Content: View>: View {
+struct SettingsGroup<Content: View>: View {
     var title: String?
     var footer: String?
     @ViewBuilder var content: Content
@@ -123,7 +129,7 @@ private struct SettingsGroup<Content: View>: View {
     }
 }
 
-private struct SettingsRow<Trailing: View>: View {
+struct SettingsRow<Trailing: View>: View {
     let title: String
     var subtitle: String?
     @ViewBuilder var trailing: Trailing
@@ -147,7 +153,7 @@ private struct SettingsRow<Trailing: View>: View {
     }
 }
 
-private struct RowDivider: View {
+struct RowDivider: View {
     var body: some View { Divider().padding(.leading, 14).opacity(0.5) }
 }
 
@@ -385,13 +391,15 @@ private struct AboutSettings: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general = "General", engine = "Engine", about = "About"
+    case general = "General", skills = "Skills", mcp = "MCP Servers", engine = "Engine", about = "About"
 
     var id: Self { self }
 
     var systemImage: String {
         switch self {
         case .general: "gearshape.fill"
+        case .skills: "sparkles"
+        case .mcp: "point.3.connected.trianglepath.dotted"
         case .engine: "terminal.fill"
         case .about: "info.circle.fill"
         }
@@ -400,6 +408,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var tile: Color {
         switch self {
         case .general: .gray
+        case .skills: .purple
+        case .mcp: .teal
         case .engine: .orange
         case .about: .blue
         }

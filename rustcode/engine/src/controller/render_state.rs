@@ -217,6 +217,10 @@ pub struct RenderState {
     pub show_mcp_config: bool,
     pub mcp_picker_index: usize,
     pub mcp_edit_state: Option<McpEditState>,
+    /// Live state of each configured MCP server while `/mcp` is open, in
+    /// `config.mcp_servers` order.
+    pub mcp_live_labels: Vec<String>,
+    pub skills_panel: Option<crate::capabilities::SkillsPanel>,
     pub modal_scroll_row: u16,
     pub tool_confirmation_selected: usize,
 }
@@ -251,6 +255,7 @@ impl RenderState {
             || self.show_session_modal
             || self.show_update_prompt
             || self.show_mcp_config
+            || self.skills_panel.is_some()
             || matches!(
                 self.status,
                 AppStatus::VerbosityPicker
@@ -467,6 +472,12 @@ pub fn render_state(state: &AppState) -> RenderState {
             .show_mcp_config
             .then(|| state.mcp_edit_state.clone())
             .flatten(),
+        mcp_live_labels: if state.show_mcp_config {
+            crate::capabilities::mcp_live_labels(&state.config.mcp_servers)
+        } else {
+            Vec::new()
+        },
+        skills_panel: state.skills_panel.clone(),
         modal_scroll_row: state.modal_scroll_row,
         tool_confirmation_selected: state.tool_confirmation_selected,
     }

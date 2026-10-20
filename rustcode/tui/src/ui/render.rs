@@ -677,6 +677,10 @@ pub(crate) fn render_with_transcript_snapshot(
             render_mcp_config_modal(f, state, input_box_area);
         }
 
+        if state.skills_panel().is_some() {
+            render_skills_panel_modal(f, state, input_box_area);
+        }
+
         if state.settings_picker() == Some(rustcode::controller::SettingsPicker::Verbosity) {
             render_verbosity_picker_modal(f, state, input_box_area);
         }

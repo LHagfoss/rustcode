@@ -1473,6 +1473,33 @@ pub(super) async fn handle_app_event(
                     return Ok(InputFlow::ContinueIteration);
                 }
 
+                if let Some(panel) = s.skills_panel.as_mut() {
+                    match key.code {
+                        KeyCode::Esc => s.skills_panel = None,
+                        KeyCode::Up | KeyCode::Down => {
+                            let next = picker_selection_for_key(
+                                panel.selected,
+                                panel.entries.len(),
+                                key.code,
+                            )
+                            .unwrap_or(panel.selected);
+                            panel.select(next);
+                            panel.notice = None;
+                        }
+                        KeyCode::Enter | KeyCode::Char(' ') => {
+                            // Keep the in-memory config in step so a later
+                            // full save cannot write the old list back.
+                            if let Some(disabled) = panel.toggle_selected() {
+                                s.config.disabled_skills = disabled;
+                            }
+                        }
+                        _ => {}
+                    }
+                    drop(s);
+                    *needs_redraw = true;
+                    return Ok(InputFlow::ContinueIteration);
+                }
+
                 if s.show_mcp_config {
                     let (existing_mcp_always_include, existing_mcp_client_id) = s
                         .mcp_edit_state
@@ -1642,13 +1669,11 @@ pub(super) async fn handle_app_event(
                                     let enabled = srv.enabled;
                                     rustcode::controller::save_config(&s.config);
                                     tokio::spawn(async move {
-                                        if enabled {
-                                            let _ =
-                                                rustcode::mcp::start_server_by_name(&name_clone)
-                                                    .await;
-                                        } else {
-                                            rustcode::mcp::shutdown_server(&name_clone).await;
-                                        }
+                                        rustcode::capabilities::apply_mcp_toggle(
+                                            &name_clone,
+                                            enabled,
+                                        )
+                                        .await;
                                     });
                                 }
                             }

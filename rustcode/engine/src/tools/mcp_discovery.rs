@@ -575,7 +575,7 @@ pub(super) fn bound_by_discovery_calls(docs: &[McpToolDoc<'_>], messages: &[Valu
 
 /// How one configured or connected server stands in this session.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum McpServerState {
+pub(crate) enum McpServerState {
     Running { tools: Vec<String> },
     NotRunning,
     Disabled,
@@ -583,7 +583,7 @@ pub(super) enum McpServerState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct McpServerStatus {
+pub(crate) struct McpServerStatus {
     pub name: String,
     pub state: McpServerState,
 }
@@ -660,7 +660,7 @@ pub(super) fn server_statuses(
 }
 
 /// The live server statuses for this session's workspace.
-pub(super) fn current_server_statuses() -> Vec<McpServerStatus> {
+pub(crate) fn current_server_statuses() -> Vec<McpServerStatus> {
     let running = {
         let registry = crate::mcp::get_mcp_registry();
         let Ok(registry) = registry.lock() else {

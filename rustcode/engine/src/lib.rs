@@ -5,6 +5,7 @@ pub mod acp;
 pub mod app;
 mod atomic_file;
 pub mod benchmark;
+pub mod capabilities;
 pub mod clipboard;
 pub mod config;
 mod context;

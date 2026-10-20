@@ -690,6 +690,7 @@ fn every_inline_picker_shares_the_measurement_rules() {
             COMMAND_PICKER_HEIGHT,
         ),
         ("mcp", render_mcp_config_modal, MCP_CONFIG_HEIGHT),
+        ("skills", render_skills_panel_modal, SKILLS_PANEL_HEIGHT),
         ("command-panel", render_command_panel, COMMAND_PANEL_HEIGHT),
         (
             "tasks",
@@ -783,6 +784,7 @@ fn picker_state() -> RenderState {
         content: "Keys\n  short  one\n  a-much-longer-label  two\n  mid  a description long enough that it has to wrap somewhere in a narrow frame\n".to_owned(),
     });
     state.tasks_panel = Some(tasks_panel_view(None));
+    state.skills_panel = Some(skills_panel());
     state.history_picker_sessions = vec![rustcode::controller::SessionMeta {
         path: std::path::PathBuf::from("/tmp/picker-sizing.json"),
         title: "A deliberately long session title that will not fit a narrow frame".to_owned(),
@@ -933,6 +935,49 @@ fn picker_panel_never_exceeds_the_space_above_the_composer() {
     let buffer = terminal.backend().buffer();
     assert_eq!(buffer[(0, 0)].bg, COLOR_PANEL());
     assert_eq!(buffer[(79, 5)].bg, COLOR_PANEL());
+}
+
+fn skills_panel() -> rustcode::capabilities::SkillsPanel {
+    let entry = |name: &str, enabled: bool| rustcode::capabilities::SkillEntry {
+        name: name.to_owned(),
+        description: format!("What {name} does"),
+        path: format!("/skills/{name}"),
+        source: "universal",
+        enabled,
+    };
+    rustcode::capabilities::SkillsPanel {
+        entries: vec![entry("deploy", true), entry("review", false)],
+        selected: 1,
+        notice: None,
+    }
+}
+
+#[test]
+fn skills_panel_shows_each_skill_and_its_toggle() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    let mut state = RenderState::new();
+    state.skills_panel = Some(skills_panel());
+    terminal
+        .draw(|frame| {
+            render_skills_panel_modal(frame, &render_snapshot(&state), Rect::new(0, 17, 100, 3))
+        })
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(rendered.contains("Skills · 1 of 2 enabled"));
+    assert!(rendered.contains("[x] deploy"));
+    assert!(rendered.contains("› [ ] review"));
+    assert!(
+        rendered.contains("What review does"),
+        "the selected skill is described"
+    );
+    assert!(rendered.contains("saved to user config"));
 }
 
 #[test]

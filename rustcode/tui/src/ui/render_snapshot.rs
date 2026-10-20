@@ -138,6 +138,8 @@ struct OverlaySnapshot {
     show_mcp_config: bool,
     mcp_picker_index: usize,
     mcp_edit_state: Option<McpEditState>,
+    mcp_live_labels: Vec<String>,
+    skills_panel: Option<rustcode::capabilities::SkillsPanel>,
     modal_scroll_row: u16,
     tool_confirmation_selected: usize,
 }
@@ -178,6 +180,8 @@ impl OverlaySnapshot {
             show_mcp_config: view.show_mcp_config,
             mcp_picker_index: view.mcp_picker_index,
             mcp_edit_state: view.mcp_edit_state.clone(),
+            mcp_live_labels: view.mcp_live_labels.clone(),
+            skills_panel: view.skills_panel.clone(),
             modal_scroll_row: view.modal_scroll_row,
             tool_confirmation_selected: view.tool_confirmation_selected,
         }
@@ -568,6 +572,13 @@ impl RenderSnapshot {
     }
     pub(crate) fn mcp_edit_state(&self) -> Option<&McpEditState> {
         self.overlay.mcp_edit_state.as_ref()
+    }
+    /// Live connection label of the MCP server at `index` in the config.
+    pub(crate) fn mcp_live_label(&self, index: usize) -> Option<&str> {
+        self.overlay.mcp_live_labels.get(index).map(String::as_str)
+    }
+    pub(crate) fn skills_panel(&self) -> Option<&rustcode::capabilities::SkillsPanel> {
+        self.overlay.skills_panel.as_ref()
     }
     pub(crate) fn generation_start_time(&self) -> Option<std::time::Instant> {
         self.generation_start_time

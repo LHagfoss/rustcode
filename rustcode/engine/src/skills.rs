@@ -33,8 +33,30 @@ pub struct SkillMetadata {
     pub priority: i32,
 }
 
+/// Skills the model may use: every discovered skill except those the user
+/// turned off with `disabled_skills`.
 pub fn discover_skills() -> Vec<SkillMetadata> {
+    let disabled = disabled_skill_names();
     discover_skills_in(current_root_inputs())
+        .into_iter()
+        .filter(|skill| !disabled.contains(&skill.name))
+        .collect()
+}
+
+/// Every discovered skill, enabled or not, for the settings surfaces that
+/// list and toggle them.
+pub fn discover_all_skills() -> Vec<SkillMetadata> {
+    discover_skills_in(current_root_inputs())
+}
+
+/// Names in the user config's `disabled_skills`. Read from the file on each
+/// call so a toggle made in another RustCode process is honoured too.
+pub fn disabled_skill_names() -> std::collections::HashSet<String> {
+    crate::config::get_config_dir()
+        .map(|dir| crate::config::load_config_from(&dir).2.disabled_skills)
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
 }
 
 /// Generation of the live skill catalog. Prompt caches use this to refresh
@@ -230,13 +252,22 @@ pub fn no_skills_message() -> String {
 
 /// `/skills` report, shared by the engine and TUI slash-command handlers so
 /// the wording and the root list cannot drift between frontends.
-pub fn format_skill_catalog(skills: &[SkillMetadata]) -> String {
+/// Skills named in `disabled` are listed as such; the model is not offered them.
+pub fn format_skill_catalog(
+    skills: &[SkillMetadata],
+    disabled: &std::collections::HashSet<String>,
+) -> String {
     if skills.is_empty() {
         return no_skills_message();
     }
     let mut out = format!("📦 Discovered Skills ({}):\n\n", skills.len());
     for skill in skills {
-        out.push_str(&format!("  • {}\n", skill.name));
+        let state = if disabled.contains(&skill.name) {
+            "  [disabled]"
+        } else {
+            ""
+        };
+        out.push_str(&format!("  • {}{state}\n", skill.name));
         out.push_str(&format!("    Description: {}\n", skill.description));
         out.push_str(&format!("    Path: {}\n\n", skill.path.display()));
     }

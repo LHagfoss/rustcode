@@ -1367,6 +1367,11 @@ pub struct AppConfig {
     /// only: a checked-out project must not be able to widen discovery.
     #[serde(default)]
     pub extra_skill_dirs: Vec<PathBuf>,
+    /// Skills turned off in `/skills` or the app's Settings. They stay
+    /// discovered and listed, but the model is never offered them. Global
+    /// config only, so the choice applies to every project.
+    #[serde(default)]
+    pub disabled_skills: Vec<String>,
     #[serde(default)]
     #[serde(with = "serde_millis")]
     pub start_time: Option<std::time::SystemTime>,
@@ -1548,6 +1553,8 @@ struct TomlConfig {
     theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extra_skill_dirs: Option<Vec<PathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    disabled_skills: Option<Vec<String>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1695,6 +1702,7 @@ impl Default for AppConfig {
             debug_verbose_network_logging: false,
             theme: default_theme(),
             extra_skill_dirs: Vec::new(),
+            disabled_skills: Vec::new(),
             start_time: None,
             is_valid: true,
         }
@@ -2085,6 +2093,8 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
         theme: Some(config.theme.clone()),
         extra_skill_dirs: Some(config.extra_skill_dirs.clone()),
+        disabled_skills: (!config.disabled_skills.is_empty())
+            .then(|| config.disabled_skills.clone()),
         start_time: config.start_time,
     };
 
@@ -2226,6 +2236,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(dirs) = file.extra_skill_dirs {
         config.extra_skill_dirs = dirs;
     }
+    if let Some(names) = file.disabled_skills {
+        config.disabled_skills = names;
+    }
     if file.start_time.is_some() {
         config.start_time = file.start_time;
     }
@@ -2272,6 +2285,8 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Skill roots widen what a prompt can see; only the user config may add
     // them, mirroring how project files cannot widen command permissions.
     file.extra_skill_dirs = None;
+    // Skill toggles are user-scoped (#2165): one explicit place to look.
+    file.disabled_skills = None;
     // Provider definitions and OS credential bindings are user-owned. Keep
     // project model profiles selectable, but never let the checkout create or
     // redirect a binding to a machine's credential-store entry.
@@ -2397,6 +2412,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         debug_verbose_network_logging: None,
         theme: None,
         extra_skill_dirs: None,
+        disabled_skills: None,
         start_time: None,
     };
     let contents = toml::to_string_pretty(&file)
@@ -2456,7 +2472,10 @@ pub use mcp_servers::{
     McpServerSpec, McpTransport, add_mcp_server, mcp_server_from_spec, mcp_server_summary,
     parse_mcp_env, parse_mcp_header, remove_mcp_server,
 };
-pub(crate) use mcp_servers::{add_mcp_server_in, remove_mcp_server_in, workspace_mcp_servers_in};
+pub(crate) use mcp_servers::{
+    add_mcp_server_in, remove_mcp_server_in, set_mcp_server_enabled_in, set_skill_enabled_in,
+    workspace_mcp_servers_in,
+};
 
 mod session;
 mod session_export;
