@@ -1,3 +1,7 @@
+## [v0.85.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.85.0) - 2026-10-20
+
+### Features
+- **macOS:** Settings gains a Keybinds section: each app shortcut is a click-to-record keycap, with search and per-row or Reset All recovery; assigning a shortcut another action uses unbinds it there, and macOS or text-editing shortcuts are refused. Menus, tooltips and the preview and terminal controls follow a remap at once (#2202).
 ## [v0.84.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.84.1) - 2026-10-20
 
 ### Fixes
