@@ -595,9 +595,12 @@ private struct FileChangeView: View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    // A plain rectangle: a colour set as the background of
+                    // the hidden line is drawn rounded on current macOS,
+                    // which made each changed line a pill of its own.
                     Text(" ").hidden()
                         .frame(maxWidth: .infinity)
-                        .background(band(row))
+                        .background { Rectangle().fill(band(row)) }
                 }
             }
             HStack(alignment: .top, spacing: 6) {
