@@ -151,12 +151,27 @@ fn session_info(
     {
         extra.insert("model".into(), serde_json::json!(model));
     }
-    if let Ok(modified) = std::fs::metadata(&meta.path).and_then(|metadata| metadata.modified()) {
-        let timestamp: chrono::DateTime<chrono::Utc> = modified.into();
+    // The last message's time, not the file's: opening or re-saving a chat
+    // rewrites its history, which made every opened chat read "now".
+    if let Some(timestamp) = session_updated_at(meta) {
         info = info.updated_at(timestamp.to_rfc3339());
     }
     info.meta = Some(extra);
     info
+}
+
+/// When the chat last changed: its last message, else the history file's
+/// modification time for transcripts written without timestamps.
+fn session_updated_at(meta: &crate::config::SessionMeta) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(&meta.when)
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+        .ok()
+        .or_else(|| {
+            std::fs::metadata(&meta.path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .map(Into::into)
+        })
 }
 
 fn session_file_is_contained(path: &std::path::Path) -> bool {
@@ -1688,6 +1703,31 @@ mod tests {
             info.meta.unwrap().get("messageCount"),
             Some(&serde_json::json!(7))
         );
+    }
+
+    #[test]
+    fn session_info_dates_a_chat_by_its_last_message_not_its_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.json");
+        // Written now, as opening a chat rewrites its history.
+        std::fs::write(&path, "[]").unwrap();
+        let meta = crate::config::SessionMeta {
+            path,
+            title: "Old chat".into(),
+            when: "2026-09-24T10:33:25.122403+02:00".into(),
+            message_count: 2,
+            workspace_cwd: None,
+        };
+        assert_eq!(
+            session_info(&meta, None).updated_at.as_deref(),
+            Some("2026-09-24T08:33:25.122403+00:00")
+        );
+
+        let untimed = crate::config::SessionMeta {
+            when: String::new(),
+            ..meta
+        };
+        assert!(session_info(&untimed, None).updated_at.is_some());
     }
 
     #[test]

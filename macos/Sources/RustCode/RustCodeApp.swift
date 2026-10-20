@@ -121,9 +121,13 @@ final class DesktopModel: ObservableObject {
     @Published var composerPanel: ComposerPanel?
     /// The `/context` breakdown shown in its sheet.
     @Published var contextSheet: ContextBreakdown?
-    /// The chat being opened, and its replayed transcript until it is in.
-    @Published private(set) var loadingSession: String?
-    private var replay = Transcript()
+    /// Chats being opened, each with its replayed transcript until it is in.
+    /// Kept per chat: picking another chat mid-load used to drop the replay
+    /// and remember the chat as empty, and it stayed blank until a restart.
+    @Published private(set) var loadingSessions: Set<String> = []
+    private var replays: [String: Transcript] = [:]
+    /// The shown chat is still being opened.
+    var isLoadingSelected: Bool { selectedSession.map(loadingSessions.contains) ?? false }
     /// A host command's long answer, shown in its sheet.
     @Published var commandResult: CommandResult?
     @Published private(set) var toasts: [Toast] = []
@@ -710,7 +714,8 @@ final class DesktopModel: ObservableObject {
     private var openSessions: [String: OpenSession] = [:]
 
     private func stashSelectedSession() {
-        guard let current = selectedSession else { return }
+        // A chat still loading has no transcript yet; its load stores it.
+        guard let current = selectedSession, !loadingSessions.contains(current) else { return }
         openSessions[current] = OpenSession(transcript: transcript, models: models, selectedModel: selectedModel)
     }
 
@@ -849,35 +854,39 @@ final class DesktopModel: ObservableObject {
             selectedModel = open.selectedModel
             return
         }
-        // `session/load` replays the transcript as `session/update`
-        // notifications before it answers, so select the session first or
-        // the replay is filtered out as belonging to another session.
         selectedSession = session.id
         transcript.removeAll()
-        // The replay builds off screen and shows at once: applied line by
-        // line, every replayed chunk redrew the whole chat.
-        loadingSession = session.id
-        replay = Transcript()
+        // Picked again while its first load is still running: that load
+        // shows it when it is in.
+        guard !loadingSessions.contains(session.id) else { return }
+        // `session/load` replays the transcript as `session/update`
+        // notifications before it answers. The replay builds off screen and
+        // shows at once: applied line by line, every replayed chunk redrew
+        // the whole chat.
+        loadingSessions.insert(session.id)
+        replays[session.id] = Transcript()
         defer {
-            if loadingSession == session.id {
-                if selectedSession == session.id { transcript = replay }
-                loadingSession = nil
+            // A stopped engine already cleared these, and a new one may be
+            // loading this chat again.
+            if engine?.connection === connection {
+                replays[session.id] = nil
+                loadingSessions.remove(session.id)
             }
         }
         do {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
-            if loadingSession == session.id {
-                transcript = replay
-                loadingSession = nil
-            }
-            // Another session may have been picked while this one loaded.
-            guard selectedSession == session.id else {
-                openSessions[session.id] = openSessions[session.id] ?? OpenSession(transcript: Transcript(), models: .empty)
-                return
-            }
+            // The engine replaced while this loaded has not opened it.
+            guard engine?.connection === connection else { return }
+            let options = result["configOptions"].map(ModelOptions.init(configOptions:)) ?? .empty
+            let loaded = OpenSession(transcript: replays[session.id] ?? Transcript(), models: options, selectedModel: options.current)
+            openSessions[session.id] = loaded
+            // Another chat may have been picked while this one loaded.
+            guard selectedSession == session.id else { return }
+            transcript = loaded.transcript
             applyConfig(result["configOptions"])
-            stashSelectedSession()
-        } catch { self.error = String(describing: error) }
+        } catch {
+            self.error = String(describing: error)
+        }
     }
 
     /// A message written while a turn runs. It waits here and is sent when
@@ -1245,6 +1254,8 @@ final class DesktopModel: ObservableObject {
 
     func stop() {
         openSessions = [:]
+        replays = [:]
+        loadingSessions = []
         inboundTask?.cancel()
         inboundTask = nil
         if let engine { DispatchQueue.global().async { engine.stop() } }
@@ -1308,6 +1319,14 @@ final class DesktopModel: ObservableObject {
                 return
             }
             if captureCommandUpdate(SessionUpdate(notificationParams: params), in: sessionId) { return }
+            // A chat being opened collects its replay off screen, shown or not.
+            if replays[sessionId] != nil, !SessionUpdate.isReport(notificationParams: params) {
+                let update = SessionUpdate(notificationParams: params)
+                if case .notice = update {} else {
+                    replays[sessionId]?.apply(update)
+                    return
+                }
+            }
             if case .notice(let text) = SessionUpdate(notificationParams: params) {
                 showToast(Toast(style: .warning, systemImage: "exclamationmark.octagon.fill", title: text,
                                 message: sessionId == selectedSession ? nil : chatTitle(sessionId),
@@ -1330,7 +1349,7 @@ final class DesktopModel: ObservableObject {
                 transcript.apply(update, at: Date())
                 contextSheet = context
             default:
-                if loadingSession == sessionId { replay.apply(update) } else { transcript.apply(update, at: Date()) }
+                transcript.apply(update, at: Date())
             }
         case .request(let id, let method, let params) where method == ACPMethod.requestPermission:
             if let request = PermissionRequest(rpcId: id, params: params) {

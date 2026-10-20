@@ -110,6 +110,13 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(SessionSummary.list(from: page).first?.projectName, "app")
     }
 
+    func testMergedSessionListHasEachChatOnce() {
+        let listed = [SessionSummary(id: "a", cwd: "/p"), SessionSummary(id: "b", cwd: "/p"), SessionSummary(id: "a", cwd: "/p")]
+        let started = [SessionSummary.started(id: "new", cwd: "/p", prompt: "hi", model: nil),
+                       SessionSummary.started(id: "b", cwd: "/p", prompt: "b", model: nil)]
+        XCTAssertEqual(SessionSummary.merging(listed, started: started).map(\.id), ["new", "a", "b"])
+    }
+
     func testAvailableCommandsCarryActionAndArguments() {
         let update = SessionUpdate(notificationParams: ["sessionId": "s", "update": [
             "sessionUpdate": "available_commands_update",
