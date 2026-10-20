@@ -865,11 +865,40 @@ fn validate_value_resolved(
                 }
             }
         }
+        // `patternProperties` names accepted keys that are not listed as
+        // properties (an edit tool's rarely used aliases), so a closed object
+        // still takes them.
+        let patterns = schema
+            .get("patternProperties")
+            .and_then(Value::as_object)
+            .map(|patterns| {
+                patterns
+                    .iter()
+                    .filter_map(|(pattern, child)| {
+                        regex::Regex::new(pattern).ok().map(|re| (re, child))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false)
             && let Some(properties) = schema.get("properties").and_then(Value::as_object)
-            && let Some(unknown) = object.keys().find(|key| !properties.contains_key(*key))
+            && let Some(unknown) = object.keys().find(|key| {
+                !properties.contains_key(*key) && !patterns.iter().any(|(re, _)| re.is_match(key))
+            })
         {
             return Err(format!("{path}.{unknown} is not an advertised argument"));
+        }
+        for (key, actual) in object {
+            if let Some((_, child)) = patterns.iter().find(|(re, _)| re.is_match(key)) {
+                validate_value_resolved(
+                    actual,
+                    child,
+                    &format!("{path}.{key}"),
+                    string_integers,
+                    root,
+                    depth + 1,
+                )?;
+            }
         }
         if let Some(ap_schema) = schema.get("additionalProperties").filter(|v| v.is_object())
             && let Some(obj) = value.as_object()

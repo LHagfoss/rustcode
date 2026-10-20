@@ -68,7 +68,41 @@ pub fn resolve_tool_path_with_context(raw_path: &str, context: &ToolContext) -> 
             .as_ref()
             .or(context.workspace_root.as_ref())
     {
+        // `sandbox/…` and `artifacts/…` name the session's directories, the
+        // same ones `run_command` reaches as `cwd: "sandbox"` and
+        // `$RUSTCODE_SANDBOX`, unless the project has a directory of that name.
+        let mut components = path.components();
+        let session_dir = match components.next() {
+            Some(std::path::Component::Normal(first)) if first == "sandbox" => {
+                context.sandbox_dir.as_ref()
+            }
+            Some(std::path::Component::Normal(first)) if first == "artifacts" => {
+                context.artifacts_dir.as_ref()
+            }
+            _ => None,
+        };
+        if let Some(session_dir) = session_dir
+            && !root.join(path.iter().next().unwrap_or_default()).exists()
+        {
+            return session_dir.join(components.as_path());
+        }
         return root.join(path);
+    }
+
+    // An absolute path inside the project names the user's file: a `sandbox`
+    // or `artifacts` directory there is project content, so redirecting it
+    // to the session's directory would silently write somewhere the shell,
+    // the dev server and the user never look.
+    if path.is_absolute()
+        && [
+            context.task_working_directory.as_ref(),
+            context.workspace_root.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|root| path.starts_with(root))
+    {
+        return path.to_path_buf();
     }
 
     let mut sandbox_parts = Vec::new();
@@ -236,6 +270,41 @@ mod tests {
         assert_eq!(
             resolve_tool_path_with_context("/tmp/artifacts/result.txt", &context),
             PathBuf::from("/session/artifacts/result.txt")
+        );
+        // Relative `sandbox/` and `artifacts/` are the session's directories
+        // when the project has none of its own.
+        assert_eq!(
+            resolve_tool_path_with_context("sandbox/index.html", &context),
+            PathBuf::from("/session/sandbox/index.html")
+        );
+        assert_eq!(
+            resolve_tool_path_with_context("artifacts/report.md", &context),
+            PathBuf::from("/session/artifacts/report.md")
+        );
+        // A project's own `sandbox/` or `artifacts/` directory stays put.
+        assert_eq!(
+            resolve_tool_path_with_context("/workspace/project/sandbox/index.html", &context),
+            PathBuf::from("/workspace/project/sandbox/index.html")
+        );
+        assert_eq!(
+            resolve_tool_path_with_context("/workspace/artifacts/report.md", &context),
+            PathBuf::from("/workspace/artifacts/report.md")
+        );
+    }
+
+    #[test]
+    fn a_project_sandbox_directory_wins_over_the_session_alias() {
+        let root = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(root.path().join("sandbox")).expect("project sandbox");
+        let context = ToolContext {
+            workspace_root: Some(root.path().to_path_buf()),
+            task_working_directory: Some(root.path().to_path_buf()),
+            sandbox_dir: Some(PathBuf::from("/session/sandbox")),
+            ..ToolContext::default()
+        };
+        assert_eq!(
+            resolve_tool_path_with_context("sandbox/main.rs", &context),
+            root.path().join("sandbox/main.rs")
         );
     }
 

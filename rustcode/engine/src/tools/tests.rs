@@ -1908,6 +1908,39 @@ fn session_title_tool_schema_bounds_and_rejects_oversized_calls() {
 }
 
 #[test]
+fn edit_aliases_outside_the_advertised_properties_still_validate() {
+    // The edit schema lists few names; its other aliases come in through
+    // `patternProperties` and must pass validation, while a real typo fails.
+    let call = |arguments: serde_json::Value| ToolCall {
+        name: "replace_file_content".to_string(),
+        arguments,
+        call_id: None,
+    };
+    validate_tool_calls(
+        &[call(serde_json::json!({
+            "path": "src/a.rs", "oldText": "old", "newText": "new"
+        }))],
+        1,
+    )
+    .expect("a root alias pair must validate");
+    validate_tool_calls(
+        &[call(serde_json::json!({
+            "path": "src/a.rs", "edits": [{"target": "old", "replacement": "new"}]
+        }))],
+        1,
+    )
+    .expect("an edits[] alias pair must validate");
+    let error = validate_tool_calls(
+        &[call(
+            serde_json::json!({"path": "src/a.rs", "replacements": []}),
+        )],
+        1,
+    )
+    .expect_err("an unknown key must still be rejected");
+    assert!(error.contains("replacements"), "got: {error}");
+}
+
+#[test]
 fn a_complete_24_kib_write_is_validated_and_written() {
     // Issue #1886: 24,108 bytes of complete content were rejected after the
     // model had generated them, only because they were over 16 KiB.

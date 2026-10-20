@@ -1034,6 +1034,9 @@ pub(super) fn provider_compatible_schema(mut schema: Value) -> Value {
         Value::Object(object) => {
             object.remove("$schema");
             object.remove("$id");
+            // Runtime-only: it admits an edit tool's undeclared aliases, and
+            // several endpoints reject the keyword.
+            object.remove("patternProperties");
             if let Some(bound) = object.remove("exclusiveMinimum") {
                 object.entry("minimum").or_insert(bound);
             }

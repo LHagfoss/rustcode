@@ -113,6 +113,7 @@ public struct EngineLocator {
             "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin",
             homeDirectory.appendingPathComponent(".cargo/bin").path,
             homeDirectory.appendingPathComponent(".local/bin").path,
+            homeDirectory.appendingPathComponent(".bun/bin").path,
         ]
         for extra in extras where !path.contains(extra) {
             path.append(extra)

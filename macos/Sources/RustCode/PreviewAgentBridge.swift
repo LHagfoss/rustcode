@@ -21,11 +21,12 @@ extension PreviewController {
         guard !isAgentActing else { return PreviewAgentError.busy.result }
 
         // The origin the request needs: the page's, or a navigate target's
-        // when nothing is shown yet.
+        // when nothing is shown yet or the chat has no grant (the panel may
+        // still show another dev server the user opened).
         let granted = agent.access.origin(for: request.sessionId)
         let origin: PreviewOrigin
-        if case .navigate(let target) = request.operation, agentPageURL == nil {
-            switch PreviewOrigin.navigationTarget(target, from: nil, approved: granted) {
+        if case .navigate(let target) = request.operation, agentPageURL == nil || granted == nil {
+            switch PreviewOrigin.navigationTarget(target, from: agentPageURL, approved: granted) {
             case .success(let url):
                 guard let target = PreviewOrigin(url) else { return PreviewAgentError.noPage.result }
                 origin = target
