@@ -1,3 +1,11 @@
+## [v0.84.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.84.1) - 2026-10-20
+
+### Fixes
+- The agent opens pages in the macOS live preview: `localhost_preview` `navigate` opens the panel, and a new dev server port is no longer refused because the panel shows another one.
+- Detached commands keep their output in the task log, so `manage_task logs` shows a dev server's URL or an early failure.
+- Absolute project paths containing `sandbox` or `artifacts` are no longer redirected into the session directories; `run_command` exposes `$RUSTCODE_SANDBOX`.
+- The macOS app launches the engine with the usual tool directories on PATH, and MCP servers get them too, so `glab`, `multica` and `bunx` are found.
+- Edit tools advertise fewer alias fields, cutting empty arguments from every edit.
 ## [v0.84.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.84.0) - 2026-10-20
 
 ### Features
