@@ -22,13 +22,11 @@
 </p>
 
 <p align="center">
-  <img src="./images/readme-macos.png" alt="RustCode for macOS" width="100%"/>
-</p>
-
-<p align="center">
-  <img src="./images/readme-ios-1.png" alt="RustCode for iPhone showing an active remote session" width="32%"/>
+  <img src="./images/readme-macos.png" alt="RustCode for macOS" width="54%"/>
   &nbsp;
-  <img src="./images/readme-ios-2.png" alt="RustCode for iPhone showing the sessions list" width="32%"/>
+  <img src="./images/readme-ios-1.png" alt="RustCode for iPhone showing an active remote session" width="17%"/>
+  &nbsp;
+  <img src="./images/readme-ios-2.png" alt="RustCode for iPhone showing the sessions list" width="17%"/>
 </p>
 
 `rustcode` is a lightweight terminal (TUI) coding agent. It started as a way to
