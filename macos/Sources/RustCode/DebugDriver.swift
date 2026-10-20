@@ -38,7 +38,8 @@ enum DebugDriver {
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
         case "dump":
-            var lines = ["items \(model.transcript.items.count) selected \(model.selectedSession ?? "-")"]
+            var lines = ["items \(model.transcript.items.count) selected \(model.selectedSession ?? "-")",
+                         "sessions \(model.sessions.count) visible \(model.visibleSessions.count) more \(model.hasMoreSessions)"]
             func walk(_ view: NSView) {
                 if let scroll = view as? NSScrollView, scroll.frame.width > 400 {
                     let doc = scroll.documentView
@@ -63,6 +64,20 @@ enum DebugDriver {
                                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) {
                 NSApp.postEvent(event, atStart: false)
             }
+        case "sidebarend":
+            // Scroll the sidebar's chat list to its end, as a reader would.
+            func walk(_ view: NSView) -> NSScrollView? {
+                if let scroll = view as? NSScrollView, scroll.frame.width < 300, scroll.frame.height > 200 { return scroll }
+                return view.subviews.lazy.compactMap(walk).first
+            }
+            if let scroll = NSApp.windows.first?.contentView.flatMap(walk), let document = scroll.documentView {
+                let y = document.isFlipped ? document.frame.height - scroll.contentView.bounds.height : 0
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+        case "scope": model.showsAllProjects = parts[1] == "all"
+        case "filter":
+            model.sessionFilter = parts.dropFirst().joined(separator: " ")
         case "size":
             NSApp.windows.first?.setFrame(NSRect(x: 80, y: 80, width: Double(parts[1])!, height: Double(parts[2])!), display: true)
         default: break

@@ -147,7 +147,7 @@ public enum ACPRequests {
     public static let permissionCancelled: JSONValue = ["outcome": ["outcome": "cancelled"]]
 }
 
-public struct SessionSummary: Identifiable, Equatable, Sendable {
+public struct SessionSummary: Identifiable, Equatable, Codable, Sendable {
     public var id: String
     public var cwd: String
     public var title: String?

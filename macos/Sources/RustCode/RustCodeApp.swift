@@ -209,11 +209,29 @@ final class DesktopModel: ObservableObject {
     private var sessionListRequests = LatestRequest()
     /// False until the first session list arrives, so the sidebar can say it is loading.
     @Published private(set) var sessionsLoaded = false
+    /// The engine's listing read so far, a page at a time (`SessionPages`),
+    /// and the project it was read for; `sessions` is drawn from it.
+    private var sessionPages = SessionPages()
+    private var listedScope: URL?
+    /// More chats are listed than the sidebar has read; it reads them as the
+    /// reader scrolls near the end.
+    @Published private(set) var hasMoreSessions = false
+    @Published private(set) var loadingMoreSessions = false
+    /// Reading the next page failed; the sidebar offers to try again.
+    @Published private(set) var moreSessionsFailed = false
     /// Chats pinned to the top of the sidebar, kept on this Mac.
-    @Published private(set) var pinnedSessions = Set(UserDefaults.standard.stringArray(forKey: "pinnedSessions") ?? [])
+    @Published private(set) var pinnedSessions = Set(UserDefaults.standard.stringArray(forKey: "pinnedSessions") ?? []) {
+        didSet { rememberPinned() }
+    }
+    /// What the sidebar last saw of each pinned chat, so a pinned chat whose
+    /// page is not read yet still shows at the top.
+    private var savedPinned: [SessionSummary] = (UserDefaults.standard.data(forKey: "pinnedSessionSummaries"))
+        .flatMap { try? JSONDecoder().decode([SessionSummary].self, from: $0) } ?? []
     /// Chats hidden from the list without deleting them, kept on this Mac.
     @Published private(set) var archivedSessions = Set(UserDefaults.standard.stringArray(forKey: "archivedSessions") ?? [])
-    @Published var showsArchived = false
+    @Published var showsArchived = false {
+        didSet { if showsArchived { readAllSessionsForFilter() } }
+    }
     /// The chat whose title the rename sheet is editing.
     @Published var renamingSession: SessionSummary?
     /// Set by /history to put the cursor in the chat search.
@@ -221,7 +239,11 @@ final class DesktopModel: ObservableObject {
     /// Filters the sidebar's chats by title, and by contents once it has
     /// `SessionContentSearch.minimumQueryLength` characters.
     @Published var sessionFilter = "" {
-        didSet { if sessionFilter != oldValue { scheduleContentSearch() } }
+        didSet {
+            guard sessionFilter != oldValue else { return }
+            scheduleContentSearch()
+            readAllSessionsForFilter()
+        }
     }
     /// Chats whose messages contain `contentQuery`, from the engine.
     @Published private(set) var contentMatches: [SessionContentMatch] = []
@@ -620,6 +642,7 @@ final class DesktopModel: ObservableObject {
         pinnedSessions.remove(session.id)
         UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
         sessions.removeAll { $0.id == session.id }
+        sessionPages.remove(session.id)
         startedSessions[session.id] = nil
         confirm("Moved to the Trash", systemImage: "trash.fill")
         if selectedSession == session.id {
@@ -774,6 +797,8 @@ final class DesktopModel: ObservableObject {
         stop()
         transcript.removeAll()
         sessions = []
+        sessionPages.reset()
+        hasMoreSessions = false
         selectedSession = nil
         await start()
     }
@@ -859,6 +884,8 @@ final class DesktopModel: ObservableObject {
         }
     }
 
+    /// Read the session list again from its start, as far as the sidebar had
+    /// read it, so a refresh never takes rows away from under the reader.
     func refreshSessions() async {
         guard let connection = engine?.connection, capabilities?.listSessions == true else { return }
         // Refreshes overlap when the scope or project changes: a slow All
@@ -866,27 +893,101 @@ final class DesktopModel: ObservableObject {
         // scope is read once so every page comes from the same listing.
         let request = sessionListRequests.begin()
         let scope = showsAllProjects ? nil : workspace
-        // The engine pages `session/list`; read every page, up to a bound.
+        let keep = scope == listedScope ? sessionPages.listed.count : 0
         do {
-            var all: [SessionSummary] = []
-            var cursor: String?
-            for _ in 0..<40 {
-                let params = ACPRequests.listSessions(cwd: scope, cursor: cursor)
+            var pages = SessionPages()
+            var read = 0
+            while pages.refreshWantsMore(keeping: keep, pagesRead: read) {
+                let params = ACPRequests.listSessions(cwd: scope, cursor: pages.cursor)
                 let result = try await connection.request(ACPMethod.sessionList, params: params, timeout: .seconds(15))
                 guard sessionListRequests.isCurrent(request) else { return }
-                all += SessionSummary.list(from: result)
-                cursor = SessionSummary.nextCursor(from: result)
-                if cursor == nil { break }
+                pages.append(SessionSummary.list(from: result), next: SessionSummary.nextCursor(from: result))
+                read += 1
             }
-            startedSessions = startedSessions.filter { id, _ in !all.contains { $0.id == id } }
-            sessions = SessionSummary.merging(all, started: Array(startedSessions.values).filter {
-                scope == nil || $0.cwd == scope?.path
-            })
+            sessionPages = pages
+            listedScope = scope
+            moreSessionsFailed = false
+            publishSessions()
             sessionsLoaded = true
         } catch {
             guard sessionListRequests.isCurrent(request) else { return }
             self.error = String(describing: error)
         }
+    }
+
+    /// Read the next page of chats, when the sidebar nears the end of those
+    /// it has. A page whose chats are all listed already reads on.
+    func loadMoreSessions() async {
+        guard !loadingMoreSessions, !moreSessionsFailed, let connection = engine?.connection,
+              capabilities?.listSessions == true, sessionPages.hasMore else { return }
+        // A refresh started meanwhile replaces the listing this page belongs to.
+        let request = sessionListRequests.generation
+        let scope = listedScope
+        loadingMoreSessions = true
+        defer { loadingMoreSessions = false }
+        do {
+            var pages = sessionPages
+            repeat {
+                let params = ACPRequests.listSessions(cwd: scope, cursor: pages.cursor)
+                let result = try await connection.request(ACPMethod.sessionList, params: params, timeout: .seconds(15))
+                guard sessionListRequests.isCurrent(request), sessionPages.cursor != nil else { return }
+                if pages.append(SessionSummary.list(from: result), next: SessionSummary.nextCursor(from: result)) > 0 { break }
+            } while pages.hasMore
+            sessionPages = pages
+            publishSessions()
+        } catch {
+            // A cursor whose chat was deleted is refused; a refresh starts over.
+            guard sessionListRequests.isCurrent(request) else { return }
+            moreSessionsFailed = true
+        }
+    }
+
+    private var readAllTask: Task<Void, Never>?
+
+    /// A search or the archive filters the whole history, not only the pages
+    /// read so far: read the rest behind it while it is shown.
+    private func readAllSessionsForFilter() {
+        guard readAllTask == nil else { return }
+        readAllTask = Task { [weak self] in
+            while let self, !Task.isCancelled, self.hasMoreSessions, !self.moreSessionsFailed,
+                  !self.sessionFilter.trimmingCharacters(in: .whitespaces).isEmpty || self.showsArchived {
+                await self.loadMoreSessions()
+                // Another page load may be running; wait for it, not spin.
+                if self.loadingMoreSessions { try? await Task.sleep(for: .milliseconds(50)) }
+            }
+            self?.readAllTask = nil
+        }
+    }
+
+    /// Try the page that failed again, from a fresh listing.
+    func retryMoreSessions() async {
+        moreSessionsFailed = false
+        await refreshSessions()
+        await loadMoreSessions()
+    }
+
+    /// `sessions` from the pages read: chats started here and not listed yet
+    /// on top, and pinned chats from pages not read yet kept in.
+    private func publishSessions() {
+        let listed = sessionPages.listed
+        startedSessions = startedSessions.filter { id, _ in !listed.contains { $0.id == id } }
+        let scope = listedScope?.path
+        let pinned = sessionPages.unlistedPinned(savedPinned, pinned: pinnedSessions, scope: scope)
+        sessions = SessionSummary.merging(listed + pinned, started: Array(startedSessions.values).filter {
+            scope == nil || $0.cwd == scope
+        })
+        hasMoreSessions = sessionPages.hasMore
+        rememberPinned()
+    }
+
+    /// Keep what the sidebar knows of each pinned chat for the next launch.
+    private func rememberPinned() {
+        let shown = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let saved = Dictionary(savedPinned.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let next = pinnedSessions.sorted().compactMap { shown[$0] ?? saved[$0] }
+        guard next != savedPinned else { return }
+        savedPinned = next
+        UserDefaults.standard.set(try? JSONEncoder().encode(next), forKey: "pinnedSessionSummaries")
     }
 
     /// A sheet or panel is open over the chat, which keeps its keys.
