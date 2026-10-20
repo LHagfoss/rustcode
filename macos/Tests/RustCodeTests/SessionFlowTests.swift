@@ -9,7 +9,7 @@ import RustCodeKit
 final class SessionFlowTests: XCTestCase {
     private var directory: URL!
     private var saved: [String: Any] = [:]
-    private static let keys = ["enginePath", "workspacePath", "lastConfigOptions", "pinnedSessions", "archivedSessions"]
+    private static let keys = ["enginePath", "workspacePath", "lastConfigOptions", "pinnedSessions", "pinnedSessionSummaries", "archivedSessions"]
 
     override func setUp() async throws {
         _ = NSApplication.shared
