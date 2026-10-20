@@ -195,6 +195,8 @@ final class DesktopModel: ObservableObject {
             scheduleContentSearch()
         }
     }
+    /// Numbers `refreshSessions` calls so only the newest publishes.
+    private var sessionListRequests = LatestRequest()
     /// False until the first session list arrives, so the sidebar can say it is loading.
     @Published private(set) var sessionsLoaded = false
     /// Chats pinned to the top of the sidebar, kept on this Mac.
@@ -798,23 +800,32 @@ final class DesktopModel: ObservableObject {
 
     func refreshSessions() async {
         guard let connection = engine?.connection, capabilities?.listSessions == true else { return }
+        // Refreshes overlap when the scope or project changes: a slow All
+        // listing must not land after, and overwrite, a later Project one. The
+        // scope is read once so every page comes from the same listing.
+        let request = sessionListRequests.begin()
+        let scope = showsAllProjects ? nil : workspace
         // The engine pages `session/list`; read every page, up to a bound.
         do {
             var all: [SessionSummary] = []
             var cursor: String?
             for _ in 0..<40 {
-                let params = ACPRequests.listSessions(cwd: showsAllProjects ? nil : workspace, cursor: cursor)
+                let params = ACPRequests.listSessions(cwd: scope, cursor: cursor)
                 let result = try await connection.request(ACPMethod.sessionList, params: params, timeout: .seconds(15))
+                guard sessionListRequests.isCurrent(request) else { return }
                 all += SessionSummary.list(from: result)
                 cursor = SessionSummary.nextCursor(from: result)
                 if cursor == nil { break }
             }
             startedSessions = startedSessions.filter { id, _ in !all.contains { $0.id == id } }
             sessions = SessionSummary.merging(all, started: Array(startedSessions.values).filter {
-                showsAllProjects || $0.cwd == workspace.path
+                scope == nil || $0.cwd == scope?.path
             })
             sessionsLoaded = true
-        } catch { self.error = String(describing: error) }
+        } catch {
+            guard sessionListRequests.isCurrent(request) else { return }
+            self.error = String(describing: error)
+        }
     }
 
     /// The request shown for the selected session, if any.
