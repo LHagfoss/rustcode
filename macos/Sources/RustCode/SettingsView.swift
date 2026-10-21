@@ -348,6 +348,8 @@ private struct KeybindingsSettings: View {
     private struct Note: Equatable {
         let text: String
         let isError: Bool
+        /// The note reports a change, so it offers Undo.
+        var undoable = false
     }
 
     var body: some View {
@@ -355,23 +357,29 @@ private struct KeybindingsSettings: View {
             HStack(spacing: 10) {
                 search
                 Spacer(minLength: 8)
-                Button("Reset All", action: resetAll)
-                    .buttonStyle(PillButtonStyle())
+                HStack(spacing: 6) {
+                    Button(action: undo) {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                    }
+                    .buttonStyle(GlassPillButtonStyle())
+                    .disabled(!store.canUndo)
+                    .help("Undo the last shortcut change")
+                    Button(action: resetAll) {
+                        Label("Reset All", systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(GlassPillButtonStyle())
                     .disabled(!store.hasCustomizations)
-                    .opacity(store.hasCustomizations ? 1 : 0.55)
-                    .help("Restore every shortcut to its default")
+                    .help("Restore every shortcut to its default. Undo brings them back")
+                }
             }
             .padding(.bottom, 12)
 
-            if let note {
-                Label(note.text, systemImage: note.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(note.isError ? Color.attention : Color.brand)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background((note.isError ? Color.attention : Color.brand).opacity(0.1),
-                                in: .rect(cornerRadius: 8))
+            if let recording {
+                RecordingBanner(action: recording) { self.recording = nil }
+                    .padding(.bottom, 12)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if let note {
+                NoteBanner(text: note.text, isError: note.isError, undo: note.undoable && store.canUndo ? undo : nil)
                     .padding(.bottom, 12)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
@@ -397,19 +405,20 @@ private struct KeybindingsSettings: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     Button("Clear Search") { query = "" }
-                        .buttonStyle(PillButtonStyle())
+                        .buttonStyle(GlassPillButtonStyle())
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 36)
             }
 
-            Text("Shortcuts save automatically on this Mac. Click one to record a new key, press Delete to clear it, or Esc to cancel. Assigning a shortcut another action uses unbinds it there.")
+            Text("Shortcuts save automatically on this Mac. Click a shortcut to record a new one: Esc cancels, Delete clears it. Taking a shortcut another command uses leaves that command without one. Undo reverts the last change.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 4)
                 .padding(.top, 2)
         }
+        .animation(.snappy(duration: 0.2), value: recording)
         .onDisappear {
             recording = nil
             noteTask?.cancel()
@@ -431,7 +440,7 @@ private struct KeybindingsSettings: View {
         .font(.callout)
         .padding(.horizontal, 12)
         .frame(height: 30)
-        .background(Color.primary.opacity(0.045), in: .capsule)
+        .glassSurface(in: .capsule)
         .frame(maxWidth: 280)
         .simultaneousGesture(TapGesture().onEnded { recording = nil })
     }
@@ -454,14 +463,98 @@ private struct KeybindingsSettings: View {
         show("All shortcuts are back to their defaults.", isError: false)
     }
 
+    private func undo() {
+        recording = nil
+        if store.undo() {
+            show("Undid the last shortcut change.", isError: false, undoable: false)
+        }
+    }
+
+    /// A message under the toolbar. One that reports a change offers Undo.
     private func show(_ text: String, isError: Bool) {
+        show(text, isError: isError, undoable: !isError)
+    }
+
+    private func show(_ text: String, isError: Bool, undoable: Bool) {
         noteTask?.cancel()
-        withAnimation(.snappy(duration: 0.2)) { note = Note(text: text, isError: isError) }
+        withAnimation(.snappy(duration: 0.2)) { note = Note(text: text, isError: isError, undoable: undoable) }
         noteTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(undoable ? 6 : 4))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { note = nil }
         }
+    }
+}
+
+/// Shown while a shortcut is being recorded, so it is plain what keys do now.
+private struct RecordingBanner: View {
+    let action: KeybindingAction
+    let cancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "record.circle")
+                .foregroundStyle(Color.brand)
+                .symbolEffect(.pulse, options: .repeating)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Recording a shortcut for \(action.title)")
+                    .font(.callout.weight(.medium))
+                Text("Press the new keys. Delete clears the shortcut, Esc cancels.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Cancel", action: cancel)
+                .buttonStyle(GlassPillButtonStyle())
+                .help("Keep the current shortcut (Esc)")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassSurface(in: .rect(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.brand.opacity(0.45), lineWidth: 1)
+        }
+    }
+}
+
+private struct NoteBanner: View {
+    let text: String
+    let isError: Bool
+    var undo: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Label(text, systemImage: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(isError ? Color.attention : Color.brand)
+            Spacer(minLength: 8)
+            if let undo {
+                Button("Undo", action: undo)
+                    .buttonStyle(GlassPillButtonStyle())
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+        .glassSurface(in: .rect(cornerRadius: 14))
+    }
+}
+
+/// A capsule button on Liquid Glass, for the controls above the keybinds.
+private struct GlassPillButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.callout.weight(.medium))
+            .labelStyle(.titleAndIcon)
+            .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .interactiveGlassSurface(in: .capsule)
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(.capsule)
     }
 }
 
@@ -471,28 +564,62 @@ private struct KeybindingRow: View {
     @Binding var recording: KeybindingAction?
     let report: (String, Bool) -> Void
 
+    private var isRecording: Bool { recording == action }
+
     var body: some View {
         SettingsRow(title: action.title, subtitle: action.detail) {
             HStack(spacing: 6) {
-                if store.isCustomized(action) {
-                    Button { store.reset(action) } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 11, weight: .semibold))
-                            .frame(width: 24, height: 24)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Reset to \(action.defaultCombo?.display ?? "no shortcut")")
+                if isRecording {
+                    RowIconButton(systemImage: "xmark", help: "Cancel (Esc)") { recording = nil }
+                } else if store.isCustomized(action) {
+                    RowIconButton(systemImage: "arrow.counterclockwise",
+                                  help: "Reset to \(action.defaultCombo?.display ?? "no shortcut")") { reset() }
                 }
                 ShortcutRecorder(action: action, store: store, recording: $recording, report: report)
             }
         }
+        .background(isRecording ? Color.brand.opacity(0.07) : .clear)
+        .contextMenu {
+            Button("Record New Shortcut") { recording = action }
+            Button("Clear Shortcut") {
+                store.clear(action)
+                report("\(action.title) has no shortcut now.", false)
+            }
+            .disabled(store.combo(for: action) == nil)
+            Button("Reset to Default", action: reset)
+                .disabled(!store.isCustomized(action))
+        }
+    }
+
+    private func reset() {
+        recording = nil
+        store.reset(action)
+        report("\(action.title) is back to \(store.display(for: action)).", false)
+    }
+}
+
+private struct RowIconButton: View {
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 24, height: 24)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
+        .accessibilityLabel(help)
     }
 }
 
 /// The keycap that records the next shortcut. While it is on, a local event
-/// monitor takes key presses before they reach a menu or a text field.
+/// monitor takes key presses before they reach a menu, a text field or the
+/// panel's own Esc, so Esc cancels the recording rather than closing Settings.
 private struct ShortcutRecorder: View {
     let action: KeybindingAction
     @ObservedObject var store: KeybindingStore
@@ -554,33 +681,28 @@ private struct ShortcutRecorder: View {
             held = KeyModifiers(event.modifierFlags)
             return nil
         }
-        // Esc leaves the old shortcut alone.
-        if event.keyCode == 53 {
+        switch KeyRecorderInput(event: event) {
+        case .cancel:
+            // The old shortcut stays.
             recording = nil
-            return nil
-        }
-        let modifiers = KeyModifiers(event.modifierFlags)
-        // Delete with no command modifier takes the shortcut away.
-        if (event.keyCode == 51 || event.keyCode == 117) && !modifiers.hasCommandModifier {
+        case .clear:
             store.clear(action)
             recording = nil
             report("\(action.title) has no shortcut now.", false)
-            return nil
-        }
-        guard let combo = KeyCombo(event: event) else {
+        case .unusable:
             report("That key can't be used. Try a letter, number, arrow or punctuation key.", true)
-            return nil
-        }
-        switch store.assign(combo, to: action) {
-        case .assigned(let displaced):
-            recording = nil
-            if let displaced {
-                report("\(combo.display) is now \(action.title). \(displaced.title) has no shortcut.", false)
-            } else {
-                report("\(action.title) is now \(combo.display).", false)
+        case .record(let combo):
+            switch store.assign(combo, to: action) {
+            case .assigned(let displaced):
+                recording = nil
+                if let displaced {
+                    report("\(combo.display) is now \(action.title). \(displaced.title) has no shortcut.", false)
+                } else {
+                    report("\(action.title) is now \(combo.display).", false)
+                }
+            case .rejected(let reason):
+                report(reason, true)
             }
-        case .rejected(let reason):
-            report(reason, true)
         }
         return nil
     }
@@ -590,6 +712,7 @@ private struct ShortcutKeycap: View {
     let text: String
     let isRecording: Bool
     let hasShortcut: Bool
+    @State private var isHovered = false
 
     var body: some View {
         Text(text)
@@ -597,26 +720,22 @@ private struct ShortcutKeycap: View {
             .lineLimit(1)
             .minimumScaleFactor(0.75)
             .foregroundStyle(foreground)
-            .padding(.horizontal, 9)
-            .frame(minWidth: 64, minHeight: 26)
-            .background { RoundedRectangle(cornerRadius: 7, style: .continuous).fill(fill) }
-            .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(stroke, lineWidth: isRecording ? 1.5 : 1)
+            .padding(.horizontal, 10)
+            .frame(minWidth: 72, minHeight: 26)
+            .background {
+                Capsule().fill(isRecording ? Color.brand.opacity(0.16) : Color.primary.opacity(isHovered ? 0.1 : 0.06))
             }
-            .contentShape(.rect)
-    }
-
-    private var fill: Color {
-        isRecording ? Color.brand.opacity(0.14) : Color.primary.opacity(0.055)
-    }
-
-    private var stroke: Color {
-        isRecording ? Color.brand : Color.primary.opacity(0.12)
+            .overlay {
+                Capsule().strokeBorder(isRecording ? Color.brand : Color.primary.opacity(0.12),
+                                       style: StrokeStyle(lineWidth: isRecording ? 1.5 : 1,
+                                                          dash: hasShortcut || isRecording ? [] : [3, 2]))
+            }
+            .contentShape(.capsule)
+            .onHover { isHovered = $0 }
     }
 
     private var foreground: Color {
-        isRecording || !hasShortcut ? .secondary : .primary
+        isRecording ? Color.brand : hasShortcut ? .primary : .secondary
     }
 }
 

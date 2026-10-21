@@ -74,6 +74,19 @@ public enum SessionSwitcher {
         return ((selection + step) % count + count) % count
     }
 
+    /// What a key press adds to the search while the switcher's field is
+    /// still taking focus: printable text typed without ⌘ or ⌃
+    /// (⌥ types characters such as | and @ on many layouts). Keys such
+    /// as Return, Tab, Esc and the arrows are left to the switcher.
+    public static func typeahead(_ characters: String?, commandKey: Bool) -> String? {
+        guard !commandKey, let characters, !characters.isEmpty else { return nil }
+        let printable = characters.unicodeScalars.allSatisfy { scalar in
+            !CharacterSet.controlCharacters.contains(scalar)
+                && !(0xF700...0xF8FF).contains(scalar.value) // AppKit's function keys
+        }
+        return printable ? characters : nil
+    }
+
     /// The highlight once the rows change under it: on the same chat when it
     /// is still listed, else the first row.
     public static func keep(_ selected: String?, in results: [Result]) -> Int {

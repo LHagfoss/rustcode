@@ -42,6 +42,10 @@ struct RustCodeApp: App {
                     .keyboardShortcut(model.keybindings.shortcut(for: .newChat))
                 Button("New Chat in Folder…") { Task { await model.chooseChatProject() } }
             }
+            // AppKit's File > Close (⌘W) would close the only window.
+            CommandGroup(replacing: .saveItem) {
+                CloseTerminalMenuItem(terminal: model.terminal, keybindings: model.keybindings)
+            }
             CommandGroup(after: .newItem) {
                 Button("Switch Chat…") { model.toggleSwitcher() }
                     .keyboardShortcut(model.keybindings.shortcut(for: .switchChat))
@@ -238,7 +242,14 @@ final class DesktopModel: ObservableObject {
     private var remotePollTask: Task<Void, Never>?
     private var remoteSessionID: String?
     /// ⌘K: the chat switcher over the window.
-    @Published var showsSwitcher = false
+    @Published var showsSwitcher = false {
+        didSet { if !showsSwitcher { stopSwitcherTypeahead() } }
+    }
+    /// Text typed between ⌘K and the switcher's field taking the keyboard,
+    /// which SwiftUI gives it a frame later. Without this, a fast typist's
+    /// first letters went to whatever had focus, such as the sidebar search.
+    private(set) var switcherTypeahead = ""
+    private var switcherTypeaheadMonitor: Any?
     /// The switcher has text typed, so it searches the whole history.
     var switcherSearches = false {
         didSet { if switcherSearches { readAllSessionsForFilter() } }
@@ -704,7 +715,39 @@ final class DesktopModel: ObservableObject {
             showsSwitcher = false
         } else if !coversChat {
             showsSwitcher = true
+            startSwitcherTypeahead()
         }
+    }
+
+    /// Holds keys typed before the switcher's field has focus, and takes
+    /// the keyboard from the field that had it.
+    private func startSwitcherTypeahead() {
+        stopSwitcherTypeahead()
+        switcherTypeahead = ""
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        switcherTypeaheadMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let text = SessionSwitcher.typeahead(event.characters,
+                                                       commandKey: !event.modifierFlags.isDisjoint(with: [.command, .control]))
+            else { return event }
+            let taken = MainActor.assumeIsolated { () -> Bool in
+                guard let self, self.showsSwitcher else { return false }
+                self.switcherTypeahead += text
+                return true
+            }
+            return taken ? nil : event
+        }
+    }
+
+    /// The switcher's field has the keyboard: hands it what was typed so far.
+    func takeSwitcherTypeahead() -> String {
+        stopSwitcherTypeahead()
+        defer { switcherTypeahead = "" }
+        return switcherTypeahead
+    }
+
+    private func stopSwitcherTypeahead() {
+        if let switcherTypeaheadMonitor { NSEvent.removeMonitor(switcherTypeaheadMonitor) }
+        switcherTypeaheadMonitor = nil
     }
 
     /// Open the chat picked in the switcher.

@@ -70,6 +70,15 @@ final class TerminalController: ObservableObject {
         withAnimation(.snappy(duration: 0.25)) { isShown = false }
     }
 
+    /// ⌘W: hide the panel when it is open. Shells keep running, as with
+    /// ⇧⌘T. Returns whether there was a panel to close.
+    @discardableResult
+    func closePanel() -> Bool {
+        guard isShown else { return false }
+        hide()
+        return true
+    }
+
     func newSession() {
         if !isShown { withAnimation(.snappy(duration: 0.25)) { isShown = true } }
         manager.newSession()
@@ -196,5 +205,19 @@ struct TerminalMenuItems: View {
         Button("New Terminal Tab") { terminal.newSession() }
             .keyboardShortcut(keybindings.shortcut(for: .newTerminalTab))
             .disabled(!terminal.manager.canOpenSession)
+    }
+}
+
+/// File > Close Terminal (⌘W), in place of AppKit's Close: it hides the
+/// terminal panel when one is open and does nothing otherwise, so ⌘W never
+/// closes the app's only window. The item stays enabled: SwiftUI did not
+/// re-enable it in time when the panel opened, which swallowed the key.
+struct CloseTerminalMenuItem: View {
+    @ObservedObject var terminal: TerminalController
+    @ObservedObject var keybindings: KeybindingStore
+
+    var body: some View {
+        Button("Close Terminal") { terminal.closePanel() }
+            .keyboardShortcut(keybindings.shortcut(for: .closeTerminal))
     }
 }

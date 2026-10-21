@@ -171,6 +171,11 @@ private struct SessionSidebar: View {
                     .onChange(of: model.focusSessionSearch) { _, focus in
                         if focus { searchFocused = true; model.focusSessionSearch = false }
                     }
+                    // ⌘K's switcher takes the keyboard: typing must not keep
+                    // filtering the sidebar underneath it.
+                    .onChange(of: model.showsSwitcher) { _, shown in
+                        if shown { searchFocused = false }
+                    }
                     .onKeyPress(.escape) {
                         guard !model.sessionFilter.isEmpty else { return .ignored }
                         model.sessionFilter = ""
