@@ -51,6 +51,36 @@ pub(crate) fn set_active_session_id(session_id: Option<&str>) {
     }
 }
 
+tokio::task_local! {
+    /// The session whose turn the current task is running. One engine process
+    /// can run turns for several ACP sessions at once, so the process-wide
+    /// active session is only a fallback for lines logged outside a turn.
+    static SCOPED_SESSION_ID: String;
+}
+
+/// Run `future` with its unscoped log lines and operational events attributed
+/// to `session_id`, whichever session last became the process's active one.
+pub(crate) async fn scope_session<F: std::future::Future>(
+    session_id: String,
+    future: F,
+) -> F::Output {
+    SCOPED_SESSION_ID.scope(session_id, future).await
+}
+
+/// [`scope_session`] for synchronous work, such as a tool on a blocking thread.
+pub(crate) fn sync_scope_session<R>(session_id: String, work: impl FnOnce() -> R) -> R {
+    SCOPED_SESSION_ID.sync_scope(session_id, work)
+}
+
+/// The session a log line belongs to: the running turn's, else the process's.
+fn log_session_id() -> Option<String> {
+    SCOPED_SESSION_ID
+        .try_with(Clone::clone)
+        .ok()
+        .filter(|id| !id.is_empty())
+        .or_else(active_session_id)
+}
+
 fn active_session_id() -> Option<String> {
     active_session_lock()
         .lock()
@@ -480,7 +510,7 @@ fn append_line_with_session(line: &str, session_id: Option<&str>) {
     if let Some(log_dir) = crate::config::get_config_dir() {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let formatted = format!("[{now}] {line}");
-        let session_id = session_id.map(str::to_owned).or_else(active_session_id);
+        let session_id = session_id.map(str::to_owned).or_else(log_session_id);
         append_line_to_logs(&log_dir, session_id.as_deref(), &formatted);
     }
 }
@@ -839,7 +869,7 @@ fn attributed_fields(mut fields: Value) -> (Value, Option<String>) {
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
-        .or_else(active_session_id);
+        .or_else(log_session_id);
     if let Some(object) = fields.as_object_mut()
         && !object.contains_key("session_id")
         && let Some(session_id) = session_id.as_ref()
@@ -1542,6 +1572,62 @@ mod tests {
         assert_eq!(collect_session_log_files(dir.path()).len(), 1);
         assert!(active_logs.join("debug.log").exists());
         assert!(!old_logs.join("debug.log").exists());
+    }
+
+    /// Regression for #2215: one ACP engine ran turns for three sessions at
+    /// once, and each turn's operational events were filed under whichever
+    /// session had last set the process-wide active session, so one chat's
+    /// debug log showed another chat's 118k-token requests.
+    #[tokio::test]
+    async fn concurrent_turns_attribute_events_to_their_own_session() {
+        let (first_started, first_wait) = tokio::sync::oneshot::channel::<()>();
+        let (second_started, second_wait) = tokio::sync::oneshot::channel::<()>();
+        let first = scope_session("turn-first".to_owned(), async move {
+            let _ = first_started.send(());
+            // The other turn starts while this one is suspended mid-turn.
+            let _ = second_wait.await;
+            (
+                attributed_fields(serde_json::json!({"round": 1})),
+                log_session_id(),
+            )
+        });
+        let second = scope_session("turn-second".to_owned(), async move {
+            let _ = first_wait.await;
+            let attributed = attributed_fields(serde_json::json!({"round": 0}));
+            let _ = second_started.send(());
+            (attributed, log_session_id())
+        });
+        let (
+            ((first_fields, first_owner), first_line),
+            ((second_fields, second_owner), second_line),
+        ) = tokio::join!(first, second);
+
+        assert_eq!(first_owner.as_deref(), Some("turn-first"));
+        assert_eq!(first_fields["session_id"], "turn-first");
+        assert_eq!(first_line.as_deref(), Some("turn-first"));
+        assert_eq!(second_owner.as_deref(), Some("turn-second"));
+        assert_eq!(second_fields["session_id"], "turn-second");
+        assert_eq!(second_line.as_deref(), Some("turn-second"));
+    }
+
+    #[tokio::test]
+    async fn explicit_event_owner_wins_over_the_scoped_turn() {
+        let (fields, owner) = scope_session("turn".to_owned(), async {
+            attributed_fields(serde_json::json!({"session_id": "explicit"}))
+        })
+        .await;
+        assert_eq!(owner.as_deref(), Some("explicit"));
+        assert_eq!(fields["session_id"], "explicit");
+    }
+
+    #[test]
+    fn blocking_tool_work_logs_under_its_scoped_session() {
+        let owner = sync_scope_session("tool-owner".to_owned(), log_session_id);
+        assert_eq!(owner.as_deref(), Some("tool-owner"));
+        let empty = sync_scope_session(String::new(), || {
+            attributed_fields(serde_json::json!({"session_id": "explicit"})).1
+        });
+        assert_eq!(empty.as_deref(), Some("explicit"));
     }
 
     #[test]
