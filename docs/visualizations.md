@@ -23,7 +23,7 @@ Shared fields:
 
 | Field     | Required | Meaning                                                  |
 | --------- | -------- | -------------------------------------------------------- |
-| `version` | yes      | Schema version. Only `1` is supported.                   |
+| `version` | yes      | Payload schema version. Only `1` is supported. New widget types are additive and keep `1`; see [Levels](#widget-levels). |
 | `type`    | yes      | Widget type from the allowlist below.                    |
 | `title`   | no       | Heading. Defaults to the type name.                      |
 | `summary` | no       | One-line takeaway, shown under the heading as plain text. |
@@ -68,6 +68,49 @@ ASCII art, or wide Markdown tables:
 
 A general box-and-arrow diagram was left out. It needs a layout engine to be
 legible in a terminal, and a tree or table covers most coding cases.
+
+## Level 2 widgets (macOS app)
+
+[#2217](https://github.com/LHagfoss/rustcode/issues/2217) adds three types
+for answers the first three draw poorly: trends, a few headline numbers, and
+progress. They use the same fence, the same `version: 1` payload and the same
+shared fields. Only the macOS app draws them so far. The TUI and older apps
+show them as source with `unsupported type`, and the engine teaches them only
+to a frontend that advertises level 2 (see [Teaching the agent](#teaching-the-agent)).
+
+- **`line_chart`** shows a trend: benchmark or binary size across commits,
+  releases or runs.
+
+  | Field    | Required | Meaning |
+  | -------- | -------- | ------- |
+  | `labels` | yes      | Shared x axis, in order. Strings or numbers. |
+  | `series` | yes      | `[{"name"?, "values": [number \| null]}]`. One value per label; `null` or a missing trailing value is a gap. A missing `name` becomes `series N`. |
+  | `unit`   | no       | Shown after every value. |
+
+  Hovering draws a rule at the nearest label and lists every series' value
+  there. A legend is shown for two or more series.
+
+  ````markdown
+  ```rustcode-viz
+  {"version":1,"type":"line_chart","title":"Release binary size","unit":"MB",
+   "labels":["v0.83","v0.84","v0.85"],"series":[{"name":"macOS","values":[23.1,18.2,18.4]}]}
+  ```
+  ````
+
+- **`stat_list`** holds a few headline numbers as labeled tiles: coverage,
+  counts, sizes, durations. Fields: `items: [{"label", "value", "unit"?,
+  "note"?}]`, where `value` is a string or a finite number. Tiles wrap to the
+  width.
+- **`checklist`** shows read-only progress: migration steps, CI checks,
+  review items. Fields: `items: [{"label", "status"?, "note"?}]`, where
+  `status` is `done`, `todo` (the default), `in_progress`, `failed` or
+  `skipped`. A bar shows how many items are done, counted over every item,
+  shown or not. Items cannot be ticked: the widget is data, and nothing is
+  sent back to the agent.
+
+Each fails to the source view, with its reason, when a required field is
+missing or has the wrong type, a `status` is not one of the five, or a
+`line_chart` has no number at all.
 
 ## Interacting in the terminal
 
@@ -118,6 +161,11 @@ representation: selecting them copies readable text.
 | Bar chart items               | 30     | `… N more items not shown`          |
 | Table rows / columns          | 50 / 8 | `… N more rows/columns not shown`   |
 | Tree nodes / depth            | 120 / 8 | `… N more nodes not shown`         |
+| Line chart points / series    | 100 / 4 | `… N more points/series not shown` (level 2) |
+| Stat list items               | 12     | `… N more items not shown` (level 2) |
+| Checklist items               | 50     | `… N more items not shown` (level 2) |
+| Stat values, series names     | 40 chars | Truncated with `…` (level 2)     |
+| Checklist labels and notes, stat notes | 60 chars | Truncated with `…` (level 2) |
 
 Every row is also cut to the viewport width. Control characters and newlines
 in any text are replaced with spaces, so a payload cannot send terminal
@@ -164,14 +212,41 @@ payload, and `RustCode/VisualizationView.swift` draws it in SwiftUI:
   shown. `sort_by` sets the initial order.
 - `tree` branches collapse and expand. The first two levels start open
   (the TUI starts with every node open).
+- `line_chart`, `stat_list` and `checklist` are the
+  [level 2 widgets](#level-2-widgets-macos-app) above.
 
-The card's Copy button and context menu copy the source fence. A block that
-is still streaming shows a "Building visualization…" placeholder. Invalid or
+The card's Copy button copies the source fence. Its context menu has
+**Copy Source** and **Copy as Text**, a plain-text form of the data
+(`RustCodeKit/VisualizationText.swift`): Markdown tables for tables and line
+charts, an indented list for trees, `[x]`-style lines for checklists, and
+`label: value` lines otherwise. VoiceOver reads the card's title, then a
+one-sentence summary of its data (item and row counts, the largest bar, each
+line's first, last, low and high values, checklist progress), and each bar,
+point, tile and checklist item has its own label. A block that is still
+streaming shows a "Building visualization…" placeholder. Invalid or
 unfinished blocks show the source with the same note as the TUI. Only
 assistant replies render widgets: command output, user messages and tool
 output keep the fence as code. The app advertises
-`clientCapabilities._meta.rustcode.visualizations = 1` in its ACP
+`clientCapabilities._meta.rustcode.visualizations = 2` in its ACP
 `initialize`.
+
+### Finding them in the app
+
+Users do not need this page to find the widgets. The app's guide lists each
+type with what it is for, how to use it, a live sample drawn by the real
+renderer, and a request with an **Insert** button that puts it in the message
+field. It opens from:
+
+- the `/visualize` slash command (an app command, so it works before the
+  engine starts),
+- **Help ▸ Charts, Tables & Trees in Chat…**,
+- **Ask for a Chart, Table or Tree…** in the composer's + menu, and
+- the **Ask for a chart, table, or tree** link on an empty chat.
+
+The guide's entries, prompts and samples live in
+`RustCodeKit/VisualizationGuide.swift`; a test checks that it covers every
+supported type and that every sample renders. `--visualization-demo` shows
+the same samples in a standalone window.
 
 ## Assistant-only
 
@@ -190,22 +265,33 @@ Selecting rendered rows with the mouse copies their text.
 
 The agent learns the format from a short `# Visualizations` section (about
 120 tokens) that is appended to the system prompt **only when the frontend
-renders the blocks**. `AppState::renders_visualizations` holds that
-decision. It is set once, when the frontend creates the session state, so the
-prompt and its cached prefix do not change during a session. The default is
-`false`.
+renders the blocks**. `AppState::visualization_level` holds that decision.
+It is set once, when the frontend creates the session state, so the prompt
+and its cached prefix do not change during a session. The default is `0`.
 
-| Frontend                          | Hint | How it is decided                                   |
-| --------------------------------- | ---- | --------------------------------------------------- |
-| TUI (local)                       | yes  | Set at startup                                      |
-| macOS app                         | yes  | Advertises the ACP capability below                 |
-| ACP client advertising support    | yes  | `clientCapabilities._meta.rustcode.visualizations >= 1` at `initialize` |
-| Any other ACP client              | no   | Capability absent, malformed, or `0`                |
-| Remote gateway, iOS, Rust desktop, remote TUI | no | Default                                |
+### Widget levels
 
-The engine announces the same version in its own `initialize` response
-(`agentCapabilities._meta.rustcode.visualizations = 1`), so a client can tell
-whether the agent knows the format.
+A frontend's level says which types it draws, so the agent is never taught a
+type the user would see as JSON:
+
+| Level | Types | Prompt |
+| ----- | ----- | ------ |
+| 0 | none | no hint |
+| 1 | `bar_chart`, `table`, `tree` | the level 1 hint, unchanged |
+| 2 | level 1 plus `line_chart`, `stat_list`, `checklist` | the level 1 hint plus one more paragraph (about 75 tokens) |
+
+| Frontend                          | Level | How it is decided                                   |
+| --------------------------------- | ----- | --------------------------------------------------- |
+| TUI (local)                       | 1     | Set at startup                                      |
+| macOS app                         | 2     | Advertises the ACP capability below                 |
+| ACP client advertising support    | 1–2   | `clientCapabilities._meta.rustcode.visualizations` at `initialize`, capped at 2 |
+| Any other ACP client              | 0     | Capability absent, malformed, or `0`                |
+| Remote gateway, iOS, Rust desktop, remote TUI | 0 | Default                                |
+
+The engine announces its highest level in its own `initialize` response
+(`agentCapabilities._meta.rustcode.visualizations = 2`), so a client can tell
+which types the agent knows. An older app that advertises `1` keeps the
+level 1 prompt.
 
 The hint is also left out of subagent prompts, which are not shown to the
 user directly, and out of compact prompts for small models. It is appended

@@ -2054,20 +2054,36 @@ When a chart, table, or tree beats prose, add a ```rustcode-viz fence with one J
 {\"version\":1,\"type\":\"bar_chart\",\"title\":\"..\",\"summary\":\"..\",\"items\":[{\"label\":\"..\",\"value\":1}]}; \
 \"table\" takes columns, rows (arrays), optional sort_by {column,descending}; \"tree\" takes nodes [{label,note,children}]. Max 30 bars, 50 rows, 120 nodes.\n\n";
 
+/// The widget types added at visualization level 2, appended after
+/// [`VISUALIZATION_PROMPT_HINT`] for frontends that draw them. Level 1
+/// frontends keep exactly the level 1 prompt.
+pub(crate) const VISUALIZATION_PROMPT_HINT_LEVEL_2: &str = "Also: \"line_chart\" takes labels [x] and series \
+[{name,values:[number|null]}] for trends (max 4 series, 100 points); \"stat_list\" takes items \
+[{label,value,unit,note}] for headline numbers (max 12); \"checklist\" takes items \
+[{label,status:done|todo|in_progress|failed|skipped,note}] for progress (max 50).\n\n";
+
+/// The visualization prompt text for a frontend's visualization level: none
+/// for 0, the level 1 types for 1, and the level 2 types added from 2.
+pub(crate) fn visualization_prompt_hint(level: u8) -> String {
+    match level {
+        0 => String::new(),
+        1 => VISUALIZATION_PROMPT_HINT.to_owned(),
+        _ => format!("{VISUALIZATION_PROMPT_HINT}{VISUALIZATION_PROMPT_HINT_LEVEL_2}"),
+    }
+}
+
 /// Append the visualization hint when the frontend renders `rustcode-viz`
 /// blocks. Only the root agent writes user-facing replies, and compact prompts
 /// are for small models where every token counts. Frontends that cannot draw
-/// the blocks never get the hint, so they never see the JSON fences.
+/// the blocks never get the hint, so they never see the JSON fences, and each
+/// frontend is taught only the types its level draws.
 pub(crate) fn append_visualization_hint(
     prompt: &mut String,
     policy: ToolSchemaPolicy,
-    renders_visualizations: bool,
+    visualization_level: u8,
 ) {
-    if renders_visualizations
-        && policy.profile != ToolSchemaProfile::ReadOnlySubagent
-        && !policy.compact_text_prompt
-    {
-        prompt.push_str(VISUALIZATION_PROMPT_HINT);
+    if policy.profile != ToolSchemaProfile::ReadOnlySubagent && !policy.compact_text_prompt {
+        prompt.push_str(&visualization_prompt_hint(visualization_level));
     }
 }
 

@@ -39,6 +39,7 @@ struct ContentView: View {
         .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0) }
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
         .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
+        .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
         .overlay { SessionSwitcherOverlay(model: model) }
         .overlay { ToastStack(model: model) }
     }
@@ -768,9 +769,9 @@ private struct ChatView: View {
                     ProgressView("Loading chat…").controlSize(.small).foregroundStyle(.secondary)
                 } else if transcript.isEmpty, !model.busy {
                     EmptyChat(folder: model.chatProject, isDefault: model.draftProject == nil,
-                              isDraft: model.selectedSession == nil) {
-                        Task { await model.chooseChatProject() }
-                    }
+                              isDraft: model.selectedSession == nil,
+                              choose: { Task { await model.chooseChatProject() } },
+                              showVisualizations: { model.showsVisualizationGuide = true })
                 }
             }
             .followsLatest($follow, scroll: scroll) { scrollToEnd(proxy) }
@@ -1326,6 +1327,8 @@ private struct EmptyChat: View {
     /// A new chat, whose folder can still be changed.
     let isDraft: Bool
     let choose: () -> Void
+    /// Opens the visualization guide.
+    let showVisualizations: () -> Void
 
     var body: some View {
         VStack(spacing: 14) {
@@ -1359,6 +1362,14 @@ private struct EmptyChat: View {
                     .foregroundStyle(.secondary)
                     .allowsHitTesting(false)
             }
+            // The one way in that needs no menu or command: answers can hold
+            // charts, tables and trees, and the guide shows how to ask.
+            Button(action: showVisualizations) {
+                Label("Ask for a chart, table, or tree", systemImage: "chart.bar.xaxis")
+                    .font(.callout)
+            }
+            .buttonStyle(.link)
+            .help("Examples of visualizations you can ask for (/visualize)")
         }
         .padding(.bottom, 80)
     }
@@ -1539,6 +1550,8 @@ private struct Composer: View {
             focused = true
             installPasteMonitor()
         }
+        // An example inserted from the visualization guide is ready to send.
+        .onChange(of: model.showsVisualizationGuide) { _, shown in if !shown { focused = true } }
         .onDisappear {
             if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
             pasteMonitor = nil
@@ -1824,6 +1837,7 @@ struct AddPanel: View {
             ("New Chat", "square.and.pencil", { Task { await model.newSession() } }),
             ("New Chat in Folder…", "folder.badge.plus", { Task { await model.chooseChatProject() } }),
             ("Choose Default Project…", "folder", { model.chooseWorkspace() }),
+            ("Ask for a Chart, Table or Tree…", "chart.bar.xaxis", { model.showsVisualizationGuide = true }),
         ]
     }
 
