@@ -1053,6 +1053,24 @@ thread_local! {
     static ACTIVE_TASK_WORKING_DIRECTORY: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     static ACTIVE_TASK_SCOPE_ESCAPE: RefCell<bool> = const { RefCell::new(false) };
     static ACTIVE_SANDBOX_MODE: RefCell<crate::config::SandboxMode> = const { RefCell::new(crate::config::SandboxMode::Trusted) };
+    /// Live-output sink for the tool running on this worker thread. `run_command`
+    /// gets one from the executor directly; tools that block while another
+    /// process writes output (`manage_task` `wait`) read it here so their output
+    /// tail reaches the transcript while they are still blocked (#2230).
+    static ACTIVE_TOOL_PROGRESS: RefCell<Option<rustcode_command::ProgressCallback>> =
+        const { RefCell::new(None) };
+}
+
+/// Install the live-output sink for the tool about to run on this thread.
+/// `None` clears it, so a pooled blocking thread cannot leak one tool's sink
+/// into the next.
+pub(crate) fn set_active_tool_progress(progress: Option<rustcode_command::ProgressCallback>) {
+    ACTIVE_TOOL_PROGRESS.with(|current| *current.borrow_mut() = progress);
+}
+
+/// The live-output sink for the tool running on this thread, if it has one.
+pub(crate) fn current_tool_progress() -> Option<rustcode_command::ProgressCallback> {
+    ACTIVE_TOOL_PROGRESS.with(|current| current.borrow().clone())
 }
 
 pub fn set_active_session_id(id: Option<String>) {

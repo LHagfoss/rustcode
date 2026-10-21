@@ -1584,6 +1584,53 @@ pub(crate) async fn background_result_answered_by_wait(session_id: &str, task_id
     background_result_delivered_by_wait(session_id, task_id)
 }
 
+/// Streams bytes appended to the waited tasks' output logs into the live tool
+/// cell while the wait is still blocked (#2230). The wait sleeps on a task
+/// event channel, not on the process, so it polls the logs on each short
+/// slice and never delays the terminal result.
+struct TaskOutputTail {
+    logs: Vec<(std::path::PathBuf, u64)>,
+}
+
+impl TaskOutputTail {
+    fn new(manager: &TaskManager, session_id: &str, task_ids: &[String]) -> Self {
+        let logs = manager
+            .list(session_id)
+            .into_iter()
+            .filter(|task| task_ids.iter().any(|id| id == task.id.as_str()))
+            .filter_map(|task| task.output_log)
+            .map(|path| (path, 0))
+            .collect();
+        Self { logs }
+    }
+
+    /// Forward whatever the tasks wrote since the last poll. A wait with no
+    /// live cell (not inside a turn) has nowhere to put the bytes, so it reads
+    /// nothing.
+    fn poll(&mut self) {
+        use std::io::{Read, Seek, SeekFrom};
+        let Some(progress) = super::current_tool_progress() else {
+            return;
+        };
+        for (path, offset) in &mut self.logs {
+            let Ok(mut file) = std::fs::File::open(&*path) else {
+                continue;
+            };
+            if file.seek(SeekFrom::Start(*offset)).is_err() {
+                continue;
+            }
+            let mut buffer = Vec::new();
+            match file.take(64 * 1024).read_to_end(&mut buffer) {
+                Ok(0) | Err(_) => {}
+                Ok(read) => {
+                    *offset += read as u64;
+                    progress(&buffer, false);
+                }
+            }
+        }
+    }
+}
+
 /// Block until one background task reaches a terminal state, so agents wait
 /// with a single tool call instead of hand-rolled sleep/poll shell loops.
 /// Runs on a blocking worker thread; Esc still interrupts the wait through
@@ -1633,15 +1680,19 @@ fn wait_for_background_tasks(
         );
     }
     let deadline = std::time::Instant::now() + timeout;
+    let mut tail = TaskOutputTail::new(manager, session_id, task_ids);
     loop {
         let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
             break;
         };
-        match subscription.recv_timeout(remaining) {
+        // Wake often enough to forward new output, but never past the deadline.
+        let slice = remaining.min(std::time::Duration::from_millis(250));
+        match subscription.recv_timeout(slice) {
             Ok(event)
                 if task_ids.iter().any(|id| id == event.task_id().as_str())
                     && event.is_terminal() =>
             {
+                tail.poll();
                 if let Some(completion) = manager.completion(session_id, event.task_id()) {
                     return deliver(&completion);
                 }
@@ -1649,7 +1700,8 @@ fn wait_for_background_tasks(
                 note_wait_delivered(session_id, &task_id);
                 return format_wait_result(&task_id, event);
             }
-            Ok(_) => continue,
+            Ok(_) => tail.poll(),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => tail.poll(),
             Err(_) => break,
         }
     }
@@ -2122,12 +2174,14 @@ mod tests {
     #[cfg(unix)]
     use super::terminate_background_pid;
     use super::{
-        cancel_result_message, command_confirmation_preview, command_confirmation_scope,
-        command_manages_own_background_jobs, command_requires_confirmation, has_interactive_sudo,
-        has_shell_background_operator, manage_task_tool, pull_request_base, reject_broad_git_stage,
-        run_command, run_command_output, run_command_output_cancellable,
-        run_command_output_with_progress, task_event_to_tool_output, wait_for_background_tasks,
+        TaskOutputTail, cancel_result_message, command_confirmation_preview,
+        command_confirmation_scope, command_manages_own_background_jobs,
+        command_requires_confirmation, has_interactive_sudo, has_shell_background_operator,
+        manage_task_tool, pull_request_base, reject_broad_git_stage, run_command,
+        run_command_output, run_command_output_cancellable, run_command_output_with_progress,
+        task_event_to_tool_output, wait_for_background_tasks,
     };
+    use std::io::Write;
 
     #[test]
     fn run_command_description_matches_the_shell_of_each_platform() {
@@ -2585,6 +2639,87 @@ mod tests {
             manager.cancel(slow.id()),
             rustcode_tasks::CancelResult::Cancelled
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_streams_a_running_tasks_output_tail_while_blocked() {
+        // A wait used to stay silent until it returned, so its card sat empty
+        // for the whole command (#2230). It now forwards appended log bytes.
+        let manager =
+            rustcode_tasks::TaskManager::new(std::sync::Arc::new(super::RootProcessTerminator));
+        let session = "wait-tail-session";
+        let log = std::env::temp_dir().join(format!(
+            "rustcode-wait-tail-{}-{}.log",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // The manager creates the log itself (`create_new`), so the test only
+        // appends to it the way a running command would.
+        let task = manager
+            .spawn_with_id(
+                "wait-tail-task",
+                rustcode_tasks::TaskSpec::new(session, task_request("sleep 30", None))
+                    .with_output_log(log.clone()),
+            )
+            .unwrap();
+
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        super::super::set_active_tool_progress(Some(std::sync::Arc::new(
+            move |bytes: &[u8], _stderr: bool| {
+                sink.lock().unwrap().extend_from_slice(bytes);
+            },
+        )));
+
+        let mut tail = TaskOutputTail::new(&manager, session, &[task.id().to_string()]);
+        // The log already held the stream label; the wait forwards from here on.
+        tail.poll();
+        assert!(seen.lock().unwrap().is_empty(), "nothing new yet");
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .unwrap()
+            .write_all(b"running 3 tests\n")
+            .unwrap();
+        tail.poll();
+
+        let forwarded = String::from_utf8(seen.lock().unwrap().clone()).unwrap();
+        assert!(forwarded.contains("running 3 tests"), "{forwarded:?}");
+        // Reading again forwards nothing twice.
+        tail.poll();
+        assert_eq!(
+            String::from_utf8(seen.lock().unwrap().clone()).unwrap(),
+            forwarded
+        );
+
+        super::super::set_active_tool_progress(None);
+        // Cancellation is asynchronous: either outcome is a request the task
+        // manager owns, exactly as the sibling wait tests assert.
+        assert!(matches!(
+            manager.cancel(task.id()),
+            rustcode_tasks::CancelResult::Requested | rustcode_tasks::CancelResult::Cancelled
+        ));
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[test]
+    fn a_wait_without_a_live_cell_forwards_nothing() {
+        // Outside a turn there is no card to stream into, and the wait must not
+        // read logs it has nowhere to put.
+        let manager =
+            rustcode_tasks::TaskManager::new(std::sync::Arc::new(super::RootProcessTerminator));
+        let session = "wait-tail-absent-session";
+        super::super::set_active_tool_progress(None);
+        assert!(super::super::current_tool_progress().is_none());
+        let mut tail = TaskOutputTail::new(&manager, session, &["missing".to_owned()]);
+        assert!(tail.logs.is_empty());
+        tail.poll();
     }
 
     #[tokio::test]
