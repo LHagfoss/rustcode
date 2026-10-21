@@ -1928,8 +1928,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         round_stale_rereads += 1;
                     }
                 }
-                round_workspace_changed |=
-                    assessment.reason == loop_detect::ProgressReason::WorkspaceChanged;
+                if assessment.reason == loop_detect::ProgressReason::WorkspaceChanged {
+                    round_workspace_changed = true;
+                    ctx.progress.workspace_change_events =
+                        ctx.progress.workspace_change_events.saturating_add(1);
+                }
                 // Runtime probes, browser checks, and fresh reads can provide
                 // decisive evidence without changing a file. The progress
                 // ledger already classifies that evidence; carry its result

@@ -247,6 +247,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     dbg_log!("Starting agent loop round {}", ctx.budget.tool_rounds);
 
     // Phase 1: enforce lifecycle budgets and prepare the provider request.
+    super::renew_token_window_if_productive(ctx);
     if !cancel_token.is_cancelled()
         && let Some(limit) = turn_budget_exceeded(ctx)
     {
