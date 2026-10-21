@@ -7,6 +7,7 @@ mod presence;
 mod preview;
 mod prompt;
 mod questions;
+mod remote;
 mod session;
 mod streaming;
 mod usage;
@@ -80,6 +81,7 @@ fn server_capabilities() -> AgentCapabilities {
             serde_json::json!({
                 "visualizations": VISUALIZATIONS_CAPABILITY_VERSION,
                 "preview": crate::preview::PREVIEW_CAPABILITY_VERSION,
+                "remote": remote::REMOTE_CAPABILITY_VERSION,
             }),
         )]))
 }
@@ -708,6 +710,8 @@ struct AcpServer {
     client_has_preview: Arc<AtomicBool>,
     /// Discord Rich Presence, for a client that asked for it (#2179).
     presence: presence::Presence,
+    /// `/remote` shares and their pairing offers.
+    remote: remote::RemoteManager,
 }
 
 impl AcpServer {
@@ -739,11 +743,19 @@ impl AcpServer {
             renders_visualizations: Arc::new(AtomicBool::new(false)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
+            remote: remote::RemoteManager::default(),
         })
     }
 }
 
 async fn unregister_acp_session(server: &AcpServer, session_id: &str) {
+    server
+        .remote
+        .stop_session(
+            session_id,
+            crate::remote::SessionCloseReason::SessionChanged,
+        )
+        .await;
     server
         .task_routes
         .lock()
@@ -892,6 +904,60 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: remote::RemoteStatusRequest, responder, _connection| {
+                    responder.respond(server.remote.status(&request.session_id).await)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: remote::RemoteStartRequest, responder, connection| {
+                    let session = {
+                        let sessions = server.sessions.lock().await;
+                        sessions.get(&request.session_id).map(|session| {
+                            remote::RemoteSession::from_acp(
+                                request.session_id.clone(),
+                                session,
+                                connection.clone(),
+                                Arc::clone(&server.client),
+                                server.auto_approve,
+                                server.presence.clone(),
+                                server.remote.clone(),
+                            )
+                        })
+                    };
+                    let Some(session) = session else {
+                        return Err(agent_client_protocol::Error::invalid_params()
+                            .data(format!("unknown ACP session: {}", request.session_id)));
+                    };
+                    responder.respond(server.remote.start(session, request.pair).await?)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: remote::RemotePairRequest, responder, _connection| {
+                    responder.respond(server.remote.pair(&request.session_id).await)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: remote::RemoteStopRequest, responder, _connection| {
+                    responder.respond(server.remote.stop(&request.session_id).await?)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |_request: capabilities::CapabilitiesRequest, responder, _connection| {
                 responder.respond(capabilities::snapshot_value()?)
             },
@@ -926,6 +992,13 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: CloseSessionRequest, responder, _connection| {
                     let session_id = request.session_id.to_string();
+                    server
+                        .remote
+                        .stop_session(
+                            &session_id,
+                            crate::remote::SessionCloseReason::SessionChanged,
+                        )
+                        .await;
                     server
                         .task_routes
                         .lock()
@@ -1077,6 +1150,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             task_connection,
                             prompt_server.client,
                             prompt_server.auto_approve,
+                            Some(prompt_server.remote.clone()),
                         )
                         .await;
                         prompt_server
@@ -1101,6 +1175,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_close({
             let server = server.clone();
             async move |_connection| {
+                server.remote.shutdown().await;
                 let route_ids = server
                     .task_routes
                     .lock()
@@ -1346,6 +1421,7 @@ mod tests {
             renders_visualizations: Arc::new(AtomicBool::new(false)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
+            remote: remote::RemoteManager::default(),
         };
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));

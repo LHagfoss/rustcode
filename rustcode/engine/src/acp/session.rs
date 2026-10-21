@@ -48,6 +48,7 @@ pub(crate) struct SessionTurnState {
     gate: Arc<Mutex<()>>,
     next_id: std::sync::atomic::AtomicU64,
     accepted: Arc<std::sync::Mutex<Vec<(u64, tokio_util::sync::CancellationToken)>>>,
+    running: Arc<std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
 }
 
 impl SessionTurnState {
@@ -56,6 +57,7 @@ impl SessionTurnState {
             gate: Arc::new(Mutex::new(())),
             next_id: std::sync::atomic::AtomicU64::new(1),
             accepted: Arc::new(std::sync::Mutex::new(Vec::new())),
+            running: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -73,6 +75,7 @@ impl SessionTurnState {
             gate: Arc::clone(&self.gate),
             cancel_token,
             accepted: Arc::clone(&self.accepted),
+            running: Arc::clone(&self.running),
             registered: true,
         }
     }
@@ -92,6 +95,15 @@ impl SessionTurnState {
         }
         !accepted.is_empty()
     }
+
+    /// The token of the turn currently holding the gate, if any. A scheduled
+    /// turn that has not begun is not running yet, so it is not returned.
+    pub(crate) fn active_token(&self) -> Option<tokio_util::sync::CancellationToken> {
+        self.running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 pub(crate) struct ScheduledSessionTurn {
@@ -99,6 +111,7 @@ pub(crate) struct ScheduledSessionTurn {
     gate: Arc<Mutex<()>>,
     cancel_token: tokio_util::sync::CancellationToken,
     accepted: Arc<std::sync::Mutex<Vec<(u64, tokio_util::sync::CancellationToken)>>>,
+    running: Arc<std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
     registered: bool,
 }
 
@@ -106,11 +119,16 @@ impl ScheduledSessionTurn {
     pub(crate) async fn begin(mut self) -> SessionTurnGuard {
         let gate = Arc::clone(&self.gate).lock_owned().await;
         self.registered = false;
+        *self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(self.cancel_token.clone());
         SessionTurnGuard {
             id: self.id,
             _gate: gate,
             cancel_token: self.cancel_token.clone(),
             accepted: Arc::clone(&self.accepted),
+            running: Arc::clone(&self.running),
         }
     }
 }
@@ -131,6 +149,7 @@ pub(crate) struct SessionTurnGuard {
     _gate: tokio::sync::OwnedMutexGuard<()>,
     cancel_token: tokio_util::sync::CancellationToken,
     accepted: Arc<std::sync::Mutex<Vec<(u64, tokio_util::sync::CancellationToken)>>>,
+    running: Arc<std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
 }
 
 impl SessionTurnGuard {
@@ -145,6 +164,10 @@ impl Drop for SessionTurnGuard {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|(id, _)| *id != self.id);
+        *self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
@@ -169,7 +192,19 @@ pub(crate) fn new_registry() -> Sessions {
 
 #[cfg(test)]
 mod tests {
-    use super::{KNOWN_TASK_ID_CAPACITY, KnownTaskIds};
+    use super::{KNOWN_TASK_ID_CAPACITY, KnownTaskIds, SessionTurnState};
+
+    #[tokio::test]
+    async fn active_token_is_only_the_turn_holding_the_gate() {
+        let turns = SessionTurnState::new();
+        let scheduled = turns.schedule();
+        // Accepted but not begun: remote cancel must not target it yet.
+        assert!(turns.active_token().is_none());
+        let guard = scheduled.begin().await;
+        assert!(turns.active_token().is_some());
+        drop(guard);
+        assert!(turns.active_token().is_none());
+    }
 
     #[test]
     fn known_task_ids_are_bounded_and_fifo() {

@@ -38,6 +38,7 @@ struct ContentView: View {
         .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0) }
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
+        .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
         .overlay { SessionSwitcherOverlay(model: model) }
         .overlay { ToastStack(model: model) }
     }

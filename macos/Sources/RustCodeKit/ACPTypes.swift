@@ -19,6 +19,10 @@ public enum ACPMethod {
     public static let sessionSetConfigOption = "session/set_config_option"
     public static let sessionUpdate = "session/update"
     public static let requestPermission = "session/request_permission"
+    public static let remote = "_rustcode/remote"
+    public static let remoteStart = "_rustcode/remote/start"
+    public static let remotePair = "_rustcode/remote/pair"
+    public static let remoteStop = "_rustcode/remote/stop"
 }
 
 public struct AgentInfo: Equatable, Sendable {
@@ -28,6 +32,8 @@ public struct AgentInfo: Equatable, Sendable {
     public var closeSession: Bool
     /// The engine takes image blocks in `session/prompt`.
     public var promptImages: Bool
+    /// The engine implements the `_rustcode/remote*` sharing bridge.
+    public var remote: Bool
 
     public init(initializeResult result: JSONValue) throws {
         guard let version = result["protocolVersion"]?.intValue else {
@@ -42,6 +48,7 @@ public struct AgentInfo: Equatable, Sendable {
         listSessions = capabilities?["sessionCapabilities"]?["list"] != nil
         closeSession = capabilities?["sessionCapabilities"]?["close"] != nil
         promptImages = capabilities?["promptCapabilities"]?["image"]?.boolValue ?? false
+        remote = capabilities?["_meta"]?["rustcode"]?["remote"]?.intValue != nil
     }
 }
 
@@ -145,6 +152,27 @@ public enum ACPRequests {
     /// ACP requires every pending permission request to be answered with
     /// `cancelled` when the client cancels the turn.
     public static let permissionCancelled: JSONValue = ["outcome": ["outcome": "cancelled"]]
+
+    /// The current share and pairing offer for a chat.
+    public static func remoteStatus(sessionId: String) -> JSONValue {
+        ["sessionId": .string(sessionId)]
+    }
+
+    /// Share a chat and, when asked, issue a pairing offer as soon as the
+    /// gateway is connected.
+    public static func remoteStart(sessionId: String, pair: Bool = true) -> JSONValue {
+        ["sessionId": .string(sessionId), "pair": .bool(pair)]
+    }
+
+    /// Replace the current pairing offer with a fresh one.
+    public static func remotePair(sessionId: String) -> JSONValue {
+        ["sessionId": .string(sessionId)]
+    }
+
+    /// Stop sharing and switch remote access off for this Mac.
+    public static func remoteStop(sessionId: String) -> JSONValue {
+        ["sessionId": .string(sessionId)]
+    }
 }
 
 public struct SessionSummary: Identifiable, Equatable, Codable, Sendable {
@@ -447,6 +475,8 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
     public enum Action: String, Sendable {
         case execute, newSession = "new_session", modelPicker = "model_picker"
         case sessionPicker = "session_picker", copyResponse = "copy_response"
+        /// Opens the engine's remote pairing panel.
+        case remote
         /// Opens the workspace terminal. The app's own; the engine never
         /// advertises or sees it.
         case terminal
@@ -496,6 +526,11 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
     /// Commands the app adds to the engine's, answered without the engine.
     public static let appCommands = [
         SlashCommand(name: "/terminal", description: "Open a terminal in this project (⇧⌘T)", action: .terminal),
+        // Also advertised by the engine, but available before the first
+        // session exists so `/remote` opens the panel instead of being sent
+        // as a prompt.
+        SlashCommand(name: "/remote", description: "Share this chat with a phone or another device",
+                     action: .remote),
     ]
 
     /// The engine's commands plus the app's; an engine command of the same

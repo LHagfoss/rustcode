@@ -14,6 +14,7 @@ final class SlashDispatchTests: XCTestCase {
                 ["name": "compact", "description": "", "_meta": ["rustcode": ["action": "execute"]]],
                 ["name": "cancel", "description": "", "_meta": ["rustcode": ["action": "execute"]]],
                 ["name": "new", "description": "", "_meta": ["rustcode": ["action": "new_session"]]],
+                ["name": "remote", "description": "", "_meta": ["rustcode": ["action": "remote"]]],
                 // An app action never counts as a report, whatever it says.
                 ["name": "model", "description": "", "_meta": ["rustcode": ["action": "model_picker", "report": true]]],
             ],
@@ -37,6 +38,7 @@ final class SlashDispatchTests: XCTestCase {
     func testAppActionsAndCancelRunAtOnce() {
         XCTAssertEqual(dispatch("/new"), "app /new")
         XCTAssertEqual(dispatch("/model gpt"), "app /model")
+        XCTAssertEqual(dispatch("/remote"), "app /remote")
         XCTAssertEqual(dispatch("/terminal"), "app /terminal")
         XCTAssertEqual(dispatch(" /CANCEL "), "cancel")
     }

@@ -605,12 +605,19 @@ private struct FileChangeView: View {
             }
             HStack(alignment: .top, spacing: 6) {
                 Text(gutter(rows)).fixedSize()
-                HorizontalOverflow {
+                // A diff line can be longer than the chat. A plain ScrollView
+                // keeps the card at the chat's width and lets the line scroll
+                // under the pointer; ViewThatFits could pick the fixed-size
+                // text here and let the card clip it instead.
+                ScrollView(.horizontal) {
                     Text(code(rows))
                         .textSelection(.enabled)
-                        .fixedSize()
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.trailing, 10)
                 }
+                .scrollIndicators(.visible)
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.leading, 6)
         }
