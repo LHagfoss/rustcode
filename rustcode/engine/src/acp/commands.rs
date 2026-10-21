@@ -64,6 +64,11 @@ fn catalog() -> Vec<RemoteCommandInfo> {
     crate::remote::ops::command_catalog()
         .into_iter()
         .map(|mut command| {
+            if command.name == "/remote" {
+                command.action = "remote".into();
+                command.description = "Share this chat with a phone or another device".into();
+                command.insertion = "/remote".into();
+            }
             if let Some((_, arguments)) =
                 ACP_COMMANDS.iter().find(|(name, _)| *name == command.name)
             {
@@ -432,6 +437,32 @@ mod tests {
         for name in ["delete_chat", "continue", "theme"] {
             assert!(find(name).is_none(), "{name} stays terminal-only");
         }
+    }
+
+    #[test]
+    fn remote_is_advertised_as_an_app_action_not_a_prompt() {
+        let SessionUpdate::AvailableCommandsUpdate(update) = available_commands_update() else {
+            panic!("expected an available_commands_update");
+        };
+        let remote = update
+            .available_commands
+            .iter()
+            .find(|command| command.name == "remote")
+            .expect("remote is advertised");
+        assert_eq!(
+            remote.meta.as_ref().unwrap()["rustcode"]["action"],
+            "remote"
+        );
+        assert!(remote.input.is_none());
+
+        let mut state = crate::app::AppState::new();
+        assert_eq!(
+            classify(&mut state, "/remote"),
+            Some(AcpCommand::Reply(
+                "`/remote` is an app action; use the app's control for it.".into()
+            ))
+        );
+        assert!(state.history.is_empty());
     }
 
     #[test]

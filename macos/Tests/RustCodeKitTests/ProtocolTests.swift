@@ -139,15 +139,20 @@ final class ProtocolTests: XCTestCase {
     func testTerminalIsAnAppCommandListedWithTheEngines() {
         let engine = [SlashCommand(name: "/status", description: "Session status")]
         let listed = SlashCommand.withAppCommands(engine)
-        XCTAssertEqual(listed.map(\.name), ["/status", "/terminal"])
+        XCTAssertEqual(listed.map(\.name), ["/status", "/terminal", "/remote"])
         XCTAssertEqual(SlashCommand.suggestions(for: "/term", in: listed).map(\.action), [.terminal])
-        XCTAssertEqual(SlashCommand.withAppCommands([]).map(\.name), ["/terminal"], "listed with no engine")
-        // An engine command of the same name is not shadowed.
+        XCTAssertEqual(SlashCommand.withAppCommands([]).map(\.name), ["/terminal", "/remote"], "listed with no engine")
+        // An engine command of the same name is not shadowed; the other app
+        // commands are still listed beside it.
         let clash = [SlashCommand(name: "/terminal", description: "engine")]
-        XCTAssertEqual(SlashCommand.withAppCommands(clash), clash)
+        let withClash = SlashCommand.withAppCommands(clash)
+        XCTAssertEqual(withClash.map(\.name), ["/terminal", "/remote"], "not shadowed")
+        XCTAssertEqual(withClash[0].description, "engine")
 
         XCTAssertEqual(SlashCommand.appCommand(chip: nil, draft: " /terminal ")?.action, .terminal)
         XCTAssertEqual(SlashCommand.appCommand(chip: listed[1], draft: "")?.action, .terminal)
+        XCTAssertEqual(SlashCommand.appCommand(chip: listed[2], draft: "")?.action, .remote)
+        XCTAssertEqual(SlashCommand.appCommand(chip: nil, draft: "/remote")?.action, .remote)
         XCTAssertNil(SlashCommand.appCommand(chip: engine[0], draft: ""))
         XCTAssertNil(SlashCommand.appCommand(chip: nil, draft: "open /terminal"))
     }

@@ -205,6 +205,14 @@ final class DesktopModel: ObservableObject {
         retry: { [weak self] text in Task { await self?.retry(text) } })
     @Published var showsSidebar = true
     @Published var showsSettings = false
+    /// `/remote`: the pairing panel over the chat.
+    @Published var showsRemote = false
+    /// The latest share and pairing state, polled while the panel is open.
+    @Published private(set) var remoteStatus: RemoteShareStatus?
+    /// A start, pair, or stop request is in flight.
+    @Published private(set) var remoteBusy = false
+    private var remotePollTask: Task<Void, Never>?
+    private var remoteSessionID: String?
     /// ⌘K: the chat switcher over the window.
     @Published var showsSwitcher = false
     /// The switcher has text typed, so it searches the whole history.
@@ -319,6 +327,123 @@ final class DesktopModel: ObservableObject {
             presence = PresenceStatus(result: result)
         } catch { self.error = "Could not change Discord Rich Presence: \(error)" }
     }
+
+    // MARK: - Remote sharing
+
+    /// Open the `/remote` panel for the shown chat and ask the engine to share
+    /// it with a fresh pairing offer.
+    func openRemote() async {
+        guard let session = selectedSession, let connection = engine?.connection else {
+            remotePollTask?.cancel()
+            remotePollTask = nil
+            remoteSessionID = nil
+            remoteStatus = RemoteShareStatus(error: "Open a chat before sharing it.")
+            showsRemote = true
+            return
+        }
+        showsRemote = true
+        await startRemote(session: session, connection: connection)
+    }
+
+    /// Turn remote access back on from the panel's off state.
+    func turnOnRemote() async {
+        guard let session = remoteSessionID ?? selectedSession, let connection = engine?.connection else {
+            remoteStatus = RemoteShareStatus(error: "Open a chat before sharing it.")
+            return
+        }
+        remoteSessionID = session
+        await startRemote(session: session, connection: connection)
+    }
+
+    private func startRemote(session: String, connection: ACPConnection) async {
+        remoteSessionID = session
+        remoteBusy = true
+        defer { remoteBusy = false }
+        do {
+            let result = try await connection.request(
+                ACPMethod.remoteStart,
+                params: ACPRequests.remoteStart(sessionId: session),
+                timeout: .seconds(30))
+            guard engine?.connection === connection else { return }
+            remoteStatus = RemoteShareStatus(result: result)
+            startRemotePolling(session: session, connection: connection)
+        } catch {
+            // Do not poll an engine that did not start sharing: its idle
+            // status would replace this error with a plain off state.
+            remotePollTask?.cancel()
+            remotePollTask = nil
+            remoteStatus = RemoteShareStatus(error: String(describing: error))
+        }
+    }
+
+    /// Replace the pairing code without closing the panel.
+    func refreshRemoteCode() async {
+        guard let session = remoteSessionID, let connection = engine?.connection else { return }
+        remoteBusy = true
+        defer { remoteBusy = false }
+        do {
+            let result = try await connection.request(
+                ACPMethod.remotePair,
+                params: ACPRequests.remotePair(sessionId: session),
+                timeout: .seconds(30))
+            guard engine?.connection === connection else { return }
+            remoteStatus = RemoteShareStatus(result: result)
+        } catch {
+            remoteStatus = RemoteShareStatus(error: String(describing: error))
+        }
+    }
+
+    /// Switch remote access off for this Mac. The panel stays open so it can
+    /// be turned on again without retyping `/remote`.
+    func turnOffRemote() async {
+        guard let session = remoteSessionID, let connection = engine?.connection else { return }
+        remoteBusy = true
+        defer { remoteBusy = false }
+        do {
+            let result = try await connection.request(
+                ACPMethod.remoteStop,
+                params: ACPRequests.remoteStop(sessionId: session),
+                timeout: .seconds(30))
+            guard engine?.connection === connection else { return }
+            remoteStatus = RemoteShareStatus(result: result)
+            remotePollTask?.cancel()
+            remotePollTask = nil
+        } catch {
+            remoteStatus = RemoteShareStatus(error: String(describing: error))
+        }
+    }
+
+    func closeRemote() {
+        showsRemote = false
+        remotePollTask?.cancel()
+        remotePollTask = nil
+        remoteSessionID = nil
+    }
+
+    /// A click outside the panel dismisses it without calling `closeRemote`.
+    /// The binding is already false by then, so cancel the poll here.
+    func remotePanelClosed() {
+        remotePollTask?.cancel()
+        remotePollTask = nil
+        remoteSessionID = nil
+    }
+
+    private func startRemotePolling(session: String, connection: ACPConnection) {
+        remotePollTask?.cancel()
+        remotePollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, self.showsRemote, self.remoteSessionID == session,
+                      self.engine?.connection === connection else { return }
+                guard let result = try? await connection.request(
+                    ACPMethod.remote,
+                    params: ACPRequests.remoteStatus(sessionId: session),
+                    timeout: .seconds(10)) else { continue }
+                self.remoteStatus = RemoteShareStatus(result: result)
+            }
+        }
+    }
+
     private var inboundTask: Task<Void, Never>?
     /// A shortcut change in Settings redraws the window's menus and tooltips.
     private var keybindingChanges: AnyCancellable?
@@ -601,6 +726,7 @@ final class DesktopModel: ObservableObject {
                 confirm("Copied the last reply", systemImage: "doc.on.doc.fill")
             }
         case .terminal: terminal.open()
+        case .remote: await openRemote()
         case .execute: break
         }
     }
@@ -1468,6 +1594,10 @@ final class DesktopModel: ObservableObject {
         openSessions = [:]
         replays = [:]
         loadingSessions = []
+        remotePollTask?.cancel()
+        remotePollTask = nil
+        remoteSessionID = nil
+        showsRemote = false
         inboundTask?.cancel()
         inboundTask = nil
         if let engine { DispatchQueue.global().async { engine.stop() } }

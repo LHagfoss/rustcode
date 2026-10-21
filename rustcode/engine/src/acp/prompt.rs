@@ -277,211 +277,244 @@ pub(crate) async fn run_prompt(
     connection: ConnectionTo<Client>,
     client: Arc<reqwest::Client>,
     auto_approve: bool,
+    remote: Option<super::remote::RemoteManager>,
 ) -> Result<StopReason, agent_client_protocol::Error> {
     let turn = scheduled_turn.begin().await;
-    crate::tools::set_active_session_id(Some(session_id.clone()));
-    // Unscoped debug lines follow the session whose turn is running, not the
-    // last session this process created.
-    crate::config::set_active_session_id(&session_id);
-    let (workspace_root, sandbox_mode) = {
+    // ACP turns get the same identity as terminal turns. Remote projection,
+    // cancel, and the live transcript all key off it.
+    let turn_id = {
         let mut state = state.lock().await;
-        state.auto_confirm = auto_approve;
-        (
-            state
-                .workspace_root
-                .clone()
-                .or_else(|| std::env::current_dir().ok()),
-            state.effective_sandbox_mode(),
-        )
+        state.status = crate::app::AppStatus::Streaming;
+        state.current_turn_started_at = Some(std::time::Instant::now());
+        state.current_turn_token_usage = None;
+        state.current_turn_token_usage_is_estimated = false;
+        state.begin_turn_identity()
     };
-    crate::tools::set_active_workspace_context(
-        workspace_root,
-        Some(cwd.clone()),
-        false,
-        Some(sandbox_mode),
-    );
-    let stale_events = drain_task_events(&task_events, &terminal_backlog);
-    for event in stale_events {
-        if event.is_terminal() {
-            known_task_ids
-                .lock()
-                .expect("ACP known task IDs mutex poisoned")
-                .remove(event.task_id().as_str());
+    let result = async {
+        crate::tools::set_active_session_id(Some(session_id.clone()));
+        // Unscoped debug lines follow the session whose turn is running, not the
+        // last session this process created.
+        crate::config::set_active_session_id(&session_id);
+        let (workspace_root, sandbox_mode) = {
+            let mut state = state.lock().await;
+            state.auto_confirm = auto_approve;
+            (
+                state
+                    .workspace_root
+                    .clone()
+                    .or_else(|| std::env::current_dir().ok()),
+                state.effective_sandbox_mode(),
+            )
+        };
+        crate::tools::set_active_workspace_context(
+            workspace_root,
+            Some(cwd.clone()),
+            false,
+            Some(sandbox_mode),
+        );
+        let stale_events = drain_task_events(&task_events, &terminal_backlog);
+        for event in stale_events {
+            if event.is_terminal() {
+                known_task_ids
+                    .lock()
+                    .expect("ACP known task IDs mutex poisoned")
+                    .remove(event.task_id().as_str());
+            }
         }
-    }
-    if terminal_overflow.load(Ordering::Acquire) {
-        return Err(agent_client_protocol::Error::internal_error()
-            .data("ACP background task completion backlog overflowed; session must be reopened"));
-    }
-    // Slash commands answer in the transcript and never reach the model or
-    // provider history, as for the remote client. `/goal` is the exception:
-    // it becomes the turn's prompt.
-    let (command, context_meta) = {
-        let mut state = state.lock().await;
-        let command = super::commands::classify(&mut state, &text);
-        let context_meta = (command.is_some() && super::commands::is_context_report(&text))
-            .then(|| super::usage::context_reply_meta(&state));
-        (command, context_meta)
-    };
-    let agent_text = |text: String| {
-        SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
-            ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text)),
-        ))
-    };
-    let text = match command {
-        None => text,
-        Some(super::commands::AcpCommand::Goal(prompt)) => {
-            // The command card says what started; the goal prompt is the
-            // user turn the model answers, as a session replay shows it.
-            send_updates(
-                &connection,
-                &session_id,
-                vec![
-                    agent_text(
-                        "**Goal**\n\nContinuous mode is on until the goal is complete.".into(),
-                    ),
-                    SessionUpdate::UserMessageChunk(
-                        agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(
-                            agent_client_protocol::schema::v1::TextContent::new(prompt.clone()),
-                        )),
-                    ),
-                ],
-            )?;
-            prompt
+        if terminal_overflow.load(Ordering::Acquire) {
+            return Err(agent_client_protocol::Error::internal_error().data(
+                "ACP background task completion backlog overflowed; session must be reopened",
+            ));
         }
-        Some(command) => {
-            let reply =
-                super::commands::run(command, &state, &client, turn.cancel_token(), |progress| {
-                    let _ = send_updates(&connection, &session_id, vec![agent_text(progress)]);
-                })
+        // Slash commands answer in the transcript and never reach the model or
+        // provider history, as for the remote client. `/goal` is the exception:
+        // it becomes the turn's prompt.
+        let (command, context_meta) = {
+            let mut state = state.lock().await;
+            let command = super::commands::classify(&mut state, &text);
+            let context_meta = (command.is_some() && super::commands::is_context_report(&text))
+                .then(|| super::usage::context_reply_meta(&state));
+            (command, context_meta)
+        };
+        let agent_text = |text: String| {
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
+                ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text)),
+            ))
+        };
+        let text = match command {
+            None => text,
+            Some(super::commands::AcpCommand::Goal(prompt)) => {
+                // The command card says what started; the goal prompt is the
+                // user turn the model answers, as a session replay shows it.
+                send_updates(
+                    &connection,
+                    &session_id,
+                    vec![
+                        agent_text(
+                            "**Goal**\n\nContinuous mode is on until the goal is complete.".into(),
+                        ),
+                        SessionUpdate::UserMessageChunk(
+                            agent_client_protocol::schema::v1::ContentChunk::new(
+                                ContentBlock::Text(
+                                    agent_client_protocol::schema::v1::TextContent::new(
+                                        prompt.clone(),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                )?;
+                prompt
+            }
+            Some(command) => {
+                let reply = super::commands::run(
+                    command,
+                    &state,
+                    &client,
+                    turn.cancel_token(),
+                    |progress| {
+                        let _ = send_updates(&connection, &session_id, vec![agent_text(progress)]);
+                    },
+                )
                 .await;
-            // A command such as `/compact` can change the context, so the
-            // usage follows its reply.
-            let usage = super::usage::usage_update(&*state.lock().await);
-            let reply = match (agent_text(reply), context_meta) {
-                (SessionUpdate::AgentMessageChunk(chunk), Some(meta)) => {
-                    SessionUpdate::AgentMessageChunk(chunk.meta(meta))
-                }
-                (reply, _) => reply,
-            };
-            send_updates(&connection, &session_id, vec![reply, usage])?;
-            return Ok(if turn.cancel_token().is_cancelled() {
-                StopReason::Cancelled
-            } else {
-                StopReason::EndTurn
-            });
-        }
-    };
-    state
-        .lock()
-        .await
-        .history
-        .push(crate::app::ChatMessage::new("user", text.clone()));
-
-    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
-    let policy = Arc::new(AcpPolicy {
-        connection: connection.clone(),
-        session_id: session_id.clone(),
-        auto_approve,
-    });
-    let task_manager = crate::tools::background_task_manager();
-    let mut turn_tasks = BackgroundTurnTasks::new(task_manager, &session_id, &known_task_ids);
-    let (events, mut receiver) = crate::network::AgentUiEventSender::channel();
-    let mut event_stream = AcpEventStream::new().with_cwd(cwd.clone());
-    let mut context = run_prompt_turn(
-        &client,
-        &state,
-        turn.cancel_token(),
-        &policy,
-        &stream_buffer,
-        text,
-        events.clone(),
-        &mut receiver,
-        &connection,
-        &session_id,
-        &mut event_stream,
-    )
-    .await?;
-
-    while matches!(
-        context.lifecycle.stop_reason,
-        Some(crate::network::lifecycle::StopReason::BackgroundPending)
-    ) {
-        if turn.cancel_token().is_cancelled() {
-            return Ok(StopReason::Cancelled);
-        }
-        turn_tasks.observe_live_tasks(task_manager, &session_id);
-        turn_tasks.observe_retained_completions(task_manager.completions(&session_id));
-        if turn_tasks.pending.is_empty() {
-            // The detached task requested history/client updates only; do not
-            // wait for its terminal event or schedule a model continuation.
-            context.lifecycle.task_completed = true;
-            context.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::Completed);
-            break;
-        }
-        loop {
-            if turn.cancel_token().is_cancelled() {
-                return Ok(StopReason::Cancelled);
-            }
-            if terminal_overflow.load(Ordering::Acquire) {
-                return Err(agent_client_protocol::Error::internal_error().data(
-                    "ACP background task completion backlog overflowed; session must be reopened",
-                ));
-            }
-            let event = loop {
-                match try_receive_task_event(&task_events, &terminal_backlog) {
-                    Ok(event) => break event,
-                    Err(TryRecvError::Empty) => {
-                        if let Some(event) = try_receive_terminal_backlog(&terminal_backlog) {
-                            break event;
-                        }
-                        tokio::select! {
-                            _ = turn.cancel_token().cancelled() => {
-                                return Ok(StopReason::Cancelled);
-                            }
-                            _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
-                        }
+                // A command such as `/compact` can change the context, so the
+                // usage follows its reply.
+                let usage = super::usage::usage_update(&*state.lock().await);
+                let reply = match (agent_text(reply), context_meta) {
+                    (SessionUpdate::AgentMessageChunk(chunk), Some(meta)) => {
+                        SessionUpdate::AgentMessageChunk(chunk.meta(meta))
                     }
-                    Err(TryRecvError::Disconnected) => {
-                        return Err(agent_client_protocol::Error::internal_error()
-                            .data("ACP background task subscription closed"));
-                    }
-                }
-            };
-            if turn.cancel_token().is_cancelled() {
-                return Ok(StopReason::Cancelled);
+                    (reply, _) => reply,
+                };
+                send_updates(&connection, &session_id, vec![reply, usage])?;
+                return Ok(if turn.cancel_token().is_cancelled() {
+                    StopReason::Cancelled
+                } else {
+                    StopReason::EndTurn
+                });
             }
-            turn_tasks.observe_event(&event, &known_task_ids);
-            turn_tasks.observe_live_tasks(task_manager, &session_id);
-            if turn_tasks.complete() {
-                break;
-            }
-        }
-        context = run_prompt_continuation(
+        };
+        state
+            .lock()
+            .await
+            .history
+            .push(crate::app::ChatMessage::new("user", text.clone()));
+
+        let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
+        let policy = Arc::new(AcpPolicy {
+            connection: connection.clone(),
+            session_id: session_id.clone(),
+            auto_approve,
+        });
+        let task_manager = crate::tools::background_task_manager();
+        let mut turn_tasks = BackgroundTurnTasks::new(task_manager, &session_id, &known_task_ids);
+        let (events, mut receiver) = crate::network::AgentUiEventSender::channel();
+        let mut event_stream = AcpEventStream::new().with_cwd(cwd.clone());
+        let mut context = run_prompt_turn(
             &client,
             &state,
             turn.cancel_token(),
             &policy,
             &stream_buffer,
-            String::new(),
+            text,
             events.clone(),
             &mut receiver,
             &connection,
             &session_id,
             &mut event_stream,
-            context,
+            remote.as_ref(),
         )
         .await?;
+
+        while matches!(
+            context.lifecycle.stop_reason,
+            Some(crate::network::lifecycle::StopReason::BackgroundPending)
+        ) {
+            if turn.cancel_token().is_cancelled() {
+                return Ok(StopReason::Cancelled);
+            }
+            turn_tasks.observe_live_tasks(task_manager, &session_id);
+            turn_tasks.observe_retained_completions(task_manager.completions(&session_id));
+            if turn_tasks.pending.is_empty() {
+                // The detached task requested history/client updates only; do not
+                // wait for its terminal event or schedule a model continuation.
+                context.lifecycle.task_completed = true;
+                context.lifecycle.stop_reason =
+                    Some(crate::network::lifecycle::StopReason::Completed);
+                break;
+            }
+            loop {
+                if turn.cancel_token().is_cancelled() {
+                    return Ok(StopReason::Cancelled);
+                }
+                if terminal_overflow.load(Ordering::Acquire) {
+                    return Err(agent_client_protocol::Error::internal_error().data(
+                    "ACP background task completion backlog overflowed; session must be reopened",
+                ));
+                }
+                let event = loop {
+                    match try_receive_task_event(&task_events, &terminal_backlog) {
+                        Ok(event) => break event,
+                        Err(TryRecvError::Empty) => {
+                            if let Some(event) = try_receive_terminal_backlog(&terminal_backlog) {
+                                break event;
+                            }
+                            tokio::select! {
+                                _ = turn.cancel_token().cancelled() => {
+                                    return Ok(StopReason::Cancelled);
+                                }
+                                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                            }
+                        }
+                        Err(TryRecvError::Disconnected) => {
+                            return Err(agent_client_protocol::Error::internal_error()
+                                .data("ACP background task subscription closed"));
+                        }
+                    }
+                };
+                if turn.cancel_token().is_cancelled() {
+                    return Ok(StopReason::Cancelled);
+                }
+                turn_tasks.observe_event(&event, &known_task_ids);
+                turn_tasks.observe_live_tasks(task_manager, &session_id);
+                if turn_tasks.complete() {
+                    break;
+                }
+            }
+            context = run_prompt_continuation(
+                &client,
+                &state,
+                turn.cancel_token(),
+                &policy,
+                &stream_buffer,
+                String::new(),
+                events.clone(),
+                &mut receiver,
+                &connection,
+                &session_id,
+                &mut event_stream,
+                context,
+                remote.as_ref(),
+            )
+            .await?;
+        }
+        let harness_reason = context
+            .lifecycle
+            .stop_reason
+            .as_ref()
+            .map(ToString::to_string);
+        Ok(acp_stop_reason(
+            turn.cancel_token().is_cancelled(),
+            harness_reason.as_deref(),
+        ))
     }
-    let harness_reason = context
-        .lifecycle
-        .stop_reason
-        .as_ref()
-        .map(ToString::to_string);
-    Ok(acp_stop_reason(
-        turn.cancel_token().is_cancelled(),
-        harness_reason.as_deref(),
-    ))
+    .await;
+    {
+        let mut state = state.lock().await;
+        state.end_turn_identity(&turn_id);
+        state.enter_idle();
+    }
+    result
 }
 
 fn try_receive_task_event(
@@ -549,6 +582,7 @@ async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
     connection: &ConnectionTo<Client>,
     session_id: &str,
     event_stream: &mut AcpEventStream,
+    remote: Option<&super::remote::RemoteManager>,
 ) -> Result<crate::network::TurnContext, agent_client_protocol::Error> {
     forward_prompt_run(
         crate::network::ui_adapter::run_agent_turn_with_events_for_acp(
@@ -566,6 +600,7 @@ async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
         event_stream,
         state,
         cancel_token,
+        remote,
     )
     .await
 }
@@ -583,6 +618,7 @@ async fn run_prompt_continuation<P: crate::network::policy::TurnPolicy + 'static
     session_id: &str,
     event_stream: &mut AcpEventStream,
     context: crate::network::TurnContext,
+    remote: Option<&super::remote::RemoteManager>,
 ) -> Result<crate::network::TurnContext, agent_client_protocol::Error> {
     forward_prompt_run(
         crate::network::ui_adapter::run_agent_turn_with_events_and_context_for_acp(
@@ -601,6 +637,7 @@ async fn run_prompt_continuation<P: crate::network::policy::TurnPolicy + 'static
         event_stream,
         state,
         cancel_token,
+        remote,
     )
     .await
 }
@@ -613,6 +650,7 @@ async fn forward_prompt_run<F>(
     event_stream: &mut AcpEventStream,
     state: &Arc<Mutex<crate::app::AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
+    remote: Option<&super::remote::RemoteManager>,
 ) -> Result<crate::network::TurnContext, agent_client_protocol::Error>
 where
     F: std::future::Future<Output = crate::network::TurnContext>,
@@ -645,6 +683,9 @@ where
                     ask_pending_questions(connection, session_id, state, cancel_token, &asked)?;
                 }
                 let title_update = title_tracker.observe_event(&event, session_id);
+                if let Some(remote) = remote {
+                    remote.observe(session_id, &event);
+                }
                 send_updates(connection, session_id, event_stream.updates(event))?;
                 if let Some(update) = title_update {
                     send_updates(connection, session_id, vec![update])?;
@@ -660,6 +701,9 @@ where
             ask_pending_questions(connection, session_id, state, cancel_token, &asked)?;
         }
         let title_update = title_tracker.observe_event(&event, session_id);
+        if let Some(remote) = remote {
+            remote.observe(session_id, &event);
+        }
         send_updates(connection, session_id, event_stream.updates(event))?;
         if let Some(update) = title_update {
             send_updates(connection, session_id, vec![update])?;
