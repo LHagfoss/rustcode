@@ -234,7 +234,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .reloadPreview: return "Reload the page in the preview"
         case .toggleTerminal: return "Your own shell, below the chat"
         case .newTerminalTab: return "Open another shell in this project"
-        case .chooseProject: return "Open another folder as the project"
+        case .chooseProject: return "Choose the default project folder for new chats"
         case .settings: return "General, keybinds, skills and MCP"
         }
     }

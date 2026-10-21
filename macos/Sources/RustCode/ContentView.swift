@@ -306,7 +306,7 @@ private struct SessionSidebar: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .help(model.keybindings.help("Choose project folder", .chooseProject))
+                .help(model.keybindings.help("Choose the default project folder for new chats", .chooseProject))
                 ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.showsSettings = true }
             }
             .padding(.horizontal, 8)
@@ -428,6 +428,9 @@ private struct SessionMenu: View {
             }
             Button("Search Chats in \(session.projectName)", systemImage: "line.3.horizontal.decrease") {
                 model.sessionFilter = session.projectName
+            }
+            Button("New Chat in \(session.projectName)", systemImage: "square.and.pencil") {
+                Task { await model.newSession(in: URL(fileURLWithPath: session.cwd, isDirectory: true)) }
             }
         }
         Divider()
@@ -668,11 +671,8 @@ private struct ChatView: View {
 
     private var title: String { model.selectedSession == nil ? "New Chat" : selected?.title ?? "RustCode" }
 
-    /// A chat from another project shows that project, not the open one.
-    private var projectName: String {
-        if let name = selected?.projectName, !name.isEmpty { return name }
-        return model.workspace.lastPathComponent
-    }
+    /// The folder this chat works in: its own, which may not be the default.
+    private var projectName: String { model.chatProject.lastPathComponent }
 
     var body: some View {
         let transcript = chat.transcript
@@ -767,7 +767,10 @@ private struct ChatView: View {
                 if model.isLoadingSelected {
                     ProgressView("Loading chat…").controlSize(.small).foregroundStyle(.secondary)
                 } else if transcript.isEmpty, !model.busy {
-                    EmptyChat(workspace: model.workspace)
+                    EmptyChat(folder: model.chatProject, isDefault: model.draftProject == nil,
+                              isDraft: model.selectedSession == nil) {
+                        Task { await model.chooseChatProject() }
+                    }
                 }
             }
             .followsLatest($follow, scroll: scroll) { scrollToEnd(proxy) }
@@ -826,7 +829,7 @@ private struct ChatView: View {
             }
         }
         .environment(\.findQuery, model.showsFind ? find.appliedQuery : "")
-        .environment(\.projectRoot, selected.map(\.cwd).flatMap { $0.isEmpty ? nil : $0 } ?? model.workspace.path)
+        .environment(\.projectRoot, model.chatProject.path)
         .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
@@ -906,7 +909,7 @@ private struct ChatView: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(title).font(.headline).lineLimit(1)
-                Text(projectName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                ChatProjectMenu(model: model, name: projectName)
             }
             Spacer()
             if let usage = chat.transcript.usage {
@@ -1317,21 +1320,94 @@ private struct FindBar: View {
 }
 
 private struct EmptyChat: View {
-    let workspace: URL
+    let folder: URL
+    /// The draft starts in the default project, not a folder of its own.
+    let isDefault: Bool
+    /// A new chat, whose folder can still be changed.
+    let isDraft: Bool
+    let choose: () -> Void
 
     var body: some View {
         VStack(spacing: 14) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 88, height: 88)
-            Text("What should we build?")
-                .font(.title2.weight(.semibold))
-            Label(workspace.path.abbreviatingHome, systemImage: "folder")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            VStack(spacing: 14) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 88, height: 88)
+                Text("What should we build?")
+                    .font(.title2.weight(.semibold))
+            }
+            .allowsHitTesting(false)
+            if isDraft {
+                Button(action: choose) {
+                    HStack(spacing: 6) {
+                        Label(folder.path.abbreviatingHome, systemImage: isDefault ? "folder" : "folder.fill")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(isDefault ? "Change" : "This chat only")
+                            .foregroundStyle(Color.brand)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: 560)
+                .help("Choose the folder this chat works in. New chats still start in the default project.")
+            } else {
+                Label(folder.path.abbreviatingHome, systemImage: "folder")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .allowsHitTesting(false)
+            }
         }
         .padding(.bottom, 80)
-        .allowsHitTesting(false)
+    }
+}
+
+/// The project folder beside the chat's title: a new chat's can be changed
+/// for that chat only; an open chat stays in its own and can start another
+/// chat there or elsewhere.
+private struct ChatProjectMenu: View {
+    @ObservedObject var model: DesktopModel
+    let name: String
+
+    var body: some View {
+        Menu {
+            let folder = model.chatProject
+            if model.selectedSession == nil {
+                Button("Choose Folder for This Chat…", systemImage: "folder.badge.gearshape") {
+                    Task { await model.chooseChatProject() }
+                }
+                if model.draftProject != nil {
+                    Button("Use Default Project (\(model.workspace.lastPathComponent))", systemImage: "arrow.uturn.backward") {
+                        model.draftProject = nil
+                    }
+                }
+            } else {
+                Button("New Chat in \(name)", systemImage: "square.and.pencil") {
+                    Task { await model.newSession(in: folder) }
+                }
+                Button("New Chat in Another Folder…", systemImage: "folder.badge.plus") {
+                    Task { await model.chooseChatProject() }
+                }
+            }
+            Divider()
+            Button("Open in Finder", systemImage: "folder") { NSWorkspace.shared.open(folder) }
+        } label: {
+            HStack(spacing: 3) {
+                Text(name)
+                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Project folder: \(model.chatProject.path.abbreviatingHome)")
+        .accessibilityLabel("Project folder \(name)")
     }
 }
 
@@ -1746,7 +1822,8 @@ struct AddPanel: View {
             ("Attach Files or Folders…", "paperclip", { model.chooseAttachments() }),
             ("Attach Image…", "photo", { model.chooseImages() }),
             ("New Chat", "square.and.pencil", { Task { await model.newSession() } }),
-            ("Choose Project…", "folder", { model.chooseWorkspace() }),
+            ("New Chat in Folder…", "folder.badge.plus", { Task { await model.chooseChatProject() } }),
+            ("Choose Default Project…", "folder", { model.chooseWorkspace() }),
         ]
     }
 
