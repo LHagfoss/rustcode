@@ -1,3 +1,14 @@
+## [v0.87.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.87.0) - 2026-10-21
+
+### Features
+- **macOS:** Settings sets a default project folder for new chats, and a single chat can start in another folder from the title menu, the + menu, File > New Chat in Folder… or a sidebar chat, without changing the default (#2220).
+- **macOS:** in-chat visualizations are discoverable: `/visualize`, Help > Charts, Tables & Trees in Chat…, the composer's + menu and an empty-chat link open a guide with insertable example requests. New `line_chart`, `stat_list` and `checklist` widgets, each with limits, VoiceOver summaries and a source fallback; every widget gains Copy as Text (#2222).
+- **macOS:** keybind settings get Liquid Glass styling, Esc to cancel a recording, per-row reset, Reset All and Undo. ⌘W no longer closes the window; it is a configurable Close Terminal shortcut. The ⌘K switcher focuses its search at once, Tab toggles All/Project, and rows and corners are tidied (#2225).
+- **macOS:** the end of the chat stays visible while streaming wide code blocks or very long replies and when sending a follow-up, instead of going blank (#2227).
+- **macOS:** a prompt ending in a dead-key backtick is sent whole and clears the composer; toasts are centered over the chat; ⌘P pins and unpins the open chat at once without moving the draft (#2226).
+- **TUI:** Markdown in thinking previews renders instead of showing literal markers; `/effort`, `/thinking` and the effort picker update the active model profile when several profiles share a server URL, so the shown effort matches the one used (#2221).
+- Engine logs from concurrent turns are written to their own session's `debug.log` instead of whichever session started last (#2223).
+- Docs: design plan for cross-session agent orchestration (#2224).
 ## [v0.86.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.86.0) - 2026-10-21
 
 ### Features
