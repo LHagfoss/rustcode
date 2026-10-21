@@ -55,8 +55,11 @@ ASCII art, or wide Markdown tables:
   and optional `unit`. At narrow widths each label sits above its bar.
 - **`table`** holds ranked or tabular results with validated cells. Fields:
   `columns: [string]` and `rows: [[cell]]`, where a cell is a string, number,
-  boolean, or null. Optional `sort_by: {"column": index, "descending": bool}`
-  sets the initial order, sorting numbers numerically and text lexically. Columns whose cells are all
+  boolean, or null. Optional `sort_by: {"column": index or column name, "descending": bool}`
+  sets the initial order, sorting numbers numerically and text lexically.
+  `column` is an index, a numeric string, or a column name (trimmed,
+  case-insensitive) among the shown columns; an unknown or hidden column is
+  ignored and the table keeps the payload's order. Columns whose cells are all
   numbers are right-aligned. Cell text is escaped and laid out by the
   transcript's existing Markdown table renderer, so the table gets the same
   column fitting, narrow key/value fallback, and theme styles as a
@@ -175,8 +178,8 @@ about 60 rows tall. The 16 KiB cap keeps parsing cheap.
 ## Fallback
 
 The block is rendered as its JSON source, with the normal code-block styling
-and one muted note line (`◇ Visualization not rendered (reason); showing
-source`), when:
+and one muted note line (`◇ Couldn't draw this visualization (reason) — showing
+its source.`), when:
 
 - the JSON is malformed or is not an object,
 - `version` is missing or not `1`,
