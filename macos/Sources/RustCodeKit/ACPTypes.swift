@@ -83,7 +83,7 @@ public enum ACPRequests {
                 // Presence asks the engine for Discord Rich Presence, which
                 // it gives only clients that ask (docs/discord-rich-presence.md).
                 "_meta": ["rustcode": [
-                    "visualizations": .number(Double(Visualization.version)),
+                    "visualizations": .number(Double(Visualization.capabilityLevel)),
                     "preview": .number(Double(rustcodePreviewCapabilityVersion)),
                     "presence": .number(Double(rustcodePresenceCapabilityVersion)),
                 ]],
@@ -480,6 +480,9 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
         /// Opens the workspace terminal. The app's own; the engine never
         /// advertises or sees it.
         case terminal
+        /// Opens the guide to in-chat charts, tables and trees. The app's
+        /// own, like `terminal`.
+        case visualizations
     }
 
     /// With the leading slash, as typed.
@@ -531,6 +534,8 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
         // as a prompt.
         SlashCommand(name: "/remote", description: "Share this chat with a phone or another device",
                      action: .remote),
+        SlashCommand(name: "/visualize", description: "Charts, tables and trees you can ask for, with examples",
+                     action: .visualizations),
     ]
 
     /// The engine's commands plus the app's; an engine command of the same

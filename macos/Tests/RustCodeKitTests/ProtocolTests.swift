@@ -139,14 +139,15 @@ final class ProtocolTests: XCTestCase {
     func testTerminalIsAnAppCommandListedWithTheEngines() {
         let engine = [SlashCommand(name: "/status", description: "Session status")]
         let listed = SlashCommand.withAppCommands(engine)
-        XCTAssertEqual(listed.map(\.name), ["/status", "/terminal", "/remote"])
+        XCTAssertEqual(listed.map(\.name), ["/status", "/terminal", "/remote", "/visualize"])
         XCTAssertEqual(SlashCommand.suggestions(for: "/term", in: listed).map(\.action), [.terminal])
-        XCTAssertEqual(SlashCommand.withAppCommands([]).map(\.name), ["/terminal", "/remote"], "listed with no engine")
+        XCTAssertEqual(SlashCommand.withAppCommands([]).map(\.name), ["/terminal", "/remote", "/visualize"],
+                       "listed with no engine")
         // An engine command of the same name is not shadowed; the other app
         // commands are still listed beside it.
         let clash = [SlashCommand(name: "/terminal", description: "engine")]
         let withClash = SlashCommand.withAppCommands(clash)
-        XCTAssertEqual(withClash.map(\.name), ["/terminal", "/remote"], "not shadowed")
+        XCTAssertEqual(withClash.map(\.name), ["/terminal", "/remote", "/visualize"], "not shadowed")
         XCTAssertEqual(withClash[0].description, "engine")
 
         XCTAssertEqual(SlashCommand.appCommand(chip: nil, draft: " /terminal ")?.action, .terminal)
@@ -155,6 +156,14 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(SlashCommand.appCommand(chip: nil, draft: "/remote")?.action, .remote)
         XCTAssertNil(SlashCommand.appCommand(chip: engine[0], draft: ""))
         XCTAssertNil(SlashCommand.appCommand(chip: nil, draft: "open /terminal"))
+    }
+
+    func testVisualizeOpensTheGuideAndIsSuggestedByChartWords() {
+        let listed = SlashCommand.withAppCommands([])
+        XCTAssertEqual(SlashCommand.appCommand(chip: nil, draft: "/visualize")?.action, .visualizations)
+        XCTAssertEqual(SlashCommand.suggestions(for: "/vis", in: listed).map(\.name), ["/visualize"])
+        XCTAssertEqual(SlashCommand.suggestions(for: "/viz", in: listed).map(\.name), [])
+        XCTAssertEqual(SlashCommand.dispatch("/visualize", in: listed, plain: true), .app(listed[2]))
     }
 
     func testConfigOptionsCarryModelAndEffort() {

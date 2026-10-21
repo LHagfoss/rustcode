@@ -76,9 +76,11 @@ struct RustCodeApp: App {
                     .keyboardShortcut(model.keybindings.shortcut(for: .findPrevious))
             }
             CommandGroup(replacing: .printItem) {
+                // Never disabled: the menu item kept the state it had at
+                // launch, with no chat open, so ⌘P stayed off after a chat
+                // was opened. The action reads the chat shown when it runs.
                 Button(model.isSelectedPinned ? "Unpin Chat" : "Pin Chat") { model.togglePinSelected() }
                     .keyboardShortcut(model.keybindings.shortcut(for: .pinChat))
-                    .disabled(model.selectedSession == nil)
             }
             CommandGroup(before: .sidebar) {
                 Button(model.showsSidebar ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
@@ -89,6 +91,9 @@ struct RustCodeApp: App {
                     .keyboardShortcut(model.keybindings.shortcut(for: .reloadPreview))
                     .disabled(!model.showsPreview)
                 TerminalMenuItems(terminal: model.terminal, keybindings: model.keybindings)
+            }
+            CommandGroup(after: .help) {
+                Button("Charts, Tables & Trees in Chat…") { model.showsVisualizationGuide = true }
             }
         }
     }
@@ -227,6 +232,9 @@ final class DesktopModel: ObservableObject {
     @Published var showsSettings = false
     /// `/remote`: the pairing panel over the chat.
     @Published var showsRemote = false
+    /// `/visualize`, Help > Charts, Tables & Trees: the guide to in-chat
+    /// visualizations, with prompts to insert.
+    @Published var showsVisualizationGuide = false
     /// The latest share and pairing state, polled while the panel is open.
     @Published private(set) var remoteStatus: RemoteShareStatus?
     /// A start, pair, or stop request is in flight.
@@ -810,8 +818,18 @@ final class DesktopModel: ObservableObject {
             }
         case .terminal: terminal.open()
         case .remote: await openRemote()
+        case .visualizations: showsVisualizationGuide = true
         case .execute: break
         }
+    }
+
+    /// Put an example request from the visualization guide in the composer,
+    /// replacing nothing the user typed, and close the guide.
+    func insertExamplePrompt(_ prompt: String) {
+        draftCommand = nil
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = typed.isEmpty ? prompt : typed + "\n\n" + prompt
+        showsVisualizationGuide = false
     }
 
     // MARK: - Chat actions
@@ -835,18 +853,28 @@ final class DesktopModel: ObservableObject {
 
     var isSelectedPinned: Bool { selectedSession.map(pinnedSessions.contains) ?? false }
 
-    /// ⌘P: pin or unpin the open chat.
+    /// ⌘P: pin or unpin the open chat, by its id: a chat just opened or
+    /// started may not be in the sidebar's list yet, and ⌘P used to do nothing
+    /// for it. It never changes the chat shown or what is typed.
     func togglePinSelected() {
-        guard let session = sessions.first(where: { $0.id == selectedSession }) else { return }
-        togglePin(session)
+        guard let id = selectedSession else {
+            showToast(Toast(style: .info, systemImage: "pin", title: "Nothing to pin yet",
+                            message: "A new chat can be pinned once its first message is sent."))
+            return
+        }
+        togglePin(id: id)
     }
 
     func togglePin(_ session: SessionSummary) {
-        if pinnedSessions.contains(session.id) {
-            pinnedSessions.remove(session.id)
+        togglePin(id: session.id)
+    }
+
+    private func togglePin(id: String) {
+        if pinnedSessions.contains(id) {
+            pinnedSessions.remove(id)
             confirm("Unpinned", systemImage: "pin.slash.fill")
         } else {
-            pinnedSessions.insert(session.id)
+            pinnedSessions.insert(id)
             confirm("Pinned", systemImage: "pin.fill")
         }
         UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
@@ -1256,7 +1284,7 @@ final class DesktopModel: ObservableObject {
     /// A sheet or panel is open over the chat, which keeps its keys.
     var coversChat: Bool {
         showsSettings || renamingSession != nil || contextSheet != nil || commandResult != nil || composerPanel != nil
-            || showsSwitcher
+            || showsSwitcher || showsVisualizationGuide
     }
 
     /// The request shown for the selected session, if any.
@@ -1367,6 +1395,8 @@ final class DesktopModel: ObservableObject {
     }
 
     func submit() async {
+        // A dead key's accent still composing is part of what was typed.
+        MarkedText.commitInWindows()
         // App commands such as /terminal work without the engine.
         if let command = SlashCommand.appCommand(chip: draftCommand, draft: draft) {
             draftCommand = nil
