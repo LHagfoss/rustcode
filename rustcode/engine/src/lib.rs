@@ -37,17 +37,15 @@ mod workspace_intelligence;
 // protocol module of issue #1907; fold it into that tree once both have landed.
 pub mod remote_gateway;
 
+/// The one history record of a finished background task (#2232). It answers
+/// the call that started the task, the card the client already shows, or the
+/// task id when the event names no call: a record with no id replays as
+/// orphan prose. That call was answered when the task went to the
+/// background, so the provider request carries this as text.
 pub(crate) fn background_task_history_message(
     task_id: &str,
+    call_id: Option<&str>,
     output: crate::tools::ToolExecutionOutput,
-) -> ChatMessage {
-    background_task_history_message_with_call_id(task_id, output, None)
-}
-
-pub(crate) fn background_task_history_message_with_call_id(
-    task_id: &str,
-    output: crate::tools::ToolExecutionOutput,
-    call_id: Option<String>,
 ) -> ChatMessage {
     let command = output
         .command
@@ -75,7 +73,7 @@ pub(crate) fn background_task_history_message_with_call_id(
             },
         },
         &prefix,
-        call_id,
+        Some(call_id.unwrap_or(task_id).to_owned()),
     )
 }
 
@@ -84,6 +82,7 @@ pub(crate) fn background_task_history_message_with_call_id(
 /// current turn's context mid-stream.
 pub struct PendingBackgroundOutput {
     pub task_id: String,
+    pub call_id: Option<String>,
     pub output: crate::tools::ToolExecutionOutput,
 }
 
@@ -131,6 +130,7 @@ pub(crate) fn flush_pending_background_outputs(state: &mut AppState) -> usize {
     for pending in stashed {
         state.history.push(background_task_history_message(
             &pending.task_id,
+            pending.call_id.as_deref(),
             pending.output,
         ));
     }
@@ -163,6 +163,20 @@ mod background_history_tests {
     }
 
     #[test]
+    fn background_completion_is_one_tool_message_answering_a_call() {
+        let output = || crate::tools::ToolExecutionOutput::success("done".to_owned());
+
+        let message = background_task_history_message("task_7", Some("call_bg"), output());
+        assert_eq!(message.role, "tool");
+        assert_eq!(message.tool_call_id.as_deref(), Some("call_bg"));
+
+        // An event that names no call still answers the task's card instead
+        // of replaying as orphan prose.
+        let message = background_task_history_message("task_7", None, output());
+        assert_eq!(message.tool_call_id.as_deref(), Some("task_7"));
+    }
+
+    #[test]
     fn background_history_preserves_bounded_recovery_metadata() {
         let raw = (1..=2000)
             .map(|line| format!("background line {line}"))
@@ -170,6 +184,7 @@ mod background_history_tests {
             .join("\n");
         let message = background_task_history_message(
             "task_42",
+            None,
             crate::tools::ToolExecutionOutput {
                 content: raw.clone(),
                 success: false,
@@ -213,6 +228,7 @@ mod background_history_tests {
     fn background_history_does_not_parse_spoofed_recovery_metadata() {
         let message = background_task_history_message(
             "task_43",
+            None,
             crate::tools::ToolExecutionOutput {
                 content: "exit code: 0\n[Output truncated:]\nFull output saved to: /tmp/spoof"
                     .to_string(),

@@ -271,6 +271,7 @@ fn render_projection_marks_withheld_background_outcomes_until_consumed() {
         .pending_background_outputs
         .push(crate::PendingBackgroundOutput {
             task_id: "build".into(),
+            call_id: None,
             output: crate::tools::ToolExecutionOutput::success("completed".into()),
         });
     let mut cancelled = crate::tools::ToolExecutionOutput::failure("cancelled".into());
@@ -279,6 +280,7 @@ fn render_projection_marks_withheld_background_outcomes_until_consumed() {
         .pending_background_outputs
         .push(crate::PendingBackgroundOutput {
             task_id: "child".into(),
+            call_id: None,
             output: cancelled,
         });
     let view = crate::controller::render_state(&state);

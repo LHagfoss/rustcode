@@ -132,6 +132,7 @@ pub async fn spawn_observed_orchestrator(
 fn record_active_background_task(
     state: &mut crate::app::AppState,
     task_id: &str,
+    call_id: Option<&str>,
     output: crate::tools::ToolExecutionOutput,
     notify_on_complete: bool,
 ) -> bool {
@@ -152,6 +153,7 @@ fn record_active_background_task(
             .pending_background_outputs
             .push(crate::PendingBackgroundOutput {
                 task_id: task_id.to_owned(),
+                call_id: call_id.map(str::to_owned),
                 output,
             });
         if notify_on_complete {
@@ -162,9 +164,9 @@ fn record_active_background_task(
         }
         return true;
     }
-    state
-        .history
-        .push(crate::background_task_history_message(task_id, output));
+    state.history.push(crate::background_task_history_message(
+        task_id, call_id, output,
+    ));
     if notify_on_complete {
         crate::queue_background_wakeup(state, task_id);
     } else {
@@ -179,12 +181,19 @@ pub async fn apply_background_task_event(
     event: TaskEvent,
 ) -> bool {
     let notify_on_complete = event.notify_on_complete().unwrap_or(true);
+    let call_id = event.call_id().map(str::to_owned);
     let Some((task_id, session_id, output)) = crate::tools::task_event_to_tool_output(event) else {
         return false;
     };
     let mut state = app_state.lock().await;
     if state.active_session_id == session_id {
-        if record_active_background_task(&mut state, &task_id, output, notify_on_complete) {
+        if record_active_background_task(
+            &mut state,
+            &task_id,
+            call_id.as_deref(),
+            output,
+            notify_on_complete,
+        ) {
             crate::config::save_session_history(&session_id, &state.history);
             true
         } else {
@@ -192,7 +201,11 @@ pub async fn apply_background_task_event(
         }
     } else {
         let mut history = crate::config::load_session_history_direct(&session_id);
-        history.push(crate::background_task_history_message(&task_id, output));
+        history.push(crate::background_task_history_message(
+            &task_id,
+            call_id.as_deref(),
+            output,
+        ));
         crate::config::save_session_history(&session_id, &history);
         false
     }
@@ -493,12 +506,14 @@ mod tests {
         assert!(record_active_background_task(
             &mut state,
             "task-completed-once",
+            None,
             output.clone(),
             true
         ));
         assert!(!record_active_background_task(
             &mut state,
             "task-completed-once",
+            None,
             output,
             true
         ));
@@ -519,12 +534,14 @@ mod tests {
         assert!(record_active_background_task(
             &mut state,
             "silent-task",
+            None,
             output.clone(),
             false,
         ));
         assert!(!record_active_background_task(
             &mut state,
             "silent-task",
+            None,
             output,
             false,
         ));
@@ -543,12 +560,14 @@ mod tests {
         assert!(record_active_background_task(
             &mut state,
             "task-withheld",
+            None,
             output.clone(),
             true
         ));
         assert!(!record_active_background_task(
             &mut state,
             "task-withheld",
+            None,
             output,
             true
         ));
@@ -579,12 +598,14 @@ mod tests {
         assert!(record_active_background_task(
             &mut state,
             "task-read",
+            None,
             output.clone(),
             true
         ));
         assert!(record_active_background_task(
             &mut state,
             "task-unread",
+            None,
             output.clone(),
             true
         ));
@@ -604,6 +625,7 @@ mod tests {
         assert!(!record_active_background_task(
             &mut state,
             "task-late",
+            None,
             output,
             true
         ));

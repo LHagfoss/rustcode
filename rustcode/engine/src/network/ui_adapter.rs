@@ -1461,10 +1461,10 @@ mod tests {
 
     #[test]
     fn synthetic_background_completion_history_is_not_replayed_to_acp() {
-        let message = crate::background_task_history_message_with_call_id(
+        let message = crate::background_task_history_message(
             "task-fast",
+            Some("call-bg"),
             crate::tools::ToolExecutionOutput::success("done".to_owned()),
-            Some("call-bg".to_owned()),
         );
 
         assert!(
