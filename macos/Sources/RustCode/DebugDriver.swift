@@ -144,7 +144,8 @@ enum DebugDriver {
             if parts.contains("shift") { flags.insert(.shift) }
             if parts.contains("cmd") { flags.insert(.command) }
             if parts.contains("opt") { flags.insert(.option) }
-            let characters = parts.count > 2 && !["shift", "cmd", "opt"].contains(parts[2]) ? parts[2] : ""
+            let named: [UInt16: String] = [36: "\r", 48: "\t", 51: "\u{7f}", 53: "\u{1b}"]
+            let characters = parts.count > 2 && !["shift", "cmd", "opt"].contains(parts[2]) ? parts[2] : named[code] ?? ""
             if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                             windowNumber: window.windowNumber, context: nil, characters: characters,
                                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) {
@@ -191,6 +192,54 @@ enum DebugDriver {
                 }
             }
             _ = model.keybindings.assign(KeyCombo(key: parts[2], modifiers: modifiers), to: action)
+        case "snap":
+            // `snap <name>`: the window drawn into `<dir>/<name>.png`, for
+            // when screencapture cannot see the screen.
+            guard parts.count > 1, let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            let path = (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/\(parts[1]).png"
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        case "state":
+            // Where the keyboard is and what the panels show, to `<dir>/state`.
+            let windows = NSApp.windows.filter { $0.isVisible && $0.contentView != nil }
+            let responder = windows.first?.firstResponder
+            let field = (responder as? NSTextView)?.delegate as? NSTextField
+            var menuItems: [String] = []
+            func walkMenu(_ menu: NSMenu) {
+                for item in menu.items {
+                    if !item.keyEquivalent.isEmpty, item.keyEquivalentModifierMask.contains(.command), "wk".contains(item.keyEquivalent) {
+                        menuItems.append("\(item.title)=\(item.keyEquivalent) enabled \(item.isEnabled)")
+                    }
+                    if let submenu = item.submenu { walkMenu(submenu) }
+                }
+            }
+            if let main = NSApp.mainMenu { walkMenu(main) }
+            let lines = ["menu \(menuItems.joined(separator: ", "))",
+                         "windows \(windows.count)",
+                         "responder \(responder.map { String(describing: type(of: $0)) } ?? "-")",
+                         "field \(field?.placeholderString ?? "-") value \(field?.stringValue ?? "-")",
+                         "sessionFilter \(model.sessionFilter)",
+                         "switcher \(model.showsSwitcher) all \(model.showsAllProjects)",
+                         "terminal \(model.terminal.isShown)",
+                         "settings \(model.showsSettings)",
+                         "closeTerminal \(model.keybindings.display(for: .closeTerminal)) newChat \(model.keybindings.display(for: .newChat)) undo \(model.keybindings.canUndo)"]
+            try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/state",
+                                                     atomically: true, encoding: .utf8)
+        case "terminal": model.terminal.open()
+        case "focussearch": model.focusSessionSearch = true
+        case "click":
+            // `click <x> <y>`: a left click at a point measured from the
+            // window's top-left, as a `snap` image shows it.
+            guard parts.count > 2, let x = Double(parts[1]), let y = Double(parts[2]),
+                  let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { break }
+            let point = NSPoint(x: x, y: window.frame.height - y)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    NSApp.postEvent(event, atStart: false)
+                }
+            }
         case "filter":
             model.sessionFilter = parts.dropFirst().joined(separator: " ")
         case "size":

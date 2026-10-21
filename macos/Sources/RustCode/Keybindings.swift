@@ -169,7 +169,6 @@ struct KeyCombo: Codable, Hashable, Sendable {
 
     private static let reserved: [String: [KeyModifiers: String]] = [
         "q": [.command: "Quit RustCode"],
-        "w": [.command: "Close the window"],
         "h": [.command: "Hide RustCode", [.command, .option]: "Hide other apps"],
         "m": [.command: "Minimize the window"],
         "z": [.command: "Undo", [.command, .shift]: "Redo"],
@@ -180,6 +179,36 @@ struct KeyCombo: Codable, Hashable, Sendable {
         "tab": [.command: "Switch apps"],
         "space": [.command: "Spotlight"],
     ]
+}
+
+/// What a key press means while a shortcut is being recorded.
+enum KeyRecorderInput: Equatable {
+    /// Esc: stop recording and keep the shortcut as it was.
+    case cancel
+    /// Delete or Forward Delete with no command modifier: take the shortcut away.
+    case clear
+    /// A shortcut to save.
+    case record(KeyCombo)
+    /// A key that cannot be a shortcut on its own, such as a lone modifier.
+    case unusable
+
+    static let escapeKeyCode: UInt16 = 53
+
+    init(keyCode: UInt16, modifiers: KeyModifiers, combo: KeyCombo?) {
+        if keyCode == Self.escapeKeyCode {
+            self = .cancel
+        } else if (keyCode == 51 || keyCode == 117) && !modifiers.hasCommandModifier {
+            self = .clear
+        } else if let combo {
+            self = .record(combo)
+        } else {
+            self = .unusable
+        }
+    }
+
+    init(event: NSEvent) {
+        self.init(keyCode: event.keyCode, modifiers: KeyModifiers(event.modifierFlags), combo: KeyCombo(event: event))
+    }
 }
 
 /// A command whose shortcut the user can change.
@@ -196,6 +225,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
     case reloadPreview
     case toggleTerminal
     case newTerminalTab
+    case closeTerminal
     case chooseProject
     case settings
 
@@ -215,6 +245,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .reloadPreview: return "Reload Preview"
         case .toggleTerminal: return "Show or Hide Terminal"
         case .newTerminalTab: return "New Terminal Tab"
+        case .closeTerminal: return "Close Terminal Panel"
         case .chooseProject: return "Choose Project"
         case .settings: return "Open Settings"
         }
@@ -234,6 +265,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .reloadPreview: return "Reload the page in the preview"
         case .toggleTerminal: return "Your own shell, below the chat"
         case .newTerminalTab: return "Open another shell in this project"
+        case .closeTerminal: return "Hide the terminal when it is open. The window stays"
         case .chooseProject: return "Open another folder as the project"
         case .settings: return "General, keybinds, skills and MCP"
         }
@@ -243,7 +275,8 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .newChat, .switchChat, .stopTurn, .pinChat: return .chat
         case .findInChat, .findNext, .findPrevious: return .find
-        case .toggleSidebar, .togglePreview, .reloadPreview, .toggleTerminal, .newTerminalTab: return .view
+        case .toggleSidebar, .togglePreview, .reloadPreview, .toggleTerminal, .newTerminalTab, .closeTerminal:
+            return .view
         case .chooseProject, .settings: return .app
         }
     }
@@ -264,6 +297,9 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .reloadPreview: return KeyCombo(key: "r", modifiers: .command)
         case .toggleTerminal: return KeyCombo(key: "t", modifiers: [.command, .shift])
         case .newTerminalTab: return nil
+        // ⌘W never closes the window: there is one, and losing it by
+        // habit from a browser or editor is worse than a key doing nothing.
+        case .closeTerminal: return KeyCombo(key: "w", modifiers: .command)
         case .chooseProject: return KeyCombo(key: "o", modifiers: .command)
         case .settings: return KeyCombo(key: ",", modifiers: .command)
         }
@@ -305,6 +341,20 @@ final class KeybindingStore: ObservableObject {
     /// Bumped by every save, so views that read a shortcut redraw.
     @Published private(set) var revision = 0
 
+    /// The shortcuts before each change, newest last, for Undo. Kept for
+    /// the life of the app, not saved.
+    private var history: [Snapshot] = []
+    static let historyLimit = 50
+
+    private struct Snapshot: Equatable {
+        var overrides: [KeybindingAction: KeyCombo]
+        var disabled: Set<KeybindingAction>
+    }
+
+    private var snapshot: Snapshot { Snapshot(overrides: overrides, disabled: disabled) }
+
+    var canUndo: Bool { !history.isEmpty }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         load()
@@ -344,6 +394,7 @@ final class KeybindingStore: ObservableObject {
         if let reserved = combo.reservedReason {
             return .rejected("\(combo.display) is used by macOS for \(reserved).")
         }
+        let before = snapshot
         let displaced = conflictingAction(for: combo, excluding: action)
         if let displaced {
             overrides.removeValue(forKey: displaced)
@@ -357,30 +408,53 @@ final class KeybindingStore: ObservableObject {
         } else {
             overrides[action] = combo
         }
-        save()
+        commit(from: before)
         return .assigned(displaced: displaced)
     }
 
     /// Removes a shortcut from an action, leaving it in the menu without a key.
     func clear(_ action: KeybindingAction) {
+        let before = snapshot
         overrides.removeValue(forKey: action)
         if action.defaultCombo == nil {
             disabled.remove(action)
         } else {
             disabled.insert(action)
         }
-        save()
+        commit(from: before)
     }
 
     func reset(_ action: KeybindingAction) {
+        let before = snapshot
         overrides.removeValue(forKey: action)
         disabled.remove(action)
-        save()
+        commit(from: before)
     }
 
     func resetAll() {
+        let before = snapshot
         overrides.removeAll()
         disabled.removeAll()
+        commit(from: before)
+    }
+
+    /// Puts the shortcuts back as they were before the last change. Returns
+    /// false when there is nothing to undo.
+    @discardableResult
+    func undo() -> Bool {
+        guard let previous = history.popLast() else { return false }
+        overrides = previous.overrides
+        disabled = previous.disabled
+        save()
+        return true
+    }
+
+    /// Saves a change, remembering `before` for Undo. A change that left the
+    /// shortcuts as they were is not one, and is not remembered.
+    private func commit(from before: Snapshot) {
+        guard before != snapshot else { return }
+        history.append(before)
+        if history.count > Self.historyLimit { history.removeFirst(history.count - Self.historyLimit) }
         save()
     }
 
@@ -482,6 +556,7 @@ final class KeybindingMenuSync {
         "Show Terminal": .toggleTerminal,
         "Hide Terminal": .toggleTerminal,
         "New Terminal Tab": .newTerminalTab,
+        "Close Terminal": .closeTerminal,
         "Choose Project…": .chooseProject,
         "Settings…": .settings,
     ]
