@@ -1567,10 +1567,11 @@ async fn automatic_compaction_discards_cross_session_result_with_shared_history(
     let state = Arc::new(Mutex::new(app));
     let request_state = Arc::clone(&state);
     let task = tokio::spawn(async move {
+        // Round 0 is the turn boundary, the only point the summarizer runs.
         prepare_turn_request(
             &reqwest::Client::new(),
             &request_state,
-            1,
+            0,
             &CancellationToken::new(),
         )
         .await
@@ -1597,7 +1598,15 @@ async fn automatic_compaction_discards_cross_session_result_with_shared_history(
 
     let live = state.lock().await;
     assert_eq!(live.active_session_id, "new-session");
-    assert!(live.history == new_session_history);
+    // The new session's own history is untouched. At a turn boundary the
+    // request it builds may still overflow and append its one-time notice.
+    assert!(live.history[..new_session_history.len()] == new_session_history[..]);
+    assert!(
+        live.history[new_session_history.len()..]
+            .iter()
+            .all(|message| message.role == "system"
+                && message.content.starts_with("context window full:"))
+    );
 }
 
 // Regression: session 1785600273324, msgs 7-18. The repeat guard correctly

@@ -1314,6 +1314,10 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             local_model,
             provider_usage.as_ref(),
             deterministic_compaction,
+            // The summarizer is a network round-trip that rewrites history.
+            // Run it only at a turn boundary: firing it between two tool calls
+            // can summarize away results the model is still working from.
+            tool_rounds == 0,
         )
         .await;
         // Run the deterministic safety reduction in the same canonical
@@ -1361,8 +1365,9 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 s.read_file_mtimes.clear();
                 crate::config::save_session_history(&live_session_id, &s.history);
                 // Record what this cost, for the context modal and /context.
-                // Plan-backed profiles and local engines never run the
-                // summarizer, so their result is the reduced record.
+                // Plan-backed profiles, local engines and mid-turn rounds
+                // never run the summarizer, so their result is the reduced
+                // record.
                 let before_tokens: usize = captured_history
                     .iter()
                     .map(compaction::estimate_message_tokens)
@@ -1372,7 +1377,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                     .iter()
                     .map(compaction::estimate_message_tokens)
                     .sum();
-                let mode = if deterministic_compaction || local_model {
+                let mode = if deterministic_compaction || local_model || tool_rounds != 0 {
                     crate::app::CompactionMode::DeterministicRecord
                 } else {
                     crate::app::CompactionMode::AiSummary
