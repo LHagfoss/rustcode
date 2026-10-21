@@ -703,13 +703,6 @@ pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, bu
     }
     let before = history.clone();
 
-    // Observe-only pass (never rewrites storage under #985; returns 0).
-    // Kept for the compaction metric below.
-    let duplicate_reads = crate::network::compaction::prune_duplicate_tool_results(
-        history.as_slice(),
-        crate::network::compaction::KEEP_RECENT_TURNS,
-    );
-
     let total: u32 = history
         .iter()
         .map(|m| crate::network::compaction::estimate_message_tokens(m) as u32)
@@ -745,10 +738,9 @@ pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, bu
         serde_json::json!({
             "history_tokens": new_total,
             "budget": budget,
-            "duplicate_reads_collapsed": duplicate_reads,
             "summary_generated": false,
+            "originating_path": "deterministic_head_record",
             "deterministic_record": deterministic_record,
-            "hard_trim": false,
         }),
     );
     *history != before

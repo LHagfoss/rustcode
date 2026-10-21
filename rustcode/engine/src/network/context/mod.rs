@@ -24,11 +24,7 @@ pub use memory::{
 #[allow(unused_imports)]
 pub(crate) use memory::{compact_context_block, compact_context_line};
 #[allow(unused_imports)]
-pub use prune::{
-    DEFAULT_PRUNE_TOKEN_THRESHOLD, KEEP_RECENT_TURNS, LAST_COMPACTION_RECLAIMED,
-    prune_duplicate_tool_results, prune_historical_reasoning, prune_historical_tool_outputs,
-    prune_old_tool_outputs,
-};
+pub use prune::{DEFAULT_PRUNE_TOKEN_THRESHOLD, KEEP_RECENT_TURNS};
 pub use tokens::estimate_message_tokens;
 pub use tokens::{estimate_tokens, estimate_tool_schema_tokens};
 
@@ -220,70 +216,9 @@ mod tests {
         assert_eq!(prune_floor(8_000), 6_400);
     }
 
-    // #985 immutable-history contract: pruning passes observe but never
-    // rewrite stored messages. Pressure relief comes from FIFO head
-    // compaction (fixed summaries), so serialized history is identical
-    // before and after every pass — old and recent outputs alike.
-    #[test]
-    fn prune_historical_keeps_every_message_byte_identical() {
-        let big = format!("run_command: {}", "x ".repeat(3000)); // > 1000 tokens
-        // A large tool output at the front, and a large one near the tail.
-        let mut history = vec![tool_msg(&big)]; // index 0: aged out
-        for i in 0..(KEEP_RECENT_TURNS + 1) {
-            history.push(ChatMessage::new("user", format!("pad {i}")));
-        }
-        let recent_idx = history.len();
-        history.push(tool_msg(&big)); // within the last KEEP_RECENT_TURNS
-        let before = serde_json::to_string(&history).unwrap();
-
-        assert_eq!(
-            prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS),
-            0
-        );
-        assert_eq!(serde_json::to_string(&history).unwrap(), before);
-        // Old and recent large tool outputs are both left fully intact.
-        assert!(history[0].content.starts_with("run_command: x x"));
-        assert!(history[recent_idx].content.starts_with("run_command: x x"));
-    }
-
-    #[test]
-    fn prune_historical_preserves_exit_code_evidence_verbatim() {
-        let big = format!("run_command: {} exit code 2", "y ".repeat(3000));
-        let history = vec![tool_msg(&big)];
-        let mut padded = history.clone();
-        for i in 0..(KEEP_RECENT_TURNS + 2) {
-            padded.push(ChatMessage::new("user", format!("m{i}")));
-        }
-        let before = serde_json::to_string(&padded).unwrap();
-        assert_eq!(prune_historical_tool_outputs(&padded, KEEP_RECENT_TURNS), 0);
-        assert_eq!(serde_json::to_string(&padded).unwrap(), before);
-        assert!(padded[0].content.contains("exit code 2"));
-    }
-
-    #[test]
-    fn prune_historical_leaves_small_outputs_alone() {
-        let mut history = vec![tool_msg("grep: match at line 4")];
-        for i in 0..(KEEP_RECENT_TURNS + 2) {
-            history.push(ChatMessage::new("user", format!("m{i}")));
-        }
-        prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS);
-        assert_eq!(history[0].content, "grep: match at line 4");
-    }
-
-    #[test]
-    fn prune_old_tool_outputs_does_not_count_already_stubbed_results() {
-        let stub =
-            "run_command: [Tool output truncated: 2000 tokens pruned to maintain context window]";
-        let recent = "grep: recent match";
-        let history = vec![tool_msg(stub), tool_msg(recent)];
-        let threshold = estimate_message_tokens(&history[1]) + 1;
-
-        let pruned = prune_old_tool_outputs(&history, threshold);
-
-        assert_eq!(pruned, 0);
-        assert_eq!(history[0].content, stub);
-    }
-
+    // #985 immutable-history contract: stored messages are never rewritten.
+    // Deduplication is pure selection at request-render time, so storage keeps
+    // every read verbatim while the rendered request omits redundant ones.
     #[test]
     fn duplicate_old_file_reads_remain_in_storage_until_request_projection() {
         use crate::network::history::{
@@ -297,9 +232,6 @@ mod tests {
             ChatMessage::new("assistant", "edit").with_diff(Some("real diff".to_string())),
             tool_msg(changed),
         ];
-        let before = serde_json::to_string(&history).unwrap();
-        assert_eq!(prune_duplicate_tool_results(&history, 1), 0);
-        assert_eq!(serde_json::to_string(&history).unwrap(), before);
         assert!(redundant_tool_result_indices(&history, 1).is_empty());
 
         let mut history = history;
@@ -307,7 +239,6 @@ mod tests {
             ChatMessage::new("assistant", "more work"),
             ChatMessage::new("user", "verify"),
         ]);
-        assert_eq!(prune_duplicate_tool_results(&history, 2), 0);
         // Different file content is not a duplicate: everything renders.
         assert!(redundant_tool_result_indices(&history, 2).is_empty());
 
@@ -317,9 +248,6 @@ mod tests {
         for i in 0..11 {
             history.push(ChatMessage::new("user", format!("follow-up {i}")));
         }
-        let before = serde_json::to_string(&history).unwrap();
-        assert_eq!(prune_duplicate_tool_results(&history, 2), 0);
-        assert_eq!(serde_json::to_string(&history).unwrap(), before);
         // Storage keeps the older copy verbatim. Under budget pressure, the
         // recent-turn projection may drop stale history as a whole.
         assert!(history[0].content.contains("1: old"));
@@ -346,9 +274,6 @@ mod tests {
             ),
             ChatMessage::new("user", "keep recent"),
         ];
-        let before = serde_json::to_string(&history).unwrap();
-        assert_eq!(prune_duplicate_tool_results(&history, 1), 0);
-        assert_eq!(serde_json::to_string(&history).unwrap(), before);
         // Only the older of the two identical a.rs reads is redundant; other
         // files, errors, and truncated reads always survive.
         assert_eq!(redundant_tool_result_indices(&history, 1), [0].into());
@@ -358,13 +283,13 @@ mod tests {
         assert!(history[4].content.contains("Truncated"));
     }
 
+    /// #985: a large failing output keeps its full evidence in storage. The
+    /// old in-place prune pass that used to be called here is gone; only the
+    /// stored message matters now.
     #[test]
     fn old_failures_keep_full_evidence_verbatim() {
         let content = format!("run_command: error: {}", "diagnostic ".repeat(3_000));
         let history = vec![tool_msg(&content)];
-        let before = serde_json::to_string(&history).unwrap();
-        assert_eq!(prune_old_tool_outputs(&history, 1), 0);
-        assert_eq!(serde_json::to_string(&history).unwrap(), before);
         assert_eq!(history[0].content, content);
     }
 

@@ -1,9 +1,5 @@
 use super::memory::compact_with_structured_memory;
-use super::prune::{
-    DEFAULT_PRUNE_TOKEN_THRESHOLD, KEEP_RECENT_TURNS, LAST_COMPACTION_RECLAIMED,
-    prune_duplicate_tool_results, prune_floor, prune_historical_reasoning,
-    prune_historical_tool_outputs, prune_old_tool_outputs,
-};
+use super::prune::{DEFAULT_PRUNE_TOKEN_THRESHOLD, KEEP_RECENT_TURNS, prune_floor};
 use super::tokens::estimate_message_tokens;
 use crate::app::{ChatMessage, CompactionBoundary, CompactionEntry, TokenUsage};
 use std::future::Future;
@@ -123,22 +119,16 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
     provider_usage: Option<&TokenUsage>,
     deterministic_only: bool,
 ) -> bool {
-    // 1. Local, zero-cost tool output pruning: collapse large tool outputs that
-    //    have aged past the recent window, then apply the hard rolling token cap
-    //    as a safety net.
+    // 1. Only compact under real pressure. Replacing history the model still
+    //    needs while most of the window sits unused buys nothing and costs it
+    //    the memory of what it just did — it re-reads, which is slower and is
+    //    how repeat-loops start. Below the threshold the history is left
+    //    exactly as it happened.
     //
-    //    Only under real pressure. Collapsing a file the model read three
-    //    round-trips ago while most of the window sits unused buys nothing and
-    //    costs the model its memory of what it just looked at — it re-reads,
-    //    which is both slower and how repeat-loops start. Below the threshold
-    //    the history is left exactly as it happened.
-    //
-    //    These passes observe but never rewrite stored messages (#985
-    //    immutable-history contract): they report how many messages would be
-    //    eligible while leaving every byte intact, so their counts stay
-    //    comparable against the same strings. The memo in `estimate_tokens`
-    //    is what keeps the passes cheap — every message the passes leave
-    //    alone is encoded once and looked up thereafter.
+    //    There are no in-place prune passes here any more (#985): they could
+    //    not rewrite stored messages, so calling them would only produce zeros
+    //    to OR into the result below. Request-time rendering already drops
+    //    duplicate reads and historical reasoning without touching storage.
     let raw_tokens = provider_adjusted_tokens(history, provider_usage);
     if raw_tokens < prune_floor(budget) {
         return false;
@@ -147,38 +137,19 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
     // Keep the exact persisted prefix available for archival even when the
     // local request projection below prunes rendered tool output.
     let archival_source = history.clone();
-    let local_before: usize = history.iter().map(estimate_message_tokens).sum();
-    let duplicate_reads = prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
-    let historical_outputs = prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
-    let pruned_reasoning = prune_historical_reasoning(history, KEEP_RECENT_TURNS);
-    let old_outputs = prune_old_tool_outputs(history, (budget as f64 * 0.6) as usize);
-
-    // 2. Count the post-prune history once. `history` is not touched again
-    //    until compaction actually runs, so the same per-message counts serve
-    //    both the budget check and the keep-suffix walk below.
+    // `history` is not touched again until compaction actually runs, so the
+    // same per-message counts serve both the budget check and the keep-suffix
+    // walk below.
     let per_message: Vec<usize> = history.iter().map(estimate_message_tokens).collect();
-    // The previous provider measurement cannot see edits to its measured
-    // prefix. Apply the local before/after delta instead of reusing that stale
-    // measurement unchanged, which hid reclamation and triggered needless
-    // summarization even after pruning restored ample headroom.
-    let total_tokens = adjusted_after_pruning(raw_tokens, local_before, per_message.iter().sum());
-    // Cancellation still permits the deterministic local pruning above, but
-    // must never report a completed compaction or start a summarizer request.
+    let total_tokens = raw_tokens;
+    // Cancellation must never report a completed compaction or start a
+    // summarizer request.
     if cancel_token.is_cancelled() {
         return false;
     }
     if total_tokens < budget {
-        emit_compaction_metrics(
-            raw_tokens,
-            total_tokens,
-            budget,
-            duplicate_reads,
-            historical_outputs + old_outputs + pruned_reasoning,
-            false,
-            false,
-            history.len(),
-        );
-        return duplicate_reads + historical_outputs + old_outputs + pruned_reasoning > 0;
+        emit_compaction_metrics(raw_tokens, budget, "below_budget", false, history.len());
+        return false;
     }
 
     // Determine how many messages to summarize. Keep a bounded recent suffix;
@@ -203,17 +174,8 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         keep_token_limit,
     );
     if summarize_count < 4 {
-        emit_compaction_metrics(
-            raw_tokens,
-            total_tokens,
-            budget,
-            duplicate_reads,
-            historical_outputs + old_outputs,
-            false,
-            false,
-            history.len(),
-        );
-        return duplicate_reads + historical_outputs + old_outputs > 0;
+        emit_compaction_metrics(raw_tokens, budget, "too_few_messages", false, history.len());
+        return false;
     }
     // Tiered compaction: local ollama engines skip LLM summarization —
     // prune+trim already reclaimed tokens, and weak local summaries lose
@@ -233,15 +195,12 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         );
         emit_compaction_metrics(
             raw_tokens,
-            total_tokens,
             budget,
-            duplicate_reads,
-            historical_outputs + old_outputs,
+            "deterministic_record",
             false,
-            true,
             history.len(),
         );
-        return structured || (duplicate_reads + historical_outputs + old_outputs > 0);
+        return structured;
     }
 
     let summary_ok = force_compact_internal(
@@ -258,30 +217,18 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
     .is_ok();
 
     if summary_ok {
-        emit_compaction_metrics(
-            raw_tokens,
-            total_tokens,
-            budget,
-            duplicate_reads,
-            historical_outputs + old_outputs,
-            true,
-            false,
-            history.len(),
-        );
+        emit_compaction_metrics(raw_tokens, budget, "ai_summary", true, history.len());
         true
     } else {
         let structured = compact_with_structured_memory(history, keep_count, budget);
         emit_compaction_metrics(
             raw_tokens,
-            total_tokens,
             budget,
-            duplicate_reads,
-            historical_outputs + old_outputs,
+            "deterministic_record",
             false,
-            true,
             history.len(),
         );
-        structured || (duplicate_reads + historical_outputs + old_outputs > 0)
+        structured
     }
 }
 
@@ -294,13 +241,6 @@ pub async fn force_compact_with_budget_deterministic(
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     let archival_source = history.clone();
-    prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
-    prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
-    prune_historical_reasoning(history, KEEP_RECENT_TURNS);
-    let prune_threshold = budget
-        .map(|b| (b as f64 * 0.6) as usize)
-        .unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD);
-    prune_old_tool_outputs(history, prune_threshold);
 
     let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
     if summarize_count < 1 {
@@ -317,23 +257,7 @@ pub async fn force_compact_with_budget_deterministic(
         return Err("Deterministic local compaction could not reduce the history.".to_string());
     }
     let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
-    if after_tokens < before_tokens {
-        LAST_COMPACTION_RECLAIMED.store(
-            before_tokens - after_tokens,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-    }
     Ok((before_tokens, after_tokens))
-}
-
-fn adjusted_after_pruning(
-    measured_before: usize,
-    local_before: usize,
-    local_after: usize,
-) -> usize {
-    measured_before
-        .saturating_sub(local_before.saturating_sub(local_after))
-        .saturating_add(local_after.saturating_sub(local_before))
 }
 
 /// Return the best available prompt estimate. A provider usage record belongs
@@ -368,30 +292,26 @@ fn provider_adjusted_tokens(history: &[ChatMessage], usage: Option<&TokenUsage>)
     )
 }
 
+/// Record what compaction decided and how far it had to go.
+///
+/// `originating_path` names the branch that produced this event. The metrics
+/// here describe real work only: the retired in-place prune passes used to
+/// contribute fields that were always zero.
 fn emit_compaction_metrics(
     before_tokens: usize,
-    after_prune_tokens: usize,
     budget: usize,
-    duplicate_reads: usize,
-    pruned_outputs: usize,
+    originating_path: &str,
     summarized: bool,
-    local_prune_only: bool,
     messages_considered: usize,
 ) {
     crate::logger::operational_event(
         "context.compaction",
         serde_json::json!({
             "before_tokens": before_tokens,
-            "after_prune_tokens": after_prune_tokens,
-            "reclaimed_tokens": before_tokens.saturating_sub(after_prune_tokens),
             "budget": budget,
             "messages_considered": messages_considered,
-            "messages_retained_raw": messages_considered.min(KEEP_RECENT_TURNS),
-            "duplicate_reads_collapsed": duplicate_reads,
-            "tool_outputs_pruned": pruned_outputs,
             "summary_generated": summarized,
-            "local_prune_only": local_prune_only,
-            "hard_trim": false,
+            "originating_path": originating_path,
         }),
     );
 }
@@ -417,13 +337,6 @@ pub async fn force_compact_with_budget(
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     let archival_source = history.clone();
-    prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
-    prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
-    prune_historical_reasoning(history, KEEP_RECENT_TURNS);
-    let prune_threshold = budget
-        .map(|b| (b as f64 * 0.6) as usize)
-        .unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD);
-    prune_old_tool_outputs(history, prune_threshold);
 
     // Summarize all but the most recent KEEP_RECENT_TURNS messages.
     let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
@@ -443,12 +356,6 @@ pub async fn force_compact_with_budget(
     )
     .await;
     let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
-    if after_tokens < before_tokens {
-        LAST_COMPACTION_RECLAIMED.store(
-            before_tokens - after_tokens,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-    }
     result.map(|_| (before_tokens, after_tokens))
 }
 
@@ -1161,13 +1068,6 @@ mod preserved_user_request_tests {
             estimate,
             1_000 + estimate_message_tokens(&history[2]) + estimate_message_tokens(&history[3])
         );
-    }
-
-    #[test]
-    fn provider_measurement_tracks_locally_reclaimed_prefix_tokens() {
-        assert_eq!(adjusted_after_pruning(90_000, 60_000, 40_000), 70_000);
-        assert_eq!(adjusted_after_pruning(90_000, 60_000, 60_000), 90_000);
-        assert_eq!(adjusted_after_pruning(90_000, 60_000, 60_100), 90_100);
     }
 
     #[tokio::test]
