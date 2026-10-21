@@ -1,3 +1,8 @@
+## [v0.86.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.86.0) - 2026-10-21
+
+### Features
+- **macOS:** `/remote` opens a native remote access popup: QR code, the pairing code and gateway address with copy controls, an expiry countdown, connected devices and share status; *New code* issues a fresh pairing offer and *Turn off* unbinds. The engine owns the sharing bridge over ACP, so a paired device runs its prompts and commands as real turns of the shared chat; typed before a session exists, `/remote` explains itself instead of prompting the model (#2206).
+- **macOS:** long diff lines scroll horizontally inside the chat's diff card instead of being clipped (#2206).
 ## [v0.85.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.85.0) - 2026-10-20
 
 ### Features
