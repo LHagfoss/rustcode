@@ -2579,3 +2579,53 @@ async fn scroll_speed_command_opens_the_picker_or_sets_the_value() {
         );
     }
 }
+
+#[tokio::test]
+async fn effort_command_updates_the_active_profile_when_profiles_share_a_url() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let url = "https://api.example.test/v1";
+    let mut app = crate::app::AppState::new();
+    app.config.models = ["first", "second"]
+        .into_iter()
+        .map(|name| crate::config::ModelProfile {
+            name: name.into(),
+            url: url.into(),
+            model: format!("{name}-model"),
+            reasoning_effort: Some("medium".into()),
+            supports_reasoning_effort: Some(true),
+            ..Default::default()
+        })
+        .collect();
+    app.config.default.set_big("second".into());
+    app.api_base_url = url.into();
+    app.model_name = "second-model".into();
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    state.lock().await.input_buffer = "/effort high".to_owned();
+    super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await;
+
+    let mut s = state.lock().await;
+    assert_eq!(
+        s.active_model_profile()
+            .and_then(|profile| profile.reasoning_effort),
+        Some("high".into()),
+        "the profile requests use must carry the new effort"
+    );
+    assert_eq!(
+        s.config.models[0].reasoning_effort.as_deref(),
+        Some("medium"),
+        "another profile on the same URL must be left alone"
+    );
+
+    s.input_buffer = "/effort".to_owned();
+    drop(s);
+    super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await;
+    let s = state.lock().await;
+    assert_eq!(s.settings_picker, Some(crate::app::SettingsPicker::Effort));
+    assert_eq!(s.modal_picker_index, 2, "picker opens on the active effort");
+}

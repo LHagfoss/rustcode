@@ -1030,6 +1030,43 @@ fn effort_picker_renders_options() {
 }
 
 #[test]
+fn effort_picker_marks_the_active_profiles_effort_when_profiles_share_a_url() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+    let mut state = RenderState::new();
+    let url = "https://api.example.test/v1";
+    let profile = |name: &str, effort: &str| rustcode::controller::ModelProfile {
+        name: name.into(),
+        url: url.into(),
+        model: name.into(),
+        reasoning_effort: Some(effort.into()),
+        ..Default::default()
+    };
+    state.config.models = vec![profile("first", "medium"), profile("second", "high")];
+    state.api_base_url = url.into();
+    state.active_model_profile = Some(state.config.models[1].clone());
+    terminal
+        .draw(|frame| {
+            render_effort_picker_modal(frame, &render_snapshot(&state), Rect::new(0, 12, 100, 3))
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let active = rows
+        .iter()
+        .filter(|row| row.contains("(active)"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(active.len(), 1, "{rows:#?}");
+    assert!(active[0].contains("High"), "{rows:#?}");
+}
+
+#[test]
 fn history_picker_renders_borderless_full_width_options() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
     let mut state = RenderState::new();
