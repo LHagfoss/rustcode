@@ -8934,24 +8934,22 @@ fn empty_composer_is_framed_with_settings_inside_and_location_footer() {
         Some(prompt_row - 1),
         "shutdown should know where the transient composer begins"
     );
-    // Top border, prompt, settings row, bottom border, then the footer.
-    let top = row_text(prompt_row - 1);
-    assert!(top.starts_with('╭') && top.ends_with('╮'), "{top:?}");
+    // A blank band row above the input, the prompt, a gap row, the settings
+    // row on the band's bottom edge, then the footer. No outline (#2246).
+    let band_top = row_text(prompt_row - 1);
+    assert!(band_top.trim().is_empty(), "band top: {band_top:?}");
     assert!(
-        row_text(prompt_row).starts_with("│ › Ask RustCode"),
+        row_text(prompt_row).starts_with("  › Ask RustCode"),
         "{:?}",
         row_text(prompt_row)
     );
-    assert!(row_text(prompt_row).ends_with('│'));
-    let settings = row_text(prompt_row + 1);
+    assert!(!row_text(prompt_row).contains('│'), "no outline (#2246)");
+    let gap = row_text(prompt_row + 1);
+    assert!(gap.trim().is_empty(), "gap row: {gap:?}");
+    let settings = row_text(prompt_row + 2);
     assert!(
-        settings.starts_with(&format!("│   ask · {}", state.model_name)),
+        settings.starts_with(&format!("    Build · ask · {}", state.model_name)),
         "settings row: {settings:?}"
-    );
-    let bottom = row_text(prompt_row + 2);
-    assert!(
-        bottom.starts_with('╰') && bottom.ends_with('╯'),
-        "{bottom:?}"
     );
     assert_eq!(footer_row, prompt_row + 3);
 
@@ -8960,17 +8958,24 @@ fn empty_composer_is_framed_with_settings_inside_and_location_footer() {
         footer.starts_with("  main · ~/code/project"),
         "composer footer: {footer:?}"
     );
-    for moved in [state.model_name.as_str(), "ask", "auto-approve", "plan"] {
+    for moved in [
+        state.model_name.as_str(),
+        "Build",
+        "ask",
+        "auto-approve",
+        "Plan",
+    ] {
         assert!(
             !footer.contains(moved),
             "{moved} moved into the composer: {footer:?}"
         );
     }
-    // The frame sits on the transcript background, the fill inside it stays
-    // the composer panel, and the footer keeps the transcript background.
-    assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_BG());
+    // The whole band is the composer panel colour, above and below the input,
+    // and the footer keeps the transcript background.
+    assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(2, prompt_row)].bg, COLOR_PANEL());
     assert_eq!(buffer[(2, prompt_row + 1)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(2, prompt_row + 2)].bg, COLOR_PANEL());
     assert_eq!(buffer[(98, prompt_row)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
 }
@@ -9006,54 +9011,72 @@ fn draw_framed_composer(
 }
 
 #[test]
-fn posture_token_is_ask_auto_approve_or_plan_and_plan_wins() {
+fn settings_row_names_the_mode_and_shows_the_approval_posture() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use rustcode::controller::AgentMode;
 
-    for (mode, auto_confirm, expected) in [
-        (AgentMode::Build, false, "ask"),
-        (AgentMode::Build, true, "auto-approve"),
-        (AgentMode::Plan, false, "plan"),
-        (AgentMode::Plan, true, "plan"),
+    for (mode, auto_confirm, expected_mode, expected_approval) in [
+        (AgentMode::Build, false, "Build", "ask"),
+        (AgentMode::Build, true, "Build", "auto-approve"),
+        (AgentMode::Plan, false, "Plan", "read-only"),
+        (AgentMode::Plan, true, "Plan", "read-only"),
     ] {
         let mut state = RenderState::new();
         state.cwd_and_branch = "~/code/project:main".to_owned();
         state.agent_mode = mode;
         state.auto_confirm = auto_confirm;
         let snapshot = render_snapshot(&state);
-        assert_eq!(super::permission_posture_token(&snapshot), expected);
+        assert_eq!(super::mode_token(&snapshot), expected_mode);
+        assert_eq!(super::approval_token(&snapshot), expected_approval);
 
         let mut transcript = TranscriptState::default();
         let (rows, area, _) = draw_framed_composer(&mut state, &mut transcript, 100, 12);
-        let settings = &rows[usize::from(area.bottom() - 2)];
+        let settings = &rows[usize::from(area.bottom() - 1)];
         assert!(
-            settings.starts_with(&format!("│   {expected} · {}", state.model_name)),
+            settings.starts_with(&format!(
+                "    {expected_mode} · {expected_approval} · {}",
+                state.model_name
+            )),
             "{mode:?}/{auto_confirm}: {settings:?}"
         );
+        // Plan mode is read-only, so auto-approve never shows beside it. The
+        // default `Build · ask` never leaks into the footer once the composer
+        // carries it; only a plan/auto-approve badge appears without a frame.
+        assert!(!settings.contains('│'), "no outline (#2246)");
+        if mode == AgentMode::Plan {
+            assert!(!settings.contains("auto-approve"), "{settings:?}");
+        }
         let footer = &rows[11];
-        for token in ["ask", "auto-approve", "plan", "plan mode"] {
+        for token in ["read-only", "auto-approve", "Plan"] {
             assert!(!footer.contains(token), "{token} leaked into {footer:?}");
-            if token != expected {
-                assert!(!settings.contains(token), "{token} beside {expected}");
-            }
         }
 
-        // The posture token is a click target over exactly its cells.
+        // The posture label (mode and approval) is a click target over exactly
+        // its cells, never the model beside it.
         let chip = transcript.posture_chip.expect("posture is clickable");
-        assert_eq!(chip.y, area.bottom() - 2);
+        assert_eq!(chip.y, area.bottom() - 1);
         let painted = (chip.x..chip.right())
             .map(|x| settings.chars().nth(usize::from(x)).unwrap())
             .collect::<String>();
-        assert_eq!(painted, expected);
+        assert_eq!(painted, format!("{expected_mode} · {expected_approval}"));
 
-        // Unframed fallback: the footer names the model and only a
-        // non-default posture, never both plan and auto-approve.
+        // Below the fallback width there is no band and no outline.
         let narrow = render_state_to_text(&mut state, super::COMPOSER_FRAME_MIN_WIDTH - 1, 12);
-        let narrow_footer = narrow.lines().last().unwrap();
         assert!(!narrow.contains('╭'), "{narrow}");
-        assert!(!narrow_footer.contains("plan mode"), "{narrow_footer:?}");
-        if expected == "plan" {
-            assert!(!narrow_footer.contains("auto-approve"), "{narrow_footer:?}");
+        assert!(!narrow.contains("Build · ask"), "{narrow}");
+
+        // The unframed footer carries the model plus only a non-default
+        // posture. Plan mode always shows there, since it changes what Enter
+        // lets the model do; the default `Build · ask` stays out of it.
+        let badges = super::footer_session_badges(&snapshot);
+        assert_eq!(badges[0], state.model_name);
+        match (mode, auto_confirm) {
+            (AgentMode::Plan, _) => {
+                assert_eq!(badges[1], "Plan · read-only", "{badges:?}");
+                assert!(!badges.iter().any(|b| b.contains("auto-approve")));
+            }
+            (AgentMode::Build, true) => assert_eq!(badges[1], "auto-approve", "{badges:?}"),
+            (AgentMode::Build, false) => assert_eq!(badges.len(), 1, "{badges:?}"),
         }
     }
 }
@@ -9065,31 +9088,36 @@ fn settings_row_drops_the_posture_before_the_model() {
     let snapshot = render_snapshot(&state);
     let model = Some("gemini-3.6-flash".to_owned());
     // Two columns of indent and the free cursor column come off the width.
+    // `Build · ask` (11) and the separators cost 14 columns before the model.
     assert_eq!(
-        super::composer_settings(&snapshot, 25),
+        super::composer_settings(&snapshot, 33),
         super::ComposerSettings {
-            posture: Some("ask"),
+            mode: Some("Build"),
+            approval: Some("ask"),
             model: model.clone()
         }
     );
     assert_eq!(
-        super::composer_settings(&snapshot, 24),
+        super::composer_settings(&snapshot, 32),
         super::ComposerSettings {
-            posture: None,
+            mode: None,
+            approval: None,
             model: model.clone()
         }
     );
     assert_eq!(
         super::composer_settings(&snapshot, 19),
         super::ComposerSettings {
-            posture: None,
+            mode: None,
+            approval: None,
             model
         }
     );
     assert_eq!(
         super::composer_settings(&snapshot, 18),
         super::ComposerSettings {
-            posture: None,
+            mode: None,
+            approval: None,
             model: None
         }
     );
@@ -9164,8 +9192,23 @@ fn resizing_keeps_the_cursor_inside_the_frame_and_the_footer_one_row() {
         if super::composer_framed(width) {
             // Never on the border, and the last text column stays free.
             assert!(cursor.x < text.right(), "width {width}");
-            assert!(rows[usize::from(area.y)].starts_with('╭'), "width {width}");
-            assert!(rows[usize::from(area.bottom() - 1)].starts_with('╰'));
+            // A borderless band: no outline glyphs anywhere in the composer,
+            // and the input row starts two pad columns in after its prompt.
+            assert!(
+                !rows[usize::from(area.y)].contains('╭'),
+                "width {width}: {:?}",
+                rows[usize::from(area.y)]
+            );
+            assert!(
+                rows[usize::from(area.y + 1)].starts_with("  "),
+                "width {width}: {:?}",
+                rows[usize::from(area.y + 1)]
+            );
+            assert!(
+                !rows[usize::from(area.bottom() - 1)].contains('╰'),
+                "width {width}: {:?}",
+                rows[usize::from(area.bottom() - 1)]
+            );
         } else {
             // Below the fallback width the layout is the unframed composer.
             assert!(
