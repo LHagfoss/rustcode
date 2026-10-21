@@ -10,7 +10,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, SessionNotification, SessionUpdate, TextContent,
@@ -19,25 +18,39 @@ use agent_client_protocol::{Client, ConnectionTo};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use super::AcpSession;
 use super::session::{KnownTaskIds, SessionTurnState};
 use crate::app::AppState;
 use crate::controller::AgentUiEvent;
+use crate::remote::SessionCloseReason;
+use rustcode_tasks::TaskEvent;
+
+// Shares and pairing offers are driven by the remote gateway, which the
+// workspace builds only on unix; everywhere else the manager below is a
+// stub with the same surface that reports the feature as unavailable.
+#[cfg(unix)]
 use crate::remote::owner::{
     GatewayLinkStatus, OwnerCommand, OwnerLink, OwnerMessage, default_connector,
     next_registration_epoch,
 };
+#[cfg(unix)]
 use crate::remote::{
-    OwnerFollowUp, ProjectionLimits, ReceiptState, RemoteResponse, SessionCloseReason,
-    SessionPublisher, SessionRegistration, apply_session_mutation, read_session,
+    OwnerFollowUp, ProjectionLimits, ReceiptState, RemoteResponse, SessionPublisher,
+    SessionRegistration, apply_session_mutation, read_session,
 };
+#[cfg(unix)]
 use crate::remote_gateway::control::OfferDetails;
+#[cfg(unix)]
 use crate::remote_gateway::lifecycle::RemoteLifecycle;
+#[cfg(unix)]
 use crate::remote_gateway::service;
-use rustcode_tasks::TaskEvent;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
+#[cfg(unix)]
+use tokio::sync::mpsc;
+#[cfg(unix)]
+use tokio_util::sync::CancellationToken;
 
 pub(crate) const REMOTE_CAPABILITY_VERSION: u64 = 1;
 
@@ -223,16 +236,19 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
     }
 }
 
+#[cfg(unix)]
 #[derive(Clone, Default)]
 pub(crate) struct RemoteManager {
     inner: Arc<std::sync::Mutex<Inner>>,
 }
 
+#[cfg(unix)]
 #[derive(Default)]
 struct Inner {
     shares: std::collections::HashMap<String, Arc<Share>>,
 }
 
+#[cfg(unix)]
 struct Share {
     session: Arc<RemoteSession>,
     registration: SessionRegistration,
@@ -242,6 +258,7 @@ struct Share {
     pairing_in_flight: AtomicBool,
 }
 
+#[cfg(unix)]
 struct ShareState {
     publisher: SessionPublisher,
     link: OwnerLink,
@@ -254,6 +271,7 @@ struct ShareState {
     closed: Option<String>,
 }
 
+#[cfg(unix)]
 struct PairingOffer {
     qr_payload: String,
     code: String,
@@ -265,6 +283,7 @@ struct PairingOffer {
     expires_at: Instant,
 }
 
+#[cfg(unix)]
 impl PairingOffer {
     fn new(offer: OfferDetails) -> Self {
         let lifetime = Duration::from_secs(offer.expires_in_secs);
@@ -281,6 +300,7 @@ impl PairingOffer {
     }
 }
 
+#[cfg(unix)]
 impl RemoteManager {
     fn get(&self, session_id: &str) -> Option<Arc<Share>> {
         self.inner
@@ -462,27 +482,104 @@ impl RemoteManager {
     }
 }
 
+/// On hosts without the gateway, the manager keeps the same surface so the
+/// ACP handlers compile everywhere, and reports sharing as unavailable.
+#[cfg(not(unix))]
+#[derive(Clone, Default)]
+pub(crate) struct RemoteManager;
+
+#[cfg(not(unix))]
+impl RemoteManager {
+    /// Shares cannot exist on this host, so there is nothing to publish.
+    pub(crate) fn observe(&self, _session_id: &str, _event: &AgentUiEvent) {}
+
+    pub(crate) async fn start(
+        &self,
+        _session: Arc<RemoteSession>,
+        _pair: bool,
+    ) -> Result<Value, agent_client_protocol::Error> {
+        Err(self.unsupported())
+    }
+
+    pub(crate) async fn status(&self, session_id: &str) -> Value {
+        idle_status(session_id)
+    }
+
+    pub(crate) async fn pair(&self, session_id: &str) -> Value {
+        json!({
+            "available": false,
+            "shared": false,
+            "sessionId": session_id,
+            "error": "remote access is not available on this host",
+        })
+    }
+
+    pub(crate) async fn stop(
+        &self,
+        _session_id: &str,
+    ) -> Result<Value, agent_client_protocol::Error> {
+        Err(self.unsupported())
+    }
+
+    pub(crate) async fn stop_session(&self, _session_id: &str, _reason: SessionCloseReason) {}
+
+    pub(crate) async fn shutdown(&self) {}
+
+    fn unsupported(&self) -> agent_client_protocol::Error {
+        agent_client_protocol::Error::invalid_params().data(
+            "remote access needs the remote gateway, which the workspace builds only on unix hosts",
+        )
+    }
+}
+
 fn idle_status(session_id: &str) -> Value {
-    let directory = crate::config::get_config_dir();
-    let enabled = directory.as_deref().is_some_and(service::enabled);
-    let devices = directory
-        .as_deref()
-        .map(RemoteLifecycle::new)
-        .and_then(|lifecycle| lifecycle.devices().ok())
-        .unwrap_or_default();
+    let devices = idle_devices();
     json!({
         "available": true,
-        "enabled": enabled,
+        "enabled": remote_enabled(),
         "shared": false,
         "sessionId": session_id,
         "pairedDevices": devices.len(),
-        "devices": devices.iter().map(|device| json!({
-            "id": device.id,
-            "name": device.name,
-        })).collect::<Vec<_>>(),
+        "devices": devices,
     })
 }
 
+#[cfg(unix)]
+fn remote_enabled() -> bool {
+    crate::config::get_config_dir()
+        .as_deref()
+        .is_some_and(service::enabled)
+}
+
+#[cfg(not(unix))]
+fn remote_enabled() -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn idle_devices() -> Vec<Value> {
+    let directory = crate::config::get_config_dir();
+    directory
+        .as_deref()
+        .map(RemoteLifecycle::new)
+        .and_then(|lifecycle| lifecycle.devices().ok())
+        .unwrap_or_default()
+        .iter()
+        .map(|device| {
+            json!({
+                "id": device.id,
+                "name": device.name,
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn idle_devices() -> Vec<Value> {
+    Vec::new()
+}
+
+#[cfg(unix)]
 async fn share_loop(manager: RemoteManager, share: Arc<Share>) {
     let mut interval = tokio::time::interval(Duration::from_millis(100));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -498,6 +595,7 @@ async fn share_loop(manager: RemoteManager, share: Arc<Share>) {
     manager.forget(&share);
 }
 
+#[cfg(unix)]
 impl Share {
     fn directory(&self) -> Option<PathBuf> {
         self.state.try_lock().ok().and_then(|state| {
@@ -769,10 +867,7 @@ impl Share {
 
 #[cfg(test)]
 mod tests {
-    use super::{PairingOffer, idle_status};
-    use crate::remote_gateway::control::OfferDetails;
-    use crate::remote_gateway::handshake::Secret;
-    use std::time::Instant;
+    use super::idle_status;
 
     #[test]
     fn requests_use_the_camel_case_acp_wire_shape() {
@@ -796,8 +891,13 @@ mod tests {
         assert_eq!(value["sessionId"], "session-1");
     }
 
+    #[cfg(unix)]
     #[test]
     fn offer_exposes_only_what_the_popup_needs() {
+        use super::PairingOffer;
+        use crate::remote_gateway::control::OfferDetails;
+        use crate::remote_gateway::handshake::Secret;
+        use std::time::Instant;
         let offer = PairingOffer::new(OfferDetails {
             advertised_address: "192.168.1.4:8787".to_owned(),
             loopback_only: false,
