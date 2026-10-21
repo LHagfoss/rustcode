@@ -143,6 +143,76 @@ enum DebugDriver {
                     try? await Task.sleep(for: .milliseconds(delay))
                 }
             }
+        case "send":
+            // `send <text>`: a follow-up as the composer sends it, starting a
+            // turn in the shown chat without an engine.
+            let session = model.selectedSession ?? "drive"
+            if model.selectedSession == nil { model.selectedSession = session }
+            model.draft = ""
+            model.transcript.appendUser(parts.dropFirst().joined(separator: " "))
+            model.debugTurn(true, in: session)
+        case "end":
+            model.debugTurn(false, in: model.selectedSession ?? "drive")
+        case "vis":
+            // `vis <tag>`: how many drawn views lie in the chat's visible area;
+            // zero with content in the chat is the blank chat.
+            if let scroll = ChatScrollState.current?.scrollView, let doc = scroll.documentView {
+                let visible = scroll.contentView.bounds
+                var count = 0
+                func walk(_ view: NSView) {
+                    for sub in view.subviews {
+                        let frame = sub.convert(sub.bounds, to: doc)
+                        if frame.intersects(visible), frame.height < 4000 { count += 1 }
+                        walk(sub)
+                    }
+                }
+                walk(doc)
+                report("vis \(parts.count > 1 ? parts[1] : "-") \(count) views, clip y \(Int(visible.minY)) doc \(Int(doc.frame.height)) items \(model.transcript.items.count)")
+            }
+        case "watch":
+            // `watch <seconds> <tag>`: log the chat's visible rows every 50 ms, in the background.
+            let seconds = Double(parts.count > 1 ? parts[1] : "3") ?? 3
+            let tag = parts.count > 2 ? parts[2] : "w"
+            Task { @MainActor in
+                let start = Date()
+                while Date().timeIntervalSince(start) < seconds {
+                    report("\(tag) \(ms(start, Date())) \(ChatScrollState.current?.debugVisible ?? "-") items \(model.transcript.items.count)")
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+            }
+        case "scrollby":
+            // `scrollby <points> [steps]`: move the chat, negative up, a step a frame.
+            let steps = Int(parts.count > 2 ? parts[2] : "1") ?? 1
+            for _ in 0..<steps {
+                ChatScrollState.current?.debugLetGo()
+                ChatScrollState.current?.scroll(by: Double(parts[1]) ?? -800, animated: false)
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        case "big":
+            // `big <prose|code|line|tool> <size> [chunks]`: a large reply
+            // streamed in `chunks` pieces at 30 ms each.
+            let kind = parts.count > 1 ? parts[1] : "prose"
+            let size = Int(parts.count > 2 ? parts[2] : "2000") ?? 2000
+            let chunks = max(Int(parts.count > 3 ? parts[3] : "40") ?? 40, 1)
+            if kind == "tool" {
+                model.transcript.apply(.toolCall(id: "big", title: "Run tests", kind: "execute", status: .inProgress, input: nil))
+                model.transcript.apply(.toolCallUpdate(id: "big", title: nil, status: .completed,
+                                                       output: (0..<size).map { "output line \($0)" }.joined(separator: "\n"), diffs: []))
+                break
+            }
+            let text = switch kind {
+            case "code": "Here:\n\n```swift\n" + (0..<size).map { "let value\($0) = compute(\($0)) // line" }.joined(separator: "\n") + "\n```\n"
+            case "wide": "Here:\n\n```swift\n" + (0..<size).map { "let value\($0) = compute(\($0)) // " + String(repeating: "wide ", count: 40) }.joined(separator: "\n") + "\n```\n"
+            case "line": String(repeating: "word ", count: size)
+            default: (0..<size).map { "Paragraph \($0) of a long reply, with `code` and **bold** text." }.joined(separator: "\n\n")
+            }
+            let step = max(text.count / chunks, 1)
+            var rest = Substring(text)
+            while !rest.isEmpty {
+                model.transcript.apply(.agentText(String(rest.prefix(step))))
+                rest = rest.dropFirst(step)
+                try? await Task.sleep(for: .milliseconds(30))
+            }
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
         case "snap":

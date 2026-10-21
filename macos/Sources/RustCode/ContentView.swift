@@ -692,22 +692,35 @@ private struct ChatView: View {
         // whole chat (170 ms a step in a 250-message session). The newest rows
         // stay eager, so the part being read never changes height under the
         // reader while scrolling near the end.
-        let split = max(transcript.items.count - Self.eagerTail, first)
+        let split = ChatLayout.split(count: transcript.items.count, firstShown: first)
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    // Home's target: always the stack's first child, so the
-                    // jump finds it however far down the chat is.
+                // The newest rows and the end of the chat sit below the lazy
+                // stack, not inside it (#2209, #2212). The lazy stack sizes
+                // itself from guessed heights for rows it has not laid out,
+                // and one very tall row (a long reply, a wide code block)
+                // threw the guess off by thousands of points: the chat's end
+                // was scrolled into empty space past its real rows, and the
+                // stack laid out nothing there, so the chat stayed blank
+                // while the reply streamed and after a message was sent. Out
+                // here the end is always laid out at its real height.
+                VStack(alignment: .leading, spacing: 18) {
+                    // Home's target: always laid out, so the jump finds it
+                    // however far down the chat is.
                     Color.clear.frame(height: 0).id(topAnchor)
-                    if first > 0 {
-                        EarlierMessages(count: first)
-                            .reportsChatRow(Self.earlierRow, to: scroll)
-                    }
-                    ForEach(transcript.items[first..<split]) { item in
-                        TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch)
-                            .equatable()
-                            .reportsChatRow(item.id, to: scroll)
-                            .id(item.id)
+                    if first > 0 || split > first {
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            if first > 0 {
+                                EarlierMessages(count: first)
+                                    .reportsChatRow(Self.earlierRow, to: scroll)
+                            }
+                            ForEach(transcript.items[first..<split]) { item in
+                                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch)
+                                    .equatable()
+                                    .reportsChatRow(item.id, to: scroll)
+                                    .id(item.id)
+                            }
+                        }
                     }
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(transcript.items[split...]) { item in
@@ -726,10 +739,8 @@ private struct ChatView: View {
                     }
                     .padding(.bottom, 2)
                     // The very end of the chat, below its padding (with the stack
-                    // spacing, 20 points). A child of the lazy stack itself, not
-                    // nested in the block above: the stack can find its own
-                    // children unlaid, but not ids inside a child it has not
-                    // laid out, so a jump from far up did nothing.
+                    // spacing, 20 points). Outside the lazy stack, so it is
+                    // always laid out and a jump from far up finds it.
                     Color.clear.frame(height: 1).id(bottomAnchor)
                         // The probe for the AppKit scroll view sits under this
                         // last, empty row. Behind the whole stack, every row
@@ -786,6 +797,9 @@ private struct ChatView: View {
             .onAppear {
                 scroll.earlierRow = Self.earlierRow
                 scroll.nearTop = { showEarlier(proxy) }
+                #if DEBUG
+                scroll.debugLetGo = { follow.letGo() }
+                #endif
                 TranscriptKeyInput.shared.start()
                 TranscriptKeyInput.shared.isCovered = { [model] in model.coversChat }
                 TranscriptKeyInput.shared.perform = { action in perform(action, proxy) }
@@ -982,8 +996,6 @@ private struct ChatView: View {
             scroll.hold(top.row, at: top.minY)
         }
     }
-    /// Newest rows laid out eagerly; everything older is lazy.
-    private static let eagerTail = 20
 
     /// Rows below the fold get their real height only once laid out, so one
     /// jump can land short of the end. On macOS 15 the scroll geometry sees

@@ -75,3 +75,20 @@ public struct TranscriptWindow: Equatable, Sendable {
         reveal(0, identity: identity, count: count)
     }
 }
+
+/// How the shown items divide between the chat's lazy stack and the block
+/// of newest rows laid out in full below it (#2209, #2212).
+public enum ChatLayout {
+    /// Newest items laid out in full; everything older in the window is lazy.
+    public static let eagerTail = 20
+
+    /// The index of the first item of the eager tail, for `count` items with
+    /// the window starting at `firstShown`. Items before it and from
+    /// `firstShown` on are lazy; the tail and the end of the chat are never
+    /// inside the lazy stack, whose guessed heights could put them past
+    /// where its rows really are.
+    public static func split(count: Int, firstShown: Int) -> Int {
+        let first = min(max(firstShown, 0), max(count, 0))
+        return max(count - eagerTail, first)
+    }
+}
