@@ -234,6 +234,8 @@ pub(crate) fn render_with_transcript_snapshot(
         transcript.follow_control.clear();
         transcript.tasks_chip = None;
         transcript.tasks_chip_hovered = false;
+        transcript.posture_chip = None;
+        transcript.posture_chip_hovered = false;
         transcript.set_tool_rows(ratatui::layout::Rect::default(), Vec::new());
         transcript.set_message_rows(ratatui::layout::Rect::default(), Vec::new());
         transcript.set_viz_rows(ratatui::layout::Rect::default(), Vec::new());
@@ -274,7 +276,11 @@ pub(crate) fn render_with_transcript_snapshot(
 
     let inner_width = f.area().width.max(1);
     let chat_width = f.area().width.max(1);
-    let raw_input_lines = input_line_count(state, inner_width as usize);
+    // The framed composer wraps inside its border and adds a settings row;
+    // narrow terminals fall back to the unframed composer.
+    let composer_chrome = composer_chrome_rows(state, inner_width);
+    let raw_input_lines =
+        input_line_count(state, usize::from(composer_text_width(state, inner_width)));
     let approval_active =
         *state.status() == AppStatus::AwaitingToolConfirmation && !state.user_overlay_open();
     let question_active =
@@ -289,7 +295,7 @@ pub(crate) fn render_with_transcript_snapshot(
     } else if question_active {
         3
     } else {
-        raw_input_lines + 2
+        raw_input_lines + composer_chrome
     };
     let queue_block_height = queue_preview_height(state, inner_width as usize);
 
@@ -389,9 +395,9 @@ pub(crate) fn render_with_transcript_snapshot(
             .saturating_sub(activity_gaps)
             .saturating_sub(footer_height)
             .saturating_sub(popup_height)
-            .saturating_sub(2)
+            .saturating_sub(composer_chrome)
             .max(1);
-        raw_input_lines.min(max_input_lines) + 2
+        raw_input_lines.min(max_input_lines) + composer_chrome
     };
 
     let max_chat_height = f
@@ -582,6 +588,21 @@ pub(crate) fn render_with_transcript_snapshot(
     } else {
         Composer::default().render(f, &composer_chunks, state)
     };
+    // The posture token on the framed composer's settings row is a click
+    // target that cycles ask -> auto-approve -> plan.
+    let composer_painted = !approval_active && !question_active;
+    let settings_in_composer = composer_painted && composer_frame_shown(state, chunks[8].width);
+    transcript.posture_chip = if settings_in_composer {
+        composer_posture_rect(state, chunks[8])
+    } else {
+        None
+    };
+    if let Some(chip) = transcript.posture_chip
+        && transcript.posture_chip_hovered
+    {
+        f.buffer_mut()
+            .set_style(chip, Style::default().bg(COLOR_HOVER_BG()));
+    }
     if footer_visible {
         // A live selection is the modal gesture, so the footer names the copy
         // key for as long as it lasts and drops it the moment the selection is
@@ -598,6 +619,7 @@ pub(crate) fn render_with_transcript_snapshot(
                 || transcript.panel_selection.has_selection()
                 || state.composer_selection_range().is_some(),
             tasks_hovered,
+            settings_in_composer,
         );
     } else {
         transcript.tasks_chip = None;

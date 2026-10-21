@@ -319,12 +319,11 @@ impl Composer {
     }
 
     fn toggle_agent_mode(&self, state: &mut AppState) {
-        state.agent_mode = match state.agent_mode {
+        let mode = match state.agent_mode {
             rustcode::controller::AgentMode::Build => rustcode::controller::AgentMode::Plan,
             rustcode::controller::AgentMode::Plan => rustcode::controller::AgentMode::Build,
         };
-        state.config.agent_mode = state.agent_mode;
-        rustcode::controller::save_config(&state.config);
+        set_agent_mode(state, mode);
         let notice = match state.agent_mode {
             rustcode::controller::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
             rustcode::controller::AgentMode::Plan => {
@@ -333,6 +332,35 @@ impl Composer {
         };
         state.set_transient_notice(notice);
     }
+}
+
+fn set_agent_mode(state: &mut AppState, mode: rustcode::controller::AgentMode) {
+    state.agent_mode = mode;
+    state.config.agent_mode = mode;
+    rustcode::controller::save_config(&state.config);
+}
+
+/// Advance the permission posture shown on the composer's settings row:
+/// `ask` -> `auto-approve` -> `plan` -> `ask`. Plan mode wins over
+/// auto-approval on screen, so entering plan turns auto-approval off and the
+/// next click lands on `ask` rather than on a hidden `auto-approve`.
+pub(crate) fn cycle_permission_posture(state: &mut AppState) {
+    use rustcode::controller::AgentMode;
+    let notice = if state.agent_mode == AgentMode::Plan {
+        set_agent_mode(state, AgentMode::Build);
+        if state.auto_confirm {
+            state.set_auto_confirm(false);
+        }
+        "Permission posture: ask"
+    } else if state.auto_confirm {
+        state.set_auto_confirm(false);
+        set_agent_mode(state, AgentMode::Plan);
+        "Permission posture: plan (read-only)"
+    } else {
+        state.set_auto_confirm(true);
+        "Permission posture: auto-approve"
+    };
+    state.set_transient_notice(notice);
 }
 
 #[cfg(test)]
@@ -487,6 +515,33 @@ mod tests {
 
         composer.handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
         assert_eq!(state.agent_mode, rustcode::controller::AgentMode::Build);
+        assert!(!state.auto_confirm);
+    }
+
+    #[test]
+    fn posture_click_cycles_ask_auto_approve_plan() {
+        use rustcode::controller::AgentMode;
+        let mut state = AppState::new();
+        state.agent_mode = AgentMode::Build;
+        state.auto_confirm = false;
+
+        super::cycle_permission_posture(&mut state);
+        assert_eq!(state.agent_mode, AgentMode::Build);
+        assert!(state.auto_confirm);
+
+        super::cycle_permission_posture(&mut state);
+        assert_eq!(state.agent_mode, AgentMode::Plan);
+        assert!(!state.auto_confirm, "plan and auto-approve never both hold");
+
+        super::cycle_permission_posture(&mut state);
+        assert_eq!(state.agent_mode, AgentMode::Build);
+        assert!(!state.auto_confirm);
+
+        // Plan entered with /yolo still on returns straight to ask.
+        state.agent_mode = AgentMode::Plan;
+        state.auto_confirm = true;
+        super::cycle_permission_posture(&mut state);
+        assert_eq!(state.agent_mode, AgentMode::Build);
         assert!(!state.auto_confirm);
     }
 
