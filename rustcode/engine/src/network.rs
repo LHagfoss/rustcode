@@ -1360,6 +1360,36 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 s.recent_read_outputs.clear();
                 s.read_file_mtimes.clear();
                 crate::config::save_session_history(&live_session_id, &s.history);
+                // Record what this cost, for the context modal and /context.
+                // Plan-backed profiles and local engines never run the
+                // summarizer, so their result is the reduced record.
+                let before_tokens: usize = captured_history
+                    .iter()
+                    .map(compaction::estimate_message_tokens)
+                    .sum();
+                let after_tokens: usize = s
+                    .history
+                    .iter()
+                    .map(compaction::estimate_message_tokens)
+                    .sum();
+                let mode = if deterministic_compaction || local_model {
+                    crate::app::CompactionMode::DeterministicRecord
+                } else {
+                    crate::app::CompactionMode::AiSummary
+                };
+                let previous_count = s
+                    .last_compaction
+                    .as_ref()
+                    .map(|stats| stats.count)
+                    .unwrap_or(0);
+                s.last_compaction = Some(crate::app::CompactionStats::new(
+                    crate::app::CompactionTrigger::Auto,
+                    mode,
+                    before_tokens,
+                    after_tokens,
+                    pre_len,
+                    previous_count,
+                ));
             } else {
                 // Deterministic pruning can change the request history without
                 // invoking the summarizer. Persist that rewrite as well, but

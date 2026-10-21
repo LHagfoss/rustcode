@@ -1102,7 +1102,8 @@ fn history_picker_renders_borderless_full_width_options() {
 fn context_panel_uses_theme_swatches_matching_the_grid() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     crate::ui::theme::set_active_theme("default");
-    let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+    // Tall enough for all eight legend rows plus the grid and reserves.
+    let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
     let mut state = RenderState::new();
     state.history.push(rustcode::controller::ChatMessage::new(
         "user",
@@ -1114,10 +1115,10 @@ fn context_panel_uses_theme_swatches_matching_the_grid() {
     ));
     terminal
         .draw(|frame| {
-            render_context_modal(frame, &render_snapshot(&state), Rect::new(0, 21, 120, 3))
+            render_context_modal(frame, &render_snapshot(&state), Rect::new(0, 29, 120, 3))
         })
         .unwrap();
-    let rows = (0..24)
+    let rows = (0..32)
         .map(|y| {
             (0..120)
                 .map(|x| terminal.backend().buffer()[(x, y)].symbol())
@@ -1129,6 +1130,7 @@ fn context_panel_uses_theme_swatches_matching_the_grid() {
         "User messages",
         "Agent responses",
         "Tool calls",
+        "Compacted history",
         "System prompt",
         "System tools",
         "Skills",

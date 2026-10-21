@@ -114,6 +114,9 @@ pub struct RenderState {
     pub current_response: Arc<String>,
     pub recap_loading: bool,
     pub current_token_usage: Option<TokenUsage>,
+    /// The last compaction applied to this session's history, for the context
+    /// modal and `/context`.
+    pub last_compaction: Option<crate::app::CompactionStats>,
     pub current_turn_token_usage: Option<TokenUsage>,
     pub current_round_token_usage: Option<TokenUsage>,
     pub current_round_estimated_input_tokens: u32,
@@ -334,6 +337,7 @@ pub fn render_state(state: &AppState) -> RenderState {
         current_response: Arc::clone(&state.current_response),
         recap_loading: state.recap_request_id.is_some(),
         current_token_usage: state.current_token_usage.clone(),
+        last_compaction: state.last_compaction.clone(),
         current_turn_token_usage: state.current_turn_token_usage.clone(),
         current_round_token_usage: state.current_round_token_usage.clone(),
         current_round_estimated_input_tokens: state.current_round_estimated_input_tokens,

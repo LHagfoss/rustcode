@@ -83,6 +83,9 @@ pub struct ContextBreakdownInput<'a> {
     /// The `rustcode-viz` level the frontend renders; above 0, root requests
     /// carry the visualization hint for that level (#2088, #2217).
     pub visualization_level: u8,
+    /// The last compaction applied to the active history, when the frontend
+    /// has one to show. Reporting only; it does not change any number above.
+    pub compaction: Option<crate::app::CompactionStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,14 +100,21 @@ pub struct ContextBreakdown {
     pub system_tools_tokens: usize,
     pub skills_tokens: usize,
     pub subagent_tokens: usize,
+    /// Tokens held by the compaction summary or deterministic record. These
+    /// messages are `system`-role, so before this category existed they matched
+    /// no arm below and silently under-reported the used total.
+    pub compacted_history_tokens: usize,
+    /// What the last compaction in this session did, if any.
+    pub compaction: Option<crate::app::CompactionStats>,
     pub remaining_tokens: usize,
 }
 
 /// The category names, in legend order, shared by every frontend.
-pub const CONTEXT_CATEGORY_LABELS: [&str; 7] = [
+pub const CONTEXT_CATEGORY_LABELS: [&str; 8] = [
     "User messages",
     "Agent responses",
     "Tool calls",
+    "Compacted history",
     "System prompt",
     "System tools",
     "Skills",
@@ -156,15 +166,17 @@ impl ContextBreakdown {
             agent_mode: state.agent_mode,
             subagent_tokens,
             visualization_level: state.visualization_level,
+            compaction: state.last_compaction.clone(),
         })
     }
 
     /// Each category's tokens, in [`CONTEXT_CATEGORY_LABELS`] order.
-    pub fn category_tokens(&self) -> [usize; 7] {
+    pub fn category_tokens(&self) -> [usize; 8] {
         [
             self.user_tokens,
             self.assistant_tokens,
             self.tool_tokens,
+            self.compacted_history_tokens,
             self.system_prompt_tokens,
             self.system_tools_tokens,
             self.skills_tokens,
@@ -207,7 +219,22 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
     });
 
     let (mut user_tokens, mut assistant_tokens, mut tool_tokens) = (0, 0, 0);
+    let mut compacted_history_tokens = 0usize;
     for message in input.history {
+        // The compaction summary and the deterministic record are `system`
+        // messages. Count them here so the categories add up to the used total
+        // instead of leaving the compacted prefix invisible.
+        if message.compaction_boundary.is_some()
+            || message
+                .content
+                .starts_with(crate::network::compaction::SUMMARY_MARKER)
+            || message
+                .content
+                .starts_with(crate::network::compaction::STRUCTURED_MEMORY_MARKER)
+        {
+            compacted_history_tokens += super::estimate_tokens(&message.content);
+            continue;
+        }
         match message.role.as_str() {
             "user" => user_tokens += super::estimate_tokens(&message.content),
             "assistant" => {
@@ -266,6 +293,8 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
         system_tools_tokens,
         skills_tokens,
         subagent_tokens: input.subagent_tokens,
+        compacted_history_tokens,
+        compaction: input.compaction.clone(),
         remaining_tokens: context_window.saturating_sub(input.current_usage.used_tokens as usize),
     }
 }
@@ -330,6 +359,31 @@ pub fn context_report_markdown(breakdown: &ContextBreakdown, model: Option<&str>
         breakdown.percent(breakdown.remaining_tokens)
     ));
     out.push_str("Categories are estimated from the saved history.\n\n");
+    if let Some(compaction) = breakdown.compaction.as_ref() {
+        out.push_str(&format!(
+            "**Last compaction ({}, {})**: {} → {} tokens, {} reclaimed ({} messages considered)\n\n",
+            compaction.trigger.label(),
+            compaction.mode.label(),
+            format_token_count(compaction.before_tokens),
+            format_token_count(compaction.after_tokens),
+            format_token_count(compaction.reclaimed_tokens),
+            compaction.messages_considered,
+        ));
+        if compaction.mode.is_reduced() {
+            out.push_str(
+                "This provider has no plain summarizer endpoint, so `/compact` writes a \
+                 reduced deterministic record rather than a written summary. Exact messages \
+                 stay recoverable with `zoom_context`.\n\n",
+            );
+        }
+        if compaction.is_repeated() {
+            out.push_str(&format!(
+                "This session has compacted {} times. Repeated compaction over a long session \
+                 makes the model less accurate; start a new chat when the task is finished.\n\n",
+                compaction.count
+            ));
+        }
+    }
     match breakdown.configured_guards {
         Some(guards) => out.push_str(&format!(
             "Configured reserves (not usage): output {} incl. thinking {} · tools {} · safety {} · provider overhead {}",

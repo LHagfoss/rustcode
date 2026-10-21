@@ -8,8 +8,10 @@ struct ContextSheet: View {
     let context: ContextBreakdown
     @Environment(\.closePanel) private var dismiss
 
-    /// One colour per category, in the engine's legend order.
-    static let palette: [Color] = [.blue, .purple, .orange, .teal, .indigo, .pink, .green]
+    /// One colour per category, in the engine's legend order (user, agent,
+    /// tool calls, compacted history, system prompt, system tools, skills,
+    /// subagents).
+    static let palette: [Color] = [.blue, .purple, .orange, .brown, .teal, .indigo, .pink, .green]
 
     private func color(_ index: Int) -> Color { Self.palette[index % Self.palette.count] }
 
@@ -18,6 +20,10 @@ struct ContextSheet: View {
             header
             bar
             legend
+            if let compaction = context.compaction {
+                Divider()
+                compactionView(compaction)
+            }
             if let reserves = context.reserves {
                 Divider()
                 reservesView(reserves)
@@ -93,6 +99,31 @@ struct ContextSheet: View {
                 .gridColumnAlignment(.trailing)
         }
         .font(.callout)
+    }
+
+    /// What the last compaction actually did. The mode matters: a
+    /// plan-backed provider writes a reduced deterministic record instead of
+    /// a written summary, and saying so is the point of showing this.
+    private func compactionView(_ compaction: ContextBreakdown.Compaction) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Last compaction").font(.subheadline.weight(.medium))
+            Text("\(compaction.trigger.capitalized) · \(compaction.mode.replacingOccurrences(of: "_", with: " ")) · \(SessionUsage.compact(compaction.beforeTokens)) → \(SessionUsage.compact(compaction.afterTokens)) tokens · \(SessionUsage.compact(compaction.reclaimedTokens)) reclaimed")
+                .font(.caption)
+                .monospacedDigit()
+                .fixedSize(horizontal: false, vertical: true)
+            if compaction.isReduced {
+                Text("This provider has no plain summarizer endpoint, so compaction wrote a reduced record rather than a written summary. Exact messages stay recoverable with `zoom_context`.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if compaction.isRepeated {
+                Text("This session has compacted \(compaction.count) times. Repeated compaction makes the model less accurate; start a new chat when the task is finished.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func reservesView(_ reserves: ContextBreakdown.Reserves) -> some View {

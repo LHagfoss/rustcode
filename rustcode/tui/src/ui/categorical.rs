@@ -45,8 +45,8 @@
 use ratatui::style::Color;
 
 /// Number of filled usage categories (legend order: user, agent, tool calls,
-/// system prompt, system tools, skills, subagents).
-pub const CATEGORY_COUNT: usize = 7;
+/// compacted history, system prompt, system tools, skills, subagents).
+pub const CATEGORY_COUNT: usize = 8;
 
 /// Oklab chroma below which a seed token counts as neutral and borrows the
 /// palette hue centre.
@@ -137,10 +137,13 @@ pub fn ramp() -> [Color; CATEGORY_COUNT + 1] {
 /// same tokens the pre-#1537 mapping read straight through; the ramp only
 /// re-derives hue, chroma and lightness from them.
 fn seed_colors(palette: &crate::ui::theme::ThemePalette) -> [Color; CATEGORY_COUNT] {
+    // Index order matches the `/context` legend: user, agent, tool calls,
+    // compacted history, system prompt, system tools, skills, subagents.
     [
         palette.primary,
         palette.green,
         palette.tip,
+        palette.selection,
         palette.secondary,
         palette.muted,
         palette.text,
@@ -635,7 +638,7 @@ mod tests {
         assert_eq!(crate::ui::COLOR_SECONDARY(), crate::ui::COLOR_GREEN());
         let colors = ramp();
         let agent = colors[1];
-        let system_prompt = colors[3];
+        let system_prompt = colors[4];
         assert_ne!(agent, system_prompt);
         assert!(separation(agent, system_prompt) >= MIN_SEPARATION);
         crate::ui::theme::set_active_theme("default");
@@ -649,7 +652,7 @@ mod tests {
         crate::ui::theme::set_active_theme("dracula");
         assert_eq!(crate::ui::COLOR_MUTED(), crate::ui::COLOR_TURN_SEPARATOR());
         let colors = ramp();
-        let system_tools = colors[4];
+        let system_tools = colors[5];
         let free = colors[CATEGORY_COUNT];
         assert_ne!(system_tools, free);
         assert!(separation(system_tools, free) >= MIN_SEPARATION);
@@ -667,6 +670,7 @@ mod tests {
             3.0,
             4.0,
             5.0,
+            5.5,
         ]);
         assert!(
             (hues[0] - primary).abs() < 1e-9,

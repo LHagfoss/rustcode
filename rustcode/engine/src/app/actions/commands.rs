@@ -981,6 +981,25 @@ pub(crate) async fn compact_history(
                 );
                 return "History compaction discarded as stale: the active session or history changed while compaction was running.".to_owned();
             }
+            let previous_count = s
+                .last_compaction
+                .as_ref()
+                .map(|stats| stats.count)
+                .unwrap_or(0);
+            s.last_compaction = Some(crate::app::CompactionStats::new(
+                crate::app::CompactionTrigger::Manual,
+                // Plan-backed profiles compact into the reduced deterministic
+                // record; every other profile gets a written summary.
+                if chatgpt_plan_profile {
+                    crate::app::CompactionMode::DeterministicRecord
+                } else {
+                    crate::app::CompactionMode::AiSummary
+                },
+                before,
+                after,
+                original_history.len(),
+                previous_count,
+            ));
             format!("🧹 History compacted: reduced context from {before} to {after} tokens.")
         }
         Err(error) => {

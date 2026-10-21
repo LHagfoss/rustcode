@@ -59,7 +59,8 @@ pub(crate) fn usage_update(state: &crate::app::AppState) -> SessionUpdate {
 }
 
 /// Bumped when the `_meta.rustcode` context fields change incompatibly.
-pub(crate) const CONTEXT_META_VERSION: u32 = 1;
+/// v2 adds the `compaction` object and the compacted-history category.
+pub(crate) const CONTEXT_META_VERSION: u32 = 2;
 
 /// The `/context` breakdown as data, for clients that draw it themselves.
 /// Category names and order match the TUI legend. `reserves` is null when the
@@ -80,6 +81,15 @@ pub(crate) fn context_breakdown(state: &crate::app::AppState) -> serde_json::Val
             == crate::controller::ContextUsageSource::HistoryEstimate,
         "free": breakdown.remaining_tokens,
         "categories": categories,
+        "compaction": breakdown.compaction.as_ref().map(|stats| serde_json::json!({
+            "trigger": stats.trigger,
+            "mode": stats.mode,
+            "beforeTokens": stats.before_tokens,
+            "afterTokens": stats.after_tokens,
+            "reclaimedTokens": stats.reclaimed_tokens,
+            "messagesConsidered": stats.messages_considered,
+            "count": stats.count,
+        })),
         "reserves": breakdown.configured_guards.map(|guards| serde_json::json!({
             "output": guards.output_tokens,
             "thinking": guards.thinking_tokens,
@@ -179,12 +189,15 @@ mod tests {
             .push(ChatMessage::new("user", "a".repeat(400)));
         let value = serde_json::to_value(usage_update(&state)).unwrap();
         let context = &value["_meta"]["rustcode"]["context"];
-        assert_eq!(context["version"], 1);
+        assert_eq!(context["version"], 2);
         assert_eq!(context["window"], u64::from(state.active_context_window()));
         assert_eq!(context["used"], 100);
         assert_eq!(context["estimated"], true);
+        // No compaction has run in a fresh session.
+        assert!(context["compaction"].is_null());
         let categories = context["categories"].as_array().unwrap();
-        assert_eq!(categories.len(), 7);
+        assert_eq!(categories.len(), 8);
+        assert_eq!(categories[3]["name"], "Compacted history");
         assert_eq!(categories[0]["name"], "User messages");
         assert!(categories[0]["tokens"].as_u64().unwrap() > 0);
         assert_eq!(
