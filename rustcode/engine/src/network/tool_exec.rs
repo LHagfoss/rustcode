@@ -471,12 +471,25 @@ async fn run_authorized_tool(
                             )
                         }
                     } else {
-                        crate::tools::execute_with_metadata_cancellable_for_call(
+                        // `manage_task` `wait` blocks while another process keeps
+                        // writing; it streams that output tail through this sink
+                        // instead of leaving the card quiet until it returns
+                        // (#2230).
+                        if live_key_owned.is_some() {
+                            let callback: crate::tools::CommandProgressCallback =
+                                Arc::new(move |bytes, stderr| {
+                                    let _ = progress_tx.send((bytes.to_vec(), stderr));
+                                });
+                            crate::tools::set_active_tool_progress(Some(callback));
+                        }
+                        let output = crate::tools::execute_with_metadata_cancellable_for_call(
                             &name_owned,
                             &args_owned,
                             Some(cancel_token_for_task),
                             call_id_owned.as_deref(),
-                        )
+                        );
+                        crate::tools::set_active_tool_progress(None);
+                        output
                     };
                     if result.success
                         && let Ok(mut diff) = mutation_diff_for_task.lock()
