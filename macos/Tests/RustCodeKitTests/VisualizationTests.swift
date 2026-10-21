@@ -165,8 +165,172 @@ final class VisualizationTests: XCTestCase {
         XCTAssertEqual([nodes[0].id, nodes[0].children[0].id, nodes[0].children[1].id, nodes[0].children[1].children[0].id], [0, 1, 2, 3])
     }
 
-    func testInitializeAdvertisesVisualizations() {
+    func testInitializeAdvertisesVisualizationLevelTwo() {
         let params = ACPRequests.initialize(appVersion: "1.0")
-        XCTAssertEqual(params["clientCapabilities"]?["_meta"]?["rustcode"]?["visualizations"], .number(1))
+        XCTAssertEqual(params["clientCapabilities"]?["_meta"]?["rustcode"]?["visualizations"], .number(2))
+        // The payload schema stays version 1; level 2 only adds types.
+        XCTAssertEqual(Visualization.version, 1)
+    }
+
+    // MARK: - Level 2 widgets
+
+    func testLineChartParsesLabelsSeriesGapsAndUnit() throws {
+        let body = #"{"version":1,"type":"line_chart","title":"Size","unit":"MB","labels":["v1",2,"v3"],"series":[{"name":"mac","values":[1.5,null,3]},{"values":[2]}]}"#
+        let visualization = try Visualization.parse(body)
+        guard case .lineChart(let labels, let series, let unit, let hiddenPoints, let hiddenSeries) = visualization.content else {
+            return XCTFail()
+        }
+        XCTAssertEqual(labels, ["v1", "2", "v3"])
+        XCTAssertEqual(unit, "MB")
+        XCTAssertEqual(series.map(\.name), ["mac", "series 2"])
+        XCTAssertEqual(series[0].values, [1.5, nil, 3])
+        // A short series is padded with gaps to the label count.
+        XCTAssertEqual(series[1].values, [2, nil, nil])
+        XCTAssertEqual(hiddenPoints, 0)
+        XCTAssertEqual(hiddenSeries, 0)
+        XCTAssertEqual(visualization.accessibilitySummary,
+                       "Line chart, 3 points from v1 to v3. mac: 1.5 MB to 3 MB, low 1.5 MB, high 3 MB; series 2: 2 MB to 2 MB, low 2 MB, high 2 MB.")
+    }
+
+    func testLineChartLimitsPointsAndSeries() throws {
+        let labels = (0..<130).map { "\($0)" }.joined(separator: ",")
+        let values = (0..<130).map { "\($0)" }.joined(separator: ",")
+        let series = (0..<6).map { #"{"name":"s\#($0)","values":[\#(values)]}"# }.joined(separator: ",")
+        guard case .lineChart(let shownLabels, let shownSeries, _, let hiddenPoints, let hiddenSeries) =
+            try Visualization.parse(#"{"version":1,"type":"line_chart","labels":[\#(labels)],"series":[\#(series)]}"#).content else {
+            return XCTFail()
+        }
+        XCTAssertEqual(shownLabels.count, Visualization.maxLinePoints)
+        XCTAssertEqual(shownSeries.count, Visualization.maxLineSeries)
+        XCTAssertTrue(shownSeries.allSatisfy { $0.values.count == Visualization.maxLinePoints })
+        XCTAssertEqual(hiddenPoints, 30)
+        XCTAssertEqual(hiddenSeries, 2)
+    }
+
+    func testStatListParsesValuesUnitsAndNotes() throws {
+        let body = #"{"version":1,"type":"stat_list","items":[{"label":"Tests","value":3104,"note":"all passing"},{"label":"Coverage","value":81.25,"unit":"%"},{"label":"LOC","value":"186k"}]}"#
+        let visualization = try Visualization.parse(body)
+        XCTAssertEqual(visualization.title, "stat list")
+        guard case .statList(let items, let hidden) = visualization.content else { return XCTFail() }
+        XCTAssertEqual(items.map(\.value), ["3104", "81.25 %", "186k"])
+        XCTAssertEqual(items.map(\.number), [3104, 81.25, nil])
+        XCTAssertEqual(items[0].note, "all passing")
+        XCTAssertEqual(hidden, 0)
+        XCTAssertEqual(visualization.accessibilitySummary, "Tests: 3104, Coverage: 81.25 %, LOC: 186k.")
+
+        let many = (0..<20).map { #"{"label":"k\#($0)","value":\#($0)}"# }.joined(separator: ",")
+        guard case .statList(let capped, let hiddenMany) =
+            try Visualization.parse(#"{"version":1,"type":"stat_list","items":[\#(many)]}"#).content else { return XCTFail() }
+        XCTAssertEqual(capped.count, Visualization.maxStatItems)
+        XCTAssertEqual(hiddenMany, 8)
+    }
+
+    func testChecklistCountsEveryItemAndDefaultsToTodo() throws {
+        let items = (0..<60).map { index in
+            #"{"label":"step \#(index)","status":"\#(index < 45 ? "done" : "failed")"}"#
+        }.joined(separator: ",")
+        let visualization = try Visualization.parse(#"{"version":1,"type":"checklist","items":[\#(items),{"label":"last"}]}"#)
+        guard case .checklist(let shown, let done, let total, let hidden) = visualization.content else { return XCTFail() }
+        XCTAssertEqual(shown.count, Visualization.maxChecklistItems)
+        XCTAssertEqual(done, 45)
+        XCTAssertEqual(total, 61)
+        XCTAssertEqual(hidden, 11)
+        XCTAssertEqual(shown[0].status, .done)
+        XCTAssertEqual(visualization.accessibilitySummary, "Checklist, 45 of 61 done, 5 failed.")
+
+        let parsed = try Visualization.parse(#"{"version":1,"type":"checklist","items":[{"label":"a","status":"in_progress","note":"half"},{"label":"b"}]}"#)
+        guard case .checklist(let pair, _, _, _) = parsed.content else { return XCTFail() }
+        XCTAssertEqual(pair.map(\.status), [.inProgress, .todo])
+        XCTAssertEqual(pair[0].note, "half")
+    }
+
+    func testLevelTwoWidgetsFallBackWithReasons() {
+        XCTAssertEqual(reason(#"{"version":1,"type":"line_chart","series":[]}"#), "line_chart needs a \"labels\" array")
+        XCTAssertEqual(reason(#"{"version":1,"type":"line_chart","labels":[],"series":[]}"#), "line_chart has no labels")
+        XCTAssertEqual(reason(#"{"version":1,"type":"line_chart","labels":["a"],"series":[]}"#), "line_chart has no series")
+        XCTAssertEqual(reason(#"{"version":1,"type":"line_chart","labels":[true],"series":[{"values":[1]}]}"#),
+                       "line_chart labels must be strings or numbers")
+        XCTAssertEqual(reason(#"{"version":1,"type":"line_chart","labels":["a"],"series":[{"values":["1"]}]}"#),
+                       "line_chart values must be finite numbers or null")
+        XCTAssertEqual(reason(#"{"version":1,"type":"line_chart","labels":["a"],"series":[{"name":3,"values":[1]}]}"#),
+                       "line_chart series \"name\" must be a string")
+        XCTAssertEqual(reason(#"{"version":1,"type":"line_chart","labels":["a"],"series":[{"values":[null]}]}"#),
+                       "line_chart has no values")
+        XCTAssertEqual(reason(#"{"version":1,"type":"line_chart","labels":["a"],"series":[1]}"#),
+                       "line_chart series must be objects")
+        XCTAssertEqual(reason(#"{"version":1,"type":"stat_list","items":[]}"#), "stat_list has no items")
+        XCTAssertEqual(reason(#"{"version":1,"type":"stat_list","items":[{"label":"a","value":[1]}]}"#),
+                       "every stat_list item needs a string or finite numeric \"value\"")
+        XCTAssertEqual(reason(#"{"version":1,"type":"stat_list","items":[{"value":1}]}"#),
+                       "every stat_list item needs a string \"label\"")
+        XCTAssertEqual(reason(#"{"version":1,"type":"checklist","items":[{"label":"a","status":"maybe"}]}"#),
+                       "checklist \"status\" must be done, todo, in_progress, failed, or skipped")
+        XCTAssertEqual(reason(#"{"version":1,"type":"checklist","items":[{"status":"done"}]}"#),
+                       "every checklist item needs a string \"label\"")
+        XCTAssertEqual(reason(#"{"version":1,"type":"checklist"}"#), "checklist needs an \"items\" array")
+    }
+
+    func testLevelTwoTextIsSingleLineAndBounded() throws {
+        let long = String(repeating: "z", count: 200)
+        let visualization = try Visualization.parse(#"{"version":1,"type":"checklist","items":[{"label":"a\u001b[2Jb\nc","note":"\#(long)"}]}"#)
+        guard case .checklist(let items, _, _, _) = visualization.content else { return XCTFail() }
+        XCTAssertEqual(items[0].label, "a [2Jb c")
+        XCTAssertEqual(items[0].note?.count, Visualization.maxCellCharacters)
+    }
+
+    func testStreamingLevelTwoBlocksStayIncompleteUntilTheFenceCloses() {
+        let body = #"{"version":1,"type":"line_chart","labels":["a","b"],"series":[{"values":[1,2]}]}"#
+        let full = "Trend:\n\n```rustcode-viz\n\(body)\n```"
+        // Every prefix that stops before the closing fence is a placeholder,
+        // never a half-drawn widget or a parse error.
+        let closing = full.range(of: "\n```", options: .backwards)!.lowerBound
+        for end in stride(from: full.distance(from: full.startIndex, to: full.range(of: "rustcode-viz\n")!.upperBound),
+                          to: full.distance(from: full.startIndex, to: closing), by: 7) {
+            let partial = String(full.prefix(end))
+            guard case .visualization(let block) = MarkdownBlock.parse(partial, visualizations: true).last else {
+                return XCTFail("no block for \(partial)")
+            }
+            XCTAssertEqual(block.state, .incomplete, partial)
+        }
+        guard case .visualization(let done) = MarkdownBlock.parse(full, visualizations: true).last,
+              case .rendered = done.state else { return XCTFail() }
+    }
+
+    func testPlainTextExportCoversEveryType() throws {
+        let table = try Visualization.parse(#"{"version":1,"type":"table","title":"T","columns":["a|b","n"],"rows":[["x",2],["y",1]],"sort_by":{"column":1}}"#)
+        XCTAssertEqual(table.plainText, "T\n\n| a\\|b | n |\n| --- | --- |\n| y | 1 |\n| x | 2 |")
+        let tree = try Visualization.parse(#"{"version":1,"type":"tree","title":"T","nodes":[{"label":"a","note":"n","children":[{"label":"b"}]}]}"#)
+        XCTAssertEqual(tree.plainText, "T\n\n- a — n\n  - b")
+        let line = try Visualization.parse(#"{"version":1,"type":"line_chart","title":"L","unit":"s","labels":["a","b"],"series":[{"name":"x","values":[1,null]}]}"#)
+        XCTAssertEqual(line.plainText, "L\n\n| Label (s) | x |\n| --- | --- |\n| a | 1 |\n| b |  |")
+        let checklist = try Visualization.parse(#"{"version":1,"type":"checklist","title":"C","summary":"S","items":[{"label":"a","status":"done"},{"label":"b","note":"n"}]}"#)
+        XCTAssertEqual(checklist.plainText, "C\nS\n\n1 of 2 done\n[x] a\n[ ] b — n")
+        XCTAssertEqual(try Visualization.parse(bar).plainText, "Build time\nengine dominates\n\nengine: 42 s\ntui: 10.5 s\ncore: 3 s")
+    }
+
+    // MARK: - Guide
+
+    func testGuideCoversEveryTypeWithASampleThatRenders() throws {
+        XCTAssertEqual(VisualizationGuide.entries.map(\.type), Visualization.supportedTypes)
+        for entry in VisualizationGuide.entries {
+            XCTAssertFalse(entry.prompt.isEmpty)
+            XCTAssertEqual(try Visualization.parse(entry.sample).type, entry.type)
+            guard case .visualization(let block) = MarkdownBlock.parse(entry.sampleMarkdown, visualizations: true).first,
+                  case .rendered = block.state else { return XCTFail(entry.type) }
+            XCTAssertLessThan(entry.sample.utf8.count, Visualization.maxPayloadBytes)
+        }
+    }
+
+    func testStoredLevelOneMessagesRenderUnchanged() throws {
+        // A reply saved before level 2 renders exactly as it did, and its
+        // source fence is what copying reproduces.
+        let stored = "Before\n\n```rustcode-viz\n\(bar)\n```\n\n```rustcode-viz\n{\"version\":1,\"type\":\"pie\"}\n```"
+        let blocks = MarkdownBlock.parse(stored, visualizations: true)
+        guard case .visualization(let first) = blocks[1], case .visualization(let second) = blocks[2] else {
+            return XCTFail("\(blocks)")
+        }
+        XCTAssertEqual(first.state, .rendered(try Visualization.parse(bar)))
+        XCTAssertEqual(first.source, "```rustcode-viz\n\(bar)\n```")
+        XCTAssertEqual(second.state, .invalid("unsupported type \"pie\""))
     }
 }

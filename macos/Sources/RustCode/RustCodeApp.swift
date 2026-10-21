@@ -86,6 +86,9 @@ struct RustCodeApp: App {
                     .disabled(!model.showsPreview)
                 TerminalMenuItems(terminal: model.terminal, keybindings: model.keybindings)
             }
+            CommandGroup(after: .help) {
+                Button("Charts, Tables & Trees in Chat…") { model.showsVisualizationGuide = true }
+            }
         }
     }
 }
@@ -223,6 +226,9 @@ final class DesktopModel: ObservableObject {
     @Published var showsSettings = false
     /// `/remote`: the pairing panel over the chat.
     @Published var showsRemote = false
+    /// `/visualize`, Help > Charts, Tables & Trees: the guide to in-chat
+    /// visualizations, with prompts to insert.
+    @Published var showsVisualizationGuide = false
     /// The latest share and pairing state, polled while the panel is open.
     @Published private(set) var remoteStatus: RemoteShareStatus?
     /// A start, pair, or stop request is in flight.
@@ -767,8 +773,18 @@ final class DesktopModel: ObservableObject {
             }
         case .terminal: terminal.open()
         case .remote: await openRemote()
+        case .visualizations: showsVisualizationGuide = true
         case .execute: break
         }
+    }
+
+    /// Put an example request from the visualization guide in the composer,
+    /// replacing nothing the user typed, and close the guide.
+    func insertExamplePrompt(_ prompt: String) {
+        draftCommand = nil
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = typed.isEmpty ? prompt : typed + "\n\n" + prompt
+        showsVisualizationGuide = false
     }
 
     // MARK: - Chat actions
@@ -1213,7 +1229,7 @@ final class DesktopModel: ObservableObject {
     /// A sheet or panel is open over the chat, which keeps its keys.
     var coversChat: Bool {
         showsSettings || renamingSession != nil || contextSheet != nil || commandResult != nil || composerPanel != nil
-            || showsSwitcher
+            || showsSwitcher || showsVisualizationGuide
     }
 
     /// The request shown for the selected session, if any.

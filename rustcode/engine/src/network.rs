@@ -1504,7 +1504,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         crate::tools::schema::append_visualization_hint(
             &mut system_prompt,
             schema_policy,
-            s.renders_visualizations,
+            s.visualization_level,
         );
         crate::tools::schema::append_preview_hint(&mut system_prompt, schema_policy);
         // Built only from the MCP registry, config and startup failures, so

@@ -30,7 +30,7 @@ use agent_client_protocol::{Agent, Client, Stdio};
 use rustcode_tasks::TaskEvent;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tokio::sync::Mutex;
 
 pub(crate) use config::{build_session_config_options, handle_set_config_option};
@@ -47,24 +47,28 @@ fn valid_acp_session_id(session_id: &str) -> bool {
     rustcode_session::valid_session_id(session_id)
 }
 
-/// Version of the `_meta.rustcode.visualizations` capability (#2088). A
-/// client that sends at least this value in its initialize
-/// `clientCapabilities._meta.rustcode.visualizations` renders `rustcode-viz`
-/// blocks, so its sessions get the visualization prompt hint.
-const VISUALIZATIONS_CAPABILITY_VERSION: u64 = 1;
+/// Highest level of the `_meta.rustcode.visualizations` capability the
+/// engine knows (#2088, #2217). A client's initialize
+/// `clientCapabilities._meta.rustcode.visualizations` says which
+/// `rustcode-viz` widgets it renders: 1 is bar chart, table and tree; 2 adds
+/// line chart, stat list and checklist. Its sessions are taught those types.
+const VISUALIZATIONS_CAPABILITY_VERSION: u64 = 2;
 
-/// Whether an ACP client advertised native `rustcode-viz` rendering. Absent,
-/// malformed, or older values mean no: the client would only see JSON.
-fn client_renders_visualizations(
+/// The `rustcode-viz` level an ACP client advertised, capped at the highest
+/// the engine knows. Absent, malformed, or zero means 0: the client would
+/// only see JSON.
+fn client_visualization_level(
     capabilities: &agent_client_protocol::schema::v1::ClientCapabilities,
-) -> bool {
+) -> u8 {
     capabilities
         .meta
         .as_ref()
         .and_then(|meta| meta.get("rustcode"))
         .and_then(|rustcode| rustcode.get("visualizations"))
         .and_then(serde_json::Value::as_u64)
-        .is_some_and(|version| version >= VISUALIZATIONS_CAPABILITY_VERSION)
+        .map_or(0, |level| {
+            level.min(VISUALIZATIONS_CAPABILITY_VERSION) as u8
+        })
 }
 
 fn server_capabilities() -> AgentCapabilities {
@@ -430,7 +434,7 @@ async fn acp_load_session(
             );
         }
         let mut state = build_loaded_app_state(&session_id, &cwd, history.clone());
-        state.renders_visualizations = server.renders_visualizations.load(Ordering::Relaxed);
+        state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
         state.preview_client = preview::preview_client_for(
             server.client_has_preview.load(Ordering::Relaxed),
             connection,
@@ -704,7 +708,7 @@ struct AcpServer {
     task_routes: TaskRoutes,
     /// Set from the client's initialize capabilities; read when each session
     /// state is created so its prompt never changes mid-session.
-    renders_visualizations: Arc<AtomicBool>,
+    visualization_level: Arc<AtomicU8>,
     /// The client advertised `_meta.rustcode.preview` (#2138), so its
     /// sessions get `localhost_preview`.
     client_has_preview: Arc<AtomicBool>,
@@ -740,7 +744,7 @@ impl AcpServer {
             client: Arc::new(client),
             auto_approve,
             task_routes,
-            renders_visualizations: Arc::new(AtomicBool::new(false)),
+            visualization_level: Arc::new(AtomicU8::new(0)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
@@ -781,8 +785,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .name("rustcode")
         .on_receive_request(
             async |request: InitializeRequest, responder, _connection| {
-                server.renders_visualizations.store(
-                    client_renders_visualizations(&request.client_capabilities),
+                server.visualization_level.store(
+                    client_visualization_level(&request.client_capabilities),
                     Ordering::Relaxed,
                 );
                 server.client_has_preview.store(
@@ -809,8 +813,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 async move |request: NewSessionRequest, responder, _connection| {
                     let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
                     let mut state = new_session_state(&cwd);
-                    state.renders_visualizations =
-                        server.renders_visualizations.load(Ordering::Relaxed);
+                    state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
                     let session_id = state.active_session_id.clone();
                     state.preview_client = preview::preview_client_for(
                         server.client_has_preview.load(Ordering::Relaxed),
@@ -1332,32 +1335,32 @@ mod tests {
     #[test]
     fn visualization_support_comes_only_from_the_client_capability() {
         let parse = |value: serde_json::Value| {
-            client_renders_visualizations(
+            client_visualization_level(
                 &serde_json::from_value::<agent_client_protocol::schema::v1::ClientCapabilities>(
                     value,
                 )
                 .unwrap(),
             )
         };
-        assert!(parse(
-            serde_json::json!({"_meta": {"rustcode": {"visualizations": 1}}})
-        ));
-        assert!(parse(
-            serde_json::json!({"_meta": {"rustcode": {"visualizations": 3}}})
-        ));
-        assert!(!parse(serde_json::json!({})));
-        assert!(!parse(serde_json::json!({"_meta": {"rustcode": {}}})));
-        assert!(!parse(
-            serde_json::json!({"_meta": {"rustcode": {"visualizations": 0}}})
-        ));
-        assert!(!parse(
-            serde_json::json!({"_meta": {"rustcode": {"visualizations": "yes"}}})
-        ));
-        assert!(!parse(
-            serde_json::json!({"_meta": {"other": {"visualizations": 1}}})
-        ));
+        let level = |value: serde_json::Value| {
+            parse(serde_json::json!({"_meta": {"rustcode": {"visualizations": value}}}))
+        };
+        assert_eq!(level(serde_json::json!(1)), 1);
+        assert_eq!(level(serde_json::json!(2)), 2);
+        // A newer client is taught only the types this engine knows.
+        assert_eq!(level(serde_json::json!(3)), 2);
+        assert_eq!(level(serde_json::json!(u64::MAX)), 2);
+        assert_eq!(parse(serde_json::json!({})), 0);
+        assert_eq!(parse(serde_json::json!({"_meta": {"rustcode": {}}})), 0);
+        assert_eq!(level(serde_json::json!(0)), 0);
+        assert_eq!(level(serde_json::json!("yes")), 0);
+        assert_eq!(level(serde_json::json!(-1)), 0);
+        assert_eq!(
+            parse(serde_json::json!({"_meta": {"other": {"visualizations": 1}}})),
+            0
+        );
         // A fresh or loaded ACP session never renders unless the server says so.
-        assert!(!crate::app::AppState::new().renders_visualizations);
+        assert_eq!(crate::app::AppState::new().visualization_level, 0);
     }
 
     #[test]
@@ -1418,7 +1421,7 @@ mod tests {
             client: Arc::new(reqwest::Client::new()),
             auto_approve: false,
             task_routes: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            renders_visualizations: Arc::new(AtomicBool::new(false)),
+            visualization_level: Arc::new(AtomicU8::new(0)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),

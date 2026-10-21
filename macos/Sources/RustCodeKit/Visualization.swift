@@ -5,7 +5,16 @@ import Foundation
 /// block looks the same, and falls back for the same reasons, in both.
 public struct Visualization: Sendable, Equatable {
     public static let infoString = "rustcode-viz"
+    /// The payload `version` every block carries. New widget types are
+    /// additive, so it stays 1; a renderer that predates a type falls back to
+    /// the source with "unsupported type".
     public static let version = 1
+    /// The `_meta.rustcode.visualizations` level the app advertises: 1 is
+    /// `bar_chart`, `table` and `tree`; 2 adds `line_chart`, `stat_list` and
+    /// `checklist`. The engine teaches the agent only the types a level covers.
+    public static let capabilityLevel = 2
+    /// Every type this renderer draws, in the order the guide lists them.
+    public static let supportedTypes = ["bar_chart", "line_chart", "table", "stat_list", "checklist", "tree"]
 
     public static let maxPayloadBytes = 16 * 1024
     public static let maxTitleCharacters = 80
@@ -18,6 +27,10 @@ public struct Visualization: Sendable, Equatable {
     public static let maxTableColumns = 8
     public static let maxTreeNodes = 120
     public static let maxTreeDepth = 8
+    public static let maxLinePoints = 100
+    public static let maxLineSeries = 4
+    public static let maxStatItems = 12
+    public static let maxChecklistItems = 50
 
     public struct Bar: Sendable, Equatable {
         public let label: String
@@ -38,6 +51,30 @@ public struct Visualization: Sendable, Equatable {
         public let children: [TreeNode]
     }
 
+    /// One line of a `line_chart`; `nil` values are gaps.
+    public struct Series: Sendable, Equatable {
+        public let name: String
+        public let values: [Double?]
+    }
+
+    /// One tile of a `stat_list`. `number` is set for numeric values.
+    public struct Stat: Sendable, Equatable {
+        public let label: String
+        public let value: String
+        public let number: Double?
+        public let note: String?
+    }
+
+    public struct ChecklistItem: Sendable, Equatable {
+        public enum Status: String, Sendable, CaseIterable {
+            case done, todo, inProgress = "in_progress", failed, skipped
+        }
+
+        public let label: String
+        public let status: Status
+        public let note: String?
+    }
+
     public enum Content: Sendable, Equatable {
         /// `hiddenItems` are items past the limit.
         case barChart(bars: [Bar], unit: String?, hiddenItems: Int)
@@ -47,6 +84,15 @@ public struct Visualization: Sendable, Equatable {
                    sortColumn: Int?, sortDescending: Bool, hiddenColumns: Int)
         /// `hiddenNodes` were past the node or depth limit.
         case tree(nodes: [TreeNode], hiddenNodes: Int)
+        /// Capability level 2. `labels` is the shared x axis; every series
+        /// has one value (or gap) per label. `hiddenPoints` and
+        /// `hiddenSeries` were past the limits.
+        case lineChart(labels: [String], series: [Series], unit: String?, hiddenPoints: Int, hiddenSeries: Int)
+        /// Capability level 2: a few headline numbers as labeled tiles.
+        case statList(items: [Stat], hiddenItems: Int)
+        /// Capability level 2: read-only progress. `doneCount` and
+        /// `totalCount` cover every item, shown or not.
+        case checklist(items: [ChecklistItem], doneCount: Int, totalCount: Int, hiddenItems: Int)
     }
 
     public let type: String
@@ -105,6 +151,9 @@ public struct Visualization: Sendable, Equatable {
         case "bar_chart": content = try barChart(object)
         case "table": content = try table(object)
         case "tree": content = try tree(object)
+        case "line_chart": content = try lineChart(object)
+        case "stat_list": content = try statList(object)
+        case "checklist": content = try checklist(object)
         default: throw ParseError.unsupportedType(truncate(type, maxLabelCharacters))
         }
         return Visualization(
@@ -232,6 +281,103 @@ public struct Visualization: Sendable, Equatable {
             default: throw ParseError.invalid("tree \"children\" must be an array")
             }
         }
+    }
+
+    private static func lineChart(_ object: [String: JSONValue]) throws -> Content {
+        guard let labels = object["labels"]?.arrayValue else {
+            throw ParseError.invalid("line_chart needs a \"labels\" array")
+        }
+        guard !labels.isEmpty else { throw ParseError.invalid("line_chart has no labels") }
+        guard let series = object["series"]?.arrayValue else {
+            throw ParseError.invalid("line_chart needs a \"series\" array")
+        }
+        guard !series.isEmpty else { throw ParseError.invalid("line_chart has no series") }
+        let unit = try optionalText(object, "unit").map { truncate($0, maxUnitCharacters) }
+        let points = min(labels.count, maxLinePoints)
+        let axis = try labels.prefix(points).map { label -> String in
+            switch label {
+            case .string(let text): return truncate(singleLine(text), maxLabelCharacters)
+            case .number(let number): return formatNumber(number)
+            default: throw ParseError.invalid("line_chart labels must be strings or numbers")
+            }
+        }
+        let lines = try series.prefix(maxLineSeries).enumerated().map { index, entry -> Series in
+            guard entry.objectValue != nil else { throw ParseError.invalid("line_chart series must be objects") }
+            let name: String
+            switch entry["name"] {
+            case nil, .null?: name = "series \(index + 1)"
+            case .string(let text)?: name = truncate(singleLine(text), maxLabelCharacters)
+            default: throw ParseError.invalid("line_chart series \"name\" must be a string")
+            }
+            guard let values = entry["values"]?.arrayValue else {
+                throw ParseError.invalid("every line_chart series needs a \"values\" array")
+            }
+            let shown = try (0..<points).map { point -> Double? in
+                guard point < values.count else { return nil }
+                switch values[point] {
+                case .null: return nil
+                case .number(let number) where number.isFinite: return number
+                default: throw ParseError.invalid("line_chart values must be finite numbers or null")
+                }
+            }
+            return Series(name: name.isEmpty ? "series \(index + 1)" : name, values: shown)
+        }
+        guard lines.contains(where: { $0.values.contains { $0 != nil } }) else {
+            throw ParseError.invalid("line_chart has no values")
+        }
+        return .lineChart(labels: axis, series: lines, unit: unit,
+                          hiddenPoints: labels.count - points, hiddenSeries: max(series.count - maxLineSeries, 0))
+    }
+
+    private static func statList(_ object: [String: JSONValue]) throws -> Content {
+        guard let items = object["items"]?.arrayValue else {
+            throw ParseError.invalid("stat_list needs an \"items\" array")
+        }
+        guard !items.isEmpty else { throw ParseError.invalid("stat_list has no items") }
+        let stats = try items.prefix(maxStatItems).map { item -> Stat in
+            guard let label = item["label"]?.stringValue else {
+                throw ParseError.invalid("every stat_list item needs a string \"label\"")
+            }
+            let value: String
+            var number: Double?
+            switch item["value"] {
+            case .string(let text)?: value = truncate(singleLine(text), maxLabelCharacters)
+            case .number(let figure)? where figure.isFinite:
+                value = formatNumber(figure)
+                number = figure
+            default: throw ParseError.invalid("every stat_list item needs a string or finite numeric \"value\"")
+            }
+            let unit = try optionalText(item.objectValue ?? [:], "unit").map { truncate($0, maxUnitCharacters) }
+            let note = try optionalText(item.objectValue ?? [:], "note").map { truncate($0, maxCellCharacters) }
+            return Stat(label: truncate(singleLine(label), maxLabelCharacters),
+                        value: unit.map { "\(value) \($0)" } ?? value, number: number, note: note)
+        }
+        return .statList(items: stats, hiddenItems: max(items.count - maxStatItems, 0))
+    }
+
+    private static func checklist(_ object: [String: JSONValue]) throws -> Content {
+        guard let items = object["items"]?.arrayValue else {
+            throw ParseError.invalid("checklist needs an \"items\" array")
+        }
+        guard !items.isEmpty else { throw ParseError.invalid("checklist has no items") }
+        let all = try items.map { item -> ChecklistItem in
+            guard let label = item["label"]?.stringValue else {
+                throw ParseError.invalid("every checklist item needs a string \"label\"")
+            }
+            let status: ChecklistItem.Status
+            switch item["status"] {
+            case nil, .null?: status = .todo
+            case .string(let raw)? where ChecklistItem.Status(rawValue: raw) != nil:
+                status = ChecklistItem.Status(rawValue: raw)!
+            default:
+                throw ParseError.invalid("checklist \"status\" must be done, todo, in_progress, failed, or skipped")
+            }
+            let note = try optionalText(item.objectValue ?? [:], "note").map { truncate($0, maxCellCharacters) }
+            return ChecklistItem(label: truncate(singleLine(label), maxCellCharacters), status: status, note: note)
+        }
+        return .checklist(items: Array(all.prefix(maxChecklistItems)),
+                          doneCount: all.filter { $0.status == .done }.count, totalCount: all.count,
+                          hiddenItems: max(all.count - maxChecklistItems, 0))
     }
 
     private static func countNodes(_ nodes: [JSONValue]) -> Int {
