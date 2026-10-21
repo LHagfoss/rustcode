@@ -630,18 +630,8 @@ private struct FileChangeView: View {
         return tint.opacity(0.13)
     }
 
-    private var digits: Int {
-        change.rows.reduce(2) { result, row in
-            guard case .line(let line) = row else { return result }
-            return max(result, String(line.oldNumber ?? 0).count, String(line.newNumber ?? 0).count)
-        }
-    }
-
     private func gutter(_ rows: [DiffRow]) -> AttributedString {
-        func padded(_ value: Int?) -> String {
-            let text = value.map(String.init) ?? ""
-            return String(repeating: " ", count: max(digits - text.count, 0)) + text
-        }
+        let digits = change.gutterDigits
         var result = AttributedString()
         for (index, row) in rows.enumerated() {
             if index > 0 { result += AttributedString("\n") }
@@ -649,11 +639,16 @@ private struct FileChangeView: View {
                 result += AttributedString(String(repeating: " ", count: digits * 2 + 3))
                 continue
             }
-            var numbers = AttributedString(padded(line.oldNumber) + " " + padded(line.newNumber) + " ")
-            numbers.foregroundColor = .secondary.opacity(0.6)
+            // The old-file column sits a step dimmer, so a pair that differs
+            // reads as old then new rather than as a repeat.
+            let cells = line.gutter(digits: digits)
+            var old = AttributedString(cells.old + " ")
+            old.foregroundColor = .secondary.opacity(0.4)
+            var new = AttributedString(cells.new + " ")
+            new.foregroundColor = .secondary.opacity(0.6)
             var mark = AttributedString(sign(line.kind))
             mark.foregroundColor = tint(line.kind) ?? .secondary
-            result += numbers + mark
+            result += old + new + mark
         }
         return result
     }
