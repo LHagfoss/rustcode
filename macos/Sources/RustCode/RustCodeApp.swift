@@ -40,6 +40,7 @@ struct RustCodeApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { Task { await model.newSession() } }
                     .keyboardShortcut(model.keybindings.shortcut(for: .newChat))
+                Button("New Chat in Folder…") { Task { await model.chooseChatProject() } }
             }
             CommandGroup(after: .newItem) {
                 Button("Switch Chat…") { model.toggleSwitcher() }
@@ -86,6 +87,9 @@ struct RustCodeApp: App {
                     .keyboardShortcut(model.keybindings.shortcut(for: .reloadPreview))
                     .disabled(!model.showsPreview)
                 TerminalMenuItems(terminal: model.terminal, keybindings: model.keybindings)
+            }
+            CommandGroup(after: .help) {
+                Button("Charts, Tables & Trees in Chat…") { model.showsVisualizationGuide = true }
             }
         }
     }
@@ -180,12 +184,27 @@ final class DesktopModel: ObservableObject {
     }
     @Published var sessions: [SessionSummary] = []
     @Published var selectedSession: String?
+    /// The default project: new chats start here unless one is given its own
+    /// folder. Set in Settings; the engine, terminal and preview run in it.
     @Published var workspace: URL {
         didSet {
             UserDefaults.standard.set(workspace.path, forKey: "workspacePath")
             preview.setWorkspace(workspace.path)
             terminal.setWorkspace(workspace.path)
         }
+    }
+    /// The folder picked for the new-chat draft only, leaving the default
+    /// alone. Nil starts the chat in the default project.
+    @Published var draftProject: URL?
+    /// The folder each chat opened or created here works in. The engine keeps
+    /// a chat in the folder it was created in, so this never goes stale.
+    private var sessionProjects: [String: String] = [:]
+
+    /// The folder the chat on screen works in: an open chat's own folder, or
+    /// the draft's.
+    var chatProject: URL {
+        let cwd = selectedSession.flatMap { id in sessionProjects[id] ?? sessions.first { $0.id == id }?.cwd }
+        return ProjectFolder.forChat(sessionCwd: cwd, draft: draftProject, default: workspace)
     }
     /// The localhost preview beside the chat, remembered per project. The
     /// agent can use it only through `localhost_preview`, after the user
@@ -209,6 +228,9 @@ final class DesktopModel: ObservableObject {
     @Published var showsSettings = false
     /// `/remote`: the pairing panel over the chat.
     @Published var showsRemote = false
+    /// `/visualize`, Help > Charts, Tables & Trees: the guide to in-chat
+    /// visualizations, with prompts to insert.
+    @Published var showsVisualizationGuide = false
     /// The latest share and pairing state, polled while the panel is open.
     @Published private(set) var remoteStatus: RemoteShareStatus?
     /// A start, pair, or stop request is in flight.
@@ -590,10 +612,34 @@ final class DesktopModel: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.directoryURL = workspace
+        panel.prompt = "Use as Default"
+        panel.message = "New chats start in this folder."
         if panel.runModal() == .OK, let url = panel.url {
             workspace = url
+            draftProject = ProjectFolder.override(draftProject, default: url)
             Task { await restartForWorkspace() }
         }
+    }
+
+    /// Pick the folder for the new-chat draft only. From an open chat, this
+    /// starts a new chat in the folder picked.
+    func chooseChatProject() async {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = chatProject
+        panel.prompt = "Use for This Chat"
+        panel.message = "This chat works in the folder you pick. New chats still start in \(workspace.lastPathComponent)."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        await newSession(in: url)
+    }
+
+    /// Start a new chat draft in `folder`, or in the default project.
+    func newSession(in folder: URL?) async {
+        if selectedSession != nil { await newSession() }
+        draftProject = ProjectFolder.override(folder, default: workspace)
     }
 
     /// Step through the matches, wrapping at either end.
@@ -729,8 +775,18 @@ final class DesktopModel: ObservableObject {
             }
         case .terminal: terminal.open()
         case .remote: await openRemote()
+        case .visualizations: showsVisualizationGuide = true
         case .execute: break
         }
+    }
+
+    /// Put an example request from the visualization guide in the composer,
+    /// replacing nothing the user typed, and close the guide.
+    func insertExamplePrompt(_ prompt: String) {
+        draftCommand = nil
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = typed.isEmpty ? prompt : typed + "\n\n" + prompt
+        showsVisualizationGuide = false
     }
 
     // MARK: - Chat actions
@@ -875,7 +931,7 @@ final class DesktopModel: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = true
-        panel.directoryURL = workspace
+        panel.directoryURL = chatProject
         panel.prompt = "Attach"
         if panel.runModal() == .OK { attach(panel.urls) }
     }
@@ -999,6 +1055,7 @@ final class DesktopModel: ObservableObject {
         transcript.removeAll()
         draftCommand = nil
         composerPanel = nil
+        draftProject = nil
         startDraftFromDefaults()
     }
 
@@ -1048,14 +1105,16 @@ final class DesktopModel: ObservableObject {
         }.value
     }
 
-    /// Create the engine session for a draft, keeping the model picked for it.
-    private func createSession() async -> String? {
+    /// Create the engine session for a draft in `folder`, keeping the model
+    /// picked for it.
+    private func createSession(in folder: URL) async -> String? {
         guard let connection = engine?.connection else { return nil }
         let wanted = selectedModel
         let wantedEffort = models.effort
         do {
-            let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: workspace), timeout: .seconds(30))
+            let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: folder), timeout: .seconds(30))
             guard let id = result["sessionId"]?.stringValue else { throw ACPProtocolError.malformed("session/new has no sessionId") }
+            sessionProjects[id] = folder.path
             selectedSession = id
             applyConfig(result["configOptions"])
             if let wanted, wanted != selectedModel, models.choices.contains(where: { $0.id == wanted }) {
@@ -1182,7 +1241,7 @@ final class DesktopModel: ObservableObject {
     /// A sheet or panel is open over the chat, which keeps its keys.
     var coversChat: Bool {
         showsSettings || renamingSession != nil || contextSheet != nil || commandResult != nil || composerPanel != nil
-            || showsSwitcher
+            || showsSwitcher || showsVisualizationGuide
     }
 
     /// The request shown for the selected session, if any.
@@ -1194,6 +1253,7 @@ final class DesktopModel: ObservableObject {
         guard let connection = engine?.connection, capabilities?.loadSession == true,
               session.id != selectedSession else { return }
         stashSelectedSession()
+        if !session.cwd.isEmpty { sessionProjects[session.id] = session.cwd }
         if let open = openSessions[session.id] {
             selectedSession = session.id
             transcript = open.transcript
@@ -1344,7 +1404,8 @@ final class DesktopModel: ObservableObject {
         case .report, .prompt:
             break
         }
-        let text = Self.prompt(typed, attaching: attachments, in: workspace)
+        let folder = chatProject
+        let text = Self.prompt(typed, attaching: attachments, in: folder)
         let sentImages = images
         if busy {
             guard let id = startingChat ? Self.newChatQueue : selectedSession else { return }
@@ -1360,7 +1421,7 @@ final class DesktopModel: ObservableObject {
         let created = selectedSession == nil
         // Until the new chat's turn starts, ⏎ and ⌘⏎ queue behind this message.
         if created { startingChat = true }
-        guard let id = created ? await createSession() : selectedSession else {
+        guard let id = created ? await createSession(in: folder) : selectedSession else {
             startingChat = false
             // Nothing was sent: what was queued behind it goes back too.
             let queued = queuedPrompts.filter { $0.sessionId == Self.newChatQueue }
@@ -1370,7 +1431,7 @@ final class DesktopModel: ObservableObject {
             return
         }
         if created {
-            startedSessions[id] = .started(id: id, cwd: workspace.path, prompt: typed, model: selectedModel)
+            startedSessions[id] = .started(id: id, cwd: folder.path, prompt: typed, model: selectedModel)
             await refreshSessions()
             queuedPrompts = Self.adoptQueued(queuedPrompts, into: id)
             // `run` marks the turn before it waits, so busy never drops between.

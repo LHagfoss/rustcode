@@ -194,6 +194,50 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2211: a chat started in another folder is created and listed there,
+    /// opens there again, and leaves the default project and the next new
+    /// chat alone.
+    func testChatInAnotherFolderKeepsTheDefault() async throws {
+        let other = directory.appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        let model = try await started()
+        let defaultProject = model.workspace
+
+        await model.newSession(in: other)
+        XCTAssertEqual(model.draftProject, other)
+        XCTAssertEqual(model.chatProject, other)
+        await send("here", in: model)
+        let id = try XCTUnwrap(model.selectedSession)
+        XCTAssertEqual(model.chatProject.path, other.path)
+        XCTAssertEqual(model.workspace, defaultProject, "the default is unchanged")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "workspacePath"), defaultProject.path)
+        try await until { model.sessions.first { $0.id == id }?.cwd == other.path }
+
+        await model.newSession()
+        XCTAssertNil(model.draftProject)
+        XCTAssertEqual(model.chatProject, defaultProject, "the next new chat starts in the default")
+
+        // Picking the default for a draft is no override.
+        await model.newSession(in: defaultProject)
+        XCTAssertNil(model.draftProject)
+
+        // Back to it, it still works in its own folder.
+        let chat = try XCTUnwrap(model.sessions.first { $0.id == id })
+        await model.select(chat)
+        XCTAssertEqual(model.chatProject.path, other.path)
+        XCTAssertEqual(model.transcript.items.count, 2)
+
+        // A stored chat resumes in the folder the engine recorded for it,
+        // which refuses any other.
+        let elsewhere = try XCTUnwrap(model.sessions.first { $0.id == "elsewhere" })
+        await model.select(elsewhere)
+        XCTAssertNil(model.error)
+        XCTAssertEqual(model.chatProject.path, "/tmp/rustcode-elsewhere")
+        XCTAssertEqual(model.transcript.items.count, 2)
+        XCTAssertEqual(model.workspace, defaultProject)
+        model.stop()
+    }
+
     /// An ACP engine with two stored chats of `replayed` messages, "slow" (its
     /// load takes a moment) and "quick", that answers each prompt with one
     /// short reply.
@@ -214,7 +258,9 @@ final class SessionFlowTests: XCTestCase {
               "update": {"sessionUpdate": kind, "content": {"type": "text", "text": text}}}})
     # Long replays: their updates queue up ahead of the load's response.
     history = [m for i in range(30) for m in ("question %d" % i, "answer %d" % i)]
-    stored = {"slow": list(history), "quick": list(history)}
+    stored = {"slow": list(history), "quick": list(history), "elsewhere": ["question", "answer"]}
+    # The folder each chat was created in, as the engine records it.
+    cwds = {"elsewhere": "/tmp/rustcode-elsewhere"}
     created = 0
     def handle(message):
         global created
@@ -227,12 +273,17 @@ final class SessionFlowTests: XCTestCase {
             created += 1
             sid = "new-%d" % created
             stored[sid] = []
+            cwds[sid] = params["cwd"]
             result = {"sessionId": sid}
         elif method == "session/list":
-            result = {"sessions": [{"sessionId": sid, "cwd": params.get("cwd", "/tmp"), "title": sid,
+            result = {"sessions": [{"sessionId": sid, "cwd": cwds.get(sid, params.get("cwd", "/tmp")), "title": sid,
                                     "updatedAt": "2026-10-20T08:00:00Z"} for sid, messages in stored.items() if messages]}
         elif method == "session/load":
             sid = params["sessionId"]
+            if sid in cwds and cwds[sid] != params["cwd"]:
+                send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602,
+                      "message": "session/load cwd does not match the recorded workspace"}})
+                return
             if sid == "slow":
                 time.sleep(0.4)
             for index, text in enumerate(stored[sid]):

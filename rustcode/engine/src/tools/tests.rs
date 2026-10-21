@@ -4788,23 +4788,33 @@ fn a_harness_notice_does_not_unbind_a_discovery_result() {
 
 #[test]
 fn visualization_hint_needs_a_rendering_frontend_and_a_root_prompt() {
-    use super::schema::{VISUALIZATION_PROMPT_HINT as HINT, append_visualization_hint};
+    use super::schema::{
+        VISUALIZATION_PROMPT_HINT as HINT, VISUALIZATION_PROMPT_HINT_LEVEL_2 as HINT_2,
+        append_visualization_hint,
+    };
     use crate::config::{AgentMode, ToolProtocol};
     assert!(crate::network::compaction::estimate_tokens(HINT) < 130);
-    let with = |policy: ToolSchemaPolicy, renders: bool| {
+    assert!(crate::network::compaction::estimate_tokens(HINT_2) < 90);
+    let with = |policy: ToolSchemaPolicy, level: u8| {
         let mut prompt = String::new();
-        append_visualization_hint(&mut prompt, policy, renders);
+        append_visualization_hint(&mut prompt, policy, level);
         prompt
     };
     for mode in [AgentMode::Build, AgentMode::Plan] {
         let root = ToolSchemaPolicy::root_for_mode(false, mode);
-        assert_eq!(with(root, true), HINT);
-        assert_eq!(with(root, false), "");
+        // Level 1 frontends (the TUI) keep exactly the level 1 prompt.
+        assert_eq!(with(root, 1), HINT);
+        assert_eq!(with(root, 2), format!("{HINT}{HINT_2}"));
+        assert_eq!(with(root, 9), format!("{HINT}{HINT_2}"));
+        assert_eq!(with(root, 0), "");
     }
-    assert_eq!(with(ToolSchemaPolicy::subagent(), true), "");
+    for type_name in ["line_chart", "stat_list", "checklist"] {
+        assert!(!HINT.contains(type_name) && HINT_2.contains(type_name));
+    }
+    assert_eq!(with(ToolSchemaPolicy::subagent(), 2), "");
     let compact =
         ToolSchemaPolicy::root_for_mode_with_compact_prompt(false, AgentMode::Build, true);
-    assert_eq!(with(compact, true), "");
+    assert_eq!(with(compact, 2), "");
     // The cached base prompt never carries it, so frontends that cannot
     // render share the same prefix as before.
     for protocol in [

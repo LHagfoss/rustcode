@@ -119,8 +119,45 @@ enum DebugDriver {
             }
             let elapsed = Date().timeIntervalSince(start) * 1000
             report("stream \(chunks) chunks over \(model.transcript.items.count) items: \(Int(elapsed)) ms, overhead \(Int(elapsed) - chunks * 30) ms")
+        case "snap":
+            // `snap <path.png>`: the window drawn into a PNG by the app
+            // itself, for hosts where `screencapture` lacks permission.
+            guard parts.count > 1, let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?
+                .contentView?.superview ?? NSApp.windows.first?.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+        case "vizguide": model.showsVisualizationGuide = true
+        case "vizreply":
+            // `vizreply [ms] [type]`: a reply holding the guide samples (or
+            // one type's), streamed in 40-character chunks in the background,
+            // so a `snap` can catch the open-fence placeholder.
+            let delay = Int(parts.count > 1 ? parts[1] : "") ?? 20
+            let entries = VisualizationGuide.entries.filter { parts.count < 3 || $0.type == parts[2] }
+            let text = entries.map { "\($0.name):\n\n\($0.sampleMarkdown)" }.joined(separator: "\n\n")
+            Task { @MainActor in
+                var rest = Substring(text)
+                while !rest.isEmpty {
+                    model.transcript.apply(.agentText(String(rest.prefix(40))))
+                    rest = rest.dropFirst(40)
+                    try? await Task.sleep(for: .milliseconds(delay))
+                }
+            }
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
+        case "snap":
+            // `snap <file.png>`: the window drawn to a file, for when
+            // `screencapture` cannot see the screen.
+            guard parts.count > 1, let main = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  case let window = main.attachedSheet ?? main,
+                  let view = window.contentView?.superview ?? window.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: parts.dropFirst().joined(separator: " ")))
+        case "chatfolder":
+            // `chatfolder <path>`: a new chat in that folder, the default kept.
+            await model.newSession(in: URL(fileURLWithPath: parts.dropFirst().joined(separator: " "), isDirectory: true))
         case "dump":
             var lines = ["items \(model.transcript.items.count) selected \(model.selectedSession ?? "-")",
                          "sessions \(model.sessions.count) visible \(model.visibleSessions.count) more \(model.hasMoreSessions)",

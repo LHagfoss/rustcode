@@ -1011,7 +1011,7 @@ async fn run_interactive(
     let mut app_state_struct = AppState::new();
     // The TUI draws `rustcode-viz` blocks natively, so its prompt carries the
     // visualization hint (#2088).
-    app_state_struct.renders_visualizations = true;
+    app_state_struct.visualization_level = 1;
     // `/theme` completion offers the themes this frontend can load.
     app_state_struct.theme_names = crate::ui::theme::load_available_themes()
         .into_iter()

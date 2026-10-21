@@ -64,9 +64,10 @@ pub fn tool_system_prompt(
     crate::tools::tool_system_prompt(delegation_active, protocol, agent_mode)
 }
 
-/// Prompt text added for frontends that render `rustcode-viz` blocks.
-pub fn visualization_prompt_hint() -> &'static str {
-    crate::tools::schema::VISUALIZATION_PROMPT_HINT
+/// Prompt text added for frontends that render `rustcode-viz` blocks at
+/// `level` (0 adds nothing).
+pub fn visualization_prompt_hint(level: u8) -> String {
+    crate::tools::schema::visualization_prompt_hint(level)
 }
 
 #[cfg(test)]

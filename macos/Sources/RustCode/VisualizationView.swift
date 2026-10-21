@@ -68,14 +68,28 @@ private struct VisualizationCard: View {
             case .tree(let nodes, let hidden):
                 TreeWidget(nodes: nodes)
                 truncation(hidden, "nodes", limit: Visualization.maxTreeNodes)
+            case .lineChart(let labels, let series, let unit, let hiddenPoints, let hiddenSeries):
+                LineChartWidget(labels: labels, series: series, unit: unit)
+                truncation(hiddenPoints, "points", limit: Visualization.maxLinePoints)
+                truncation(hiddenSeries, "series", limit: Visualization.maxLineSeries)
+            case .statList(let items, let hidden):
+                StatListWidget(items: items)
+                truncation(hidden, "items", limit: Visualization.maxStatItems)
+            case .checklist(let items, let done, let total, let hidden):
+                ChecklistWidget(items: items, done: done, total: total)
+                truncation(hidden, "items", limit: Visualization.maxChecklistItems)
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.fill.quaternary, in: .rect(cornerRadius: 12))
-        .contextMenu { Button("Copy Source", systemImage: "doc.on.doc", action: copy) }
+        .contextMenu {
+            Button("Copy Source", systemImage: "doc.on.doc", action: copy)
+            Button("Copy as Text", systemImage: "text.alignleft") { Clipboard.copy(visualization.plainText) }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(visualization.title)
+        .accessibilityHint(visualization.accessibilitySummary)
     }
 
     @ViewBuilder
@@ -283,6 +297,198 @@ private struct TreeWidget: View {
 
     private func toggle(_ id: Int) {
         if collapsed.contains(id) { collapsed.remove(id) } else { collapsed.insert(id) }
+    }
+}
+
+/// Trends over a shared x axis, one line per series. Hovering shows a rule
+/// at the nearest label and every series' value there.
+private struct LineChartWidget: View {
+    let labels: [String]
+    let series: [Visualization.Series]
+    let unit: String?
+    @State private var hovered: Int?
+
+    private struct Point: Identifiable {
+        let series: String
+        let index: Int
+        let value: Double
+        var id: String { "\(series)#\(index)" }
+    }
+
+    private var points: [Point] {
+        series.flatMap { line in
+            line.values.enumerated().compactMap { index, value in
+                value.map { Point(series: line.name, index: index, value: $0) }
+            }
+        }
+    }
+
+    private func valueText(_ value: Double) -> String {
+        let number = Visualization.formatNumber(value)
+        return unit.map { "\(number) \($0)" } ?? number
+    }
+
+    private var hoverText: String {
+        guard let hovered, labels.indices.contains(hovered) else { return "" }
+        let values = series.compactMap { line in
+            line.values[hovered].map { "\(line.name) \(valueText($0))" }
+        }
+        return "\(labels[hovered]): " + values.joined(separator: ", ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Chart {
+                ForEach(points) { point in
+                    LineMark(x: .value("Label", point.index), y: .value("Value", point.value),
+                             series: .value("Series", point.series))
+                        .foregroundStyle(by: .value("Series", point.series))
+                        .interpolationMethod(.monotone)
+                    PointMark(x: .value("Label", point.index), y: .value("Value", point.value))
+                        .foregroundStyle(by: .value("Series", point.series))
+                        .symbolSize(labels.count > 30 ? 0 : 24)
+                        .accessibilityLabel("\(point.series), \(labels[point.index])")
+                        .accessibilityValue(valueText(point.value))
+                }
+                if let hovered {
+                    RuleMark(x: .value("Label", hovered))
+                        .foregroundStyle(.secondary.opacity(0.5))
+                }
+            }
+            .chartForegroundStyleScale(range: [Color.brand, .orange, .teal, .pink])
+            .chartLegend(series.count > 1 ? .visible : .hidden)
+            // Half a step of room at each end keeps the first and last labels.
+            .chartXScale(domain: -0.5...(Double(max(labels.count - 1, 1)) + 0.5))
+            .chartXAxis {
+                AxisMarks(values: Array(stride(from: 0, to: labels.count, by: max(labels.count / 6, 1)))) { value in
+                    AxisGridLine()
+                    AxisValueLabel {
+                        if let index = value.as(Int.self), labels.indices.contains(index) {
+                            Text(labels[index]).lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .chartYAxis {
+                AxisMarks { value in
+                    AxisGridLine()
+                    AxisValueLabel {
+                        if let number = value.as(Double.self) { Text(valueText(number)) }
+                    }
+                }
+            }
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                guard let plot = proxy.plotFrame else { hovered = nil; return }
+                                let x = location.x - geometry[plot].origin.x
+                                let index = proxy.value(atX: x, as: Double.self).map { Int($0.rounded()) }
+                                hovered = index.flatMap { labels.indices.contains($0) ? $0 : nil }
+                            case .ended:
+                                hovered = nil
+                            }
+                        }
+                }
+            }
+            .frame(height: 180)
+            Text(hoverText.isEmpty ? " " : hoverText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .accessibilityHidden(hoverText.isEmpty)
+        }
+    }
+}
+
+/// Headline numbers as labeled tiles that wrap to the card's width.
+private struct StatListWidget: View {
+    let items: [Visualization.Stat]
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 8, alignment: .topLeading)],
+                  alignment: .leading, spacing: 8) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text(item.value)
+                        .font(.title3.weight(.semibold).monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    if let note = item.note {
+                        Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.fill.quaternary, in: .rect(cornerRadius: 8))
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .textSelection(.enabled)
+    }
+}
+
+/// Read-only progress: a bar for how many items are done, then each item
+/// with its status.
+private struct ChecklistWidget: View {
+    let items: [Visualization.ChecklistItem]
+    let done: Int
+    let total: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                ProgressView(value: Double(done), total: Double(max(total, 1)))
+                    .tint(Color.brand)
+                Text("\(done) of \(total) done")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            .accessibilityElement(children: .combine)
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: icon(item.status))
+                        .foregroundStyle(color(item.status))
+                        .frame(width: 16)
+                        .accessibilityLabel(item.status.title)
+                    Text(item.label)
+                        .strikethrough(item.status == .skipped)
+                        .foregroundStyle(item.status == .skipped ? .secondary : .primary)
+                    if let note = item.note {
+                        Text(note).foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .font(.callout)
+        .textSelection(.enabled)
+    }
+
+    private func icon(_ status: Visualization.ChecklistItem.Status) -> String {
+        switch status {
+        case .done: "checkmark.circle.fill"
+        case .todo: "circle"
+        case .inProgress: "circle.lefthalf.filled"
+        case .failed: "xmark.circle.fill"
+        case .skipped: "minus.circle"
+        }
+    }
+
+    private func color(_ status: Visualization.ChecklistItem.Status) -> Color {
+        switch status {
+        case .done: .green
+        case .todo, .skipped: .secondary
+        case .inProgress: .brand
+        case .failed: .red
+        }
     }
 }
 

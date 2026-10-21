@@ -40,6 +40,7 @@ final class SlashDispatchTests: XCTestCase {
         XCTAssertEqual(dispatch("/model gpt"), "app /model")
         XCTAssertEqual(dispatch("/remote"), "app /remote")
         XCTAssertEqual(dispatch("/terminal"), "app /terminal")
+        XCTAssertEqual(dispatch("/visualize"), "app /visualize")
         XCTAssertEqual(dispatch(" /CANCEL "), "cancel")
     }
 

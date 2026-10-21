@@ -290,10 +290,11 @@ pub(crate) async fn run_prompt(
         state.current_turn_token_usage_is_estimated = false;
         state.begin_turn_identity()
     };
-    let result = async {
+    // Unscoped debug lines and operational events follow the session whose
+    // turn is running. The process-wide active session below is only the
+    // fallback: concurrent turns of other sessions overwrite it.
+    let result = crate::logger::scope_session(session_id.clone(), async {
         crate::tools::set_active_session_id(Some(session_id.clone()));
-        // Unscoped debug lines follow the session whose turn is running, not the
-        // last session this process created.
         crate::config::set_active_session_id(&session_id);
         let (workspace_root, sandbox_mode) = {
             let mut state = state.lock().await;
@@ -507,7 +508,7 @@ pub(crate) async fn run_prompt(
             turn.cancel_token().is_cancelled(),
             harness_reason.as_deref(),
         ))
-    }
+    })
     .await;
     {
         let mut state = state.lock().await;

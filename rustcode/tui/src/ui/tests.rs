@@ -6284,10 +6284,17 @@ fn thought_parser_captures_preamble_before_think_tag() {
     );
 }
 
+fn thought_preview_text(text: &str, max_width: usize) -> String {
+    thought_preview_spans(text, max_width, false)
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
 #[test]
 fn thought_preview_keeps_short_text_unchanged() {
     assert_eq!(
-        truncate_thought_preview("Analyzing Paste Events", 24),
+        thought_preview_text("Analyzing Paste Events", 24),
         "Analyzing Paste Events"
     );
 }
@@ -6295,7 +6302,7 @@ fn thought_preview_keeps_short_text_unchanged() {
 #[test]
 fn thought_preview_truncates_to_one_display_line() {
     assert_eq!(
-        truncate_thought_preview(
+        thought_preview_text(
             "The user has made a request with contradictory instructions.",
             24
         ),
@@ -6305,9 +6312,37 @@ fn thought_preview_truncates_to_one_display_line() {
 
 #[test]
 fn thought_preview_does_not_split_wide_or_multibyte_characters() {
-    let result = truncate_thought_preview("分析しています 🚀", 10);
+    let result = thought_preview_text("分析しています 🚀", 10);
     assert!(result.width() <= 10);
     assert!(result.is_char_boundary(result.len()));
+}
+
+#[test]
+fn thought_preview_renders_markdown_instead_of_literal_markers() {
+    let spans = thought_preview_spans("**Reading bridge event fields**", 64, false);
+    let text = spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert_eq!(text, "Reading bridge event fields");
+    assert!(
+        spans
+            .iter()
+            .filter(|span| !span.content.trim().is_empty())
+            .all(|span| span.style.add_modifier.contains(Modifier::BOLD)
+                && span.style.fg == Some(COLOR_MUTED())),
+        "bold stays bold in the muted thinking colour: {spans:?}"
+    );
+
+    let text = thought_preview_text("Check `config.rs` and *then* the tests", 64);
+    assert_eq!(text, "Check config.rs and then the tests");
+}
+
+#[test]
+fn thought_preview_truncates_rendered_markdown_text() {
+    let text = thought_preview_text("**Reading bridge event fields from the stream**", 16);
+    assert_eq!(text, "Reading bridge …");
+    assert!(text.width() <= 16);
 }
 
 #[test]
@@ -6344,7 +6379,11 @@ fn test_thinking_renders_metadata_and_summary() {
     assert_eq!(lines[0].spans[1].content, "Thought for 3s, 1.4k tokens");
     assert_eq!(lines[0].spans[0].content, "▸ ");
     assert_eq!(
-        lines[1].spans[0].content,
+        lines[1]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>(),
         "  Understanding the history issue."
     );
     let rendered: String = lines

@@ -430,58 +430,63 @@ async fn run_authorized_tool(
 
         let mcp_registry = crate::mcp::get_mcp_registry();
         tokio::task::spawn_blocking(move || {
-            crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
-                crate::tools::set_active_session_id(Some(session_id));
-                let workspace_root_for_command = workspace_root_for_task.clone();
-                crate::tools::set_active_workspace_context(
-                    workspace_root_for_task,
-                    task_working_directory_for_task,
-                    false,
-                    Some(sandbox_mode_for_task),
-                );
-                let tool_context = crate::tools::current_tool_context();
-                let mutation_snapshot = capture_text_mutation_before(
-                    &name_owned,
-                    &args_owned,
-                    &tool_context,
-                );
-                let result = if name_owned == "run_command" {
-                    if live_key_owned.is_some() {
-                        let callback: crate::tools::CommandProgressCallback =
-                            Arc::new(move |bytes, stderr| {
-                                let _ = progress_tx.send((bytes.to_vec(), stderr));
-                            });
-                        crate::tools::run_command_output_with_progress_cancellable_for_call_and_workspace(
-                            &args_owned,
-                            callback,
-                            Some(cancel_token_for_task),
-                            call_id_owned.as_deref(),
-                            workspace_root_for_command,
-                        )
-                    } else {
-                        crate::tools::run_command_output_with_workspace_for_call(
-                            &args_owned,
-                            Some(cancel_token_for_task),
-                            call_id_owned.as_deref(),
-                            workspace_root_for_command,
-                        )
-                    }
-                } else {
-                    crate::tools::execute_with_metadata_cancellable_for_call(
+            // The tool's own log lines belong to this session even while
+            // another session's turn is the process's active one.
+            let log_session_id = session_id.clone();
+            crate::logger::sync_scope_session(log_session_id, || {
+                crate::mcp::DIRECT_MCP_REGISTRY.sync_scope(mcp_registry, || {
+                    crate::tools::set_active_session_id(Some(session_id));
+                    let workspace_root_for_command = workspace_root_for_task.clone();
+                    crate::tools::set_active_workspace_context(
+                        workspace_root_for_task,
+                        task_working_directory_for_task,
+                        false,
+                        Some(sandbox_mode_for_task),
+                    );
+                    let tool_context = crate::tools::current_tool_context();
+                    let mutation_snapshot = capture_text_mutation_before(
                         &name_owned,
                         &args_owned,
-                        Some(cancel_token_for_task),
-                        call_id_owned.as_deref(),
-                    )
-                };
-                if result.success
-                    && let Ok(mut diff) = mutation_diff_for_task.lock()
-                {
-                    *diff = finish_text_mutation_diff(mutation_snapshot, &tool_context);
-                }
-                crate::tools::set_active_workspace_context(None, None, false, None);
-                crate::tools::set_active_session_id(None);
-                result
+                        &tool_context,
+                    );
+                    let result = if name_owned == "run_command" {
+                        if live_key_owned.is_some() {
+                            let callback: crate::tools::CommandProgressCallback =
+                                Arc::new(move |bytes, stderr| {
+                                    let _ = progress_tx.send((bytes.to_vec(), stderr));
+                                });
+                            crate::tools::run_command_output_with_progress_cancellable_for_call_and_workspace(
+                                &args_owned,
+                                callback,
+                                Some(cancel_token_for_task),
+                                call_id_owned.as_deref(),
+                                workspace_root_for_command,
+                            )
+                        } else {
+                            crate::tools::run_command_output_with_workspace_for_call(
+                                &args_owned,
+                                Some(cancel_token_for_task),
+                                call_id_owned.as_deref(),
+                                workspace_root_for_command,
+                            )
+                        }
+                    } else {
+                        crate::tools::execute_with_metadata_cancellable_for_call(
+                            &name_owned,
+                            &args_owned,
+                            Some(cancel_token_for_task),
+                            call_id_owned.as_deref(),
+                        )
+                    };
+                    if result.success
+                        && let Ok(mut diff) = mutation_diff_for_task.lock()
+                    {
+                        *diff = finish_text_mutation_diff(mutation_snapshot, &tool_context);
+                    }
+                    crate::tools::set_active_workspace_context(None, None, false, None);
+                    crate::tools::set_active_session_id(None);
+                    result
+                })
             })
         })
         .await
