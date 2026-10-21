@@ -14,7 +14,7 @@ struct ContentView: View {
         HStack(spacing: 0) {
             if model.showsSidebar {
                 SessionSidebar(model: model, updater: model.updater)
-                    .frame(width: 270)
+                    .frame(width: SessionSidebar.width)
                     .transition(.move(edge: .leading))
             }
             ChatView(model: model, chat: model.chat, find: model.find)
@@ -41,7 +41,13 @@ struct ContentView: View {
         .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
         .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
         .overlay { SessionSwitcherOverlay(model: model) }
-        .overlay { ToastStack(model: model) }
+        // Centered on the chat, not the window: the sidebar and the preview
+        // beside it are left out.
+        .overlay {
+            ToastStack(model: model,
+                       leadingInset: model.showsSidebar ? SessionSidebar.width : 0,
+                       trailingInset: model.showsPreview ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
+        }
     }
 }
 
@@ -132,6 +138,8 @@ private struct SessionSidebar: View {
 
     /// The hidden title bar's height, so buttons line up with the traffic lights.
     static let barHeight: CGFloat = 28
+    /// How wide the sidebar is beside the chat.
+    static let width: CGFloat = 270
     /// Room above the toolbar clusters so their glass does not touch the
     /// window's top edge.
     static let barTopInset: CGFloat = 6
@@ -1439,6 +1447,31 @@ private struct ErrorBanner: View {
     }
 }
 
+/// Text a field is still composing: the accent of a dead key, such as ` on
+/// Norwegian and other European layouts, or an input method's candidate. ⏎
+/// is handled before the text system sees it, so an accent still marked was
+/// never committed: the draft was sent without it, and the field, still
+/// composing, kept the sent prompt instead of clearing.
+enum MarkedText {
+    /// Commit the marked text in `responder`, if it is a text view composing
+    /// any, as typed. Returns whether there was any.
+    @discardableResult
+    static func commit(in responder: NSResponder?) -> Bool {
+        guard let editor = responder as? NSTextView, editor.hasMarkedText() else { return false }
+        let range = editor.markedRange()
+        let text = (editor.string as NSString).substring(with: range)
+        editor.insertText(text, replacementRange: range)
+        return true
+    }
+
+    /// Commit whatever a field in any window is composing. Only the field
+    /// being typed in composes, so this is the composer when it is sending.
+    @discardableResult
+    static func commitInWindows() -> Bool {
+        NSApp.windows.reduce(false) { committed, window in commit(in: window.firstResponder) || committed }
+    }
+}
+
 /// The floating message field, laid out like the iOS composer: the text on
 /// top, and below it the + menu, the model and Send. ⏎ sends, ⇧⏎ breaks the line.
 private struct Composer: View {
@@ -1475,6 +1508,9 @@ private struct Composer: View {
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
                 .onKeyPress(.return, phases: .down) { press in
+                    // A dead key's accent still waiting for its letter goes
+                    // in as typed first, or the cleared field keeps the prompt.
+                    MarkedText.commitInWindows()
                     // ⇧⏎ (and ⌥⏎) start a new line at the cursor.
                     if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
                         NSApp.sendAction(#selector(NSText.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)

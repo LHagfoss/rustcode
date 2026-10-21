@@ -181,7 +181,8 @@ enum DebugDriver {
             if parts.contains("shift") { flags.insert(.shift) }
             if parts.contains("cmd") { flags.insert(.command) }
             if parts.contains("opt") { flags.insert(.option) }
-            let characters = parts.count > 2 && !["shift", "cmd", "opt"].contains(parts[2]) ? parts[2] : ""
+            // `return` stands for the carriage return ⏎ types.
+            let characters = parts.count > 2 && !["shift", "cmd", "opt"].contains(parts[2]) ? (parts[2] == "return" ? "\r" : parts[2]) : ""
             if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                             windowNumber: window.windowNumber, context: nil, characters: characters,
                                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) {
@@ -208,6 +209,39 @@ enum DebugDriver {
                     NSApp.postEvent(event, atStart: false)
                 }
             }
+        case "mark":
+            // `mark <text>`: text left composing in the focused field, as a
+            // dead key such as ` on a Norwegian keyboard leaves it.
+            guard let editor = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?.firstResponder as? NSTextView else { break }
+            let text = String(line.dropFirst(5))
+            editor.setMarkedText(text, selectedRange: NSRange(location: text.utf16.count, length: 0),
+                                 replacementRange: NSRange(location: NSNotFound, length: 0))
+        case "menus":
+            // Every menu item with a key equivalent, to `<dir>/menus`.
+            var lines: [String] = []
+            func walk(_ menu: NSMenu, _ path: String) {
+                for item in menu.items {
+                    if !item.keyEquivalent.isEmpty || item.title.contains("Pin") {
+                        lines.append("\(path)/\(item.title) [\(item.keyEquivalent)] mods \(item.keyEquivalentModifierMask.rawValue) enabled \(item.isEnabled) action \(item.action.map(NSStringFromSelector) ?? "-")")
+                    }
+                    if let submenu = item.submenu { walk(submenu, path + "/" + item.title) }
+                }
+            }
+            if let menu = NSApp.mainMenu { walk(menu, "") }
+            try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/menus",
+                                                     atomically: true, encoding: .utf8)
+        case "cleardraft":
+            // What sending does to the composer, without sending anything.
+            model.draft = ""
+        case "state":
+            // The draft, the field and the selection, to `<dir>/state`.
+            let window = NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+            let editor = window?.firstResponder as? NSTextView
+            let lines = ["draft [\(model.draft)]", "field [\(editor?.string ?? "-")] marked \(editor?.hasMarkedText() ?? false)",
+                         "selected \(model.selectedSession ?? "-") pinned \(model.isSelectedPinned)",
+                         "toasts \(model.toasts.map(\.title))", "key \(window?.isKeyWindow ?? false) responder \(String(describing: window?.firstResponder.map { type(of: $0) }))"]
+            try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/state",
+                                                     atomically: true, encoding: .utf8)
         case "scope": model.showsAllProjects = parts[1] == "all"
         case "settings":
             if parts.count > 1, let section = SettingsSection(rawValue: parts.dropFirst().joined(separator: " ")) {
