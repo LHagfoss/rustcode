@@ -1980,9 +1980,12 @@ fn inline_command_selection_is_distinct_from_typed_input() {
             .rev()
             .find(|row| row_text(*row).contains(input))
             .expect("composer input row should be visible");
-        let input_column = row_text(input_row)
-            .find(input)
-            .expect("typed command should be visible") as u16;
+        // Rows are read cell by cell, so convert the byte offset to a column:
+        // the frame's `│` and the `›` prompt are wider in bytes than in cells.
+        let row = row_text(input_row);
+        let input_column = row[..row.find(input).expect("typed command should be visible")]
+            .chars()
+            .count() as u16;
         assert_eq!(
             buffer[(input_column, input_row)].fg,
             COLOR_TEXT(),
@@ -2716,6 +2719,8 @@ fn selection_copy_hint_appears_with_the_selection_and_leaves_with_it() {
 
     let binding = rustcode::controller::copy_selection_binding();
     let mut state = RenderState::new();
+    state.cwd_and_branch = "~/code/project:main".to_owned();
+    let location = "main · ~/code/project";
     let mut transcript = TranscriptState::default();
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
 
@@ -2736,7 +2741,7 @@ fn selection_copy_hint_appears_with_the_selection_and_leaves_with_it() {
     assert!(!idle.contains(binding), "idle footer: {idle:?}");
     assert!(!idle.contains("or right-click"), "idle footer: {idle:?}");
     assert!(
-        idle.contains(&state.model_name),
+        idle.contains(location),
         "idle footer should keep the session metadata: {idle:?}"
     );
 
@@ -2753,7 +2758,7 @@ fn selection_copy_hint_appears_with_the_selection_and_leaves_with_it() {
         "selected footer: {selected:?}"
     );
     assert!(
-        !selected.contains(&state.model_name),
+        !selected.contains(location),
         "the hint replaces the session metadata: {selected:?}"
     );
 
@@ -2770,7 +2775,7 @@ fn selection_copy_hint_appears_with_the_selection_and_leaves_with_it() {
     let cleared = footer(&terminal);
     assert!(!cleared.contains(binding), "cleared footer: {cleared:?}");
     assert!(
-        cleared.contains(&state.model_name),
+        cleared.contains(location),
         "cleared footer should fall back to the session metadata: {cleared:?}"
     );
 }
@@ -7396,6 +7401,7 @@ fn footer_counts_tasks_and_reports_where_the_counter_is() {
                     None,
                     false,
                     false,
+                    false,
                 );
             })
             .unwrap();
@@ -8895,13 +8901,14 @@ fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
 }
 
 #[test]
-fn empty_composer_has_painted_padding_and_external_model_footer() {
+fn empty_composer_is_framed_with_settings_inside_and_location_footer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
     let mut state = RenderState::new();
+    state.cwd_and_branch = "~/code/project:main".to_owned();
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
     let mut input_area = ratatui::layout::Rect::default();
     terminal
@@ -8911,47 +8918,307 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
         .unwrap();
 
     let buffer = terminal.backend().buffer();
-    let prompt_row = (0..12).find(|y| {
+    let row_text = |y: u16| {
         (0..100)
-            .map(|x| buffer[(x, *y)].symbol())
+            .map(|x| buffer[(x, y)].symbol())
             .collect::<String>()
-            .contains("Ask RustCode to do anything")
-    });
-    let bottom_border_row = (0..12).find(|y| {
-        (0..100)
-            .map(|x| buffer[(x, *y)].symbol())
-            .collect::<String>()
-            .contains("context left")
-    });
-
-    let prompt_row = prompt_row.expect("composer prompt should be rendered");
-    let footer_row = bottom_border_row.expect("composer footer should be rendered");
+    };
+    let prompt_row = (0..12)
+        .find(|y| row_text(*y).contains("Ask RustCode to do anything"))
+        .expect("composer prompt should be rendered");
+    let footer_row = (0..12)
+        .find(|y| row_text(*y).contains("context left"))
+        .expect("composer footer should be rendered");
     assert_eq!(
         Some(input_area.y),
         Some(prompt_row - 1),
         "shutdown should know where the transient composer begins"
     );
-    assert_eq!(footer_row, prompt_row + 2);
-    let footer = (0..100)
-        .map(|x| buffer[(x, footer_row)].symbol())
-        .collect::<String>();
+    // Top border, prompt, settings row, bottom border, then the footer.
+    let top = row_text(prompt_row - 1);
+    assert!(top.starts_with('╭') && top.ends_with('╮'), "{top:?}");
     assert!(
-        footer.contains(&state.model_name),
+        row_text(prompt_row).starts_with("│ › Ask RustCode"),
+        "{:?}",
+        row_text(prompt_row)
+    );
+    assert!(row_text(prompt_row).ends_with('│'));
+    let settings = row_text(prompt_row + 1);
+    assert!(
+        settings.starts_with(&format!("│   ask · {}", state.model_name)),
+        "settings row: {settings:?}"
+    );
+    let bottom = row_text(prompt_row + 2);
+    assert!(
+        bottom.starts_with('╰') && bottom.ends_with('╯'),
+        "{bottom:?}"
+    );
+    assert_eq!(footer_row, prompt_row + 3);
+
+    let footer = row_text(footer_row);
+    assert!(
+        footer.starts_with("  main · ~/code/project"),
         "composer footer: {footer:?}"
     );
-    assert!(
-        !footer.contains("? for shortcuts"),
-        "composer footer: {footer:?}"
-    );
-    assert!(
-        footer.contains(" · "),
-        "composer footer should include model/location separators: {footer:?}"
-    );
-    assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
-    assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
-    // The footer sits on the transcript background, below the composer panel.
+    for moved in [state.model_name.as_str(), "ask", "auto-approve", "plan"] {
+        assert!(
+            !footer.contains(moved),
+            "{moved} moved into the composer: {footer:?}"
+        );
+    }
+    // The frame sits on the transcript background, the fill inside it stays
+    // the composer panel, and the footer keeps the transcript background.
+    assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_BG());
+    assert_eq!(buffer[(2, prompt_row)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(2, prompt_row + 1)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(98, prompt_row)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
-    assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
+}
+
+/// Render one frame and return its rows, the composer rect and the cursor.
+fn draw_framed_composer(
+    state: &mut RenderState,
+    transcript: &mut TranscriptState,
+    width: u16,
+    height: u16,
+) -> (
+    Vec<String>,
+    ratatui::layout::Rect,
+    ratatui::layout::Position,
+) {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::{Backend, TestBackend};
+
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut input_area = ratatui::layout::Rect::default();
+    terminal
+        .draw(|frame| input_area = render_with_transcript(frame, state, transcript).1)
+        .unwrap();
+    let rows = (0..height)
+        .map(|row| {
+            (0..width)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect();
+    let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+    (rows, input_area, cursor)
+}
+
+#[test]
+fn posture_token_is_ask_auto_approve_or_plan_and_plan_wins() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use rustcode::controller::AgentMode;
+
+    for (mode, auto_confirm, expected) in [
+        (AgentMode::Build, false, "ask"),
+        (AgentMode::Build, true, "auto-approve"),
+        (AgentMode::Plan, false, "plan"),
+        (AgentMode::Plan, true, "plan"),
+    ] {
+        let mut state = RenderState::new();
+        state.cwd_and_branch = "~/code/project:main".to_owned();
+        state.agent_mode = mode;
+        state.auto_confirm = auto_confirm;
+        let snapshot = render_snapshot(&state);
+        assert_eq!(super::permission_posture_token(&snapshot), expected);
+
+        let mut transcript = TranscriptState::default();
+        let (rows, area, _) = draw_framed_composer(&mut state, &mut transcript, 100, 12);
+        let settings = &rows[usize::from(area.bottom() - 2)];
+        assert!(
+            settings.starts_with(&format!("│   {expected} · {}", state.model_name)),
+            "{mode:?}/{auto_confirm}: {settings:?}"
+        );
+        let footer = &rows[11];
+        for token in ["ask", "auto-approve", "plan", "plan mode"] {
+            assert!(!footer.contains(token), "{token} leaked into {footer:?}");
+            if token != expected {
+                assert!(!settings.contains(token), "{token} beside {expected}");
+            }
+        }
+
+        // The posture token is a click target over exactly its cells.
+        let chip = transcript.posture_chip.expect("posture is clickable");
+        assert_eq!(chip.y, area.bottom() - 2);
+        let painted = (chip.x..chip.right())
+            .map(|x| settings.chars().nth(usize::from(x)).unwrap())
+            .collect::<String>();
+        assert_eq!(painted, expected);
+
+        // Unframed fallback: the footer names the model and only a
+        // non-default posture, never both plan and auto-approve.
+        let narrow = render_state_to_text(&mut state, super::COMPOSER_FRAME_MIN_WIDTH - 1, 12);
+        let narrow_footer = narrow.lines().last().unwrap();
+        assert!(!narrow.contains('╭'), "{narrow}");
+        assert!(!narrow_footer.contains("plan mode"), "{narrow_footer:?}");
+        if expected == "plan" {
+            assert!(!narrow_footer.contains("auto-approve"), "{narrow_footer:?}");
+        }
+    }
+}
+
+#[test]
+fn settings_row_drops_the_posture_before_the_model() {
+    let mut state = RenderState::new();
+    state.model_name = "gemini-3.6-flash".to_owned();
+    let snapshot = render_snapshot(&state);
+    let model = Some("gemini-3.6-flash".to_owned());
+    // Two columns of indent and the free cursor column come off the width.
+    assert_eq!(
+        super::composer_settings(&snapshot, 25),
+        super::ComposerSettings {
+            posture: Some("ask"),
+            model: model.clone()
+        }
+    );
+    assert_eq!(
+        super::composer_settings(&snapshot, 24),
+        super::ComposerSettings {
+            posture: None,
+            model: model.clone()
+        }
+    );
+    assert_eq!(
+        super::composer_settings(&snapshot, 19),
+        super::ComposerSettings {
+            posture: None,
+            model
+        }
+    );
+    assert_eq!(
+        super::composer_settings(&snapshot, 18),
+        super::ComposerSettings {
+            posture: None,
+            model: None
+        }
+    );
+}
+
+#[test]
+fn hovering_the_posture_token_highlights_it() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = RenderState::new();
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    let chip = transcript.posture_chip.expect("posture chip");
+    assert!(transcript.posture_chip_at(chip.x, chip.y));
+    assert!(!transcript.posture_chip_at(chip.right(), chip.y));
+    transcript.posture_chip_hovered = true;
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(chip.x, chip.y)].bg,
+        COLOR_HOVER_BG()
+    );
+
+    // No composer, no posture target: an approval pane replaces it.
+    state.status = AppStatus::AwaitingToolConfirmation;
+    state.pending_tool_confirmation = Some(vec![rustcode::controller::ToolConfirmation {
+        request_id: None,
+        tool_name: "run_command".to_owned(),
+        path: "cargo test".to_owned(),
+        content_preview: String::new(),
+        content_bytes: 0,
+        rememberable_prefix: None,
+        forbidden_prefix: None,
+    }]);
+    terminal
+        .draw(|frame| {
+            render_with_transcript(frame, &mut state, &mut transcript);
+        })
+        .unwrap();
+    assert_eq!(transcript.posture_chip, None);
+}
+
+#[test]
+fn resizing_keeps_the_cursor_inside_the_frame_and_the_footer_one_row() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let height = 20;
+    for width in 16..=200u16 {
+        let mut state = RenderState::new();
+        state.input_buffer =
+            "a draft that wraps across several rows of the composer at narrow widths".to_owned();
+        state.cursor_position = state.input_buffer.len();
+        let mut transcript = TranscriptState::default();
+        let (rows, area, cursor) = draw_framed_composer(&mut state, &mut transcript, width, height);
+        // The footer keeps exactly one row, directly under the composer.
+        assert_eq!(area.bottom() + 1, height, "width {width}");
+        assert!(rows[usize::from(height - 1)].contains("context left") || width < 40);
+        let text = super::composer_text_rect(area);
+        assert!(
+            text.contains(cursor),
+            "width {width}: cursor {cursor:?} outside {text:?}"
+        );
+        if super::composer_framed(width) {
+            // Never on the border, and the last text column stays free.
+            assert!(cursor.x < text.right(), "width {width}");
+            assert!(rows[usize::from(area.y)].starts_with('╭'), "width {width}");
+            assert!(rows[usize::from(area.bottom() - 1)].starts_with('╰'));
+        } else {
+            // Below the fallback width the layout is the unframed composer.
+            assert!(
+                !rows
+                    .iter()
+                    .any(|row| row.contains('╭') && row.contains('╮'))
+            );
+            assert!(
+                rows[usize::from(area.y + 1)].starts_with("› "),
+                "width {width}: {:?}",
+                rows[usize::from(area.y + 1)]
+            );
+        }
+    }
+}
+
+#[test]
+fn notices_and_hints_replace_the_footer_without_moving_the_composer() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut idle = RenderState::new();
+    idle.cwd_and_branch = "~/code/project:main".to_owned();
+    let mut transcript = TranscriptState::default();
+    let (idle_rows, idle_area, _) = draw_framed_composer(&mut idle, &mut transcript, 80, 14);
+    assert!(idle_rows[13].contains("main · ~/code/project"));
+
+    let variants: [(&str, fn(&mut RenderState)); 3] = [
+        ("notice", |state| {
+            state.transient_notice = Some("Copied selection to clipboard".to_owned());
+        }),
+        ("ctrl-c", |state| state.ctrl_c_exit_armed = true),
+        ("hint", |state| {
+            state.input_buffer = "/mo".to_owned();
+            state.cursor_position = 3;
+        }),
+    ];
+    for (label, apply) in variants {
+        let mut state = RenderState::new();
+        state.cwd_and_branch = "~/code/project:main".to_owned();
+        apply(&mut state);
+        let mut transcript = TranscriptState::default();
+        let (rows, area, _) = draw_framed_composer(&mut state, &mut transcript, 80, 14);
+        assert_eq!(area, idle_area, "{label} moved the composer");
+        assert!(
+            !rows[13].contains("~/code/project"),
+            "{label}: {:?}",
+            rows[13]
+        );
+        assert_eq!(
+            rows[usize::from(area.bottom() - 2)],
+            idle_rows[usize::from(area.bottom() - 2)],
+            "{label} changed the settings row"
+        );
+    }
 }
 
 #[test]
@@ -9349,9 +9616,18 @@ fn active_subagent_context_is_named_in_the_composer_footer() {
     state.selected_subagent = Some(child);
     state.selected_subagent_id = Some(1);
 
+    state.cwd_and_branch = "~/code/project:main".to_owned();
     let rendered = render_state_to_text(&mut state, 100, 30);
 
-    assert!(rendered.contains(&format!("agent-1 · {}", state.model_name)));
+    // The subagent leads the footer; the model now sits inside the composer.
+    assert!(
+        rendered.contains("agent-1 · main · ~/code/project"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("ask · {}", state.model_name)),
+        "{rendered}"
+    );
 }
 
 #[test]
@@ -10772,7 +11048,15 @@ fn footer_shows_the_model_without_a_running_indicator() {
                 .unwrap();
         terminal
             .draw(|frame| {
-                super::render_composer_footer(frame, frame.area(), &snapshot, None, false, false);
+                super::render_composer_footer(
+                    frame,
+                    frame.area(),
+                    &snapshot,
+                    None,
+                    false,
+                    false,
+                    false,
+                );
             })
             .unwrap();
         let row = (0..160)

@@ -133,10 +133,7 @@ pub(crate) fn composer_cursor_from_mouse(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let inner = area.inner(Margin {
-        vertical: 1,
-        horizontal: 0,
-    });
+    let inner = composer_text_rect(area);
     if !inner.contains(ratatui::layout::Position::new(column, row)) {
         return None;
     }
@@ -167,7 +164,8 @@ pub(crate) fn composer_cursor_from_mouse(
         Style::default(),
         true,
     );
-    let scroll_start = usize::from(cursor_row).saturating_sub(usize::from(inner.height) - 1);
+    let scroll_start =
+        usize::from(cursor_row).saturating_sub(usize::from(inner.height).saturating_sub(1));
     let clicked_row = usize::from(row - inner.y) + scroll_start;
     let hits = hit_rows.get(clicked_row)?;
     let clicked_column = column - inner.x;
@@ -214,6 +212,186 @@ fn display_index_to_byte(input: &str, index: usize) -> usize {
     input.len()
 }
 
+/// Narrowest composer that is still drawn inside a frame. Below it the border
+/// and the settings row cost more than they give, so the composer falls back
+/// to the unframed layout and the footer carries the session settings again.
+pub(crate) const COMPOSER_FRAME_MIN_WIDTH: u16 = 24;
+
+/// Whether a composer `width` columns wide is drawn inside the rounded frame.
+/// This is the one switch every consumer reads -- layout, painting, the footer
+/// and click-to-cursor -- so they never disagree about where the text sits.
+pub(crate) fn composer_framed(width: u16) -> bool {
+    width >= COMPOSER_FRAME_MIN_WIDTH
+}
+
+/// Whether the composer for `state` is drawn framed. Panels that borrow or
+/// hide the composer keep the plain panel row they always had.
+pub(super) fn composer_frame_shown(state: &RenderSnapshot, width: u16) -> bool {
+    panel_composer(state).is_none() && composer_framed(width)
+}
+
+/// Whether layout reserves the framed composer's rows. Slash-command panels
+/// hand the composer row back to the panel, as they always did; an approval
+/// or question keeps the framed geometry so the chat above does not shift
+/// when the pane opens over it.
+fn composer_frame_reserved(state: &RenderSnapshot, width: u16) -> bool {
+    composer_framed(width) && !state.user_overlay_open()
+}
+
+/// Rows the composer adds around its text: the top border, the settings row
+/// and the bottom border when framed; one pad row above and below otherwise.
+pub(super) fn composer_chrome_rows(state: &RenderSnapshot, width: u16) -> u16 {
+    if composer_frame_reserved(state, width) {
+        3
+    } else {
+        2
+    }
+}
+
+/// Width the input text wraps at inside a composer `width` columns wide.
+pub(super) fn composer_text_width(state: &RenderSnapshot, width: u16) -> u16 {
+    if composer_frame_reserved(state, width) {
+        framed_text_rect(ratatui::layout::Rect::new(0, 0, width, 3)).width
+    } else {
+        width
+    }
+}
+
+/// The text rect of a framed composer: inside the left border and one pad
+/// column, up to (not including) the right border. The wrap pass keeps the
+/// rect's last column free for the cursor (#2004), which doubles as the pad
+/// before the right border. The settings row and both borders are excluded.
+fn framed_text_rect(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    ratatui::layout::Rect::new(
+        area.x.saturating_add(2),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(3),
+        area.height.saturating_sub(3),
+    )
+}
+
+/// Where the input text is painted inside the composer `area`, and therefore
+/// where a click maps to a cursor position.
+pub(crate) fn composer_text_rect(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    if composer_framed(area.width) {
+        framed_text_rect(area)
+    } else {
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        })
+    }
+}
+
+/// The settings row on the last line inside a framed composer `area`.
+pub(super) fn composer_settings_rect(area: ratatui::layout::Rect) -> Option<ratatui::layout::Rect> {
+    (composer_framed(area.width) && area.height >= 3).then(|| {
+        let text = framed_text_rect(area);
+        ratatui::layout::Rect::new(text.x, area.bottom() - 2, text.width, 1)
+    })
+}
+
+/// The permission posture: the one setting that changes what Enter does.
+/// Plan mode wins over auto-approval, so the two never show together.
+pub(super) fn permission_posture_token(state: &RenderSnapshot) -> &'static str {
+    if state.agent_mode() == rustcode::controller::AgentMode::Plan {
+        "plan"
+    } else if state.auto_confirm() {
+        "auto-approve"
+    } else {
+        "ask"
+    }
+}
+
+/// The active model with its reasoning effort when one is set.
+pub(super) fn session_model_label(state: &RenderSnapshot) -> String {
+    let effort = state
+        .active_model_profile()
+        .and_then(|profile| profile.reasoning_effort.as_deref())
+        .filter(|effort| !effort.is_empty());
+    match effort {
+        Some(effort) => format!("{} {effort}", state.model_name()),
+        None => state.model_name().to_string(),
+    }
+}
+
+/// What the settings row holds at a given text width, posture first. The
+/// posture is dropped before the model, and the model before nothing at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ComposerSettings {
+    pub(super) posture: Option<&'static str>,
+    pub(super) model: Option<String>,
+}
+
+/// Indent of the settings row, aligned with the text after the `› ` prompt.
+const SETTINGS_INDENT: u16 = 2;
+
+pub(super) fn composer_settings(state: &RenderSnapshot, text_width: u16) -> ComposerSettings {
+    // The last column stays free, as on every input row.
+    let available = usize::from(text_width.saturating_sub(SETTINGS_INDENT + 1));
+    let posture = permission_posture_token(state);
+    let model = session_model_label(state);
+    if posture.width() + HINT_SEPARATOR.width() + model.width() <= available {
+        ComposerSettings {
+            posture: Some(posture),
+            model: Some(model),
+        }
+    } else if model.width() <= available {
+        ComposerSettings {
+            posture: None,
+            model: Some(model),
+        }
+    } else {
+        ComposerSettings {
+            posture: None,
+            model: None,
+        }
+    }
+}
+
+/// Where the posture token is painted inside the composer `area`, so the
+/// pointer can hover and click it to cycle the posture.
+pub(super) fn composer_posture_rect(
+    state: &RenderSnapshot,
+    area: ratatui::layout::Rect,
+) -> Option<ratatui::layout::Rect> {
+    let row = composer_settings_rect(area)?;
+    let posture = composer_settings(state, row.width).posture?;
+    Some(ratatui::layout::Rect::new(
+        row.x + SETTINGS_INDENT,
+        row.y,
+        posture.width() as u16,
+        1,
+    ))
+}
+
+fn render_composer_settings(f: &mut Frame, row: ratatui::layout::Rect, state: &RenderSnapshot) {
+    let settings = composer_settings(state, row.width);
+    let muted = get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false);
+    let mut spans = vec![Span::styled(
+        " ".repeat(usize::from(SETTINGS_INDENT)),
+        muted,
+    )];
+    if let Some(posture) = settings.posture {
+        let style = match posture {
+            "plan" => get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, false),
+            "auto-approve" => get_themed_style(Color::Yellow, COLOR_PANEL(), Modifier::BOLD, false),
+            _ => get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), false),
+        };
+        spans.push(Span::styled(posture, style));
+        if settings.model.is_some() {
+            spans.push(Span::styled(HINT_SEPARATOR, muted));
+        }
+    }
+    if let Some(model) = settings.model {
+        spans.push(Span::styled(model, muted));
+    }
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(COLOR_PANEL())),
+        row,
+    );
+}
+
 #[cfg(test)]
 mod mouse_tests {
     use super::*;
@@ -247,25 +425,91 @@ mod mouse_tests {
 
     #[test]
     fn click_treats_collapsed_markers_as_atomic_text() {
-        let area = ratatui::layout::Rect::new(0, 0, 40, 3);
+        // Framed: the text starts two columns in, after `│ `.
+        let area = ratatui::layout::Rect::new(0, 0, 40, 4);
         let input = "a![image](file:///tmp/a.png)b";
         assert_eq!(
-            composer_cursor_from_mouse(input, 0, None, area, 3, 1),
+            composer_cursor_from_mouse(input, 0, None, area, 5, 1),
             Some(1)
         );
         assert_eq!(
-            composer_cursor_from_mouse(input, 0, None, area, 13, 1),
+            composer_cursor_from_mouse(input, 0, None, area, 15, 1),
             Some(input.len() - 1)
         );
         let pasted = "a<!--PASTE:5:hello-->b";
         assert_eq!(
-            composer_cursor_from_mouse(pasted, 0, None, area, 3, 1),
+            composer_cursor_from_mouse(pasted, 0, None, area, 5, 1),
             Some(1)
         );
         assert_eq!(
-            composer_cursor_from_mouse(pasted, 0, None, area, 30, 1),
+            composer_cursor_from_mouse(pasted, 0, None, area, 32, 1),
             Some(pasted.len())
         );
+    }
+
+    #[test]
+    fn framed_text_rect_excludes_the_border_and_settings_row() {
+        let area = ratatui::layout::Rect::new(3, 4, 30, 6);
+        assert!(composer_framed(area.width));
+        // Inside `│ ` on the left, up to the right border; the top border, the
+        // settings row and the bottom border are not text.
+        assert_eq!(
+            composer_text_rect(area),
+            ratatui::layout::Rect::new(5, 5, 27, 3)
+        );
+        assert_eq!(
+            composer_settings_rect(area),
+            Some(ratatui::layout::Rect::new(5, 8, 27, 1))
+        );
+        // Below the fallback width the composer is unframed, as before.
+        let narrow = ratatui::layout::Rect::new(0, 0, COMPOSER_FRAME_MIN_WIDTH - 1, 4);
+        assert!(!composer_framed(narrow.width));
+        assert_eq!(
+            composer_text_rect(narrow),
+            ratatui::layout::Rect::new(0, 1, COMPOSER_FRAME_MIN_WIDTH - 1, 2)
+        );
+        assert_eq!(composer_settings_rect(narrow), None);
+    }
+
+    #[test]
+    fn framed_click_lands_on_the_right_byte_on_every_wrapped_row() {
+        // 30 columns framed -> a 27-column text rect whose last column is kept
+        // free for the cursor (#2004), so 24 columns of text after the indent.
+        let area = ratatui::layout::Rect::new(0, 0, 30, 7);
+        let text = composer_text_rect(area);
+        let input = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
+        let styled = input
+            .chars()
+            .map(|character| (character, Style::default()))
+            .collect::<Vec<_>>();
+        let (lines, _, _, hits) =
+            wrap_input_chars_with_hits(&styled, text.width as usize, 0, Style::default(), true);
+        assert!(lines.len() >= 3, "the input should wrap: {}", lines.len());
+        assert!(lines.len() <= usize::from(text.height));
+        for (row, row_hits) in hits.iter().enumerate() {
+            for &(x, index) in row_hits {
+                let column = text.x + x;
+                assert!(column < text.right(), "hit spills onto the border");
+                let byte = input
+                    .char_indices()
+                    .nth(index)
+                    .map_or(input.len(), |(offset, _)| offset);
+                assert_eq!(
+                    composer_cursor_from_mouse(input, 0, None, area, column, text.y + row as u16),
+                    Some(byte),
+                    "row {row} column {column}"
+                );
+            }
+        }
+        // The borders and the settings row map to nothing.
+        assert_eq!(composer_cursor_from_mouse(input, 0, None, area, 0, 1), None);
+        assert_eq!(
+            composer_cursor_from_mouse(input, 0, None, area, 29, 1),
+            None
+        );
+        assert_eq!(composer_cursor_from_mouse(input, 0, None, area, 5, 0), None);
+        assert_eq!(composer_cursor_from_mouse(input, 0, None, area, 5, 5), None);
+        assert_eq!(composer_cursor_from_mouse(input, 0, None, area, 5, 6), None);
     }
 
     #[test]
@@ -1031,11 +1275,39 @@ pub(crate) fn render_input(
         ratatui::widgets::Block::default().style(Style::default().bg(COLOR_PANEL())),
         area,
     );
-    let input_margin = Margin {
-        vertical: 1,
-        horizontal: 0,
+    let framed = composer_frame_shown(state, area.width);
+    let (input_margin, input_inner) = if framed {
+        // The border sits on the transcript background so the rounded corners
+        // read as a box; the panel fill stays inside it.
+        f.render_widget(
+            ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Rounded)
+                .border_style(get_themed_style(
+                    COLOR_MUTED(),
+                    COLOR_BG(),
+                    Modifier::empty(),
+                    false,
+                )),
+            area,
+        );
+        if let Some(row) = composer_settings_rect(area) {
+            render_composer_settings(f, row, state);
+        }
+        (
+            Margin {
+                vertical: 1,
+                horizontal: 2,
+            },
+            composer_text_rect(area),
+        )
+    } else {
+        let margin = Margin {
+            vertical: 1,
+            horizontal: 0,
+        };
+        (margin, area.inner(margin))
     };
-    let input_inner = area.inner(input_margin);
 
     let panel = panel_composer(state);
     if panel == Some(PanelComposer::Hidden) {
@@ -1231,30 +1503,23 @@ pub(super) fn footer_location(state: &RenderSnapshot) -> String {
     format!("{branch} · {path}")
 }
 
-/// Standing session settings for the footer: the model with its reasoning
-/// effort when one is set, then Plan mode and auto-approval, which change
-/// what a prompt will do and were otherwise visible only as a passing notice.
+/// Standing session settings for the footer when the composer cannot carry
+/// them (it is unframed, or replaced by an approval or question pane): the
+/// model with its reasoning effort, then a non-default permission posture.
+/// The default `ask` posture is only spelled out inside the framed composer.
 pub(super) fn footer_session_badges(state: &RenderSnapshot) -> Vec<String> {
-    let mut badges = Vec::new();
-    let effort = state
-        .active_model_profile()
-        .and_then(|profile| profile.reasoning_effort.as_deref())
-        .filter(|effort| !effort.is_empty());
-    badges.push(match effort {
-        Some(effort) => format!("{} {effort}", state.model_name()),
-        None => state.model_name().to_string(),
-    });
-    if state.agent_mode() == rustcode::controller::AgentMode::Plan {
-        badges.push("plan mode".to_owned());
-    }
-    if state.auto_confirm() {
-        badges.push("auto-approve".to_owned());
+    let mut badges = vec![session_model_label(state)];
+    let posture = permission_posture_token(state);
+    if posture != "ask" {
+        badges.push(posture.to_owned());
     }
     badges
 }
 
 /// Paint the footer. Returns where the task counter was drawn, so the pointer
-/// can hover and click it.
+/// can hover and click it. `settings_in_composer` is true when the framed
+/// composer's settings row already shows the model and posture, so the footer
+/// leaves them out and nothing renders twice.
 pub(super) fn render_composer_footer(
     f: &mut Frame,
     area: ratatui::layout::Rect,
@@ -1262,6 +1527,7 @@ pub(super) fn render_composer_footer(
     popup_hint: Option<&'static [&'static str]>,
     selection_active: bool,
     tasks_hovered: bool,
+    settings_in_composer: bool,
 ) -> Option<ratatui::layout::Rect> {
     if area.height == 0 || area.width == 0 {
         return None;
@@ -1314,10 +1580,11 @@ pub(super) fn render_composer_footer(
         if let Some(agent) = state.selected_subagent() {
             metadata.push(agent.name().to_string());
         }
-        // The running indicator lives at the bottom of the chat now, so the
-        // footer carries the session's standing settings: model and effort,
-        // a non-default mode, then the workspace.
-        metadata.extend(footer_session_badges(state));
+        // The framed composer carries the model and posture on its last row;
+        // the footer repeats them only when that row is not on screen.
+        if !settings_in_composer {
+            metadata.extend(footer_session_badges(state));
+        }
         metadata.push(location);
         (
             format!("  {}", metadata.join(" · ")),

@@ -110,6 +110,9 @@ pub(crate) struct TranscriptState {
     /// Where the footer's task counter was painted, if it was.
     pub(crate) tasks_chip: Option<ratatui::layout::Rect>,
     pub(crate) tasks_chip_hovered: bool,
+    /// The permission posture token on the framed composer's settings row.
+    pub(crate) posture_chip: Option<ratatui::layout::Rect>,
+    pub(crate) posture_chip_hovered: bool,
     /// Clickable cells of the panel painted last frame: its `esc` hint and
     /// the rows of its list.
     panel_targets: Vec<(ratatui::layout::Rect, PanelTarget)>,
@@ -221,6 +224,8 @@ impl Default for TranscriptState {
             hovered_message: None,
             tasks_chip: None,
             tasks_chip_hovered: false,
+            posture_chip: None,
+            posture_chip_hovered: false,
             panel_targets: Vec::new(),
             hovered_target: None,
             pointer: None,
@@ -429,6 +434,12 @@ impl TranscriptState {
             .is_some_and(|area| area.contains(ratatui::layout::Position::new(column, row)))
     }
 
+    /// Whether this cell is on the composer's permission posture token.
+    pub(crate) fn posture_chip_at(&self, column: u16, row: u16) -> bool {
+        self.posture_chip
+            .is_some_and(|area| area.contains(ratatui::layout::Position::new(column, row)))
+    }
+
     /// Find what a click can reach in the panel just painted into `area`: an
     /// `esc` hint closing a row, and, when the panel is a list, the rows
     /// around its `›` selection marker. Panels are read from the painted
@@ -539,6 +550,7 @@ impl TranscriptState {
     fn resolve_hover(&mut self, column: u16, row: u16) -> bool {
         let block = self.tool_block_at(column, row);
         let chip = self.tasks_chip_at(column, row);
+        let posture = self.posture_chip_at(column, row);
         let target = self
             .panel_target_rect_at(column, row)
             .map(|(rect, _)| rect)
@@ -557,6 +569,7 @@ impl TranscriptState {
             .filter(|_| target.is_none() && self.panel_selection_area.is_none());
         let changed = block != self.hovered_tool_block
             || chip != self.tasks_chip_hovered
+            || posture != self.posture_chip_hovered
             || target != self.hovered_target
             || message != self.hovered_message
             || viz != self.hovered_viz;
@@ -564,6 +577,7 @@ impl TranscriptState {
         self.hovered_message = message;
         self.hovered_tool_block = block;
         self.tasks_chip_hovered = chip;
+        self.posture_chip_hovered = posture;
         self.hovered_target = target;
         changed
     }

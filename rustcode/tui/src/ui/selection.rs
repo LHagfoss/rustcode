@@ -1816,7 +1816,7 @@ mod tests {
              ```\n+------+------+\n| name | value |\n+------+------+\n| a    | 1    |\n+------+------+\n```",
         ));
         let mut transcript = super::super::history_cell::TranscriptState::default();
-        let _ = rendered_transcript_size(&state, &mut transcript, 40, 20);
+        let _ = rendered_transcript_size(&state, &mut transcript, 40, 21);
         let area = transcript.selection.area;
         transcript.selection.begin_with_snapshot(
             mouse(MouseEventKind::Down(MouseButton::Left), area.x, area.y + 1),
