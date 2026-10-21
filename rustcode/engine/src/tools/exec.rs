@@ -966,7 +966,11 @@ fn run_command_output_inner(
                 if let Some(path) = output_log {
                     let _ = std::fs::remove_file(path);
                 }
-                return Ok(foreground_command_output(&output, &sandbox_context));
+                return Ok(foreground_command_output(
+                    command_str,
+                    &output,
+                    &sandbox_context,
+                ));
             }
             if !has_start_barrier {
                 barrier.release();
@@ -1041,7 +1045,7 @@ fn run_command_output_inner(
                 .map_err(|error| with_home_traversal_hint(error, home_traversal))?
         }
     };
-    let result = foreground_command_output(&output, &sandbox_context);
+    let result = foreground_command_output(command_str, &output, &sandbox_context);
     if result.success
         && !result.truncated
         && !verification_cancel
@@ -1140,21 +1144,106 @@ struct CommandSandboxContext<'a> {
     one_shot_writable_roots: &'a [std::path::PathBuf],
 }
 
+/// Whether the command ends in a bare `rg`/`grep` search, outside any
+/// pipeline. Only then is the shell's exit status the search's own.
+fn ends_in_bare_search(command: &str) -> bool {
+    // Mask quoted text so a `|` or `;` inside a pattern is not taken for
+    // shell syntax.
+    let mut quote = None;
+    let command: String = command
+        .chars()
+        .map(|c| match (quote, c) {
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                'q'
+            }
+            (Some(open), _) if c == open => {
+                quote = None;
+                'q'
+            }
+            (Some(_), _) => 'q',
+            (None, c) => c,
+        })
+        .collect();
+    let command = command.as_str();
+    let last = command
+        .rsplit(['\n', ';'])
+        .next()
+        .unwrap_or(command)
+        .rsplit("&&")
+        .next()
+        .unwrap_or(command)
+        .rsplit("||")
+        .next()
+        .unwrap_or(command)
+        .trim();
+    if last.contains('|') {
+        return false;
+    }
+    let mut words = last.split_whitespace();
+    match words.next() {
+        Some("rg" | "grep" | "egrep" | "fgrep") => true,
+        Some("git") => words.next() == Some("grep"),
+        _ => false,
+    }
+}
+
+/// `rg` and `grep` exit 1 when nothing matched. With no output at all that is
+/// an answer, not a failure, and counting it as one fed the failed-call
+/// streaks in session 01a15ef714ce.
+fn is_empty_search_miss(command: &str, output: &rustcode_command::CommandOutput) -> bool {
+    output.exit_code == Some(1)
+        && output.signal.is_none()
+        && output.stdout.total_bytes() == 0
+        && output.stderr.total_bytes() == 0
+        && ends_in_bare_search(command)
+}
+
+/// `rg -rn` is a grep habit, but in ripgrep `-r` is `--replace`: the pattern
+/// is searched and each match is rewritten to `n`. Point that out once in the
+/// result. A lone `-r` is left alone, as it is usually a deliberate replace.
+fn rg_replace_flag_hint(command: &str) -> Option<&'static str> {
+    let mut in_rg = false;
+    for word in command.split_whitespace() {
+        match word {
+            "rg" => in_rg = true,
+            path if path.ends_with("/rg") => in_rg = true,
+            "|" | "&&" | "||" | ";" => in_rg = false,
+            flag if in_rg
+                && flag.len() > 2
+                && flag.starts_with('-')
+                && !flag.starts_with("--")
+                && flag[1..].chars().all(|c| c.is_ascii_alphabetic())
+                && flag[1..].contains('r') =>
+            {
+                return Some(
+                    "[note: in rg, -r is --replace, not recursive; rg already searches recursively, so drop the r]",
+                );
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Render a finished command as the `run_command` result the model reads.
 fn foreground_command_output(
+    command: &str,
     output: &rustcode_command::CommandOutput,
     sandbox: &CommandSandboxContext<'_>,
 ) -> super::ToolExecutionOutput {
     let exit_code = output.exit_code.unwrap_or(-1);
+    let search_miss = is_empty_search_miss(command, output);
+    let succeeded = output.success || search_miss;
 
     let command_status = command_result_metadata(output);
     let mut result = String::new();
     result.push_str(&format!(
         "{}\nexit code: {exit_code}\n",
-        format_command_status(output.success, &command_status)
+        format_command_status(succeeded, &command_status)
     ));
 
-    let failed = !output.success;
+    let failed = !succeeded;
     let truncated = output.stdout.is_truncated() || output.stderr.is_truncated();
     let stdout = rustcode_command::format_bounded_output(&output.stdout);
     let stderr = rustcode_command::format_bounded_output(&output.stderr);
@@ -1173,8 +1262,14 @@ fn foreground_command_output(
             result.push('\n');
         }
     }
-    if stdout.is_empty() && stderr.is_empty() {
+    if search_miss {
+        result.push_str("(no matches)\n");
+    } else if stdout.is_empty() && stderr.is_empty() {
         result.push_str("(no output)\n");
+    }
+    if let Some(hint) = rg_replace_flag_hint(command) {
+        result.push_str(hint);
+        result.push('\n');
     }
     // A failed command's own stderr is ambiguous: "error connecting to
     // api.github.com" reads identically to a sandbox network denial and to a
@@ -1915,6 +2010,53 @@ pub fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_a_bare_trailing_search_counts_as_the_search_status() {
+        assert!(super::ends_in_bare_search("rg -n foo src"));
+        assert!(super::ends_in_bare_search("cd /repo && rg -n 'a|b' src"));
+        assert!(super::ends_in_bare_search("cd /repo; grep -rn foo ."));
+        assert!(super::ends_in_bare_search("git grep foo"));
+        // Pipelines fail on any stage, so exit 1 is not the search's own.
+        assert!(!super::ends_in_bare_search("rg foo | head"));
+        assert!(!super::ends_in_bare_search("rg foo && cargo test"));
+        assert!(!super::ends_in_bare_search("cargo test"));
+    }
+
+    #[test]
+    fn rg_grep_style_recursive_flags_get_a_replace_hint() {
+        assert!(super::rg_replace_flag_hint("cd /repo && rg -rn \"TokenUsage\" src").is_some());
+        assert!(super::rg_replace_flag_hint("/opt/homebrew/bin/rg -nr foo").is_some());
+        assert!(super::rg_replace_flag_hint("rg -n foo src").is_none());
+        // A lone -r is usually a deliberate replacement.
+        assert!(super::rg_replace_flag_hint("rg -o 'v(\\d+)' -r '$1' Cargo.toml").is_none());
+        // grep's -rn is recursive and correct.
+        assert!(super::rg_replace_flag_hint("grep -rn foo .").is_none());
+        assert!(super::rg_replace_flag_hint("rg foo | grep -rn bar").is_none());
+    }
+
+    #[test]
+    fn a_search_that_finds_nothing_is_an_answer_not_a_failure() {
+        let output = super::run_command_output_with_workspace(
+            &serde_json::json!({"command": "grep rustcode-no-such-line /dev/null"}),
+            None,
+        )
+        .expect("grep runs");
+        assert!(output.success, "{}", output.content);
+        assert!(
+            output.content.contains("(no matches)"),
+            "{}",
+            output.content
+        );
+
+        // A real error (exit 2) still fails.
+        let output = super::run_command_output_with_workspace(
+            &serde_json::json!({"command": "grep foo /rustcode/no/such/file"}),
+            None,
+        )
+        .expect("grep runs");
+        assert!(!output.success, "{}", output.content);
+    }
     use super::sandbox;
     #[cfg(unix)]
     use super::terminate_background_pid;
