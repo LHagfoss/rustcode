@@ -202,10 +202,10 @@ public struct Visualization: Sendable, Equatable {
 
         var sortColumn: Int?
         var sortDescending = false
-        if let sort = object["sort_by"] {
-            guard let column = sort["column"]?.intValue, (0..<shown).contains(column) else {
-                throw ParseError.invalid("\"sort_by.column\" must be a shown column index")
-            }
+        // `sort_by` is only a hint: a column that is unknown or not shown keeps
+        // the payload's order instead of failing the whole table.
+        if let sort = object["sort_by"],
+           let column = sort["column"].flatMap({ resolveSortColumn($0, shown: Array(columns.prefix(shown))) }) {
             sortColumn = column
             sortDescending = sort["descending"]?.boolValue ?? false
         }
@@ -215,6 +215,22 @@ public struct Visualization: Sendable, Equatable {
         return .table(columns: headers, rows: cells, numericColumns: numeric,
                       sortColumn: sortColumn, sortDescending: sortDescending,
                       hiddenColumns: columns.count - shown)
+    }
+
+    /// Resolve a table's `sort_by.column` to a shown column: an index, a
+    /// numeric string, or a column name (trimmed, case-insensitive).
+    static func resolveSortColumn(_ column: JSONValue, shown: [JSONValue]) -> Int? {
+        let index: Int?
+        if let number = column.intValue {
+            index = number
+        } else if let text = column.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) {
+            index = Int(text) ?? shown.firstIndex {
+                $0.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == text.lowercased()
+            }
+        } else {
+            index = nil
+        }
+        return index.flatMap { shown.indices.contains($0) ? $0 : nil }
     }
 
     private static func cell(_ value: JSONValue) throws -> Cell {

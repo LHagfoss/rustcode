@@ -33,7 +33,7 @@ struct VisualizationView: View {
 
     private func fallback(_ reason: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Visualization not rendered (\(reason)); showing source", systemImage: "chart.bar.xaxis")
+            Label("Couldn't draw this visualization (\(reason)) — showing its source.", systemImage: "chart.bar.xaxis")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             CodeBlock(language: Visualization.infoString, text: block.body)

@@ -134,7 +134,7 @@ pub(super) fn streaming_placeholder(body_lines: usize, show_picker: bool) -> Lin
 /// Muted note shown above the source when a block is not rendered.
 pub(super) fn fallback_note(reason: &str, show_picker: bool) -> Line<'static> {
     Line::from(vec![Span::styled(
-        format!("◇ Visualization not rendered ({reason}); showing source"),
+        format!("◇ Couldn't draw this visualization ({reason}) — showing its source."),
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
     )])
 }
@@ -459,6 +459,26 @@ fn cell_text(value: &Value) -> Result<(String, bool), String> {
     }
 }
 
+/// Resolve a table's `sort_by.column` to a shown column: an index, a
+/// numeric string, or a column name (trimmed, case-insensitive).
+fn sort_column(column: &Value, shown: &[Value]) -> Option<usize> {
+    let index = match column {
+        Value::Number(number) => number.as_u64().map(|index| index as usize),
+        Value::String(text) => {
+            let text = text.trim();
+            text.parse::<usize>().ok().or_else(|| {
+                let text = text.to_lowercase();
+                shown.iter().position(|name| {
+                    name.as_str()
+                        .is_some_and(|name| name.trim().to_lowercase() == text)
+                })
+            })
+        }
+        _ => None,
+    }?;
+    (index < shown.len()).then_some(index)
+}
+
 /// Escape Markdown punctuation so cell text is shown literally by the table
 /// renderer instead of being interpreted as inline markup.
 fn escape_markdown_cell(text: &str) -> String {
@@ -516,22 +536,18 @@ fn render_table(
         parsed_rows.push((parsed, sort_key));
     }
 
-    let payload_sort = match object.get("sort_by") {
-        None => None,
-        Some(sort) => {
-            let column = sort
-                .get("column")
-                .and_then(Value::as_u64)
-                .map(|column| column as usize)
-                .filter(|column| *column < shown_columns)
-                .ok_or("\"sort_by.column\" must be a shown column index")?;
-            let descending = sort
-                .get("descending")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            Some((column, descending))
-        }
-    };
+    // `sort_by` is only a hint: a column that is unknown or not shown keeps
+    // the payload's order instead of failing the whole table.
+    let payload_sort = object.get("sort_by").and_then(|sort| {
+        let column = sort
+            .get("column")
+            .and_then(|column| sort_column(column, &columns[..shown_columns]))?;
+        let descending = sort
+            .get("descending")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        Some((column, descending))
+    });
     // A header click overrides the payload's order. Every row is sorted, so
     // the shown rows are the top of the whole table, not of the first 50.
     let sort = view
@@ -1002,6 +1018,59 @@ mod tests {
     }
 
     #[test]
+    fn table_sort_by_accepts_an_index_a_numeric_string_or_a_column_name() {
+        let table = |column: &str| {
+            let body = format!(
+                r#"{{"version":1,"type":"table","columns":["Source file","Lines"],"rows":[["b.rs",5],["a.rs",900],["c.rs",40]],"sort_by":{{"column":{column},"descending":true}}}}"#
+            );
+            text(&render_visualization(&body, 60, false).unwrap())
+        };
+        for column in ["1", r#""1""#, r#""Lines""#, r#"" lines ""#] {
+            let rendered = table(column);
+            let (a, b, c) = (
+                rendered.find("a.rs").unwrap(),
+                rendered.find("b.rs").unwrap(),
+                rendered.find("c.rs").unwrap(),
+            );
+            assert!(a < c && c < b, "{column}: sorted descending: {rendered}");
+            assert!(rendered.contains("Lines ▼"), "{column}: {rendered}");
+        }
+        // An unknown or out-of-range column is only a hint: the table still
+        // renders, in the payload's order.
+        for column in [r#""Size""#, "7", r#""7""#, "true"] {
+            let rendered = table(column);
+            let (a, b, c) = (
+                rendered.find("a.rs").unwrap(),
+                rendered.find("b.rs").unwrap(),
+                rendered.find("c.rs").unwrap(),
+            );
+            assert!(b < a && a < c, "{column}: payload order: {rendered}");
+            assert!(!rendered.contains('▼'), "{column}: {rendered}");
+        }
+        // Structural problems stay strict.
+        for (body, reason) in [
+            (
+                r#"{"version":1,"type":"table","rows":[],"sort_by":{"column":"Lines"}}"#,
+                "table needs a \"columns\" array",
+            ),
+            (
+                r#"{"version":1,"type":"table","columns":["a"],"rows":[1],"sort_by":{"column":"a"}}"#,
+                "table rows must be arrays",
+            ),
+            (
+                r#"{"version":2,"type":"table","columns":["a"],"rows":[]}"#,
+                "unsupported version 2",
+            ),
+        ] {
+            assert_eq!(
+                render_visualization(body, 60, false).unwrap_err(),
+                reason,
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
     fn tree_renders_guides_and_notes() {
         let body = r#"{"version":1,"type":"tree","title":"ui","nodes":[{"label":"ui/","children":[{"label":"markdown.rs","note":"tables"},{"label":"modals/","children":[{"label":"theme.rs"}]}]}]}"#;
         let rendered = text(&render_visualization(body, 60, false).unwrap());
@@ -1211,7 +1280,7 @@ mod tests {
             let (lines, _) = render(&fenced(body), 80, false);
             let rendered = text(&lines);
             assert!(
-                rendered.contains("Visualization not rendered") && rendered.contains(reason),
+                rendered.contains("Couldn't draw this visualization") && rendered.contains(reason),
                 "{body}: {rendered}"
             );
             assert!(
@@ -1294,7 +1363,7 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("bar_chart"), "{rendered}");
-        assert!(!rendered.contains("not rendered"), "{rendered}");
+        assert!(!rendered.contains("Couldn't draw"), "{rendered}");
         assert!(copies.is_empty());
 
         // A finalized message whose fence never closed shows its source.

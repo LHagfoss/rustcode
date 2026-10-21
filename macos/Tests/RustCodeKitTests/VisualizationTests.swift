@@ -75,8 +75,11 @@ final class VisualizationTests: XCTestCase {
                        "every bar_chart item needs a finite numeric \"value\"")
         XCTAssertEqual(reason(#"{"version":1,"type":"table","columns":["a"],"rows":[[{"x":1}]]}"#),
                        "table cells must be strings, numbers, booleans, or null")
-        XCTAssertEqual(reason(#"{"version":1,"type":"table","columns":["a"],"rows":[],"sort_by":{"column":3}}"#),
-                       "\"sort_by.column\" must be a shown column index")
+        XCTAssertEqual(reason(#"{"version":1,"type":"table","rows":[],"sort_by":{"column":"a"}}"#),
+                       "table needs a \"columns\" array")
+        XCTAssertEqual(reason(#"{"version":1,"type":"table","columns":["a"],"rows":[1],"sort_by":{"column":"a"}}"#),
+                       "table rows must be arrays")
+        XCTAssertEqual(reason(#"{"version":2,"type":"table","columns":["a"],"rows":[]}"#), "unsupported version 2")
         XCTAssertEqual(reason(#"{"version":1,"type":"tree","nodes":[{"label":"a","children":"b"}]}"#),
                        "tree \"children\" must be an array")
         XCTAssertEqual(reason(#"{"version":1,"type":"tree","title":5,"nodes":[{"label":"a"}]}"#),
@@ -155,6 +158,26 @@ final class VisualizationTests: XCTestCase {
         let byName = Visualization.Content.sortedRows(rows, column: 0, descending: false)
         XCTAssertEqual(byName.map { $0[0].text }, ["a", "b", "c"])
         XCTAssertEqual(Visualization.Content.sortedRows(rows, column: nil, descending: false).map { $0[0].text }, ["b", "a", "c"])
+    }
+
+    func testTableSortByAcceptsAnIndexANumericStringOrAColumnName() throws {
+        func sort(_ column: String) throws -> (Int?, Bool) {
+            let body = #"{"version":1,"type":"table","title":"Largest Rust source files","columns":["Source file","Lines"],"rows":[["b.rs",5],["a.rs",900],["c.rs",40]],"sort_by":{"column":"# + column + #","descending":true}}"#
+            guard case .table(_, _, _, let column, let descending, _) = try Visualization.parse(body).content else {
+                XCTFail()
+                return (nil, false)
+            }
+            return (column, descending)
+        }
+        for column in ["1", #""1""#, #""Lines""#, #"" lines ""#] {
+            let (resolved, descending) = try sort(column)
+            XCTAssertEqual(resolved, 1, column)
+            XCTAssertTrue(descending, column)
+        }
+        // An unknown or hidden column is only a hint: the table still renders unsorted.
+        for column in [#""Size""#, "7", #""7""#, "true", "-1"] {
+            XCTAssertNil(try sort(column).0, column)
+        }
     }
 
     func testTreeNodesKeepNotesAndUniqueIds() throws {
