@@ -687,6 +687,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         subagent_tokens,
         // The TUI renders visualizations, so its root requests carry the hint.
         visualization_level: 1,
+        compaction: state.last_compaction().cloned(),
     })
 }
 
@@ -780,11 +781,12 @@ pub(in crate::ui) fn render_context_modal(
     let color_user = cat_colors[0];
     let color_asst = cat_colors[1];
     let color_tool = cat_colors[2];
-    let color_sys_p = cat_colors[3];
-    let color_sys_t = cat_colors[4];
-    let color_skill = cat_colors[5];
-    let color_sub = cat_colors[6];
-    let color_free = cat_colors[7];
+    let color_compact = cat_colors[3];
+    let color_sys_p = cat_colors[4];
+    let color_sys_t = cat_colors[5];
+    let color_skill = cat_colors[6];
+    let color_sub = cat_colors[7];
+    let color_free = cat_colors[8];
 
     let mut dot_spans: Vec<Span<'static>> = Vec::with_capacity(total_blocks);
 
@@ -805,6 +807,7 @@ pub(in crate::ui) fn render_context_modal(
         breakdown.user_tokens,
         breakdown.assistant_tokens,
         breakdown.tool_tokens,
+        breakdown.compacted_history_tokens,
         breakdown.system_prompt_tokens,
         breakdown.system_tools_tokens,
         breakdown.skills_tokens,
@@ -815,6 +818,7 @@ pub(in crate::ui) fn render_context_modal(
         color_user,
         color_asst,
         color_tool,
+        color_compact,
         color_sys_p,
         color_sys_t,
         color_skill,
@@ -950,6 +954,14 @@ pub(in crate::ui) fn render_context_modal(
             "Tool calls",
             breakdown.tool_tokens,
             pct(breakdown.tool_tokens),
+            true,
+        ),
+        (
+            "●",
+            color_compact,
+            "Compacted history",
+            breakdown.compacted_history_tokens,
+            pct(breakdown.compacted_history_tokens),
             true,
         ),
         (

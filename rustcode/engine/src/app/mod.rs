@@ -1,7 +1,9 @@
 pub mod events;
+pub use compaction::{CompactionMode, CompactionStats, CompactionTrigger};
 pub use events::{ApprovalDecision, QuestionAnswer, SessionAction, UpdateDecision};
 pub mod actions;
 pub mod activity;
+pub mod compaction;
 pub mod composer;
 pub mod fuzzy;
 pub mod geometry;

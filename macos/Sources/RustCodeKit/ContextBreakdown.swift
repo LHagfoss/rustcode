@@ -1,7 +1,8 @@
 import Foundation
 
 /// The `version` of `_meta.rustcode.context` this client understands.
-public let rustcodeContextMetaVersion = 1
+/// v2 adds the `compaction` object and the compacted-history category.
+public let rustcodeContextMetaVersion = 2
 
 /// How the model's context window is spent, as the engine's `/context`
 /// computes it. It rides in `_meta.rustcode.context` on `usage_update` and on
@@ -35,6 +36,34 @@ public struct ContextBreakdown: Equatable, Sendable, Identifiable {
         }
     }
 
+    /// What the last compaction in this session did, if any.
+    public struct Compaction: Equatable, Sendable {
+        public var trigger: String
+        public var mode: String
+        public var beforeTokens: Int
+        public var afterTokens: Int
+        public var reclaimedTokens: Int
+        public var messagesConsidered: Int
+        public var count: Int
+
+        public init(trigger: String, mode: String, beforeTokens: Int, afterTokens: Int,
+                    reclaimedTokens: Int, messagesConsidered: Int, count: Int) {
+            self.trigger = trigger
+            self.mode = mode
+            self.beforeTokens = beforeTokens
+            self.afterTokens = afterTokens
+            self.reclaimedTokens = reclaimedTokens
+            self.messagesConsidered = messagesConsidered
+            self.count = count
+        }
+
+        /// True when the result is the reduced deterministic record rather than
+        /// a written summary, so the sheet can say so.
+        public var isReduced: Bool { mode == "deterministic_record" }
+        /// True once the session has compacted more than once.
+        public var isRepeated: Bool { count > 1 }
+    }
+
     public var model: String?
     public var window: Int
     public var used: Int
@@ -44,11 +73,13 @@ public struct ContextBreakdown: Equatable, Sendable, Identifiable {
     /// In the terminal's legend order.
     public var categories: [Category]
     public var reserves: Reserves?
+    public var compaction: Compaction?
 
     public var id: String { "\(window)-\(used)-\(categories.map(\.tokens))" }
 
     public init(model: String? = nil, window: Int, used: Int, estimated: Bool = false, free: Int,
-                categories: [Category] = [], reserves: Reserves? = nil) {
+                categories: [Category] = [], reserves: Reserves? = nil,
+                compaction: Compaction? = nil) {
         self.model = model
         self.window = window
         self.used = used
@@ -56,6 +87,7 @@ public struct ContextBreakdown: Equatable, Sendable, Identifiable {
         self.free = free
         self.categories = categories
         self.reserves = reserves
+        self.compaction = compaction
     }
 
     /// Reads `_meta.rustcode.context`; nil for another version or no window.
@@ -80,6 +112,19 @@ public struct ContextBreakdown: Equatable, Sendable, Identifiable {
                 tools: reserves["tools"]?.intValue ?? 0,
                 safety: reserves["safety"]?.intValue ?? 0,
                 providerOverhead: reserves["providerOverhead"]?.intValue ?? 0)
+        }
+        // Null when this session has not compacted yet.
+        if let compaction = json["compaction"],
+           let trigger = compaction["trigger"]?.stringValue,
+           let mode = compaction["mode"]?.stringValue {
+            self.compaction = Compaction(
+                trigger: trigger,
+                mode: mode,
+                beforeTokens: compaction["beforeTokens"]?.intValue ?? 0,
+                afterTokens: compaction["afterTokens"]?.intValue ?? 0,
+                reclaimedTokens: compaction["reclaimedTokens"]?.intValue ?? 0,
+                messagesConsidered: compaction["messagesConsidered"]?.intValue ?? 0,
+                count: compaction["count"]?.intValue ?? 1)
         }
     }
 

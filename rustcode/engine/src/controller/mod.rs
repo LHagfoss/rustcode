@@ -50,6 +50,9 @@ pub(crate) fn next_question_id() -> String {
 #[cfg(test)]
 mod tests;
 
+/// Compaction state a frontend renders. Re-exported here so the TUI render
+/// layer reaches it through the frontend seam rather than `rustcode::app`.
+pub use crate::app::compaction::{CompactionMode, CompactionStats, CompactionTrigger};
 /// Editing operations every frontend text field shares.
 pub use crate::app::text_edit;
 pub use crate::capabilities::{SkillEntry, SkillsPanel, apply_mcp_toggle, redacted_target};
