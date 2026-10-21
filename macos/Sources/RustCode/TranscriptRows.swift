@@ -26,7 +26,7 @@ struct TranscriptRow: View, Equatable {
         case .user(let text): UserMessage(text: text)
         case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming)
         case .thinking(let text): ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration)
-        case .tool(let tool): ToolRow(tool: tool)
+        case .tool(let tool): if !tool.isBlank { ToolRow(tool: tool) }
         case .command(let input, let output): CommandCard(input: input, output: output)
         }
     }

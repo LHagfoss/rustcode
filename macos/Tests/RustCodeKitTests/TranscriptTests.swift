@@ -62,6 +62,44 @@ final class TranscriptTests: XCTestCase {
         XCTAssertNotNil(tool.input)
     }
 
+    private func tools(_ transcript: Transcript) -> [ToolItem] {
+        transcript.items.compactMap { if case .tool(let tool) = $0.content { tool } else { nil } }
+    }
+
+    func testTurnEndFinishesACardWhoseUpdateNeverCame() {
+        var transcript = Transcript()
+        transcript.apply(.toolCall(id: "t1", title: "run_command", kind: "execute", status: .inProgress, input: ["cmd": "ls"]))
+        transcript.apply(.toolCallUpdate(id: "t2", title: nil, status: .pending, output: nil))
+        transcript.apply(.toolCallUpdate(id: "t3", title: nil, status: nil, output: nil, outputDelta: "a\n"))
+        transcript.apply(.toolCallUpdate(id: "t3", title: nil, status: .inProgress, output: nil))
+        transcript.apply(.agentText("Here is the chart."))
+        transcript.finishTurn(at: Date())
+        XCTAssertEqual(tools(transcript).map(\.status), [.completed, .completed, .completed])
+        XCTAssertFalse(tools(transcript).contains(where: \.isBlank))
+    }
+
+    func testCancelledTurnFailsItsEmptyCardsAndKeepsOutput() {
+        var transcript = Transcript()
+        transcript.apply(.toolCall(id: "t1", title: "run_command", kind: nil, status: .inProgress, input: nil))
+        transcript.apply(.toolCall(id: "t2", title: "run_command", kind: nil, status: .inProgress, input: nil))
+        transcript.apply(.toolCallUpdate(id: "t2", title: nil, status: nil, output: nil, outputDelta: "half\n"))
+        transcript.apply(.toolCall(id: "t3", title: "read_file", kind: nil, status: .completed, input: nil))
+        transcript.finishTurn(at: Date(), failure: "Cancelled.")
+        let cards = tools(transcript)
+        XCTAssertEqual(cards.map(\.status), [.failed, .completed, .completed])
+        XCTAssertEqual(cards[0].output, "Cancelled.")
+        XCTAssertEqual(cards[1].output, "half\n")
+        XCTAssertNil(cards[2].output)
+    }
+
+    func testOnlyARunningCardWithNothingToShowIsBlank() {
+        var transcript = Transcript()
+        transcript.apply(.toolCallUpdate(id: "t1", title: "Compressed release asset", status: .inProgress, output: nil))
+        transcript.apply(.toolCall(id: "t2", title: "run_command", kind: nil, status: .inProgress, input: nil, detail: "cargo test"))
+        transcript.apply(.toolCall(id: "t3", title: "run_command", kind: nil, status: .completed, input: nil))
+        XCTAssertEqual(tools(transcript).map(\.isBlank), [true, false, false])
+    }
+
     func testRunningToolShowsItsDetailAndStreamsOutputUntilTheResult() {
         var transcript = Transcript()
         transcript.apply(.toolCall(id: "t1", title: "run_command", kind: nil, status: .inProgress, input: nil, detail: "cargo test"))

@@ -153,6 +153,30 @@ enum DebugDriver {
             model.debugTurn(true, in: session)
         case "end":
             model.debugTurn(false, in: model.selectedSession ?? "drive")
+        case "vizturn":
+            // `vizturn`: a turn whose call never gets its finishing update,
+            // then a reply holding a line chart, then the turn's end. After
+            // it no card may still spin, and the empty one is not drawn.
+            let session = model.selectedSession ?? "drive"
+            if model.selectedSession == nil { model.selectedSession = session }
+            model.transcript.appendUser("How has the release binary size changed? Show it as a line chart.")
+            model.debugTurn(true, in: session)
+            model.transcript.apply(.toolCall(id: "vizturn-run", title: "run_command", kind: "execute", status: .inProgress,
+                                             input: .object(["command": .string("gh release list")])))
+            model.transcript.apply(.toolCallUpdate(id: "vizturn-orphan", title: nil, status: .inProgress, output: nil, diffs: []))
+            let sample = VisualizationGuide.entries.first { $0.type == "line_chart" }?.sampleMarkdown ?? ""
+            var rest = Substring("Here is the trend:\n\n\(sample)\n\nSize dropped after LTO.")
+            while !rest.isEmpty {
+                model.transcript.apply(.agentText(String(rest.prefix(40))))
+                rest = rest.dropFirst(40)
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            model.debugTurn(false, in: session)
+            let spinning = model.transcript.items.filter {
+                if case .tool(let tool) = $0.content { return tool.status == .pending || tool.status == .inProgress }
+                return false
+            }
+            report("vizturn items \(model.transcript.items.count) spinning \(spinning.count)")
         case "vis":
             // `vis <tag>`: how many drawn views lie in the chat's visible area;
             // zero with content in the chat is the blank chat.

@@ -15,6 +15,11 @@ public struct ToolItem: Equatable, Sendable {
 
     public var displayTitle: String { ToolPresentation.title(title) }
     public var detail: String? { inputDetail ?? ToolPresentation.detail(input: nil, output: output) }
+    /// Still running yet with nothing to show: no detail, input, output or
+    /// changes. Such a card is only a spinner, so the chat leaves it out.
+    public var isBlank: Bool {
+        !(status?.isTerminal ?? true) && inputDetail == nil && input == nil && output == nil && changes.isEmpty
+    }
 }
 
 public struct TranscriptItem: Identifiable, Equatable, Sendable {
@@ -165,6 +170,25 @@ public struct Transcript: Equatable, Sendable {
         guard let last = items.indices.last, case .thinking = items[last].content,
               let started = items[last].startedAt, items[last].duration == nil else { return }
         items[last].duration = max(now.timeIntervalSince(started), 0)
+    }
+
+    /// The turn ended: its open thought stops its clock, and no card it ran
+    /// may keep spinning, even when its finishing update never arrived. A card
+    /// with output completed; an empty one failed with `failure` when the turn
+    /// was cancelled or failed, or completed when the turn did.
+    public mutating func finishTurn(at now: Date, failure: String? = nil) {
+        finishThinking(at: now)
+        for index in items.indices {
+            guard case .tool(var tool) = items[index].content, tool.status == .pending || tool.status == .inProgress else { continue }
+            let hasOutput = !(tool.output ?? "").isEmpty || !tool.changes.isEmpty
+            if let failure, !hasOutput {
+                tool.status = .failed
+                tool.output = failure
+            } else {
+                tool.status = .completed
+            }
+            items[index].content = .tool(tool)
+        }
     }
 
     private mutating func append(_ content: TranscriptItem.Content, at now: Date? = nil) {
