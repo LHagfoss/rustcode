@@ -253,8 +253,14 @@ pub(crate) const MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS: u8 = 4;
 /// finite round budgets remain available to explicit low-level callers.
 ///
 /// The token budget is measured in *budget tokens*, not raw provider tokens:
-/// see [`budget_tokens_for_usage`].
+/// see [`budget_tokens_for_usage`]. It is a window, not a lifetime cap: a
+/// window in which the turn changed the workspace is renewed (see
+/// [`renew_token_window_if_productive`]), up to [`MAX_TURN_TOKEN_CEILING`].
 const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
+/// Hard stop for one turn however productive it is. On a long, well-cached
+/// turn every round re-reads the whole prefix, so a 300k-token context spends
+/// one 5M window in roughly 170 rounds even when each round ships work.
+const MAX_TURN_TOKEN_CEILING: u64 = 4 * MAX_TURN_TOKEN_BUDGET;
 /// Provider-reported prompt-cache reads are charged at 1/N of their raw count
 /// against [`MAX_TURN_TOKEN_BUDGET`]. Every round re-sends the whole
 /// conversation prefix, so on a long, well-cached turn most of each round's
@@ -291,6 +297,7 @@ pub(crate) enum TurnBudgetLimit {
     ToolRounds(usize),
     TotalToolRounds(usize),
     Tokens(u64),
+    TokenCeiling(u64),
     NoProgress(usize),
     FailedMutations(usize),
     CompilerErrorGates(usize),
@@ -314,6 +321,12 @@ impl std::fmt::Display for TurnBudgetLimit {
                 "token budget reached (~{} of {} budget tokens; cached prompt reads count at 1/{CACHED_INPUT_BUDGET_DIVISOR})",
                 crate::controller::format_token_count(*n as usize),
                 crate::controller::format_token_count(MAX_TURN_TOKEN_BUDGET as usize),
+            ),
+            TurnBudgetLimit::TokenCeiling(n) => write!(
+                f,
+                "turn token ceiling reached (~{} of {} budget tokens across productive windows)",
+                crate::controller::format_token_count(*n as usize),
+                crate::controller::format_token_count(MAX_TURN_TOKEN_CEILING as usize),
             ),
             TurnBudgetLimit::NoProgress(n) => write!(
                 f,
@@ -371,12 +384,48 @@ pub(crate) fn accumulate_tokens_used(
     current.saturating_add(reported_this_round.unwrap_or_else(|| count_tokens(content) as u64))
 }
 
+fn token_window_used(ctx: &TurnContext) -> u64 {
+    ctx.budget
+        .tokens_used
+        .saturating_sub(ctx.budget.token_window_start)
+}
+
+/// Opens a fresh token window when the current one is spent but the turn
+/// changed the workspace during it. Returns whether it renewed. A window with
+/// only reads, failures or re-verification is left spent, so
+/// [`turn_budget_exceeded`] stops the turn as before.
+pub(crate) fn renew_token_window_if_productive(ctx: &mut TurnContext) -> bool {
+    if token_window_used(ctx) < MAX_TURN_TOKEN_BUDGET
+        || ctx.budget.tokens_used >= MAX_TURN_TOKEN_CEILING
+        || ctx.progress.workspace_change_events <= ctx.budget.token_window_change_checkpoint
+    {
+        return false;
+    }
+    let changes = ctx.progress.workspace_change_events - ctx.budget.token_window_change_checkpoint;
+    ctx.budget.token_window_start = ctx.budget.tokens_used;
+    ctx.budget.token_window_change_checkpoint = ctx.progress.workspace_change_events;
+    crate::logger::operational_event(
+        "turn.token_window_renewed",
+        serde_json::json!({
+            "tool_rounds": ctx.budget.tool_rounds,
+            "tokens_used": ctx.budget.tokens_used,
+            "ceiling": MAX_TURN_TOKEN_CEILING,
+            "workspace_changes_in_window": changes,
+        }),
+    );
+    true
+}
+
 /// Checks every budget signal and returns the first one that has been
 /// exceeded, if any. Order matters only for which reason is reported when
 /// several trip on the same round — all are equally terminal.
 pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
-    if ctx.budget.tokens_used >= MAX_TURN_TOKEN_BUDGET {
-        return Some(TurnBudgetLimit::Tokens(ctx.budget.tokens_used));
+    if ctx.budget.tokens_used >= MAX_TURN_TOKEN_CEILING {
+        return Some(TurnBudgetLimit::TokenCeiling(ctx.budget.tokens_used));
+    }
+    let window_used = token_window_used(ctx);
+    if window_used >= MAX_TURN_TOKEN_BUDGET {
+        return Some(TurnBudgetLimit::Tokens(window_used));
     }
     if ctx.progress.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS {
         return Some(TurnBudgetLimit::NoProgress(
@@ -466,7 +515,10 @@ pub(crate) async fn stop_turn_for_budget(
         // Lead with the limit that actually stopped the turn. "stopped after
         // N tool round(s) — token budget" read as a round limit to both the
         // model and the user.
-        let not_a_round_limit = if matches!(limit, TurnBudgetLimit::Tokens(_)) {
+        let not_a_round_limit = if matches!(
+            limit,
+            TurnBudgetLimit::Tokens(_) | TurnBudgetLimit::TokenCeiling(_)
+        ) {
             " This was the turn token budget, not a tool-round limit."
         } else {
             ""
@@ -1314,6 +1366,10 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             local_model,
             provider_usage.as_ref(),
             deterministic_compaction,
+            // The summarizer is a network round-trip that rewrites history.
+            // Run it only at a turn boundary: firing it between two tool calls
+            // can summarize away results the model is still working from.
+            tool_rounds == 0,
         )
         .await;
         // Run the deterministic safety reduction in the same canonical
@@ -1361,8 +1417,9 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 s.read_file_mtimes.clear();
                 crate::config::save_session_history(&live_session_id, &s.history);
                 // Record what this cost, for the context modal and /context.
-                // Plan-backed profiles and local engines never run the
-                // summarizer, so their result is the reduced record.
+                // Plan-backed profiles, local engines and mid-turn rounds
+                // never run the summarizer, so their result is the reduced
+                // record.
                 let before_tokens: usize = captured_history
                     .iter()
                     .map(compaction::estimate_message_tokens)
@@ -1372,7 +1429,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                     .iter()
                     .map(compaction::estimate_message_tokens)
                     .sum();
-                let mode = if deterministic_compaction || local_model {
+                let mode = if deterministic_compaction || local_model || tool_rounds != 0 {
                     crate::app::CompactionMode::DeterministicRecord
                 } else {
                     crate::app::CompactionMode::AiSummary

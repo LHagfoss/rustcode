@@ -104,6 +104,9 @@ pub(crate) fn resolve_builtin_tool_alias(name: &str) -> Option<&'static str> {
         "read" => "view_file",
         "write" | "write_file" => "write_to_file",
         "bash" => "run_command",
+        // Edit-tool spellings from other harnesses; session 01a15ef714ce
+        // called `replace_string_in_file` twice.
+        "replace_string_in_file" | "str_replace" => "replace_file_content",
         _ => return None,
     };
     let mcp_claims_name = crate::mcp::get_mcp_registry()

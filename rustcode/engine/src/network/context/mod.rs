@@ -310,9 +310,8 @@ mod tests {
             "NEWEST-FACT: src/network/compaction.rs is the active file",
         ));
         let refs: Vec<&ChatMessage> = history.iter().collect();
-        let prior = format!("PRIOR-SUMMARY: {}", "é".repeat(SUMMARY_INPUT_MAX_BYTES));
 
-        let input = build_summary_input(Some(&prior), &refs);
+        let input = build_summary_input(&refs);
 
         assert!(
             input.len() <= SUMMARY_INPUT_MAX_BYTES,
@@ -321,7 +320,6 @@ mod tests {
         );
         assert!(input.contains("ORIGINAL-TASK: preserve this exact objective"));
         assert!(input.contains("NEWEST-FACT: src/network/compaction.rs is the active file"));
-        assert!(input.contains("PRIOR-SUMMARY:"));
         assert!(
             !input.contains("OLD-FACT-0:"),
             "oldest bulk should be dropped first"
@@ -412,8 +410,10 @@ mod tests {
     async fn manual_compaction_cancellation_interrupts_pending_summary_request() {
         let (url, request_accepted) = pending_response_server().await;
         let mut history = vec![ChatMessage::new("user", "original task")];
+        // Several user turns, so the cut has a complete turn to land on.
         for index in 0..(KEEP_RECENT_TURNS + 4) {
-            history.push(ChatMessage::new("assistant", format!("fact {index}")));
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            history.push(ChatMessage::new(role, format!("fact {index}")));
         }
         let expected: Vec<(String, String)> = history
             .iter()
@@ -525,6 +525,29 @@ mod tests {
         assert!(boundary.summary.contains(STRUCTURED_MEMORY_MARKER));
     }
 
+    /// One long turn has no complete earlier turn to cut at. `/compact` must
+    /// say so instead of spending a summary request that changes nothing.
+    #[tokio::test]
+    async fn manual_compaction_of_a_single_turn_reports_nothing_to_compact() {
+        let mut history = vec![ChatMessage::new("user", "original task")];
+        for i in 0..(KEEP_RECENT_TURNS + 8) {
+            history.push(ChatMessage::new("assistant", format!("fact {i}")));
+        }
+        let expected = history.clone();
+
+        let result = force_compact(
+            &reqwest::Client::new(),
+            "http://127.0.0.1:9/v1/chat/completions",
+            "model",
+            &mut history,
+            None,
+        )
+        .await;
+
+        assert_eq!(result, Err("Not enough messages to compact.".to_string()));
+        assert!(history == expected);
+    }
+
     #[tokio::test]
     async fn manual_compaction_failure_keeps_history_and_returns_error() {
         let url = one_shot_json_server(serde_json::json!({
@@ -533,7 +556,8 @@ mod tests {
         .await;
         let mut history = vec![ChatMessage::new("user", "original task")];
         for i in 0..(KEEP_RECENT_TURNS + 1) {
-            history.push(ChatMessage::new("assistant", format!("fact {i}")));
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            history.push(ChatMessage::new(role, format!("fact {i}")));
         }
         let expected: Vec<(String, String)> = history
             .iter()
@@ -584,7 +608,11 @@ mod tests {
             .as_ref()
             .expect("AI summaries must persist a typed boundary");
         assert_eq!(boundary.version, 1);
-        assert_eq!(boundary.summary, "Goal: retain the original objective");
+        // The earlier summary is carried forward verbatim, never re-summarized.
+        assert_eq!(
+            boundary.summary,
+            "Prior facts\n\n[Work since the previous compaction]\nGoal: retain the original objective"
+        );
         assert_eq!(
             boundary
                 .first_retained_entry

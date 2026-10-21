@@ -1567,10 +1567,11 @@ async fn automatic_compaction_discards_cross_session_result_with_shared_history(
     let state = Arc::new(Mutex::new(app));
     let request_state = Arc::clone(&state);
     let task = tokio::spawn(async move {
+        // Round 0 is the turn boundary, the only point the summarizer runs.
         prepare_turn_request(
             &reqwest::Client::new(),
             &request_state,
-            1,
+            0,
             &CancellationToken::new(),
         )
         .await
@@ -1597,7 +1598,15 @@ async fn automatic_compaction_discards_cross_session_result_with_shared_history(
 
     let live = state.lock().await;
     assert_eq!(live.active_session_id, "new-session");
-    assert!(live.history == new_session_history);
+    // The new session's own history is untouched. At a turn boundary the
+    // request it builds may still overflow and append its one-time notice.
+    assert!(live.history[..new_session_history.len()] == new_session_history[..]);
+    assert!(
+        live.history[new_session_history.len()..]
+            .iter()
+            .all(|message| message.role == "system"
+                && message.content.starts_with("context window full:"))
+    );
 }
 
 // Regression: session 1785600273324, msgs 7-18. The repeat guard correctly
@@ -5569,6 +5578,90 @@ fn normal_multi_round_work_is_not_stopped_prematurely() {
     assert!(
         turn_budget_exceeded(&ctx).is_none(),
         "10 rounds of light, real work must not trip a safety budget"
+    );
+}
+
+/// Session 01a15ef714ce turn 3 (#2236): two PRs merged inside one turn, then
+/// a third stopped mid-edit at round 199 once a ~300k cached prefix had spent
+/// the 5M window. A window that changed the workspace is renewed instead.
+#[test]
+fn a_window_that_changed_the_workspace_is_renewed_instead_of_stopping() {
+    let mut ctx = TurnContext::new();
+    ctx.budget.tool_rounds = 199;
+    ctx.budget.tokens_used = 5_015_842;
+    ctx.progress.workspace_change_events = 51;
+
+    assert!(renew_token_window_if_productive(&mut ctx));
+    assert_eq!(turn_budget_exceeded(&ctx), None);
+    assert_eq!(ctx.budget.token_window_start, 5_015_842);
+    assert_eq!(ctx.budget.token_window_change_checkpoint, 51);
+
+    // The renewed window only counts what is spent after it opened.
+    ctx.budget.tokens_used += MAX_TURN_TOKEN_BUDGET - 1;
+    assert_eq!(turn_budget_exceeded(&ctx), None);
+}
+
+#[test]
+fn a_window_without_workspace_changes_still_stops_the_turn() {
+    let mut ctx = TurnContext::new();
+    ctx.budget.tokens_used = 5_015_842;
+    ctx.progress.workspace_change_events = 51;
+    assert!(renew_token_window_if_productive(&mut ctx));
+
+    // The next window only reads and re-verifies: no renewal.
+    ctx.budget.tokens_used += MAX_TURN_TOKEN_BUDGET;
+    ctx.progress.meaningful_events += 40;
+    assert!(!renew_token_window_if_productive(&mut ctx));
+    assert_eq!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::Tokens(MAX_TURN_TOKEN_BUDGET))
+    );
+
+    // A turn that never changed anything stops at the first window, as before.
+    let mut read_only = TurnContext::new();
+    read_only.budget.tokens_used = MAX_TURN_TOKEN_BUDGET;
+    assert!(!renew_token_window_if_productive(&mut read_only));
+    assert!(matches!(
+        turn_budget_exceeded(&read_only),
+        Some(TurnBudgetLimit::Tokens(_))
+    ));
+}
+
+#[test]
+fn the_token_ceiling_stops_even_a_productive_turn() {
+    let round = crate::app::TokenUsage {
+        prompt_tokens: 300_000,
+        completion_tokens: 0,
+        total_tokens: 300_000,
+        cached_tokens: Some(300_000),
+        ..Default::default()
+    };
+    let mut ctx = TurnContext::new();
+    let mut rounds = 0;
+    loop {
+        // Every round edits a file.
+        ctx.progress.workspace_change_events += 1;
+        renew_token_window_if_productive(&mut ctx);
+        if let Some(limit) = turn_budget_exceeded(&ctx) {
+            assert!(
+                matches!(limit, TurnBudgetLimit::TokenCeiling(n) if n >= MAX_TURN_TOKEN_CEILING),
+                "{limit:?}"
+            );
+            break;
+        }
+        ctx.budget.tokens_used = accumulate_tokens_used(
+            ctx.budget.tokens_used,
+            Some(budget_tokens_for_usage(&round)),
+            "",
+        );
+        rounds += 1;
+        assert!(rounds <= 1_000, "the ceiling must bound a productive turn");
+    }
+    assert_eq!(rounds as u64, MAX_TURN_TOKEN_CEILING.div_ceil(30_000));
+    assert!(
+        TurnBudgetLimit::TokenCeiling(MAX_TURN_TOKEN_CEILING)
+            .to_string()
+            .starts_with("turn token ceiling reached (~20.0M of 20.0M")
     );
 }
 

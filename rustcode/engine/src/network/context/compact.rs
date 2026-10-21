@@ -7,15 +7,64 @@ use std::time::Duration;
 
 pub(super) const SUMMARY_INPUT_MAX_BYTES: usize = 64 * 1024;
 
-/// A prior summary is high-value context, but must leave room for the original
-/// task and recent facts inside [`SUMMARY_INPUT_MAX_BYTES`].
-const SUMMARY_PRIOR_MAX_BYTES: usize = 24 * 1024;
-
 /// Provider output is requested at 1024 tokens; 16 KiB is a generous defensive
 /// byte ceiling for providers that ignore that limit.
 pub(super) const SUMMARY_OUTPUT_MAX_BYTES: usize = 16 * 1024;
 const PRESERVED_USER_REQUEST_MAX_TOKENS: usize = 20_000;
 const PRESERVED_USER_REQUEST_BUDGET_DIVISOR: usize = 5;
+
+/// Recent tokens kept verbatim after a compaction.
+///
+/// This is an absolute allowance rather than a share of the window, so a large
+/// context does not turn into an enormous raw tail that defeats the point of
+/// compacting. Twenty thousand tokens is roughly a long working session's worth
+/// of recent tool rounds, and matches what Pi keeps by default.
+pub(crate) const KEEP_RECENT_TOKENS: usize = 20_000;
+
+/// Share of the window the raw tail may never exceed. On a small local window
+/// the absolute allowance above would eat most of the budget, so the window
+/// caps it; on a large window the absolute figure binds instead.
+const KEEP_RECENT_WINDOW_SHARE: f64 = 0.3;
+
+/// Index of the first message that compaction must leave untouched.
+///
+/// One rule for both automatic compaction and manual `/compact`. The newest
+/// message is always retained even when it alone exceeds the allowance, and the
+/// cut is snapped back to a complete turn so a tool result is never replayed
+/// without the call that announced it. That floor is what keeps the turn in
+/// progress intact.
+pub(crate) fn retention_tail_start(history: &[ChatMessage], budget: usize) -> usize {
+    if history.is_empty() {
+        return 0;
+    }
+    let limit = ((budget as f64 * KEEP_RECENT_WINDOW_SHARE) as usize)
+        .min(KEEP_RECENT_TOKENS)
+        .max(1);
+    let mut tokens = 0usize;
+    let mut start = history.len();
+    for index in (0..history.len()).rev() {
+        let message_tokens = estimate_message_tokens(&history[index]);
+        if start == history.len() || tokens.saturating_add(message_tokens) <= limit {
+            tokens = tokens.saturating_add(message_tokens);
+            start = index;
+        } else {
+            break;
+        }
+    }
+    valid_compaction_boundary(history, start)
+}
+
+/// The same cut for manual `/compact`.
+///
+/// An explicit request must reclaim something. When the whole history fits
+/// inside the token allowance the automatic rule keeps everything, so the tail
+/// is also capped at the last [`KEEP_RECENT_TURNS`] messages, which is what
+/// `/compact` kept before the token allowance existed.
+pub(crate) fn retention_tail_start_for_manual(history: &[ChatMessage], budget: usize) -> usize {
+    let by_tokens = retention_tail_start(history, budget);
+    let by_messages = history.len().saturating_sub(KEEP_RECENT_TURNS);
+    valid_compaction_boundary(history, by_tokens.max(by_messages))
+}
 
 /// Total wall-clock budget for a non-streaming summary request, including
 /// connection, response headers, body transfer, and JSON decoding. Twenty-five
@@ -104,6 +153,7 @@ pub async fn maybe_compact_with_local_policy_and_usage(
         local_model,
         provider_usage,
         false,
+        true,
     )
     .await
 }
@@ -118,6 +168,7 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
     local_model: bool,
     provider_usage: Option<&TokenUsage>,
     deterministic_only: bool,
+    turn_boundary: bool,
 ) -> bool {
     // 1. Only compact under real pressure. Replacing history the model still
     //    needs while most of the window sits unused buys nothing and costs it
@@ -137,10 +188,6 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
     // Keep the exact persisted prefix available for archival even when the
     // local request projection below prunes rendered tool output.
     let archival_source = history.clone();
-    // `history` is not touched again until compaction actually runs, so the
-    // same per-message counts serve both the budget check and the keep-suffix
-    // walk below.
-    let per_message: Vec<usize> = history.iter().map(estimate_message_tokens).collect();
     let total_tokens = raw_tokens;
     // Cancellation must never report a completed compaction or start a
     // summarizer request.
@@ -152,41 +199,25 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         return false;
     }
 
-    // Determine how many messages to summarize. Keep a bounded recent suffix;
-    // preserving an unbounded number of "recent" messages defeats compaction
-    // when one tool result is very large.
-    let mut accumulated_tokens = 0;
-    let keep_token_limit = (budget as f64 * 0.3) as usize;
-
-    let mut keep_count = 0;
-    for &tokens in per_message.iter().rev() {
-        if keep_count == 0 || accumulated_tokens + tokens <= keep_token_limit {
-            accumulated_tokens += tokens;
-            keep_count += 1;
-        } else {
-            break;
-        }
-    }
-
-    let summarize_count = bounded_recent_suffix_start(
-        history,
-        history.len().saturating_sub(keep_count),
-        keep_token_limit,
-    );
+    // Keep a bounded recent suffix verbatim, using the same allowance manual
+    // `/compact` uses so both paths retain the same amount.
+    let summarize_count = retention_tail_start(history, budget);
+    let keep_count = history.len().saturating_sub(summarize_count);
     if summarize_count < 4 {
         emit_compaction_metrics(raw_tokens, budget, "too_few_messages", false, history.len());
         return false;
     }
-    // Tiered compaction: local ollama engines skip LLM summarization —
-    // prune+trim already reclaimed tokens, and weak local summaries lose
-    // fidelity while adding latency/cost. Gate strictly on ollama endpoint
-    // so mock/test servers (random 127.0.0.1 ports) still exercise the
-    // summary path.
+    // Tiered compaction. The deterministic record is the only relief that may
+    // run between tool calls: it is local, costs no round-trip, and never waits
+    // on the network mid-turn. The LLM summarizer additionally waits for a turn
+    // boundary, so a compaction can never rewrite the tool results the model is
+    // still working from. Local engines skip summarization entirely — a weak
+    // local summary loses fidelity for latency and cost.
     let is_local_engine = local_model || {
         let lower = url.to_ascii_lowercase();
         lower.contains("11434") || lower.contains("ollama")
     };
-    if is_local_engine || deterministic_only {
+    if is_local_engine || deterministic_only || !turn_boundary {
         let structured = super::memory::compact_with_structured_memory_from_archive(
             history,
             keep_count,
@@ -242,7 +273,10 @@ pub async fn force_compact_with_budget_deterministic(
     let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     let archival_source = history.clone();
 
-    let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
+    // Same allowance as the summarizing path, so a plan-backed `/compact`
+    // keeps as much recent history as any other compaction.
+    let summarize_count =
+        retention_tail_start_for_manual(history, budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD));
     if summarize_count < 1 {
         return Err("Not enough messages to compact.".to_string());
     }
@@ -338,8 +372,10 @@ pub async fn force_compact_with_budget(
     let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     let archival_source = history.clone();
 
-    // Summarize all but the most recent KEEP_RECENT_TURNS messages.
-    let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
+    // Summarize everything before the shared retention tail, so manual
+    // `/compact` and automatic compaction retain the same recent history.
+    let summarize_count =
+        retention_tail_start_for_manual(history, budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD));
     if summarize_count < 1 {
         return Err("Not enough messages to compact.".to_string());
     }
@@ -421,17 +457,24 @@ async fn force_compact_internal(
         })
         .collect();
 
-    let mut summary = match generate_summary(
-        client,
-        url,
-        model,
-        prior_summary.as_deref(),
-        &to_summarize,
-        cancel_token,
-    )
-    .await
+    // Never re-summarize an earlier summary. Feeding it back through the model
+    // on every pass is what makes a long session drift: each rewrite drops a
+    // detail and the loss compounds. The earlier summary is carried forward
+    // verbatim instead, and the model only sees the messages that came after
+    // it, so the prefix also stays byte-stable for provider cache reuse.
+    // A cut snapped back to the start of the only turn leaves nothing new to
+    // summarize. Say so rather than report a compaction that changed nothing.
+    if to_summarize.is_empty() {
+        return Err("Not enough messages to compact.".to_string());
+    }
+    let mut summary = match generate_summary(client, url, model, &to_summarize, cancel_token).await
     {
-        Some(s) => s,
+        Some(delta) => match prior_summary.as_deref() {
+            Some(prior) if !prior.trim().is_empty() => {
+                format!("{prior}\n\n[Work since the previous compaction]\n{delta}")
+            }
+            _ => delta,
+        },
         None => return Err("Failed to generate summary.".to_string()),
     };
 
@@ -735,29 +778,21 @@ fn render_summary_message(message: &ChatMessage) -> String {
     format!("{role_label}:\n{content}\n\n")
 }
 
-/// Build a bounded prompt that pins the original task and prior summary, then
-/// spends the remaining space on the newest messages in chronological order.
-pub(super) fn build_summary_input(
-    prior_summary: Option<&str>,
-    messages: &[&ChatMessage],
-) -> String {
+/// Build a bounded prompt that pins the original task, then spends the
+/// remaining space on the newest messages in chronological order.
+///
+/// An earlier summary is never fed back through the model: the caller carries
+/// it forward verbatim and this input covers only the work since then.
+pub(super) fn build_summary_input(messages: &[&ChatMessage]) -> String {
     let first_user_index = messages.iter().position(|message| message.role == "user");
     let mut input = String::with_capacity(SUMMARY_INPUT_MAX_BYTES);
-    input.push_str("Summarize this coding conversation.\n\n");
+    input.push_str("Summarize the work in this coding conversation.\n\n");
 
     if let Some(index) = first_user_index {
         input.push_str("Original user task (preserve this objective):\n");
         let rendered = render_summary_message(messages[index]);
         let remaining = SUMMARY_INPUT_MAX_BYTES.saturating_sub(input.len());
         input.push_str(truncate_utf8(&rendered, remaining));
-    }
-
-    if let Some(previous) = prior_summary {
-        input.push_str("Existing summary of earlier context (preserve every fact):\n");
-        let previous = truncate_utf8(previous, SUMMARY_PRIOR_MAX_BYTES);
-        let remaining = SUMMARY_INPUT_MAX_BYTES.saturating_sub(input.len());
-        input.push_str(truncate_utf8(previous, remaining));
-        input.push_str("\n\n");
     }
 
     input.push_str("Newest messages to fold into the summary:\n\n");
@@ -841,11 +876,12 @@ async fn generate_summary(
     client: &reqwest::Client,
     url: &str,
     model: &str,
-    prior_summary: Option<&str>,
     messages: &[&ChatMessage],
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Option<String> {
-    let user_content = build_summary_input(prior_summary, messages);
+    // The earlier summary is carried forward verbatim by the caller, so the
+    // model only reports the work that happened after it.
+    let user_content = build_summary_input(messages);
 
     let payload = serde_json::json!({
         "model": model,
@@ -997,6 +1033,7 @@ mod preserved_user_request_tests {
                 false,
                 None,
                 true,
+                true,
             )
             .await
         );
@@ -1067,6 +1104,100 @@ mod preserved_user_request_tests {
         assert_eq!(
             estimate,
             1_000 + estimate_message_tokens(&history[2]) + estimate_message_tokens(&history[3])
+        );
+    }
+
+    #[test]
+    fn retention_tail_keeps_an_absolute_allowance_not_a_window_share() {
+        // A window large enough that the 20k allowance, not the 30% cap, binds.
+        let budget = 500_000;
+        let mut history = vec![ChatMessage::new("user", "original task")];
+        // Each turn is a few dozen tokens, so the total well exceeds the
+        // allowance and something must actually be compactable.
+        for index in 0..2_000 {
+            history.push(ChatMessage::new(
+                "user",
+                format!("turn {index}: {}", "context detail ".repeat(8)),
+            ));
+        }
+
+        let start = retention_tail_start(&history, budget);
+        let kept: usize = history[start..].iter().map(estimate_message_tokens).sum();
+
+        assert!(start > 0, "the head must be compactable");
+        assert!(
+            kept <= KEEP_RECENT_TOKENS,
+            "retained {kept} tokens exceeds the {KEEP_RECENT_TOKENS} allowance"
+        );
+        // A 30% share of this window would be 150k; the absolute figure wins.
+        assert!(kept < budget / 4);
+    }
+
+    #[test]
+    fn retention_tail_is_capped_on_a_small_window_and_never_empty() {
+        let small = 8_000;
+        let history: Vec<ChatMessage> = (0..200)
+            .map(|index| ChatMessage::new("user", format!("message {index}")))
+            .collect();
+
+        let start = retention_tail_start(&history, small);
+        let kept: usize = history[start..].iter().map(estimate_message_tokens).sum();
+
+        // 30% of 8k binds well below the 20k allowance.
+        assert!(kept <= (small as f64 * KEEP_RECENT_WINDOW_SHARE) as usize + 64);
+        // The newest message always survives, even with no room.
+        assert!(start < history.len());
+        assert_eq!(
+            retention_tail_start(&history[..1], 1),
+            0,
+            "a single message is retained rather than dropped"
+        );
+    }
+
+    /// Mid-turn, compaction must never reach the provider: the summarizer
+    /// waits for a turn boundary, and per-round relief uses the local
+    /// deterministic record instead (#2215).
+    #[tokio::test]
+    async fn mid_turn_compaction_never_opens_provider_http() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let mut history = Vec::new();
+        for turn in 0..6 {
+            history.push(ChatMessage::new("user", format!("task {turn}")));
+            history.push(ChatMessage::new("assistant", format!("work {turn}")));
+            history.push(ChatMessage::new(
+                "tool",
+                format!("view_file: {}", "file evidence\n".repeat(1000)),
+            ));
+        }
+
+        // Not a plan profile, not local: only the turn boundary gates this.
+        assert!(
+            maybe_compact_with_local_policy_and_usage_mode(
+                &reqwest::Client::new(),
+                &endpoint,
+                "turn-boundary-model",
+                &mut history,
+                5_000,
+                &tokio_util::sync::CancellationToken::new(),
+                false,
+                None,
+                false,
+                false,
+            )
+            .await,
+            "mid-turn compaction must still relieve pressure locally"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "mid-turn compaction must not make a summarizer request"
         );
     }
 

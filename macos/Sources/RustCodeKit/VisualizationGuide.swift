@@ -57,10 +57,10 @@ public enum VisualizationGuide {
         ),
         Entry(
             type: "table", name: "Sortable table", systemImage: "tablecells",
-            purpose: "Rank or list results with several columns.",
+            purpose: "Rank or list results with several columns; sort_by takes an index or column name.",
             interaction: "Click a column heading to sort; click again to reverse.",
             prompt: "List the largest source files in this project as a sortable table with their line counts.",
-            sample: #"{"version":1,"type":"table","title":"Largest source files","columns":["File","Lines","Tests"],"rows":[["engine/src/acp.rs",1420,true],["tui/src/ui/tests.rs",12900,true],["engine/src/tools/schema.rs",2100,false]],"sort_by":{"column":1,"descending":true}}"#
+            sample: #"{"version":1,"type":"table","title":"Largest source files","columns":["File","Lines","Tests"],"rows":[["engine/src/acp.rs",1420,true],["tui/src/ui/tests.rs",12900,true],["engine/src/tools/schema.rs",2100,false]],"sort_by":{"column":"Lines","descending":true}}"#
         ),
         Entry(
             type: "stat_list", name: "Stat list", systemImage: "square.grid.2x2",

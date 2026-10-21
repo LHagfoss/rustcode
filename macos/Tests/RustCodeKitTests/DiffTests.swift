@@ -92,4 +92,39 @@ final class DiffTests: XCTestCase {
         XCTAssertEqual(tool.changes.map(\.path), ["/r/a"])
         XCTAssertEqual(tool.changes.first?.added, 1)
     }
+
+    private func gutters(_ change: FileChange) -> [String] {
+        change.rows.compactMap { row in
+            guard case .line(let line) = row else { return nil }
+            let cells = line.gutter(digits: change.gutterDigits)
+            return cells.old + "|" + cells.new
+        }
+    }
+
+    func testGutterPrintsAnEqualContextNumberOnce() {
+        let change = FileChange.group([FileDiff(path: "/r/a", oldText: "a\n", newText: "a\n\nb\n")])[0]
+        XCTAssertEqual(gutters(change), ["  | 1", "  | 2", "  | 3"])
+    }
+
+    func testGutterKeepsBothNumbersOnceContextDiverges() {
+        let change = FileChange.group([FileDiff(path: "/r/a", oldText: "a\nb\n", newText: "a\nnew\nb\n")])[0]
+        XCTAssertEqual(gutters(change), ["  | 1", "  | 2", " 2| 3"])
+    }
+
+    func testGutterShowsOnlyTheOldNumberOnARemoval() {
+        let change = FileChange.group([FileDiff(path: "/r/a", oldText: "a\ngone\nb\n", newText: "a\nb\n")])[0]
+        XCTAssertEqual(gutters(change), ["  | 1", " 2|  ", " 3| 2"])
+    }
+
+    func testGutterNumbersANewFileInTheNewColumnOnly() {
+        let change = FileChange.group([FileDiff(path: "/r/a", oldText: nil, newText: "a\nb\n")])[0]
+        XCTAssertTrue(change.isNewFile)
+        XCTAssertEqual(gutters(change), ["  | 1", "  | 2"])
+    }
+
+    func testGutterDigitsFitTheWidestNumber() {
+        let change = FileChange.group([FileDiff(path: "/r/a", oldText: "a\n", newText: "b\n", oldStart: 99, newStart: 120)])[0]
+        XCTAssertEqual(change.gutterDigits, 3)
+        XCTAssertEqual(gutters(change), [" 99|   ", "   |120"])
+    }
 }

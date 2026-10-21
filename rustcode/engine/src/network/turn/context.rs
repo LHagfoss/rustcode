@@ -35,6 +35,12 @@ pub struct BudgetState {
     /// A productive segment may be continued by the queue orchestrator.
     pub continuation_pending: bool,
     pub tokens_used: u64,
+    /// `tokens_used` when the current token window opened. A window that
+    /// changed the workspace is renewed instead of stopping the turn; see
+    /// `renew_token_window_if_productive`.
+    pub token_window_start: u64,
+    /// `ProgressState::workspace_change_events` when the window opened.
+    pub token_window_change_checkpoint: usize,
     pub budget_stopped: Option<String>,
     pub round_budget_notice_sent: bool,
 }
@@ -142,6 +148,9 @@ pub struct ProgressState {
     /// checkpoint of this value so progress from an earlier segment cannot
     /// authorize an endless sequence of empty continuations.
     pub meaningful_events: usize,
+    /// Monotonic count of results that changed the workspace. Only these
+    /// renew the turn token window, so a read-only loop cannot.
+    pub workspace_change_events: usize,
 }
 
 impl ProgressState {
@@ -272,6 +281,15 @@ pub struct SegmentCheckpoint {
     /// from older sidecars, which predate persisted turn token accounting.
     #[serde(default)]
     pub tokens_used: u64,
+    /// Where the current token window began and the workspace-change count
+    /// at that point. Older sidecars omit both and restore one window that
+    /// started at zero.
+    #[serde(default)]
+    pub token_window_start: u64,
+    #[serde(default)]
+    pub token_window_change_checkpoint: usize,
+    #[serde(default)]
+    pub workspace_change_events: usize,
     pub meaningful_events: usize,
     pub made_edits: bool,
     pub failed_mutations: usize,
@@ -321,6 +339,8 @@ impl TurnContext {
                 segment_count: 1,
                 continuation_pending: false,
                 tokens_used: 0,
+                token_window_start: 0,
+                token_window_change_checkpoint: 0,
                 budget_stopped: None,
                 round_budget_notice_sent: false,
             },
@@ -363,6 +383,7 @@ impl TurnContext {
                 untracked_edits: false,
                 phase_checkpoint: None,
                 meaningful_events: 0,
+                workspace_change_events: 0,
             },
             verification: VerificationState {
                 blocks: 0,
@@ -462,6 +483,9 @@ impl TurnContext {
             segment_progress_checkpoint: self.budget.segment_progress_checkpoint,
             segment_count: self.budget.segment_count,
             tokens_used: self.budget.tokens_used,
+            token_window_start: self.budget.token_window_start,
+            token_window_change_checkpoint: self.budget.token_window_change_checkpoint,
+            workspace_change_events: self.progress.workspace_change_events,
             meaningful_events: self.progress.meaningful_events,
             made_edits: self.progress.made_edits,
             failed_mutations: self.progress.failed_mutations,
@@ -502,6 +526,11 @@ impl TurnContext {
             .min(checkpoint.meaningful_events);
         self.budget.segment_count = checkpoint.segment_count.max(1);
         self.budget.tokens_used = checkpoint.tokens_used;
+        self.budget.token_window_start = checkpoint.token_window_start.min(checkpoint.tokens_used);
+        self.budget.token_window_change_checkpoint = checkpoint
+            .token_window_change_checkpoint
+            .min(checkpoint.workspace_change_events);
+        self.progress.workspace_change_events = checkpoint.workspace_change_events;
         self.budget.continuation_pending = checkpoint.continuation_pending;
         self.progress.meaningful_events = checkpoint.meaningful_events;
         self.progress.made_edits = checkpoint.made_edits;
@@ -635,6 +664,9 @@ mod tests {
         let mut ctx = TurnContext::with_budgets(40, 200);
         ctx.budget.tool_rounds = 40;
         ctx.budget.tokens_used = 123_456;
+        ctx.budget.token_window_start = 100_000;
+        ctx.budget.token_window_change_checkpoint = 3;
+        ctx.progress.workspace_change_events = 5;
         ctx.budget.segment_count = 2;
         ctx.progress.meaningful_events = 7;
         ctx.progress.made_edits = true;
@@ -658,6 +690,9 @@ mod tests {
         assert!(restored.restore_segment(&reparsed, "session-1"));
         assert_eq!(restored.budget.tool_rounds, 40);
         assert_eq!(restored.budget.tokens_used, 123_456);
+        assert_eq!(restored.budget.token_window_start, 100_000);
+        assert_eq!(restored.budget.token_window_change_checkpoint, 3);
+        assert_eq!(restored.progress.workspace_change_events, 5);
         assert_eq!(restored.budget.segment_count, 2);
         assert!(restored.budget.continuation_pending);
         assert!(restored.has_progress_in_current_segment());

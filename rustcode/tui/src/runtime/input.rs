@@ -2354,6 +2354,17 @@ pub(super) async fn handle_app_event(
                         *needs_redraw = true;
                         return Ok(InputFlow::ContinueIteration);
                     }
+                    // The composer's posture token cycles ask -> auto-approve -> plan.
+                    event::MouseEventKind::Down(event::MouseButton::Left)
+                        if transcript_state.posture_chip_at(mouse.column, mouse.row) =>
+                    {
+                        let mut state = app_state.lock().await;
+                        if !state.modal_open() {
+                            super::composer::cycle_permission_posture(&mut state);
+                        }
+                        *needs_redraw = true;
+                        return Ok(InputFlow::ContinueIteration);
+                    }
                     // The wheel moves the tasks panel's selection, or scrolls
                     // its log, instead of the transcript behind it.
                     event::MouseEventKind::ScrollUp | event::MouseEventKind::ScrollDown
