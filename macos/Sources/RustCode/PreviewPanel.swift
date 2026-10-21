@@ -216,12 +216,14 @@ struct PreviewResizeHandle: View {
     @Binding var width: Double
     @State private var startWidth: Double?
     static let range: ClosedRange<Double> = 320...1200
+    /// The line and the padding either side that can be grabbed.
+    static let width: CGFloat = 7
 
     var body: some View {
         Rectangle()
             .fill(Color.primary.opacity(0.1))
             .frame(width: 1)
-            .padding(.horizontal, 3)
+            .padding(.horizontal, (Self.width - 1) / 2)
             .contentShape(.rect)
             .onHover { inside in
                 if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }

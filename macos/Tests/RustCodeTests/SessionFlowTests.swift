@@ -148,6 +148,52 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2210: ⌘P pins and unpins the chat shown at once, and never moves what
+    /// is typed, or the follow-up sent next, to another chat.
+    func testPinActsOnTheShownChatAndKeepsTheDraft() async throws {
+        let model = try await started()
+        await model.newSession()
+        model.draft = "not sent yet"
+        model.togglePinSelected()
+        XCTAssertTrue(model.pinnedSessions.isEmpty, "a new chat has nothing to pin yet")
+        XCTAssertNil(model.selectedSession)
+        XCTAssertEqual(model.draft, "not sent yet")
+        XCTAssertEqual(model.toasts.last?.title, "Nothing to pin yet")
+
+        await send("first", in: model)
+        let id = try XCTUnwrap(model.selectedSession)
+        model.draft = "follow-up"
+        model.togglePinSelected()
+        XCTAssertEqual(model.pinnedSessions, [id])
+        XCTAssertTrue(model.isSelectedPinned)
+        XCTAssertEqual(model.selectedSession, id)
+        XCTAssertEqual(model.draft, "follow-up")
+
+        await model.submit()
+        XCTAssertEqual(model.selectedSession, id, "the follow-up stays in the chat it was typed in")
+        XCTAssertEqual(model.transcript.items.count, 4)
+        XCTAssertTrue(model.isSelectedPinned, "sending leaves the pin alone")
+
+        model.togglePinSelected()
+        XCTAssertFalse(model.isSelectedPinned)
+        XCTAssertEqual(model.selectedSession, id)
+        model.stop()
+    }
+
+    /// A chat shown before the sidebar lists it is pinned all the same; ⌘P
+    /// used to do nothing for it.
+    func testPinWorksForAChatNotListedYet() async throws {
+        let model = try await started()
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        await model.select(quick)
+        model.sessions = []
+        model.togglePinSelected()
+        XCTAssertTrue(model.isSelectedPinned)
+        XCTAssertEqual(model.selectedSession, "quick")
+        XCTAssertEqual(model.toasts.last?.title, "Pinned")
+        model.stop()
+    }
+
     /// An ACP engine with two stored chats of `replayed` messages, "slow" (its
     /// load takes a moment) and "quick", that answers each prompt with one
     /// short reply.

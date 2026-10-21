@@ -28,12 +28,17 @@ struct Toast: Identifiable, Equatable {
     static func == (lhs: Toast, rhs: Toast) -> Bool { lhs.id == rhs.id }
 }
 
-/// The toasts in the top-right corner of the chat, newest last.
+/// The toasts centered at the top of the chat, newest last. The stack covers
+/// the window so it draws above panels, and is inset by the sidebar and the
+/// preview beside the chat so it centers on the chat itself.
 struct ToastStack: View {
     @ObservedObject var model: DesktopModel
+    /// The width taken beside the chat on each side.
+    var leadingInset: CGFloat = 0
+    var trailingInset: CGFloat = 0
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
+        VStack(alignment: .center, spacing: 8) {
             ForEach(model.toasts) { toast in
                 ToastView(toast: toast) { model.open(toast) } dismiss: { model.dismissToast(toast.id) }
                     .transition(.asymmetric(
@@ -46,15 +51,17 @@ struct ToastStack: View {
         }
         // Below the chat header.
         .padding(.top, 56)
-        .padding(.trailing, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.leading, leadingInset)
+        .padding(.trailing, trailingInset)
         .animation(.snappy(duration: 0.25), value: model.toasts)
     }
 }
 
 /// How a dragged toast moves and whether letting go dismisses it. Toasts sit
-/// in the top-right corner, so they leave to the right or upward; a drag the
-/// other way follows the pointer with resistance and springs back.
+/// centered at the top of the chat, so they leave upward or to either side; a
+/// drag downward follows the pointer with resistance and springs back.
 enum ToastSwipe {
     /// How far a toast must travel to go when released.
     static let distance: CGFloat = 80
@@ -64,21 +71,27 @@ enum ToastSwipe {
     /// Where the toast is drawn for a drag of `translation`.
     static func offset(for translation: CGSize) -> CGSize {
         CGSize(
-            width: translation.width > 0 ? translation.width : resisted(translation.width),
+            width: translation.width,
             height: translation.height < 0 ? translation.height : resisted(translation.height)
         )
     }
 
     /// Whether letting go of a drag dismisses the toast: far enough out, or a
-    /// flick heading out, to the right or upward.
+    /// flick heading out, upward or to either side.
     static func dismisses(translation: CGSize, predicted: CGSize) -> Bool {
-        translation.width >= distance || -translation.height >= distance
-            || predicted.width >= flick || -predicted.height >= flick
+        abs(translation.width) >= distance || -translation.height >= distance
+            || abs(predicted.width) >= flick || -predicted.height >= flick
     }
 
     /// The direction it leaves in once dismissed, along the drag's main axis.
     static func exit(for translation: CGSize) -> CGSize {
-        -translation.height > translation.width ? CGSize(width: 0, height: -160) : CGSize(width: 420, height: 0)
+        if -translation.height > abs(translation.width) { return CGSize(width: 0, height: -160) }
+        return CGSize(width: translation.width < 0 ? -420 : 420, height: 0)
+    }
+
+    /// How faded the toast is for its drawn `offset`, more as it heads out.
+    static func fade(for offset: CGSize) -> Double {
+        Double(min(max(abs(offset.width), -offset.height, 0) / (distance * 3), 0.6))
     }
 
     /// A drag against the way out moves a fraction of the pointer, to a limit.
@@ -134,7 +147,7 @@ private struct ToastView: View {
         .glassSurface(in: .rect(cornerRadius: 14))
         .contentShape(.rect)
         .offset(offset)
-        .opacity(1 - min(max(offset.width, -offset.height, 0) / (ToastSwipe.distance * 3), 0.6))
+        .opacity(1 - ToastSwipe.fade(for: offset))
         .onTapGesture { if opens { open() } else { dismiss() } }
         .gesture(swipe)
         .onHover { hovering in
@@ -146,7 +159,7 @@ private struct ToastView: View {
         .accessibilityAction(named: "Dismiss", dismiss)
     }
 
-    /// Drag right or up to dismiss; anything short of that springs back.
+    /// Drag up or to either side to dismiss; anything short of that springs back.
     private var swipe: some Gesture {
         DragGesture(minimumDistance: 6)
             .onChanged { value in
