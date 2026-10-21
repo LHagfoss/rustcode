@@ -1,3 +1,8 @@
+## [v0.88.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.88.1) - 2026-10-21
+
+### Fixes
+- **TUI:** the composer is drawn as a borderless panel band instead of a rounded frame, with a blank row between the input and its settings row. The settings row now names the agent mode (`Build` or `Plan`) and always shows how tool actions are handled (`ask`, `auto-approve`, or `read-only` in Plan mode); clicking it cycles the posture. The unframed footer names `Plan · read-only` and `auto-approve` (#2246).
+- A `manage_task` `wait` streams the waited task's output tail while it is still blocked, so its card shows progress instead of sitting empty for the whole command (#2249).
 ## [v0.88.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.88.0) - 2026-10-21
 
 ### Features
