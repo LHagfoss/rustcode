@@ -52,6 +52,18 @@ public struct DiffLine: Equatable, Sendable {
         self.oldNumber = oldNumber
         self.newNumber = newNumber
     }
+
+    /// The old- and new-file cells of this line's gutter, each right-aligned
+    /// to `digits`. An unchanged line whose numbers match prints the number
+    /// once, in the new-file column, so it does not read as doubled.
+    public func gutter(digits: Int) -> (old: String, new: String) {
+        func padded(_ value: Int?) -> String {
+            let text = value.map(String.init) ?? ""
+            return String(repeating: " ", count: max(digits - text.count, 0)) + text
+        }
+        let old = kind == .context && oldNumber == newNumber ? nil : oldNumber
+        return (padded(old), padded(newNumber))
+    }
 }
 
 /// A row of a rendered diff: a line, or unchanged lines left out (`nil` when
@@ -70,6 +82,15 @@ public struct FileChange: Equatable, Sendable, Identifiable {
     public var isNewFile: Bool
 
     public var id: String { path }
+
+    /// The width of each gutter column: the widest number in the change, so
+    /// the columns do not shift between rows.
+    public var gutterDigits: Int {
+        rows.reduce(2) { result, row in
+            guard case .line(let line) = row else { return result }
+            return max(result, String(line.oldNumber ?? 0).count, String(line.newNumber ?? 0).count)
+        }
+    }
 
     /// Unchanged lines kept around each change.
     static let context = 3
