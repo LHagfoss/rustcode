@@ -121,6 +121,111 @@ final class KeybindingTests: XCTestCase {
         XCTAssertEqual(KeyCombo(event: left)?.display, "⌘←")
     }
 
+    func testUndoRevertsTheLastChange() {
+        let store = makeStore()
+        XCTAssertFalse(store.canUndo)
+        XCTAssertFalse(store.undo())
+
+        store.assign(KeyCombo(key: "j", modifiers: .command), to: .newChat)
+        store.clear(.findInChat)
+        XCTAssertTrue(store.canUndo)
+
+        XCTAssertTrue(store.undo())
+        XCTAssertEqual(store.display(for: .findInChat), "⌘F")
+        XCTAssertEqual(store.display(for: .newChat), "⌘J")
+        // The undone state is what is saved.
+        XCTAssertEqual(makeStore().display(for: .findInChat), "⌘F")
+
+        XCTAssertTrue(store.undo())
+        XCTAssertEqual(store.display(for: .newChat), "⌘N")
+        XCTAssertFalse(store.hasCustomizations)
+        XCTAssertFalse(store.canUndo)
+    }
+
+    func testUndoBringsBackADisplacedShortcut() {
+        let store = makeStore()
+        store.assign(KeyCombo(key: "k", modifiers: .command), to: .newChat)
+        XCTAssertNil(store.combo(for: .switchChat))
+
+        store.undo()
+        XCTAssertEqual(store.display(for: .newChat), "⌘N")
+        XCTAssertEqual(store.display(for: .switchChat), "⌘K")
+    }
+
+    func testUndoAfterResetAllRestoresEveryCustomization() {
+        let store = makeStore()
+        store.assign(KeyCombo(key: "j", modifiers: .command), to: .newChat)
+        store.clear(.settings)
+        store.resetAll()
+        XCTAssertFalse(store.hasCustomizations)
+
+        store.undo()
+        XCTAssertEqual(store.display(for: .newChat), "⌘J")
+        XCTAssertNil(store.combo(for: .settings))
+    }
+
+    /// A change that leaves every shortcut as it was is not one to undo.
+    func testNoOpChangesAreNotRemembered() {
+        let store = makeStore()
+        store.reset(.newChat)
+        store.resetAll()
+        store.assign(KeyCombo(key: "n", modifiers: .command), to: .newChat)
+        store.assign(KeyCombo(key: "q", modifiers: .command), to: .newChat)
+        XCTAssertFalse(store.canUndo)
+    }
+
+    func testUndoHistoryIsBounded() {
+        let store = makeStore()
+        for index in 0..<(KeybindingStore.historyLimit + 10) {
+            let key = index.isMultiple(of: 2) ? "j" : "l"
+            store.assign(KeyCombo(key: key, modifiers: .command), to: .newChat)
+        }
+        var undone = 0
+        while store.undo() { undone += 1 }
+        XCTAssertEqual(undone, KeybindingStore.historyLimit)
+    }
+
+    /// ⌘W closes the terminal panel rather than the window, and can be
+    /// remapped like any other command.
+    func testCommandWClosesTheTerminalAndIsConfigurable() {
+        let store = makeStore()
+        let commandW = KeyCombo(key: "w", modifiers: .command)
+        XCTAssertEqual(store.combo(for: .closeTerminal), commandW)
+        XCTAssertNil(commandW.reservedReason)
+        XCTAssertEqual(KeybindingAction.closeTerminal.category, .view)
+
+        XCTAssertEqual(store.assign(KeyCombo(key: "w", modifiers: [.command, .shift]), to: .closeTerminal),
+                       .assigned(displaced: nil))
+        XCTAssertEqual(store.display(for: .closeTerminal), "⇧⌘W")
+
+        // Another command may take ⌘W, leaving the terminal without it.
+        store.reset(.closeTerminal)
+        XCTAssertEqual(store.assign(commandW, to: .newTerminalTab), .assigned(displaced: .closeTerminal))
+        XCTAssertNil(store.combo(for: .closeTerminal))
+    }
+
+    func testRecorderKeys() {
+        let combo = KeyCombo(key: "j", modifiers: .command)
+        // Esc cancels, whatever is held with it.
+        XCTAssertEqual(KeyRecorderInput(keyCode: 53, modifiers: [], combo: nil), .cancel)
+        XCTAssertEqual(KeyRecorderInput(keyCode: 53, modifiers: .command, combo: nil), .cancel)
+        // Delete and Forward Delete clear; with ⌘ they are a shortcut.
+        XCTAssertEqual(KeyRecorderInput(keyCode: 51, modifiers: [], combo: nil), .clear)
+        XCTAssertEqual(KeyRecorderInput(keyCode: 117, modifiers: .shift, combo: nil), .clear)
+        let commandDelete = KeyCombo(key: "delete", modifiers: .command)
+        XCTAssertEqual(KeyRecorderInput(keyCode: 51, modifiers: .command, combo: commandDelete), .record(commandDelete))
+        XCTAssertEqual(KeyRecorderInput(keyCode: 38, modifiers: .command, combo: combo), .record(combo))
+        XCTAssertEqual(KeyRecorderInput(keyCode: 122, modifiers: .command, combo: nil), .unusable)
+    }
+
+    func testRecorderReadsEscapeFromAKeyPress() throws {
+        let escape = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false, keyCode: 53))
+        XCTAssertEqual(KeyRecorderInput(event: escape), .cancel)
+    }
+
     func testHelpIncludesTheCurrentShortcut() {
         let store = makeStore()
         XCTAssertEqual(store.help("New chat", .newChat), "New chat (⌘N)")

@@ -2,7 +2,8 @@ import RustCodeKit
 import SwiftUI
 
 /// ⌘K: a Liquid Glass panel at the top of the window for jumping to a chat
-/// (`SessionSwitcher`). Type to search, ↑↓ to move, ⏎ to open, Esc to close.
+/// (`SessionSwitcher`). Type to search, ↑↓ to move, ⏎ to open, ⇥ to switch
+/// between All and Project, Esc to close.
 /// The open chat stays as it is until a row is picked.
 struct SessionSwitcherOverlay: View {
     @ObservedObject var model: DesktopModel
@@ -36,6 +37,8 @@ private struct SessionSwitcherPanel: View {
     @State private var searching = false
     @FocusState private var focused: Bool
 
+    private static let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
     private var results: [SessionSwitcher.Result] {
@@ -54,7 +57,10 @@ private struct SessionSwitcherPanel: View {
             footer
         }
         .frame(width: 600)
-        .glassSurface(in: .rect(cornerRadius: 24))
+        // The rows and the footer's band are clipped to the panel's shape,
+        // or their square bottom corners show past the glass's round ones.
+        .clipShape(Self.shape)
+        .glassSurface(in: Self.shape)
         .shadow(color: .black.opacity(0.18), radius: 30, y: 14)
         .background {
             // Esc closes from wherever focus is.
@@ -64,6 +70,18 @@ private struct SessionSwitcherPanel: View {
             let initial = SessionSwitcher.initialSelection(results, current: model.selectedSession)
             selectedID = results.indices.contains(initial) ? results[initial].id : nil
             focused = true
+        }
+        // The field is in the window only once the panel's transition has
+        // inserted it; asking again a tick later is what makes typing land
+        // here and not in the sidebar's search, which may have had focus.
+        .task {
+            await Task.yield()
+            focused = true
+            try? await Task.sleep(for: .milliseconds(60))
+            if focused { takeTypeahead() } else { focused = true }
+        }
+        .onChange(of: focused) { _, on in
+            if on { takeTypeahead() }
         }
         .onDisappear { model.switcherSearches = false }
         .task(id: trimmed) { await searchContents() }
@@ -88,6 +106,12 @@ private struct SessionSwitcherPanel: View {
                 }
                 .onKeyPress(.escape) {
                     model.showsSwitcher = false
+                    return .handled
+                }
+                // ⇥ (and ⇧⇥) switch between All and Project instead of
+                // moving focus out of the field.
+                .onKeyPress(.tab, phases: .down) { _ in
+                    model.showsAllProjects.toggle()
                     return .handled
                 }
                 .onChange(of: query) { _, _ in
@@ -121,7 +145,7 @@ private struct SessionSwitcherPanel: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 2) {
+                    LazyVStack(spacing: 4) {
                         ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
                             SwitcherRow(result: result, query: trimmed, showsProject: model.showsAllProjects,
                                         isSelected: index == selection,
@@ -132,9 +156,9 @@ private struct SessionSwitcherPanel: View {
                             .id(result.id)
                         }
                     }
-                    .padding(6)
+                    .padding(8)
                 }
-                .frame(maxHeight: 380)
+                .frame(maxHeight: 420)
                 .fixedSize(horizontal: false, vertical: true)
                 .onChange(of: selectedID) { _, id in
                     if let id { proxy.scrollTo(id) }
@@ -155,6 +179,7 @@ private struct SessionSwitcherPanel: View {
         HStack(spacing: 14) {
             hint("↑↓", "move")
             hint("⏎", "open")
+            hint("⇥", "all / project")
             hint("esc", "close")
             Spacer()
             if model.showsAllProjects {
@@ -165,8 +190,8 @@ private struct SessionSwitcherPanel: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 16)
-        .frame(height: 30)
+        .padding(.horizontal, 18)
+        .frame(height: 34)
         .background(Color.primary.opacity(0.03))
         .accessibilityHidden(true)
     }
@@ -180,6 +205,12 @@ private struct SessionSwitcherPanel: View {
                 .background(Color.primary.opacity(0.08), in: .rect(cornerRadius: 4))
             Text(label)
         }
+    }
+
+    /// Letters typed after ⌘K but before the field had focus come first.
+    private func takeTypeahead() {
+        let typed = model.takeSwitcherTypeahead()
+        if !typed.isEmpty { query = typed + query }
     }
 
     private func move(_ step: Int, _ results: [SessionSwitcher.Result], _ selection: Int) {
@@ -224,7 +255,7 @@ private struct SwitcherRow: View {
                     .font(.system(size: 13))
                     .foregroundStyle(isSelected ? Color.brand : .secondary)
                     .frame(width: 18)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(highlighted(result.session.title ?? "New chat"))
                         .lineLimit(1)
                     Text(detail)
@@ -247,10 +278,10 @@ private struct SwitcherRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? Color.brand.opacity(0.16) : .clear, in: .rect(cornerRadius: 12))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .background(isSelected ? Color.brand.opacity(0.16) : .clear, in: .rect(cornerRadius: 14, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

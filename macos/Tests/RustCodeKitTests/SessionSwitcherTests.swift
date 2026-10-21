@@ -87,4 +87,20 @@ final class SessionSwitcherTests: XCTestCase {
         XCTAssertEqual(SessionSwitcher.keep("gone", in: after), 0)
         XCTAssertEqual(SessionSwitcher.keep(nil, in: after), 0)
     }
+
+    /// Letters typed right after ⌘K, before the field has focus, are kept
+    /// for the search; keys the switcher or a menu handles are not.
+    func testTypeaheadKeepsOnlyTypedText() {
+        XCTAssertEqual(SessionSwitcher.typeahead("f", commandKey: false), "f")
+        XCTAssertEqual(SessionSwitcher.typeahead("Ø", commandKey: false), "Ø")
+        XCTAssertEqual(SessionSwitcher.typeahead(" ", commandKey: false), " ")
+        XCTAssertNil(SessionSwitcher.typeahead("k", commandKey: true))
+        XCTAssertNil(SessionSwitcher.typeahead(nil, commandKey: false))
+        XCTAssertNil(SessionSwitcher.typeahead("", commandKey: false))
+        XCTAssertNil(SessionSwitcher.typeahead("\r", commandKey: false))
+        XCTAssertNil(SessionSwitcher.typeahead("\t", commandKey: false))
+        XCTAssertNil(SessionSwitcher.typeahead("\u{1b}", commandKey: false))
+        XCTAssertNil(SessionSwitcher.typeahead("\u{7f}", commandKey: false))
+        XCTAssertNil(SessionSwitcher.typeahead("\u{F700}", commandKey: false)) // ↑
+    }
 }
