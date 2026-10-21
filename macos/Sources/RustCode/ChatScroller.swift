@@ -49,10 +49,20 @@ final class ChatScrollState: ObservableObject {
     #if DEBUG
     /// The open chat's state, for the debug driver.
     static weak var current: ChatScrollState?
+    /// Lets go of the end, as the reader scrolling up does.
+    var debugLetGo: () -> Void = {}
     /// The row at the top of the view, where it is, and the rows mapped.
     var debugDescription: String {
         let top = reference.map { "top row \($0.key) at \(Int($0.value.minY))" } ?? "no rows"
         return "\(top), rows \(map.rows.count) first \(map.rows.first.map(String.init) ?? "-")"
+    }
+    /// The laid-out rows that reach into the visible area, and the clip's
+    /// place and the document's height.
+    var debugVisible: String {
+        let shown = frames.filter { $0.value.maxY > 0 && $0.value.minY < visible }.keys.sorted()
+        let clip = scrollView.map { "clip y \(Int($0.contentView.bounds.minY)) doc \(Int($0.documentView?.frame.height ?? 0))" } ?? "-"
+        let rows = shown.map { ($0 == Int.max ? "W" : String($0)) + "@\(Int(frames[$0]!.minY))+\(Int(frames[$0]!.height))" }
+        return "\(clip) visible \(Int(visible)) first \(map.rows.dropFirst().first ?? -1) hold \(isAnchoring) laid \(frames.count) shown [\(rows.joined(separator: ","))]"
     }
     #endif
 

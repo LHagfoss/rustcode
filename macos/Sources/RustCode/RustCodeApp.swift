@@ -331,6 +331,12 @@ final class DesktopModel: ObservableObject {
     @Published private(set) var startingChat = false
     /// The shown chat is running a model turn, which the chat shows as Working.
     var isTurnRunning: Bool { selectedSession.map(runningSessions.contains) ?? false }
+    #if DEBUG
+    /// The debug driver's stand-in for a turn, without an engine.
+    func debugTurn(_ running: Bool, in session: String) {
+        if running { _ = turnActivity.begin(session) } else { turnActivity.reset() }
+    }
+    #endif
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
     /// engine blocks until each one is answered, so none may be dropped.
