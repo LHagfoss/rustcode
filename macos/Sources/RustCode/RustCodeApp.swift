@@ -334,7 +334,7 @@ final class DesktopModel: ObservableObject {
     #if DEBUG
     /// The debug driver's stand-in for a turn, without an engine.
     func debugTurn(_ running: Bool, in session: String) {
-        if running { _ = turnActivity.begin(session) } else { turnActivity.reset() }
+        if running { _ = turnActivity.begin(session) } else { endAllTurns(failure: nil) }
     }
     #endif
     @Published var error: String?
@@ -586,7 +586,7 @@ final class DesktopModel: ObservableObject {
                     // A late exit of an engine replaced by a project switch
                     // must not touch the state of the one now running.
                     guard let self, let launched, self.engine === launched else { return }
-                    self.turnActivity.reset()
+                    self.endAllTurns()
                     guard !exit.requested else { return }
                     // Drop the dead engine so the next `start()` launches a
                     // new one; its waiting requests can no longer be answered.
@@ -1516,19 +1516,22 @@ final class DesktopModel: ObservableObject {
         // keep spinning after its answer.
         let turn = isCommand ? nil : turnActivity.begin(id)
         var stopped = false
+        var failure: String?
         do {
             let result = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: prompt.text, images: prompt.images))
             await catchUpInbound(on: connection)
             stopped = result["stopReason"]?.stringValue == "cancelled"
+            if stopped { failure = "Cancelled." }
         } catch {
             self.error = String(describing: error)
             stopped = true
+            failure = "The turn failed."
             TurnNotifier.shared.notify(session: id, title: chatTitle(id), body: "The turn failed: \(error)")
         }
         // The turn is over, so the engine no longer waits on its requests.
         permissionQueue.removeAll { $0.sessionId == id }
-        // A thought the turn ended on stops its clock.
-        appendToTranscript(of: id) { $0.finishThinking(at: Date()) }
+        // A thought the turn ended on stops its clock, and no card keeps spinning.
+        appendToTranscript(of: id) { $0.finishTurn(at: Date(), failure: failure) }
         if isCommand {
             finishCommand(in: id)
         } else if !stopped {
@@ -1730,6 +1733,15 @@ final class DesktopModel: ObservableObject {
         selectedSession = nil
         // The engine is being stopped, so its waiting requests die with it.
         permissionQueue = []
+        endAllTurns()
+    }
+
+    /// The engine is gone, and every turn with it: no card one of them was
+    /// running may keep spinning for an answer that cannot come.
+    private func endAllTurns(failure: String? = "The engine stopped.") {
+        for session in turnActivity.sessions {
+            appendToTranscript(of: session) { $0.finishTurn(at: Date(), failure: failure) }
+        }
         turnActivity.reset()
     }
 
@@ -1772,7 +1784,7 @@ final class DesktopModel: ObservableObject {
     private func handle(_ inbound: ACPInbound) async {
         switch inbound {
         case .closed(let reason):
-            turnActivity.reset()
+            endAllTurns()
             if engine != nil { error = reason }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate
             && params["update"]?["sessionUpdate"]?.stringValue == "available_commands_update":
