@@ -1429,6 +1429,66 @@ pub(crate) fn background_result_delivered_by_wait(session_id: &str, task_id: &st
         .contains(&(session_id.to_owned(), task_id.to_owned()))
 }
 
+/// Tasks a `manage_task` `wait` is blocked on right now, counted per waiter.
+/// A completion sink that sees one of these defers to the wait: the wait is
+/// subscribed first, so it decides whether the result reaches the model.
+fn wait_in_flight() -> &'static Mutex<HashMap<(String, String), usize>> {
+    static IN_FLIGHT: OnceLock<Mutex<HashMap<(String, String), usize>>> = OnceLock::new();
+    IN_FLIGHT.get_or_init(Default::default)
+}
+
+struct WaitInFlight {
+    keys: Vec<(String, String)>,
+}
+
+impl WaitInFlight {
+    fn new(session_id: &str, task_ids: &[String]) -> Self {
+        let keys = task_ids
+            .iter()
+            .map(|id| (session_id.to_owned(), id.clone()))
+            .collect::<Vec<_>>();
+        let mut in_flight = wait_in_flight()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for key in &keys {
+            *in_flight.entry(key.clone()).or_default() += 1;
+        }
+        Self { keys }
+    }
+}
+
+impl Drop for WaitInFlight {
+    fn drop(&mut self) {
+        let mut in_flight = wait_in_flight()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for key in &self.keys {
+            if let Some(count) = in_flight.get_mut(key) {
+                *count -= 1;
+                if *count == 0 {
+                    in_flight.remove(key);
+                }
+            }
+        }
+    }
+}
+
+/// Whether a `manage_task` `wait` answers this task's completion, so the
+/// completion sink must not record it a second time (#2232). A wait still
+/// blocked on the task is let finish first: it holds the earlier
+/// subscription and returns the same terminal event.
+pub(crate) async fn background_result_answered_by_wait(session_id: &str, task_id: &str) -> bool {
+    let key = (session_id.to_owned(), task_id.to_owned());
+    while wait_in_flight()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains_key(&key)
+    {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    background_result_delivered_by_wait(session_id, task_id)
+}
+
 /// Block until one background task reaches a terminal state, so agents wait
 /// with a single tool call instead of hand-rolled sleep/poll shell loops.
 /// Runs on a blocking worker thread; Esc still interrupts the wait through
@@ -1442,6 +1502,7 @@ fn wait_for_background_tasks(
     // Subscribe before checking the roster: a task that finishes after this
     // point still delivers its terminal event to us, while one that finished
     // before is simply absent from the roster below.
+    let _in_flight = WaitInFlight::new(session_id, task_ids);
     let subscription = manager.subscribe_session(session_id.to_owned());
     let deliver = |completion: &rustcode_tasks::TaskCompletion| {
         note_wait_delivered(session_id, completion.id.as_str());
@@ -2382,6 +2443,23 @@ mod tests {
             manager.cancel(slow.id()),
             rustcode_tasks::CancelResult::Cancelled
         );
+    }
+
+    #[tokio::test]
+    async fn completion_sink_defers_to_a_wait_in_flight() {
+        let session = "wait-in-flight-session";
+        let in_flight = super::WaitInFlight::new(session, &["waited".to_owned()]);
+        let answered = tokio::spawn(super::background_result_answered_by_wait(session, "waited"));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !answered.is_finished(),
+            "the sink must let the wait decide first"
+        );
+        super::note_wait_delivered(session, "waited");
+        drop(in_flight);
+
+        assert!(answered.await.expect("sink check finishes"));
+        assert!(!super::background_result_answered_by_wait(session, "unwaited").await);
     }
 
     #[test]

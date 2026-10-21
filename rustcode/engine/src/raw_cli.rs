@@ -53,59 +53,36 @@ async fn persist_task_event_once(
     seen: &Arc<Mutex<HashSet<String>>>,
     event: TaskEvent,
 ) {
+    let call_id = event.call_id().map(str::to_owned);
     let Some((task_id, event_session_id, output)) = crate::tools::task_event_to_tool_output(event)
     else {
         return;
     };
+    // A `manage_task` `wait` result already records this completion.
+    if crate::tools::background_result_answered_by_wait(&event_session_id, &task_id).await {
+        return;
+    }
     let mut seen = seen.lock().await;
     if !seen.insert(task_id.clone()) {
         return;
     }
     let mut state = state.lock().await;
     if state.active_session_id == event_session_id {
-        state
-            .history
-            .push(background_task_history_message(&task_id, output));
+        state.history.push(crate::background_task_history_message(
+            &task_id,
+            call_id.as_deref(),
+            output,
+        ));
         crate::config::save_session_history(&event_session_id, &state.history);
     } else {
         let mut history = crate::config::load_session_history_direct(&event_session_id);
-        history.push(background_task_history_message(&task_id, output));
+        history.push(crate::background_task_history_message(
+            &task_id,
+            call_id.as_deref(),
+            output,
+        ));
         crate::config::save_session_history(&event_session_id, &history);
     }
-}
-
-fn background_task_history_message(
-    task_id: &str,
-    output: crate::tools::ToolExecutionOutput,
-) -> ChatMessage {
-    let command = output
-        .command
-        .as_deref()
-        .map(|command| format!(" Command: {command}."))
-        .unwrap_or_default();
-    let prefix = format!("background_task: Task {task_id} completed.{command} Output:\n");
-    crate::network::bounded_tool_result_history_message(
-        crate::network::ToolResult {
-            tool_name: "background_task".to_string(),
-            content: output.content,
-            diff: None,
-            file_preview: None,
-            metadata: crate::network::ToolResultMetadata {
-                success: output.success,
-                exit_code: output.exit_code,
-                command: output.command,
-                truncated: output.truncated,
-                completeness: output.completeness,
-                replayed: output.replayed,
-                error_kind: output.error_kind,
-                retryable: output.retryable,
-                command_status: output.command_status,
-                ..Default::default()
-            },
-        },
-        &prefix,
-        None,
-    )
 }
 
 /// Build the initial application state and apply any model overrides.
@@ -876,8 +853,9 @@ mod tests {
 
     #[test]
     fn background_completion_is_preserved_as_typed_tool_evidence() {
-        let message = background_task_history_message(
+        let message = crate::background_task_history_message(
             "task-7",
+            None,
             crate::tools::ToolExecutionOutput {
                 content: "tests failed".to_string(),
                 success: false,

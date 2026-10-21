@@ -2078,10 +2078,10 @@ mod tests {
             ChatMessage::new("assistant", "starting").with_tool_calls(vec![call("call_bg")]),
             ChatMessage::new("tool", "run_command: Task started in background.")
                 .answering(Some("call_bg".into())),
-            crate::background_task_history_message_with_call_id(
+            crate::background_task_history_message(
                 "task-1",
+                Some("call_bg"),
                 crate::tools::ToolExecutionOutput::success("installed".to_owned()),
-                Some("call_bg".to_owned()),
             ),
             ChatMessage::new("assistant", "next").with_tool_calls(vec![call("call_next")]),
             ChatMessage::new("tool", "run_command: ok").answering(Some("call_next".into())),
@@ -2119,6 +2119,7 @@ mod tests {
             ChatMessage::new("tool", "run_command: a").answering(Some("call_a".into())),
             crate::background_task_history_message(
                 "task-2",
+                None,
                 crate::tools::ToolExecutionOutput::success("done".to_owned()),
             ),
             ChatMessage::new("tool", "run_command: b").answering(Some("call_b".into())),
