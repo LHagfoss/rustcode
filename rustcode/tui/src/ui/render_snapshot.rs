@@ -19,7 +19,7 @@ pub(crate) struct RenderSnapshot {
     current_response: Arc<String>,
     recap_loading: bool,
     current_token_usage: Option<TokenUsage>,
-    last_compaction: Option<rustcode::app::CompactionStats>,
+    last_compaction: Option<rustcode::controller::CompactionStats>,
     current_turn_token_usage: Option<TokenUsage>,
     current_round_token_usage: Option<TokenUsage>,
     current_round_estimated_input_tokens: u32,
@@ -362,7 +362,7 @@ impl RenderSnapshot {
     pub(crate) fn current_token_usage(&self) -> Option<&TokenUsage> {
         self.current_token_usage.as_ref()
     }
-    pub(crate) fn last_compaction(&self) -> Option<&rustcode::app::CompactionStats> {
+    pub(crate) fn last_compaction(&self) -> Option<&rustcode::controller::CompactionStats> {
         self.last_compaction.as_ref()
     }
     pub(crate) fn current_turn_token_usage(&self) -> Option<&TokenUsage> {

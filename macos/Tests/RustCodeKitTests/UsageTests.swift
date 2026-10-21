@@ -71,7 +71,7 @@ final class UsageTests: XCTestCase {
 
 final class ContextBreakdownTests: XCTestCase {
     private let contextJSON: JSONValue = [
-        "version": 1, "model": "gpt", "window": 200_000, "used": 50_000, "estimated": false, "free": 150_000,
+        "version": 2, "model": "gpt", "window": 200_000, "used": 50_000, "estimated": false, "free": 150_000,
         "categories": [
             ["name": "User messages", "tokens": 20_000],
             ["name": "Agent responses", "tokens": 0],
@@ -111,8 +111,10 @@ final class ContextBreakdownTests: XCTestCase {
     }
 
     func testUnknownVersionsAndEmptyWindowsAreIgnored() {
-        XCTAssertNil(ContextBreakdown(json: ["version": 2, "window": 10, "used": 1]))
-        XCTAssertNil(ContextBreakdown(json: ["version": 1, "window": 0, "used": 1]))
+        // v1 is the previous contract; v9 is unknown.
+        XCTAssertNil(ContextBreakdown(json: ["version": 1, "window": 10, "used": 1]))
+        XCTAssertNil(ContextBreakdown(json: ["version": 9, "window": 10, "used": 1]))
+        XCTAssertNil(ContextBreakdown(json: ["version": 2, "window": 0, "used": 1]))
         let plain = SessionUpdate(notificationParams: ["sessionId": "s1", "update": [
             "sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": "hi"],
             "_meta": ["rustcode": ["kind": "context", "version": 9]],
