@@ -1834,10 +1834,6 @@ mod tests {
         ];
         let before = serde_json::to_string(&history).unwrap();
 
-        crate::network::compaction::prune_duplicate_tool_results(&history, 1);
-        crate::network::compaction::prune_historical_tool_outputs(&history, 1);
-        crate::network::compaction::prune_historical_reasoning(&history, 1);
-        crate::network::compaction::prune_old_tool_outputs(&history, 1);
         let first_render = to_messages(&history, "system");
         let second_render = to_messages(&history, "system");
 
@@ -2237,10 +2233,6 @@ mod tests {
         turn_two.push(ChatMessage::new("assistant", "verified"));
         turn_two.push(ChatMessage::new("user", "next step"));
         let before = serde_json::to_string(&turn_two).unwrap();
-        crate::network::compaction::prune_duplicate_tool_results(&turn_two, 12);
-        crate::network::compaction::prune_historical_tool_outputs(&turn_two, 12);
-        crate::network::compaction::prune_historical_reasoning(&turn_two, 12);
-        crate::network::compaction::prune_old_tool_outputs(&turn_two, usize::MAX);
         let second_render = to_messages(&turn_two, "system");
 
         assert_eq!(serde_json::to_string(&turn_two).unwrap(), before);

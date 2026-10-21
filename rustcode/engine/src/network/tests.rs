@@ -7328,13 +7328,9 @@ fn compaction_prunes_massive_historical_reasoning() {
         .map(compaction::estimate_message_tokens)
         .sum();
     assert!(before_tokens > 10000, "initial tokens should be large");
-    let before = serde_json::to_string(&history).unwrap();
 
-    // #985: storage is append-only — the pass reports no storage change and
-    // every retained message stays byte-identical.
-    let pruned = compaction::prune_historical_reasoning(&history, 2);
-    assert_eq!(pruned, 0, "storage must not be rewritten");
-    assert_eq!(serde_json::to_string(&history).unwrap(), before);
+    // #985: storage is append-only. Nothing rewrites retained messages;
+    // the request render is what drops the scratchpads.
 
     // The request render still excludes the scratchpads while preserving the
     // visible answers, so provider pressure is handled without touching
