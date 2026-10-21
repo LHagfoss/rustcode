@@ -121,6 +121,19 @@ enum DebugDriver {
             report("stream \(chunks) chunks over \(model.transcript.items.count) items: \(Int(elapsed)) ms, overhead \(Int(elapsed) - chunks * 30) ms")
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
+        case "snap":
+            // `snap <file.png>`: the window drawn to a file, for when
+            // `screencapture` cannot see the screen.
+            guard parts.count > 1, let main = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  case let window = main.attachedSheet ?? main,
+                  let view = window.contentView?.superview ?? window.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: parts.dropFirst().joined(separator: " ")))
+        case "chatfolder":
+            // `chatfolder <path>`: a new chat in that folder, the default kept.
+            await model.newSession(in: URL(fileURLWithPath: parts.dropFirst().joined(separator: " "), isDirectory: true))
         case "dump":
             var lines = ["items \(model.transcript.items.count) selected \(model.selectedSession ?? "-")",
                          "sessions \(model.sessions.count) visible \(model.visibleSessions.count) more \(model.hasMoreSessions)",

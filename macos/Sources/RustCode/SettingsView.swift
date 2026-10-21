@@ -198,7 +198,8 @@ private struct GeneralSettings: View {
             .onChange(of: appearance) { _, value in AppearanceSetting.apply(value) }
 
             SettingsGroup(title: "Chat") {
-                SettingsRow(title: "Project", subtitle: model.workspace.path.abbreviatingHome) {
+                SettingsRow(title: "Default project folder",
+                            subtitle: "\(model.workspace.path.abbreviatingHome) · New chats start here") {
                     Button("Choose…") { model.chooseWorkspace() }.buttonStyle(PillButtonStyle())
                 }
                 RowDivider()

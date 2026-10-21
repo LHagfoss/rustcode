@@ -464,13 +464,7 @@ async fn handle_enter_inner(
                 }
             }
             "/thinking" => {
-                let url = s.api_base_url.clone();
-                let current = s
-                    .config
-                    .models
-                    .iter()
-                    .find(|p| p.url == url)
-                    .and_then(|p| p.enable_thinking);
+                let current = s.active_model_profile_mut().and_then(|p| p.enable_thinking);
                 let value = match tokens.get(1) {
                     None => {
                         s.modal_picker_index = match current {
@@ -492,7 +486,7 @@ async fn handle_enter_inner(
                     }
                 };
                 if let Some(value) = value {
-                    if let Some(profile) = s.config.models.iter_mut().find(|p| p.url == url) {
+                    if let Some(profile) = s.active_model_profile_mut() {
                         profile.enable_thinking = value;
                     }
                     crate::config::save_entire_config(&s.config);
@@ -505,21 +499,11 @@ async fn handle_enter_inner(
                 }
             }
             "/effort" => {
-                let url = s.api_base_url.clone();
-                let current = s
-                    .config
-                    .models
-                    .iter()
-                    .find(|p| p.url == url)
-                    .and_then(|p| p.reasoning_effort.as_deref());
+                let current = s.active_reasoning_effort();
                 let value = match tokens.get(1) {
                     None => {
-                        s.modal_picker_index = match current {
-                            Some("low") => 0,
-                            Some("medium") => 1,
-                            Some("high") => 2,
-                            _ => 3,
-                        };
+                        s.modal_picker_index =
+                            crate::app::state::AppState::effort_picker_index(current.as_deref());
                         s.settings_picker = Some(crate::app::SettingsPicker::Effort);
                         None
                     }
@@ -536,11 +520,7 @@ async fn handle_enter_inner(
                     }
                 };
                 if let Some(value) = value {
-                    if let Some(profile) = s.config.models.iter_mut().find(|p| p.url == url) {
-                        profile.reasoning_effort = value.clone();
-                    }
-                    crate::config::save_entire_config(&s.config);
-                    s.record_session_model();
+                    s.set_active_reasoning_effort(value.clone());
                     let label = match value {
                         Some(ref e) => format!("Reasoning effort set to '{e}'."),
                         None => "Reasoning effort cleared (default).".to_string(),

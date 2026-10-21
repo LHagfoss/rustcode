@@ -1777,34 +1777,84 @@ impl AppState {
     }
 
     pub fn active_model_profile(&self) -> Option<crate::config::ModelProfile> {
+        self.active_model_profile_index()
+            .map(|index| self.config.models[index].clone())
+    }
+
+    /// Index into `config.models` of the profile requests are sent with.
+    /// Settings such as reasoning effort must be read from and written to
+    /// this profile: several profiles can share one base URL, so the first
+    /// profile with a matching URL is not necessarily the active one.
+    pub fn active_model_profile_index(&self) -> Option<usize> {
         let selected_name = self.config.default.big();
         let matching = self
             .config
             .models
             .iter()
-            .filter(|profile| profile.matches_request(&self.api_base_url, &self.model_name))
+            .enumerate()
+            .filter(|(_, profile)| profile.matches_request(&self.api_base_url, &self.model_name))
             .collect::<Vec<_>>();
-        if let Some(selected) = matching
+        if let Some((index, _)) = matching
             .iter()
-            .find(|profile| profile.name == selected_name)
+            .find(|(_, profile)| profile.name == selected_name)
         {
-            return Some((*selected).clone());
+            return Some(*index);
         }
-        if matching.len() > 1 && matching.iter().any(|profile| profile.credential.is_some()) {
+        if matching.len() > 1
+            && matching
+                .iter()
+                .any(|(_, profile)| profile.credential.is_some())
+        {
             return None;
         }
-        matching
-            .first()
-            .map(|profile| (*profile).clone())
-            .or_else(|| {
-                let mut candidates = self
-                    .config
-                    .models
-                    .iter()
-                    .filter(|p| p.model == self.model_name || p.name == self.model_name);
-                let candidate = candidates.next()?;
-                candidates.next().is_none().then(|| candidate.clone())
-            })
+        matching.first().map(|(index, _)| *index).or_else(|| {
+            let mut candidates = self
+                .config
+                .models
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.model == self.model_name || p.name == self.model_name);
+            let (index, _) = candidates.next()?;
+            candidates.next().is_none().then_some(index)
+        })
+    }
+
+    /// The active profile, or else the first profile on the active base URL
+    /// (the legacy lookup, kept for endpoints whose model is not configured).
+    pub fn active_model_profile_mut(&mut self) -> Option<&mut crate::config::ModelProfile> {
+        let index = self.active_model_profile_index().or_else(|| {
+            let url = self.api_base_url.as_str();
+            self.config.models.iter().position(|p| p.url == url)
+        })?;
+        self.config.models.get_mut(index)
+    }
+
+    /// Reasoning effort of the active profile (`None` = provider default).
+    pub fn active_reasoning_effort(&mut self) -> Option<String> {
+        self.active_model_profile_mut()
+            .and_then(|profile| profile.reasoning_effort.clone())
+    }
+
+    /// Set the active profile's reasoning effort, persist it to the config
+    /// and to this session, and report whether a profile was updated.
+    pub fn set_active_reasoning_effort(&mut self, effort: Option<String>) -> bool {
+        let Some(profile) = self.active_model_profile_mut() else {
+            return false;
+        };
+        profile.reasoning_effort = effort;
+        crate::config::save_entire_config(&self.config);
+        self.record_session_model();
+        true
+    }
+
+    /// Picker row for an effort: 0 low, 1 medium, 2 high, 3 off/other.
+    pub fn effort_picker_index(effort: Option<&str>) -> usize {
+        match effort {
+            Some("low") => 0,
+            Some("medium") => 1,
+            Some("high") => 2,
+            _ => 3,
+        }
     }
 
     /// Whether the active endpoint/model should receive the local-model

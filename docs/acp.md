@@ -36,6 +36,14 @@ equivalent cleanup for all sessions.
 Prompts within one session are serialized. Separate sessions remain isolated.
 A cancel notification targets the active turn for that session.
 
+Turns of different sessions can run at the same time in one engine. Each
+turn's debug lines and `[op]` events, including those logged by its tools,
+are filed under that turn's own session (`sessions/…/<id>/logs/debug.log` and
+the `session_id` field), not under whichever session most recently became the
+process's active one. When reading a session's log, a sudden jump in
+`rendered_history_messages` between rounds is therefore real history, not
+another chat's turn.
+
 Cancellation stops model/tool execution for the prompt, but a command already
 detached into the background is not implicitly discarded solely because the
 model turn was cancelled. Its eventual completion is persisted independently.

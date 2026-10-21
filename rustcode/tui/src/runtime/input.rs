@@ -1147,10 +1147,7 @@ pub(super) async fn handle_app_event(
                                     1 => Some(false),
                                     _ => None,
                                 };
-                                let url = s.api_base_url.clone();
-                                if let Some(profile) =
-                                    s.config.models.iter_mut().find(|p| p.url == url)
-                                {
+                                if let Some(profile) = s.active_model_profile_mut() {
                                     profile.enable_thinking = value;
                                 }
                                 rustcode::controller::save_config(&s.config);
@@ -1185,14 +1182,7 @@ pub(super) async fn handle_app_event(
                                     2 => Some("high".to_string()),
                                     _ => None,
                                 };
-                                let url = s.api_base_url.clone();
-                                if let Some(profile) =
-                                    s.config.models.iter_mut().find(|p| p.url == url)
-                                {
-                                    profile.reasoning_effort = value;
-                                }
-                                rustcode::controller::save_config(&s.config);
-                                s.record_session_model();
+                                s.set_active_reasoning_effort(value);
                                 s.close_modal_status();
                             }
                             KeyCode::Esc => {

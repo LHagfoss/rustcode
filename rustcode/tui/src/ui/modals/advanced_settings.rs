@@ -56,10 +56,7 @@ pub(in crate::ui) fn render_thinking_picker_modal(
     );
 
     let current = state
-        .config()
-        .models
-        .iter()
-        .find(|prof| prof.url == state.api_base_url())
+        .active_model_profile()
         .and_then(|prof| prof.enable_thinking);
 
     let choices = [
@@ -178,11 +175,10 @@ pub(in crate::ui) fn render_effort_picker_modal(
         modal_chunks[0],
     );
 
+    // Mark the effort requests actually use: the active profile's, not the
+    // first profile that happens to share the active base URL.
     let current = state
-        .config()
-        .models
-        .iter()
-        .find(|prof| prof.url == state.api_base_url())
+        .active_model_profile()
         .and_then(|prof| prof.reasoning_effort.as_deref());
 
     let choices = [

@@ -266,7 +266,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .toggleTerminal: return "Your own shell, below the chat"
         case .newTerminalTab: return "Open another shell in this project"
         case .closeTerminal: return "Hide the terminal when it is open. The window stays"
-        case .chooseProject: return "Open another folder as the project"
+        case .chooseProject: return "Choose the default project folder for new chats"
         case .settings: return "General, keybinds, skills and MCP"
         }
     }

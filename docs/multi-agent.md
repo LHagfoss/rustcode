@@ -104,3 +104,7 @@ attributed evidence and drain before a model request, after announced tool
 results are complete. Root history is flushed before acknowledging the mailbox
 snapshot. Status notices redraw the UI without injecting asynchronous system
 messages into native tool batches.
+
+Coordinating separate, user-visible sessions (rather than children inside one
+session) is planned in
+[cross-session orchestration](architecture/cross-session-orchestration.md).

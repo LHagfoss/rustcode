@@ -115,30 +115,74 @@ pub(super) struct AssistantRenderOptions {
     pub(super) last_copy_text: Option<(String, std::time::Instant)>,
 }
 
-pub(super) fn truncate_thought_preview(text: &str, max_width: usize) -> String {
-    if text.width() <= max_width {
-        return text.to_string();
+/// Render one line of thinking through the transcript's Markdown renderer so
+/// `**bold**`, `*italic*` and `` `code` `` show as formatting instead of
+/// literal markers, then repaint it in the muted thinking colour (keeping the
+/// emphasis modifiers) and truncate it to `max_width` with an ellipsis.
+pub(super) fn thought_preview_spans(
+    text: &str,
+    max_width: usize,
+    show_picker: bool,
+) -> Vec<Span<'static>> {
+    // Wide enough that the renderer never wraps a preview line; truncation
+    // below is what bounds it.
+    const UNWRAPPED_WIDTH: usize = 4096;
+    let rendered = super::markdown::render_markdown(text, UNWRAPPED_WIDTH, show_picker, true);
+    let Some(line) = rendered.into_iter().find(|line| {
+        line.spans
+            .iter()
+            .any(|span| !span.content.trim().is_empty())
+    }) else {
+        return Vec::new();
+    };
+    let styled = line
+        .spans
+        .into_iter()
+        .map(|span| {
+            let modifier = span.style.add_modifier - span.style.sub_modifier;
+            (
+                span.content.into_owned(),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), modifier, show_picker),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let total: usize = styled.iter().map(|(content, _)| content.width()).sum();
+    if total <= max_width {
+        return styled
+            .into_iter()
+            .map(|(content, style)| Span::styled(content, style))
+            .collect();
     }
     if max_width == 0 {
-        return String::new();
+        return Vec::new();
     }
-    if max_width == 1 {
-        return "…".to_string();
-    }
-
-    let content_width = max_width - 1;
-    let mut result = String::new();
+    let budget = max_width - 1;
     let mut width = 0;
-    for c in text.chars() {
-        let char_width = c.width().unwrap_or(0);
-        if width + char_width > content_width {
-            break;
+    let mut spans = Vec::new();
+    let mut last_style =
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker);
+    'outer: for (content, style) in styled {
+        let mut kept = String::new();
+        for c in content.chars() {
+            let char_width = c.width().unwrap_or(0);
+            if width + char_width > budget {
+                if !kept.is_empty() {
+                    spans.push(Span::styled(kept, style));
+                }
+                last_style = style;
+                break 'outer;
+            }
+            kept.push(c);
+            width += char_width;
         }
-        result.push(c);
-        width += char_width;
+        last_style = style;
+        if !kept.is_empty() {
+            spans.push(Span::styled(kept, style));
+        }
     }
-    result.push('…');
-    result
+    spans.push(Span::styled("…", last_style));
+    spans
 }
 
 pub(super) fn is_reasoning_preamble(text: &str) -> bool {
@@ -429,7 +473,7 @@ pub(super) fn render_assistant_message_with_cache<'a>(
         };
 
         let preview_width = (viewport_width as usize).saturating_sub(2).min(64);
-        let preview = truncate_thought_preview(&first_line, preview_width);
+        let preview = thought_preview_spans(&first_line, preview_width, show_picker);
 
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
@@ -447,10 +491,13 @@ pub(super) fn render_assistant_message_with_cache<'a>(
         ]));
 
         if !preview.is_empty() {
-            lines.push(Line::from(vec![Span::styled(
-                format!("  {preview}"),
+            let mut spans = Vec::with_capacity(preview.len() + 1);
+            spans.push(Span::styled(
+                "  ",
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            )]));
+            ));
+            spans.extend(preview);
+            lines.push(Line::from(spans));
         }
     }
 
