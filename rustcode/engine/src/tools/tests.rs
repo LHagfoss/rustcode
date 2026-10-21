@@ -104,6 +104,14 @@ fn conservative_builtin_aliases_recover_common_call_spellings() {
         Some("write_to_file")
     );
     assert_eq!(resolve_builtin_tool_alias("bash"), Some("run_command"));
+    assert_eq!(
+        resolve_builtin_tool_alias("replace_string_in_file"),
+        Some("replace_file_content")
+    );
+    assert_eq!(
+        resolve_builtin_tool_alias("str_replace"),
+        Some("replace_file_content")
+    );
 }
 
 #[test]
