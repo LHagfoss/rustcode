@@ -1,3 +1,13 @@
+## [v0.88.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.88.0) - 2026-10-21
+
+### Features
+- **Compaction:** automatic compaction and `/compact` keep the same recent history: a 20k-token tail, capped at 30% of the window and snapped to a complete turn. An earlier summary is carried forward verbatim instead of being re-summarized, so detail no longer drifts away pass after pass. The LLM summarizer runs only at a turn boundary; mid-turn pressure uses the local deterministic record. `/compact` on a single long turn says there is nothing to compact instead of spending a request that changes nothing (#2241).
+- **Compaction stats:** the last compaction's trigger, mode, before/after tokens and count reach every frontend through `/context` and `_meta.rustcode.context` v2, with a Compacted history category in the TUI context modal and the macOS context sheet (#2235). The dead prune passes are gone and compaction metrics name the branch that fired (#2234).
+- **TUI:** the composer is drawn in a rounded frame with one permission token (`ask`, `auto-approve` or `plan`) and the model on its last row; click the token to cycle it. The footer keeps branch, folder and context usage (#2243).
+- A turn that keeps changing the workspace is no longer stopped by the 5M turn token budget: a productive window is renewed, up to a 20M ceiling. Read-only or spinning turns still stop at 5M (#2237).
+- `rg`/`grep` finding nothing is reported as "(no matches)" rather than a failed command; `rg -rn` gets a note that `-r` means `--replace`; `replace_string_in_file` and `str_replace` resolve to `replace_file_content` (#2242).
+- A finished background task is recorded in history once, answering its call, instead of also as orphan prose sent to the model twice (#2244).
+- **macOS:** chat cards stop spinning when their turn ends or the engine goes away, and empty running cards are not drawn (#2239). Diff gutters print an unchanged line number once (#2238). Tables accept a column name in `sort_by`, and an unknown sort column no longer drops the table (#2240).
 ## [v0.87.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.87.0) - 2026-10-21
 
 ### Features
