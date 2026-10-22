@@ -1961,14 +1961,44 @@ pub(crate) fn withheld_tools_notice(stats: &McpSchemaSelectionStats) -> Option<S
 /// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
 /// definition. Unknown names fall back to an empty permissive object schema.
 pub(super) fn schema_for_tool(name: &str) -> Value {
-    TOOLS
-        .iter()
-        .find(|t| t.name == name)
-        .map(|t| (t.schema)())
-        .unwrap_or_else(|| schema_from_arguments("{}"))
+    with_call_summary(
+        TOOLS
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| (t.schema)())
+            .unwrap_or_else(|| schema_from_arguments("{}")),
+    )
+}
+
+/// The optional argument every built-in and agent tool takes: a few words on
+/// what the call does, which the app and the terminal show on its row. It is
+/// display-only; no handler reads it.
+pub(crate) const CALL_SUMMARY_KEY: &str = "summary";
+
+fn with_call_summary(mut schema: Value) -> Value {
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        properties
+            .entry(CALL_SUMMARY_KEY)
+            .or_insert_with(|| serde_json::json!({"type": "string"}));
+    }
+    schema
+}
+
+/// The summary a call carries, trimmed to one line, when it has one.
+pub(crate) fn call_summary(arguments: &Value) -> Option<&str> {
+    arguments
+        .get(CALL_SUMMARY_KEY)?
+        .as_str()?
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
 }
 
 pub(super) fn schema_for_agent_tool(name: &str) -> Value {
+    with_call_summary(agent_tool_schema(name))
+}
+
+fn agent_tool_schema(name: &str) -> Value {
     match name {
         "spawn_agent" => {
             serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"model":{"type":"string","description":"Model profile name for the child. Defaults to the parent's model."},"agent_type":{"type":"string","enum":crate::app::subagent_context::AgentRole::NAMES,"default":"default","description":"Role preset: explorer is read-only, worker presets write_access (allowed_paths still required), default follows write_access."},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
@@ -1994,7 +2024,7 @@ pub(super) fn schema_for_agent_tool(name: &str) -> Value {
 #[cfg(test)]
 pub(crate) const BASE_PROMPT_MAX_BYTES: usize = 4_700;
 #[cfg(test)]
-pub(crate) const BASE_PROMPT_MAX_TOKENS: usize = 1_000;
+pub(crate) const BASE_PROMPT_MAX_TOKENS: usize = 1_020;
 
 /// Append the resolved execution policy after the cached, profile-independent
 /// prompt so model switches cannot retain another profile's mutation limit.
@@ -2141,7 +2171,7 @@ For local machine state check the shell first, never `list_skills` first. \
 - If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
 - Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors or warnings, then rerun failed or stale checks. Subagent reports are advisory; inspect the workspace yourself.\n\
 - Use native `grep`/`glob` for exact discovery, `rg` through `run_command` for advanced searches, and SocratiCode `codebase_*` for semantic relationships. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
-- Batch independent reads in one response; mutations run in order, control-plane calls first. Wait for results before the next calls.\n\
+- Batch independent reads in one response; mutations run in order, control-plane calls first. Wait for results before the next calls. Give each call a short `summary` for the user.\n\
 - Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; complete results are authoritative, so do not reread them—edit or verify next. For manual previews, use the user's exact port, do not start/probe/fallback, and let them run it after verification; do not start a server merely to inspect a static app.\n\
 - Match neighboring signatures, state/lock, and error conventions.\n\
 - Run focused checks and cover boundaries for complex logic.\n\

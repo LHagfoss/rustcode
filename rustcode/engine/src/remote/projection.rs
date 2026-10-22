@@ -827,7 +827,9 @@ pub fn project_event(
             thought_tokens: live_thought_tokens(state),
             thought_tokens_estimated: live_thought_tokens(state).map(|_| true),
         }],
-        AgentUiEvent::ToolStarted { name, id, detail } => vec![RemoteEvent::ToolStarted {
+        AgentUiEvent::ToolStarted {
+            name, id, detail, ..
+        } => vec![RemoteEvent::ToolStarted {
             tool: RemoteTool {
                 id: id.clone(),
                 name: name.clone(),

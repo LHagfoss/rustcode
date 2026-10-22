@@ -28,6 +28,7 @@ pub use parser::{
     diagnose_failed_tool_call, has_incomplete_actionable_tool_call, parse_tool_call,
     parse_tool_calls,
 };
+pub(crate) use schema::call_summary;
 #[cfg(test)]
 pub use schema::native_tools_schema;
 pub use schema::tool_system_prompt;
@@ -416,6 +417,10 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
 /// duplicate check so they cannot race through the parallel read scheduler.
 pub(crate) fn duplicate_tool_call_key(call: &ToolCall) -> String {
     let mut arguments = call.arguments.clone();
+    // Two calls that differ only in what they say they do are one call.
+    if let Some(object) = arguments.as_object_mut() {
+        object.remove(schema::CALL_SUMMARY_KEY);
+    }
     if call.name == "view_file"
         && let Some(object) = arguments.as_object_mut()
     {

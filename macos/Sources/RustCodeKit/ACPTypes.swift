@@ -333,8 +333,10 @@ public enum SessionUpdate: Equatable, Sendable {
     /// A harness notice, such as why a turn stopped. It is shown as a
     /// toast, never as part of the conversation.
     case notice(String)
-    /// `detail` is the engine's one line on what the call acts on.
-    case toolCall(id: String, title: String, kind: String?, status: ToolStatus?, input: JSONValue?, detail: String? = nil)
+    /// `detail` is the engine's one line on what the call acts on;
+    /// `summary` is what the model said the call does.
+    case toolCall(id: String, title: String, kind: String?, status: ToolStatus?, input: JSONValue?, detail: String? = nil,
+                  summary: String? = nil)
     /// `outputDelta` is output a running call printed since the last update;
     /// `output` is the whole result once it is in.
     case toolCallUpdate(id: String, title: String?, status: ToolStatus?, output: String?, diffs: [FileDiff] = [],
@@ -371,7 +373,8 @@ public enum SessionUpdate: Equatable, Sendable {
                 kind: update["kind"]?.stringValue,
                 status: update["status"]?.stringValue.flatMap(ToolStatus.init(rawValue:)),
                 input: update["rawInput"],
-                detail: update["_meta"]?["rustcode"]?["detail"]?.stringValue)
+                detail: update["_meta"]?["rustcode"]?["detail"]?.stringValue,
+                summary: update["_meta"]?["rustcode"]?["summary"]?.stringValue)
         case "tool_call_update":
             self = .toolCallUpdate(
                 id: update["toolCallId"]?.stringValue ?? "",

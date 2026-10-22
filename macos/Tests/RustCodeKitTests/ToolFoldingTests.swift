@@ -28,15 +28,30 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertTrue(folding.folds.isEmpty)
     }
 
-    func testLowFoldsEachRunOfTwoOrMore() {
+    func testLowFoldsEveryRunALoneCallToo() {
         let list = items("txtsts tt".replacingOccurrences(of: " ", with: ""))
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
         let first = list[0].id
-        XCTAssertEqual(folding.fold(for: first), ToolRunFold(run: first, count: 3, failed: 1, isOpen: false))
+        XCTAssertEqual(folding.fold(for: first),
+                       ToolRunFold(run: first, count: 3, failed: 1, isOpen: false, label: "Run ×3"))
         XCTAssertEqual(folding.hidden, [list[1].id, list[2].id, list[7].id])
-        // A lone call between texts stays as it is.
-        XCTAssertNil(folding.fold(for: list[4].id))
+        // A lone call between texts is still `1 tool call`.
+        XCTAssertEqual(folding.fold(for: list[4].id)?.count, 1)
+        XCTAssertEqual(folding.fold(for: list[4].id)?.label, "Run · cmd 4")
         XCTAssertNotNil(folding.fold(for: list[6].id))
+    }
+
+    func testTheLabelNamesEachToolOnceAndALoneCallsSummary() {
+        var transcript = Transcript()
+        for (index, title) in ["web_search", "web_search", "fetch_url", "view_file", "grep"].enumerated() {
+            transcript.apply(.toolCall(id: "c\(index)", title: title, kind: nil, status: .completed,
+                                       input: .object(["summary": .string("Step \(index)")])))
+        }
+        let calls = transcript.items.compactMap { item -> ToolItem? in
+            if case .tool(let tool) = item.content { tool } else { nil }
+        }
+        XCTAssertEqual(ToolRunFold.label(for: calls), "Web search ×2, Fetch url, Read, 1 more")
+        XCTAssertEqual(ToolRunFold.label(for: calls.prefix(1)), "Web search · Step 0")
     }
 
     func testAnOpenedRunHidesNothing() {

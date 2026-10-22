@@ -77,10 +77,11 @@ final class ProtocolTests: XCTestCase {
     func testToolUpdatesCarryEngineDetailAndLiveOutput() {
         let started = SessionUpdate(notificationParams: ["update": [
             "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "run_command", "status": "in_progress",
-            "_meta": ["rustcode": ["detail": "cargo test"]],
+            "_meta": ["rustcode": ["detail": "cargo test", "summary": "Running the tests"]],
         ]])
-        guard case .toolCall(_, _, _, _, _, let detail) = started else { return XCTFail("expected a tool call") }
+        guard case .toolCall(_, _, _, _, _, let detail, let summary) = started else { return XCTFail("expected a tool call") }
         XCTAssertEqual(detail, "cargo test")
+        XCTAssertEqual(summary, "Running the tests")
         let output = SessionUpdate(notificationParams: ["update": [
             "sessionUpdate": "tool_call_update", "toolCallId": "c1",
             "_meta": ["rustcode": ["outputDelta": "running 3 tests\n"]],

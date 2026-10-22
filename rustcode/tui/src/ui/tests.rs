@@ -1276,6 +1276,7 @@ fn context_and_settings_panels_survive_controller_tool_events_and_completion() {
                 name: "get_time".to_owned(),
                 id: "panel-call".to_owned(),
                 detail: None,
+                summary: None,
             },
             AgentUiEvent::ToolFinished {
                 id: "panel-call".to_owned(),

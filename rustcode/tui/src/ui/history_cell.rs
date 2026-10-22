@@ -1537,26 +1537,38 @@ pub(super) fn render_live_tool_cell_at_refs(
                 detail_style,
             ))]
         };
+        let lead = vec![Span::styled(
+            // A call that has ended keeps its row, with the glyph it will
+            // have once its batch is recorded.
+            format!(
+                "  {} ",
+                match call.finished {
+                    None => super::tool_transcript::LIVE_ROW_GLYPH,
+                    Some(finish) if finish.success => '✓',
+                    Some(_) => '✗',
+                }
+            ),
+            detail_style,
+        )];
+        let label = vec![Span::styled(call.action.clone(), action_style)];
+        let mut target = if target.is_empty() {
+            Vec::new()
+        } else {
+            vec![Span::styled(target, target_style)]
+        };
+        super::tool_transcript::push_call_summary(
+            &lead,
+            &label,
+            &mut target,
+            &state,
+            call.summary.as_deref(),
+            usize::from(width),
+            show_picker,
+        );
         lines.push(super::tool_transcript::fit_tool_row(
-            vec![Span::styled(
-                // A call that has ended keeps its row, with the glyph it
-                // will have once its batch is recorded.
-                format!(
-                    "  {} ",
-                    match call.finished {
-                        None => super::tool_transcript::LIVE_ROW_GLYPH,
-                        Some(finish) if finish.success => '✓',
-                        Some(_) => '✗',
-                    }
-                ),
-                detail_style,
-            )],
-            vec![Span::styled(call.action.clone(), action_style)],
-            if target.is_empty() {
-                Vec::new()
-            } else {
-                vec![Span::styled(target, target_style)]
-            },
+            lead,
+            label,
+            target,
             // A command is recognised by how it starts, a path by how it ends.
             if call.tool_name == "run_command" {
                 super::tool_transcript::TargetKeep::Head

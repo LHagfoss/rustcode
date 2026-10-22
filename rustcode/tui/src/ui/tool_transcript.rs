@@ -798,6 +798,8 @@ pub(super) struct ToolTranscriptEntry {
     /// The target stands in for a command history no longer holds, so it is
     /// drawn as a note instead of as the command.
     pub(super) target_is_note: bool,
+    /// What the model said the call does: its `summary` argument.
+    pub(super) summary: Option<String>,
 }
 
 /// What a command or task row says when its command cannot be recovered.
@@ -1224,6 +1226,7 @@ pub(super) fn tool_transcript_entry(
         }
     }
 
+    let summary = call_summary(&tool_call_arguments(state, message_index, &tool_name));
     Some(ToolTranscriptEntry {
         message_index,
         tool_name,
@@ -1237,6 +1240,7 @@ pub(super) fn tool_transcript_entry(
         earlier: 0,
         earlier_failed: 0,
         target_is_note,
+        summary,
     })
 }
 
@@ -1474,6 +1478,58 @@ impl RowState {
 
 fn spans_width(spans: &[Span<'static>]) -> usize {
     spans.iter().map(|span| span.content.width()).sum()
+}
+
+/// The `summary` a call's arguments carry: one line, at most 120 columns.
+pub(super) fn call_summary(arguments: &serde_json::Value) -> Option<String> {
+    let line = arguments
+        .get("summary")?
+        .as_str()?
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    Some(
+        clip_spans(vec![Span::raw(line.to_owned())], 120, TargetKeep::Head)
+            .into_iter()
+            .map(|span| span.content.into_owned())
+            .collect(),
+    )
+}
+
+/// Put what the model said a call does behind its target, muted, when the
+/// whole summary fits beside the label, target and state. It never squeezes
+/// them: a narrow row keeps naming what the call acts on.
+pub(super) fn push_call_summary(
+    lead: &[Span<'static>],
+    label: &[Span<'static>],
+    target: &mut Vec<Span<'static>>,
+    state: &[RowState],
+    summary: Option<&str>,
+    width: usize,
+    show_picker: bool,
+) {
+    let Some(summary) = summary else {
+        return;
+    };
+    let text = if target.is_empty() {
+        summary.to_owned()
+    } else {
+        format!(" · {summary}")
+    };
+    let used = spans_width(lead)
+        + spans_width(label)
+        + 1
+        + spans_width(target)
+        + state
+            .iter()
+            .map(|part| part.span.content.width())
+            .sum::<usize>();
+    if used + text.width() <= width {
+        target.push(Span::styled(
+            text,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
 }
 
 /// Shorten styled spans to `max_width` columns, marking the cut with `…`.
@@ -1749,6 +1805,15 @@ pub(super) fn tool_child_line(
             ),
         );
     }
+    push_call_summary(
+        &lead,
+        &label,
+        &mut target,
+        &state,
+        entry.summary.as_deref(),
+        usize::from(width),
+        show_picker,
+    );
     vec![fit_tool_row(
         lead,
         label,
@@ -1798,7 +1863,7 @@ pub(super) fn command_child_lines(
         entry.action.clone(),
         get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
     )];
-    let target = if target_is_missing(&entry.target) {
+    let mut target = if target_is_missing(&entry.target) {
         Vec::new()
     } else if entry.target_is_note {
         vec![Span::styled(entry.target.clone(), note_style(show_picker))]
@@ -1821,6 +1886,15 @@ pub(super) fn command_child_lines(
     if show_hint {
         state.push(RowState::optional(expand_hint_span(width, show_picker)));
     }
+    push_call_summary(
+        &lead,
+        &label,
+        &mut target,
+        &state,
+        entry.summary.as_deref(),
+        usize::from(width),
+        show_picker,
+    );
     vec![fit_tool_row(
         lead,
         label,
@@ -2595,6 +2669,7 @@ mod tests {
             earlier: 0,
             earlier_failed: 0,
             target_is_note: false,
+            summary: None,
         };
         assert_eq!(super::tool_status_glyph(&entry), '○');
 
@@ -2830,6 +2905,36 @@ mod tests {
     }
 
     #[test]
+    fn a_call_summary_follows_the_target_only_when_it_fits() {
+        let entry = super::ToolTranscriptEntry {
+            message_index: 0,
+            tool_name: "web_search".to_owned(),
+            action: "Search".to_owned(),
+            target: "lhagfoss".to_owned(),
+            success: true,
+            status: "completed".to_owned(),
+            body: Vec::new(),
+            kind: super::ToolTranscriptKind::Tool,
+            diff_counts: None,
+            earlier: 0,
+            earlier_failed: 0,
+            target_is_note: false,
+            summary: super::call_summary(
+                &serde_json::json!({"summary": "  Finding public profiles\nignored"}),
+            ),
+        };
+        let wide = super::tool_child_line(&entry, true, false, 80, false)[0].to_string();
+        assert!(
+            wide.contains("Search lhagfoss · Finding public profiles"),
+            "{wide:?}"
+        );
+        // Too narrow for the whole summary: the target keeps the room.
+        let narrow = super::tool_child_line(&entry, true, false, 30, false)[0].to_string();
+        assert!(narrow.contains("lhagfoss"), "{narrow:?}");
+        assert!(!narrow.contains("Finding"), "{narrow:?}");
+    }
+
+    #[test]
     fn fitting_generic_tool_title_keeps_hint_inline() {
         let entry = super::ToolTranscriptEntry {
             message_index: 0,
@@ -2846,6 +2951,7 @@ mod tests {
             earlier: 0,
             earlier_failed: 0,
             target_is_note: false,
+            summary: None,
         };
         let title = super::tool_child_line(&entry, true, false, 80, false);
         let body = super::indent_generic_tool_body(
@@ -2883,6 +2989,7 @@ mod tests {
             earlier: 0,
             earlier_failed: 0,
             target_is_note: false,
+            summary: None,
         };
         let width = 24;
         let lines = super::command_child_lines(&entry, true, true, width, false);

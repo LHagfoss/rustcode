@@ -115,13 +115,26 @@ impl AcpEventStream {
     pub(crate) fn updates(&mut self, event: crate::network::AgentUiEvent) -> Vec<SessionUpdate> {
         match event {
             crate::network::AgentUiEvent::TextDelta { text } => self.process_text_delta(text),
-            crate::network::AgentUiEvent::ToolStarted { name, id, detail } => {
+            crate::network::AgentUiEvent::ToolStarted {
+                name,
+                id,
+                detail,
+                summary,
+            } => {
                 let mut updates = self.flush();
                 let mut call = AcpToolCall::new(id, name).status(ToolCallStatus::InProgress);
-                // What the call acts on (a command, a path), so a client can
-                // say what is running before it finishes.
+                // What the call acts on (a command, a path) and what the model
+                // said it does, so a client can say what is running before it
+                // finishes.
+                let mut meta = serde_json::Map::new();
                 if let Some(detail) = detail {
-                    call = call.meta(rustcode_meta(serde_json::json!({ "detail": detail })));
+                    meta.insert("detail".into(), detail.into());
+                }
+                if let Some(summary) = summary {
+                    meta.insert("summary".into(), summary.into());
+                }
+                if !meta.is_empty() {
+                    call = call.meta(rustcode_meta(serde_json::Value::Object(meta)));
                 }
                 updates.push(SessionUpdate::ToolCall(call));
                 updates

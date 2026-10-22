@@ -289,13 +289,19 @@ enum DebugDriver {
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
         case "tools":
-            // A turn's tool calls: three commands (one failed), an edit, two
-            // more commands, then the answer.
+            // A turn's tool calls: a lone search, then three commands (one
+            // failed), an edit, two more commands, then the answer.
+            model.transcript.apply(.toolCall(id: "drive-tool-search", title: "web_search", kind: "fetch",
+                                             status: .completed,
+                                             input: .object(["query": .string("lhagfoss"),
+                                                             "summary": .string("Finding public profiles")])))
+            model.transcript.apply(.agentText("Found a profile; checking the build next."))
             for (index, kind) in "ttxett".enumerated() {
                 let id = "drive-tool-\(index)"
                 model.transcript.apply(.toolCall(id: id, title: "run_command", kind: "execute",
                                                  status: kind == "x" ? .failed : .completed, input: nil,
-                                                 detail: "cargo test --package step-\(index)"))
+                                                 detail: "cargo test --package step-\(index)",
+                                                 summary: "Testing step \(index)"))
                 if kind == "e" {
                     model.transcript.apply(.toolCallUpdate(id: id, title: "Edit", status: .completed, output: nil,
                                                            diffs: [FileDiff(path: "/tmp/lib.rs", oldText: "let a = 1;\n", newText: "let a = 2;\n")]))

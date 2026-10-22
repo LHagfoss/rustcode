@@ -2325,6 +2325,7 @@ mod tests {
 
         let tool_start = stream.updates(crate::network::AgentUiEvent::ToolStarted {
             detail: None,
+            summary: None,
             name: "get_time".to_string(),
             id: "call-1".to_string(),
         });
@@ -2419,6 +2420,7 @@ mod tests {
         let mut stream = AcpEventStream::new();
         let started = stream.updates(crate::network::AgentUiEvent::ToolStarted {
             detail: Some("cargo test".to_string()),
+            summary: Some("Running the tests".to_string()),
             name: "run_command".to_string(),
             id: "call-1".to_string(),
         });
@@ -2428,6 +2430,10 @@ mod tests {
         assert_eq!(
             call.meta.as_ref().unwrap()["rustcode"]["detail"],
             "cargo test"
+        );
+        assert_eq!(
+            call.meta.as_ref().unwrap()["rustcode"]["summary"],
+            "Running the tests"
         );
 
         let output = stream.updates(crate::network::AgentUiEvent::ToolOutput {
@@ -2450,6 +2456,7 @@ mod tests {
         let mut stream = AcpEventStream::new();
         let started = stream.updates(crate::network::AgentUiEvent::ToolStarted {
             detail: None,
+            summary: None,
             name: "grep".to_string(),
             id: "call-1".to_string(),
         });
