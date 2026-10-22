@@ -93,7 +93,7 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
     };
     let name_lower = name.to_ascii_lowercase();
     let (action, target) = match name_lower.as_str() {
-        "search_web" | "searchweb" => ("Search", "query".to_owned()),
+        "search_web" | "searchweb" => ("Search", value(&["query"], "?")),
         "read_url" | "readurl" => ("Fetch", value(&["url"], "?")),
         "run_command" | "runcommand" | "execute_command" | "bash" => (
             rustcode_command::shell_label(),
@@ -681,6 +681,24 @@ mod tests {
         assert_eq!(activity.kind, ActivityKind::RunningTool);
         assert_eq!(activity.label, "Running");
         assert_eq!(activity.detail.as_deref(), Some("Bash cargo test --lib"));
+    }
+
+    #[test]
+    fn web_search_summary_shows_the_query() {
+        let (action, target) = summarize_tool_call(
+            "search_web",
+            &serde_json::json!({"query": "swiftui scroll anchoring"}),
+        );
+        assert_eq!(action, "Search");
+        assert_eq!(target, "swiftui scroll anchoring");
+        assert_eq!(
+            crate::network::ui_adapter::tool_display_detail(
+                "search_web",
+                &serde_json::json!({"query": "swiftui scroll anchoring"}),
+            )
+            .as_deref(),
+            Some("swiftui scroll anchoring")
+        );
     }
 
     #[test]
