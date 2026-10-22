@@ -288,6 +288,25 @@ enum DebugDriver {
             }
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
+        case "agents":
+            // `agents [open]`: two subagents above the composer; `open` shows
+            // the first one's panel.
+            let now = Date().timeIntervalSince1970 * 1000
+            let agents = SubagentInfo.list(from: ["agents": [
+                ["id": 1, "name": "agent-1", "task": "Find where the ACP prompt arms delegation", "model": "gpt-6-luna",
+                 "agentType": "explorer", "status": "running", "activeTurn": true, "messageCount": 3,
+                 "startedAtMs": .number(now - 42_000)],
+                ["id": 2, "name": "agent-2", "task": "Run the Swift tests", "agentType": "worker", "status": "completed",
+                 "writeAccess": true, "messageCount": 2, "startedAtMs": .number(now - 125_000),
+                 "finishedAtMs": .number(now - 20_000), "completion": "All 214 tests pass."],
+            ]])
+            let transcript = SubagentInfo.transcript(from: ["updates": [
+                ["sessionUpdate": "user_message_chunk", "content": ["type": "text", "text": "Find where the ACP prompt arms delegation"]],
+                ["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": "Looking at `acp/prompt.rs` and `acp/commands.rs`."]],
+                ["sessionUpdate": "tool_call", "toolCallId": "t1", "title": "search_files", "status": "completed",
+                 "rawInput": ["pattern": "begin_task_delegation"]],
+            ]])
+            model.debugAgents(agents, viewing: parts.count > 1 && parts[1] == "open" ? transcript : nil)
         case "panel":
             // `panel model|effort|add|none`: open a composer panel as its chip does.
             model.composerPanel = ["model": .model, "effort": .effort, "add": .add][parts[1]]

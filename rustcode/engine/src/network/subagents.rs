@@ -821,6 +821,56 @@ async fn project_subagent_completion(
     );
 }
 
+/// Cancel the child `id` and its descendants, as `cancel_agent` and the
+/// macOS app's agent panel do. An interrupted child that is no longer running
+/// is marked cancelled at once.
+pub(crate) async fn cancel_subagent_tree(
+    state: &Arc<Mutex<AppState>>,
+    id: u32,
+) -> Result<String, String> {
+    let supervisor = state.lock().await.subagent_supervisor.clone();
+    if !supervisor.is_active(crate::app::SubagentId::from_raw(id)) {
+        let mut s = state.lock().await;
+        if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == id)
+            && agent.status == crate::app::SubAgentStatus::Interrupted
+        {
+            agent.completion = Some("error: cancelled".into());
+            let _ = crate::app::SubagentController.set_status(
+                &mut s,
+                crate::app::SubagentId::from_raw(id),
+                crate::app::SubAgentStatus::Cancelled,
+            );
+            crate::app::subagent_persistence::save(&s);
+            return Ok(format!("subagent {id} cancelled"));
+        }
+    }
+    let descendants = {
+        let s = state.lock().await;
+        let mut ids = vec![id];
+        for _ in 0..3 {
+            for agent in &s.subagents {
+                if agent.parent_id.is_some_and(|parent| ids.contains(&parent))
+                    && !ids.contains(&agent.id)
+                {
+                    ids.push(agent.id);
+                }
+            }
+        }
+        ids
+    };
+    for child in descendants.iter().skip(1) {
+        let _ = supervisor.cancel(crate::app::SubagentId::from_raw(*child));
+    }
+    supervisor
+        .cancel(crate::app::SubagentId::from_raw(id))
+        .map(|()| {
+            format!(
+                "cancellation requested for subagent {id}; use wait_agent for its terminal result"
+            )
+        })
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) fn launch_subagent_turn(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -1642,50 +1692,13 @@ async fn handle_agent_tool_for_parent(
                     "error: missing or invalid 'id' argument".to_string(),
                 );
             };
-            let supervisor = state.lock().await.subagent_supervisor.clone();
             if parent_id == Some(id) {
                 return crate::tools::ToolExecutionOutput::failure(
                     "error: an agent cannot cancel itself".into(),
                 );
             }
-            if !supervisor.is_active(crate::app::SubagentId::from_raw(id)) {
-                let mut s = state.lock().await;
-                if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == id)
-                    && agent.status == crate::app::SubAgentStatus::Interrupted
-                {
-                    agent.completion = Some("error: cancelled".into());
-                    let _ = crate::app::SubagentController.set_status(
-                        &mut s,
-                        crate::app::SubagentId::from_raw(id),
-                        crate::app::SubAgentStatus::Cancelled,
-                    );
-                    crate::app::subagent_persistence::save(&s);
-                    return crate::tools::ToolExecutionOutput::success(format!(
-                        "subagent {id} cancelled"
-                    ));
-                }
-            }
-            let descendants = {
-                let s = state.lock().await;
-                let mut ids = vec![id];
-                for _ in 0..3 {
-                    for agent in &s.subagents {
-                        if agent.parent_id.is_some_and(|parent| ids.contains(&parent))
-                            && !ids.contains(&agent.id)
-                        {
-                            ids.push(agent.id);
-                        }
-                    }
-                }
-                ids
-            };
-            for child in descendants.iter().skip(1) {
-                let _ = supervisor.cancel(crate::app::SubagentId::from_raw(*child));
-            }
-            match supervisor.cancel(crate::app::SubagentId::from_raw(id)) {
-                Ok(()) => crate::tools::ToolExecutionOutput::success(format!(
-                    "cancellation requested for subagent {id}; use wait_agent for its terminal result"
-                )),
+            match cancel_subagent_tree(state, id).await {
+                Ok(message) => crate::tools::ToolExecutionOutput::success(message),
                 Err(error) => crate::tools::ToolExecutionOutput::failure(format!("error: {error}")),
             }
         }

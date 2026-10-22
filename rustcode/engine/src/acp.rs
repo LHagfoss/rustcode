@@ -1,3 +1,4 @@
+mod agents;
 mod capabilities;
 mod commands;
 mod config;
@@ -88,6 +89,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "preview": crate::preview::PREVIEW_CAPABILITY_VERSION,
                 "remote": remote::REMOTE_CAPABILITY_VERSION,
                 "steer": steer::STEER_CAPABILITY_VERSION,
+                "agents": agents::AGENTS_CAPABILITY_VERSION,
             }),
         )]))
 }
@@ -726,7 +728,24 @@ struct AcpServer {
     remote: remote::RemoteManager,
 }
 
+fn unknown_session(session_id: &str) -> agent_client_protocol::Error {
+    agent_client_protocol::Error::invalid_params()
+        .data(format!("unknown ACP session: {session_id}"))
+}
+
 impl AcpServer {
+    /// An open session's state and working directory.
+    async fn session_handle(
+        &self,
+        session_id: &str,
+    ) -> Option<(Arc<Mutex<crate::app::AppState>>, std::path::PathBuf)> {
+        self.sessions
+            .lock()
+            .await
+            .get(session_id)
+            .map(|session| (Arc::clone(&session.state), session.cwd.clone()))
+    }
+
     fn new(auto_approve: bool) -> Result<Self, agent_client_protocol::Error> {
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -910,6 +929,22 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: presence::SetPresenceRequest, responder, _connection| {
                     responder.respond(server.presence.set_enabled(request)?)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: agents::AgentsRequest, responder, _connection| {
+                    let Some((state, cwd)) = server.session_handle(&request.session_id).await
+                    else {
+                        return responder.respond_with_error(unknown_session(&request.session_id));
+                    };
+                    match agents::answer(&state, &cwd, &server.client, request.action).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder.respond_with_error(error),
+                    }
                 }
             },
             agent_client_protocol::on_receive_request!(),
