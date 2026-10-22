@@ -348,6 +348,7 @@ extension SessionSidebar {
                    isSelected: session.id == model.selectedSession,
                    needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
                    isRunning: model.runningSessions.contains(session.id),
+                   hasUnseenReply: model.unseenReplies.contains(session.id),
                    searchSnippet: model.searchSnippet(for: session),
                    searchQuery: model.sessionFilter.trimmingCharacters(in: .whitespaces),
                    isHovered: hoveredSession == session.id,
@@ -546,6 +547,8 @@ struct SessionRow: View {
     let isSelected: Bool
     let needsAnswer: Bool
     let isRunning: Bool
+    /// A turn finished while another chat was on screen.
+    var hasUnseenReply = false
     /// Set for a chat found by its contents: the text around the match.
     var searchSnippet: String?
     var searchQuery = ""
@@ -555,7 +558,8 @@ struct SessionRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                indicator
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.title ?? "New chat")
                         .lineLimit(1)
@@ -591,16 +595,9 @@ struct SessionRow: View {
                         .foregroundStyle(.secondary)
                     }
                 }
-                Spacer(minLength: 4)
-                if needsAnswer {
-                    Image(systemName: "questionmark.bubble.fill")
-                        .foregroundStyle(Color.attention)
-                        .help("Waiting for your answer")
-                } else if isRunning {
-                    RowSpinner()
-                }
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 5)
+            .padding(.trailing, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(rowFill, in: .rect(cornerRadius: 9))
@@ -615,6 +612,29 @@ struct SessionRow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
             onHover(false)
         }
+    }
+
+    /// The chat's state on the leading edge, in a slot of its own width so
+    /// titles line up whether a row shows one or not.
+    private var indicator: some View {
+        ZStack {
+            Color.clear
+            if needsAnswer {
+                Image(systemName: "questionmark.bubble.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.attention)
+                    .help("Waiting for your answer")
+            } else if isRunning {
+                RowSpinner()
+            } else if hasUnseenReply {
+                Circle()
+                    .fill(.blue)
+                    .frame(width: 7, height: 7)
+                    .help("New reply")
+                    .accessibilityLabel("New reply")
+            }
+        }
+        .frame(width: 16, height: 16)
     }
 
     /// The snippet with every occurrence of the query emphasized.
