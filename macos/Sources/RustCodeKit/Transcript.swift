@@ -10,6 +10,8 @@ public struct ToolItem: Equatable, Sendable {
     public var output: String?
     /// One line saying what the call acted on, taken from its arguments.
     public var inputDetail: String?
+    /// What the model said the call does (its `summary` argument).
+    public var summary: String?
     /// What the call changed, one entry per edited file.
     public var changes: [FileChange] = []
 
@@ -143,18 +145,21 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.thinking(text), at: now)
             }
-        case .toolCall(let id, let title, let kind, let status, let input, let engineDetail):
+        case .toolCall(let id, let title, let kind, let status, let input, let engineDetail, let engineSummary):
             let rendered = input.map { $0.prettyPrinted() }
             let detail = ToolPresentation.detail(input: input, output: nil) ?? engineDetail
+            let summary = engineSummary.flatMap(ToolPresentation.summary) ?? ToolPresentation.summary(input: input)
             if let index = toolIndex(id), case .tool(var tool) = items[index].content {
                 tool.title = title
                 tool.kind = kind ?? tool.kind
                 tool.status = status ?? tool.status
                 tool.input = rendered ?? tool.input
                 tool.inputDetail = detail ?? tool.inputDetail
+                tool.summary = summary ?? tool.summary
                 items[index].content = .tool(tool)
             } else {
-                append(.tool(ToolItem(callId: id, title: title, kind: kind, status: status, input: rendered, inputDetail: detail)), at: now)
+                append(.tool(ToolItem(callId: id, title: title, kind: kind, status: status, input: rendered,
+                                      inputDetail: detail, summary: summary)), at: now)
             }
         case .toolCallUpdate(let id, let title, let status, let output, let diffs, let outputDelta):
             let changes = FileChange.group(diffs)

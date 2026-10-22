@@ -29,6 +29,8 @@ pub enum AgentUiEvent {
         name: String,
         id: String,
         detail: Option<String>,
+        /// What the model said the call does, for the row's subtitle.
+        summary: Option<String>,
     },
     /// Output a running call has printed since its last `ToolOutput`, so a
     /// client can show a command's progress before it finishes.
@@ -156,6 +158,7 @@ pub fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
         AgentEvent::TextDelta(text) => Some(AgentUiEvent::TextDelta { text }),
         AgentEvent::ToolCall(call) => Some(AgentUiEvent::ToolStarted {
             detail: tool_display_detail(&call.name, &call.arguments),
+            summary: crate::tools::call_summary(&call.arguments).map(str::to_owned),
             id: call
                 .call_id
                 .clone()
@@ -412,6 +415,7 @@ async fn publish_snapshot_with_mode(
                 id: id.clone(),
                 name: call.tool_name.clone(),
                 detail: live_tool_display_detail(call),
+                summary: call.summary.clone(),
             });
         }
     }
@@ -468,6 +472,7 @@ async fn publish_snapshot_with_mode(
                     sender.send(AgentUiEvent::ToolStarted {
                         id,
                         detail: tool_display_detail(&call.name, &call.arguments),
+                        summary: crate::tools::call_summary(&call.arguments).map(str::to_owned),
                         name: call.name,
                     });
                 }
@@ -486,6 +491,7 @@ async fn publish_snapshot_with_mode(
                     detail: result.metadata.command.as_ref().and_then(|command| {
                         tool_display_detail("run_command", &serde_json::json!({"command": command}))
                     }),
+                    summary: None,
                 });
             }
             sender.send(event);

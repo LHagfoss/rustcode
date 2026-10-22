@@ -3,8 +3,8 @@ import Foundation
 /// How much of a turn's tool calls the chat shows, as the terminal's
 /// `verbosity` setting does.
 public enum ToolVerbosity: String, CaseIterable, Identifiable, Sendable {
-    /// A run of calls folds into one `N tool calls` row; while tools run,
-    /// only the current call shows.
+    /// Calls fold into one `N tool calls` row, a lone call too; while tools
+    /// run, only the current call shows.
     case low
     /// Every call is its own closed card.
     case high
@@ -47,6 +47,27 @@ public struct ToolRunFold: Equatable, Sendable {
     public var count: Int
     public var failed: Int
     public var isOpen: Bool
+    /// What the run did, after its count: the tools it used, or what a lone
+    /// call said it does.
+    public var label: String? = nil
+
+    /// `Web search ×3, Fetch`: each tool once, in the order first used.
+    static func label(for calls: some Collection<ToolItem>) -> String? {
+        if calls.count == 1, let call = calls.first {
+            return [call.displayTitle, call.summary ?? call.detail].compactMap { $0 }.joined(separator: " · ")
+        }
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for call in calls {
+            if counts[call.displayTitle] == nil { order.append(call.displayTitle) }
+            counts[call.displayTitle, default: 0] += 1
+        }
+        let shown = order.prefix(3).map { title in
+            counts[title, default: 1] > 1 ? "\(title) ×\(counts[title, default: 1])" : title
+        }
+        let rest = order.count - shown.count
+        return (shown + (rest > 0 ? ["\(rest) more"] : [])).joined(separator: ", ")
+    }
 }
 
 /// Which tool cards a chat shows at a verbosity: rows stay one per item, so
@@ -69,11 +90,12 @@ public struct ToolFolding: Equatable, Sendable {
             defer { run = []; ids = [] }
             let live = atEnd && running
             let count = live ? run.count - 1 : run.count
-            guard count >= (live ? 1 : 2), let first = ids.first else { return }
+            guard count >= 1, let first = ids.first else { return }
             let isOpen = open.contains(first)
+            let calls = run.prefix(count)
             folds[first] = ToolRunFold(run: first, count: count,
-                                       failed: run.prefix(count).filter { $0.status == .failed }.count,
-                                       isOpen: isOpen)
+                                       failed: calls.filter { $0.status == .failed }.count,
+                                       isOpen: isOpen, label: ToolRunFold.label(for: calls))
             if !isOpen { hidden.formUnion(ids.prefix(count).dropFirst()) }
         }
         for item in items {

@@ -717,6 +717,8 @@ pub struct LiveToolCall {
     pub tool_name: String,
     pub action: String,
     pub target: String,
+    /// What the model said the call does (its `summary` argument).
+    pub summary: Option<String>,
     /// Command working directory supplied to execution, if available.
     pub cwd: Option<String>,
     pub execution_started: bool,
@@ -898,6 +900,7 @@ impl LiveToolCall {
             tool_name: tool_name.into(),
             action: action.into(),
             target: target.into(),
+            summary: None,
             cwd: None,
             execution_started: true,
             finished: None,

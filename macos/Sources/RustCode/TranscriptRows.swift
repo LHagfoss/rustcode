@@ -401,10 +401,20 @@ private struct ToolRow: View {
         HStack(spacing: 10) {
             statusIcon.frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
-                Text(tool.displayTitle)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(tool.displayTitle)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    // What the model said the call does.
+                    if let summary = tool.summary {
+                        Text(summary)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
                 if let detail = detailLine {
                     Text(detail)
                         .font(.caption.monospaced())
@@ -758,8 +768,8 @@ extension ToolVerbosity {
     }()
 }
 
-/// The row a folded run of tool calls shows: how many and how many failed.
-/// A click opens the run to its cards, and folds it again.
+/// The row a folded run of tool calls shows: how many, how many failed, and
+/// what they were. A click opens the run to its cards, and folds it again.
 private struct ToolRunSummary: View {
     let fold: ToolRunFold
     @Environment(\.toggleToolRun) private var toggle
@@ -775,6 +785,13 @@ private struct ToolRunSummary: View {
                 Text("\(fold.count) tool call\(fold.count == 1 ? "" : "s")").font(.callout.weight(.medium))
                 if fold.failed > 0 {
                     Text("· \(fold.failed) failed").font(.callout).foregroundStyle(.red)
+                }
+                if let label = fold.label {
+                    Text("· \(label)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
                 Spacer(minLength: 0)
             }

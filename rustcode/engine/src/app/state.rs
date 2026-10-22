@@ -1059,6 +1059,7 @@ impl AppState {
             .get("cwd")
             .and_then(serde_json::Value::as_str)
             .map(|cwd| rustcode_core::activity::sanitize_tool_parameter(cwd, 160));
+        let summary = live_call_summary(arguments);
         if let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
             .iter_mut()
             .find(|call| {
@@ -1077,6 +1078,7 @@ impl AppState {
             call.action = action;
             call.target = target;
             call.cwd = cwd;
+            call.summary = summary;
             call.execution_started = true;
             call.started_at = std::time::Instant::now();
             let key = call.key.clone();
@@ -1098,6 +1100,7 @@ impl AppState {
             target,
         );
         call.cwd = cwd;
+        call.summary = summary;
         Arc::make_mut(&mut self.live_tool_calls).push(call);
         self.request_redraw();
         key
@@ -1120,6 +1123,7 @@ impl AppState {
             tool_name,
             action,
             target,
+            live_call_summary(arguments),
         );
     }
 
@@ -1140,7 +1144,13 @@ impl AppState {
             target = crate::tools::mcp_tool_display_name(tool_name)
                 .unwrap_or_else(|| tool_name.to_owned());
         }
-        self.update_speculative_live_tool_call_with_summary(None, tool_name, action, target);
+        self.update_speculative_live_tool_call_with_summary(
+            None,
+            tool_name,
+            action,
+            target,
+            live_call_summary(arguments),
+        );
     }
 
     fn update_speculative_live_tool_call_with_summary(
@@ -1149,6 +1159,7 @@ impl AppState {
         tool_name: &str,
         action: String,
         target: String,
+        summary: Option<String>,
     ) {
         if let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
             .iter_mut()
@@ -1167,6 +1178,8 @@ impl AppState {
             call.tool_name = tool_name.to_owned();
             call.action = action;
             call.target = target;
+            // A streamed `summary` names the call before it runs.
+            call.summary = summary;
             self.request_redraw();
             return;
         }
@@ -1185,6 +1198,7 @@ impl AppState {
             target,
         );
         call.execution_started = false;
+        call.summary = summary;
         Arc::make_mut(&mut self.live_tool_calls).push(call);
         self.request_redraw();
     }
@@ -2770,3 +2784,9 @@ mod steering_tests;
 #[cfg(test)]
 #[path = "state/turn_timing_tests.rs"]
 mod turn_timing_tests;
+
+/// The `summary` a call's arguments carry, bounded for a one-line row.
+fn live_call_summary(arguments: &serde_json::Value) -> Option<String> {
+    crate::tools::call_summary(arguments)
+        .map(|summary| rustcode_core::activity::sanitize_tool_parameter(summary, 120))
+}

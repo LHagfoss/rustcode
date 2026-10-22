@@ -224,7 +224,9 @@ pub(crate) fn from_agent_ui_event(
         AgentUiEvent::TextDelta { text } => {
             vec![ControllerUpdate::Turn(TurnUpdate::TextDelta(text))]
         }
-        AgentUiEvent::ToolStarted { id, name, detail } => {
+        AgentUiEvent::ToolStarted {
+            id, name, detail, ..
+        } => {
             vec![ControllerUpdate::Turn(TurnUpdate::ToolStarted {
                 id,
                 name,
@@ -460,6 +462,7 @@ mod tests {
             id: "call-9".to_owned(),
             name: "read_file".to_owned(),
             detail: Some("src/main.rs".to_owned()),
+            summary: None,
         };
         let public = from_agent_ui_event(12, event)
             .into_iter()

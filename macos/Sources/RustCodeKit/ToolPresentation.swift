@@ -25,6 +25,16 @@ public enum ToolPresentation {
         return nil
     }
 
+    /// What the model said a call does: the `summary` every built-in tool
+    /// takes, on one line.
+    public static func summary(input: JSONValue?) -> String? {
+        input?["summary"]?.stringValue.flatMap(summary)
+    }
+
+    static func summary(_ text: String) -> String? {
+        firstLine(text).map(clipped)
+    }
+
     private static let detailKeys = ["command", "path", "file_path", "pattern", "query", "url", "task", "name", "description"]
 
     private static func firstLine(_ text: String) -> String? {
