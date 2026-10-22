@@ -212,9 +212,9 @@ fn display_index_to_byte(input: &str, index: usize) -> usize {
     input.len()
 }
 
-/// Narrowest composer that is still drawn inside a frame. Below it the border
-/// and the settings row cost more than they give, so the composer falls back
-/// to the unframed layout and the footer carries the session settings again.
+/// Narrowest composer that is still drawn inside a frame. Below it the band's
+/// indent costs more than it gives, so the composer falls back to the
+/// unframed layout.
 pub(crate) const COMPOSER_FRAME_MIN_WIDTH: u16 = 24;
 
 /// Whether a composer `width` columns wide is drawn inside the rounded frame.
@@ -230,23 +230,17 @@ pub(super) fn composer_frame_shown(state: &RenderSnapshot, width: u16) -> bool {
     panel_composer(state).is_none() && composer_framed(width)
 }
 
-/// Whether layout reserves the framed composer's rows. Slash-command panels
-/// hand the composer row back to the panel, as they always did; an approval
-/// or question keeps the framed geometry so the chat above does not shift
-/// when the pane opens over it.
+/// Whether layout reserves the framed composer's columns. Slash-command
+/// panels hand the composer row back to the panel, as they always did; an
+/// approval or question keeps the framed geometry so the chat above does not
+/// shift when the pane opens over it.
 fn composer_frame_reserved(state: &RenderSnapshot, width: u16) -> bool {
     composer_framed(width) && !state.user_overlay_open()
 }
 
-/// Rows the composer adds around its text: the top border, the settings row
-/// and the bottom border when framed; one pad row above and below otherwise.
-pub(super) fn composer_chrome_rows(state: &RenderSnapshot, width: u16) -> u16 {
-    if composer_frame_reserved(state, width) {
-        3
-    } else {
-        2
-    }
-}
+/// Rows the composer adds around its text: one pad row above and below, the
+/// band's edges when framed. The session settings live in the footer (#2276).
+pub(super) const COMPOSER_CHROME_ROWS: u16 = 2;
 
 /// Width the input text wraps at inside a composer `width` columns wide.
 pub(super) fn composer_text_width(state: &RenderSnapshot, width: u16) -> u16 {
@@ -257,16 +251,16 @@ pub(super) fn composer_text_width(state: &RenderSnapshot, width: u16) -> u16 {
     }
 }
 
-/// The text rect of a framed composer: inside the left border and one pad
-/// column, up to (not including) the right border. The wrap pass keeps the
-/// rect's last column free for the cursor (#2004), which doubles as the pad
-/// before the right border. The settings row and both borders are excluded.
+/// The text rect of a framed composer: two pad columns in, up to (not
+/// including) the band's last column. The wrap pass keeps the rect's last
+/// column free for the cursor (#2004), which doubles as the right pad. The
+/// band's top and bottom rows are excluded.
 fn framed_text_rect(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     ratatui::layout::Rect::new(
         area.x.saturating_add(2),
         area.y.saturating_add(1),
         area.width.saturating_sub(3),
-        area.height.saturating_sub(3),
+        area.height.saturating_sub(2),
     )
 }
 
@@ -283,17 +277,6 @@ pub(crate) fn composer_text_rect(area: ratatui::layout::Rect) -> ratatui::layout
     }
 }
 
-/// The settings row on the last line of a framed composer `area`. It is the
-/// band's bottom edge, with the input's gap row directly above it (#2246).
-pub(super) fn composer_settings_rect(area: ratatui::layout::Rect) -> Option<ratatui::layout::Rect> {
-    (composer_framed(area.width) && area.height >= 3).then(|| {
-        let text = framed_text_rect(area);
-        ratatui::layout::Rect::new(text.x, area.bottom() - 1, text.width, 1)
-    })
-}
-
-/// The permission posture: the one setting that changes what Enter does.
-/// Plan mode wins over auto-approval, so the two never show together.
 /// The agent mode, spelled out: `ask` described the approval posture, not what
 /// Enter would let the model do (#2246).
 pub(super) fn mode_token(state: &RenderSnapshot) -> &'static str {
@@ -325,117 +308,6 @@ pub(super) fn session_model_label(state: &RenderSnapshot) -> String {
         Some(effort) => format!("{} {effort}", state.model_name()),
         None => state.model_name().to_string(),
     }
-}
-
-/// What the settings row holds at a given text width, posture first. The
-/// posture is dropped before the model, and the model before nothing at all.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ComposerSettings {
-    pub(super) mode: Option<&'static str>,
-    pub(super) approval: Option<&'static str>,
-    pub(super) model: Option<String>,
-}
-
-impl ComposerSettings {
-    /// Width of the clickable posture label: the mode, and how tool actions
-    /// are handled when it fits beside it.
-    fn posture_width(&self) -> Option<u16> {
-        let mode = self.mode?;
-        let width = mode.width()
-            + self
-                .approval
-                .map_or(0, |approval| HINT_SEPARATOR.width() + approval.width());
-        u16::try_from(width).ok()
-    }
-}
-
-/// Indent of the settings row, aligned with the text after the `› ` prompt.
-const SETTINGS_INDENT: u16 = 2;
-
-pub(super) fn composer_settings(state: &RenderSnapshot, text_width: u16) -> ComposerSettings {
-    // The last column stays free, as on every input row.
-    let available = usize::from(text_width.saturating_sub(SETTINGS_INDENT + 1));
-    let mode = mode_token(state);
-    let approval = approval_token(state);
-    let model = session_model_label(state);
-    let posture = mode.width() + HINT_SEPARATOR.width() + approval.width();
-    if posture + HINT_SEPARATOR.width() + model.width() <= available {
-        ComposerSettings {
-            mode: Some(mode),
-            approval: Some(approval),
-            model: Some(model),
-        }
-    } else if model.width() <= available {
-        ComposerSettings {
-            mode: None,
-            approval: None,
-            model: Some(model),
-        }
-    } else {
-        ComposerSettings {
-            mode: None,
-            approval: None,
-            model: None,
-        }
-    }
-}
-
-/// Where the posture token is painted inside the composer `area`, so the
-/// pointer can hover and click it to cycle the posture.
-pub(super) fn composer_posture_rect(
-    state: &RenderSnapshot,
-    area: ratatui::layout::Rect,
-) -> Option<ratatui::layout::Rect> {
-    let row = composer_settings_rect(area)?;
-    let posture = composer_settings(state, row.width).posture_width()?;
-    Some(ratatui::layout::Rect::new(
-        row.x + SETTINGS_INDENT,
-        row.y,
-        posture,
-        1,
-    ))
-}
-
-fn render_composer_settings(f: &mut Frame, row: ratatui::layout::Rect, state: &RenderSnapshot) {
-    let settings = composer_settings(state, row.width);
-    let muted = get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false);
-    let mut spans = vec![Span::styled(
-        " ".repeat(usize::from(SETTINGS_INDENT)),
-        muted,
-    )];
-    if let Some(mode) = settings.mode {
-        // Plan mode leads in the primary colour; a Build turn is the default
-        // and stays quiet. How tool actions are handled is always spelled
-        // out beside it, and the risky posture is the loud one (#2246).
-        let mode_style = match mode {
-            "Plan" => get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, false),
-            _ => get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), false),
-        };
-        spans.push(Span::styled(mode, mode_style));
-        if let Some(approval) = settings.approval {
-            spans.push(Span::styled(HINT_SEPARATOR, muted));
-            let approval_style = match approval {
-                "auto-approve" => {
-                    get_themed_style(Color::Yellow, COLOR_PANEL(), Modifier::BOLD, false)
-                }
-                "read-only" => {
-                    get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::empty(), false)
-                }
-                _ => get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), false),
-            };
-            spans.push(Span::styled(approval, approval_style));
-        }
-        if settings.model.is_some() {
-            spans.push(Span::styled(HINT_SEPARATOR, muted));
-        }
-    }
-    if let Some(model) = settings.model {
-        spans.push(Span::styled(model, muted));
-    }
-    f.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(COLOR_PANEL())),
-        row,
-    );
 }
 
 #[cfg(test)]
@@ -494,25 +366,16 @@ mod mouse_tests {
     }
 
     #[test]
-    fn framed_text_rect_excludes_the_settings_row_and_leaves_a_gap() {
+    fn framed_text_rect_leaves_one_band_row_above_and_below() {
         let area = ratatui::layout::Rect::new(3, 4, 30, 6);
         assert!(composer_framed(area.width));
         // Two pad columns on the left, up to the free last column. The band's
-        // top row and the gap row above the settings row are not text, and the
-        // settings row sits on the band's bottom edge (#2246).
+        // top and bottom rows are not text (#2246, #2276).
         assert_eq!(
             composer_text_rect(area),
-            ratatui::layout::Rect::new(5, 5, 27, 3)
+            ratatui::layout::Rect::new(5, 5, 27, 4)
         );
-        assert_eq!(
-            composer_settings_rect(area),
-            Some(ratatui::layout::Rect::new(5, 9, 27, 1))
-        );
-        assert_eq!(
-            composer_text_rect(area).bottom() + 1,
-            composer_settings_rect(area).expect("settings row").y,
-            "one blank band row separates the input from the settings row"
-        );
+        assert_eq!(composer_text_rect(area).bottom() + 1, area.bottom());
         // Below the fallback width the composer is unframed, as before.
         let narrow = ratatui::layout::Rect::new(0, 0, COMPOSER_FRAME_MIN_WIDTH - 1, 4);
         assert!(!composer_framed(narrow.width));
@@ -520,7 +383,6 @@ mod mouse_tests {
             composer_text_rect(narrow),
             ratatui::layout::Rect::new(0, 1, COMPOSER_FRAME_MIN_WIDTH - 1, 2)
         );
-        assert_eq!(composer_settings_rect(narrow), None);
     }
 
     #[test]
@@ -1329,12 +1191,9 @@ pub(crate) fn render_input(
     );
     let framed = composer_frame_shown(state, area.width);
     let (input_margin, input_inner) = if framed {
-        // No outline: the composer is a panel-coloured band that runs above and
-        // below the input, and the settings row sits on its bottom edge with a
-        // blank band row between it and the text (#2246).
-        if let Some(row) = composer_settings_rect(area) {
-            render_composer_settings(f, row, state);
-        }
+        // No outline: the composer is a panel-coloured band with one blank
+        // row above and below the input (#2246). The session settings sit in
+        // the footer (#2276).
         (
             Margin {
                 vertical: 1,
@@ -1544,26 +1403,28 @@ pub(super) fn footer_location(state: &RenderSnapshot) -> String {
     format!("{branch} · {path}")
 }
 
-/// Standing session settings for the footer when the composer cannot carry
-/// them (it is unframed, or replaced by an approval or question pane): the
-/// model with its reasoning effort, then a non-default posture. The default
-/// `Build · ask` is only spelled out inside the framed composer, but Plan mode
-/// always shows, since it changes what Enter lets the model do (#2246).
-pub(super) fn footer_session_badges(state: &RenderSnapshot) -> Vec<String> {
-    let mut badges = vec![session_model_label(state)];
-    let approval = approval_token(state);
-    if state.agent_mode() == rustcode::controller::AgentMode::Plan {
-        badges.push(format!("{} · {approval}", mode_token(state)));
-    } else if approval != "ask" {
-        badges.push(approval.to_owned());
-    }
-    badges
+/// The permission posture: the agent mode and how tool actions are handled.
+/// It changes what Enter lets the model do, so it leads the footer.
+pub(super) fn posture_label(state: &RenderSnapshot) -> String {
+    format!(
+        "{}{HINT_SEPARATOR}{}",
+        mode_token(state),
+        approval_token(state)
+    )
 }
 
-/// Paint the footer. Returns where the task counter was drawn, so the pointer
-/// can hover and click it. `settings_in_composer` is true when the framed
-/// composer's settings row already shows the model and posture, so the footer
-/// leaves them out and nothing renders twice.
+/// Where the footer painted its click targets: the task counter and the
+/// posture, which cycles ask -> auto-approve -> plan.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FooterTargets {
+    pub(super) tasks_chip: Option<ratatui::layout::Rect>,
+    pub(super) posture_chip: Option<ratatui::layout::Rect>,
+}
+
+/// Paint the footer. Its standing metadata leads with the session settings,
+/// `Build · ask · model effort`, then the location (#2276). Returns where the
+/// task counter and the posture were drawn, so the pointer can hover and
+/// click them.
 pub(super) fn render_composer_footer(
     f: &mut Frame,
     area: ratatui::layout::Rect,
@@ -1571,10 +1432,9 @@ pub(super) fn render_composer_footer(
     popup_hint: Option<&'static [&'static str]>,
     selection_active: bool,
     tasks_hovered: bool,
-    settings_in_composer: bool,
-) -> Option<ratatui::layout::Rect> {
+) -> FooterTargets {
     if area.height == 0 || area.width == 0 {
-        return None;
+        return FooterTargets::default();
     }
 
     let context_usage = super::context_usage::context_usage(state);
@@ -1583,6 +1443,8 @@ pub(super) fn render_composer_footer(
     let remaining = rustcode_core::status::context_remaining_percent(used, window);
     let location = footer_location(state);
     let hint_clauses = footer_hint_clauses(popup_hint, selection_active);
+    // Columns from the row's start to the posture, when the metadata shows it.
+    let mut posture_offset = None;
     let (left_content, left_style, hint_clauses) = if state.ctrl_c_exit_armed() {
         // A second Ctrl+C is a pending exit, which outranks every hint. The
         // same press may also have copied a selection, so keep that answer
@@ -1624,11 +1486,14 @@ pub(super) fn render_composer_footer(
         if let Some(agent) = state.selected_subagent() {
             metadata.push(agent.name().to_string());
         }
-        // The framed composer carries the model and posture on its last row;
-        // the footer repeats them only when that row is not on screen.
-        if !settings_in_composer {
-            metadata.extend(footer_session_badges(state));
-        }
+        posture_offset = Some(
+            2 + metadata
+                .iter()
+                .map(|item| item.width() + HINT_SEPARATOR.width())
+                .sum::<usize>(),
+        );
+        metadata.push(posture_label(state));
+        metadata.push(session_model_label(state));
         metadata.push(location);
         (
             format!("  {}", metadata.join(" · ")),
@@ -1711,6 +1576,7 @@ pub(super) fn render_composer_footer(
         .filter(|chip| keep_right && left.width() + chip.width() + 2 + right_width <= row_width);
     let chip_width = chip.as_ref().map_or(0, |chip| chip.width() + 2);
     let padding = row_width.saturating_sub(left.width() + chip_width + right_width);
+    let left_width = left.width();
     let mut spans = vec![
         Span::styled(left, left_style),
         Span::styled(" ".repeat(padding), Style::default().bg(COLOR_BG())),
@@ -1744,5 +1610,49 @@ pub(super) fn render_composer_footer(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(COLOR_BG())),
         area,
     );
-    chip_area
+    // The posture is a target only while it is painted whole.
+    let posture_chip = posture_offset.and_then(|offset| {
+        let width = posture_label(state).width();
+        (offset + width <= left_width)
+            .then(|| ratatui::layout::Rect::new(area.x + offset as u16, area.y, width as u16, 1))
+    });
+    if let Some(chip) = posture_chip {
+        paint_posture(f, chip, state);
+    }
+    FooterTargets {
+        tasks_chip: chip_area,
+        posture_chip,
+    }
+}
+
+/// Plan mode leads in the primary colour; a Build turn is the default and
+/// stays quiet. How tool actions are handled is always spelled out beside
+/// it, and the risky posture is the loud one (#2246).
+fn paint_posture(f: &mut Frame, chip: ratatui::layout::Rect, state: &RenderSnapshot) {
+    let mode = mode_token(state);
+    let mode_style = match mode {
+        "Plan" => get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        _ => get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), false),
+    };
+    let approval_style = match approval_token(state) {
+        "auto-approve" => get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
+        "read-only" => get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), false),
+        _ => get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+    };
+    let mode_width = mode.width() as u16;
+    let buffer = f.buffer_mut();
+    buffer.set_style(
+        ratatui::layout::Rect::new(chip.x, chip.y, mode_width, 1),
+        mode_style,
+    );
+    let approval_x = chip.x + mode_width + HINT_SEPARATOR.width() as u16;
+    buffer.set_style(
+        ratatui::layout::Rect::new(
+            approval_x,
+            chip.y,
+            chip.right().saturating_sub(approval_x),
+            1,
+        ),
+        approval_style,
+    );
 }
