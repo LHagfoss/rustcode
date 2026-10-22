@@ -9,6 +9,7 @@ mod prompt;
 mod questions;
 mod remote;
 mod session;
+mod steer;
 mod streaming;
 mod usage;
 
@@ -86,6 +87,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "visualizations": VISUALIZATIONS_CAPABILITY_VERSION,
                 "preview": crate::preview::PREVIEW_CAPABILITY_VERSION,
                 "remote": remote::REMOTE_CAPABILITY_VERSION,
+                "steer": steer::STEER_CAPABILITY_VERSION,
             }),
         )]))
 }
@@ -915,6 +917,28 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_receive_request(
             {
                 let server = server.clone();
+                async move |request: steer::SteerRequest, responder, _connection| {
+                    let state = server
+                        .sessions
+                        .lock()
+                        .await
+                        .get(&request.session_id)
+                        .map(|session| Arc::clone(&session.state));
+                    let Some(state) = state else {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(format!("unknown ACP session: {}", request.session_id)),
+                        );
+                    };
+                    let answer = steer::accept(&mut *state.lock().await, &request.text);
+                    responder.respond(answer)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
                 async move |request: remote::RemoteStatusRequest, responder, _connection| {
                     responder.respond(server.remote.status(&request.session_id).await)
                 }
@@ -1147,7 +1171,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     server.presence.turn_started(&session_id, &presence_cwd);
                     connection.spawn(async move {
                         let result = prompt::run_prompt(
-                            state,
+                            Arc::clone(&state),
                             cwd,
                             scheduled_turn,
                             session_id.clone(),
@@ -1166,9 +1190,15 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             .presence
                             .turn_finished(&session_id, &presence_cwd);
 
+                        // Steers the turn ended before reading go back to the
+                        // client, which sends them next.
+                        let unused = steer::end(&mut *state.lock().await, &session_id);
                         match result {
                             Ok(stop_reason) => {
-                                responder.respond(PromptResponse::new(stop_reason))?;
+                                responder.respond(
+                                    PromptResponse::new(stop_reason)
+                                        .meta(steer::unused_meta(unused)),
+                                )?;
                             }
                             Err(error) => {
                                 responder.respond_with_error(error)?;
