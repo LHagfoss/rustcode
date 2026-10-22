@@ -165,8 +165,18 @@ fn reply(result: Result<RemoteResult, crate::remote::protocol::RemoteError>, nam
 }
 
 /// Classify `text`, running it when the answer is immediate. `None` means
-/// the text is a prompt for the model.
+/// the text is a prompt for the model, and like a terminal submit it starts
+/// a task: the session's delegation setting decides whether the turn gets the
+/// agent tools, consuming a one-shot `/delegate`.
 pub(crate) fn classify(state: &mut crate::app::AppState, text: &str) -> Option<AcpCommand> {
+    let command = classify_command(state, text);
+    if command.is_none() {
+        crate::app::actions::begin_task_delegation(state);
+    }
+    command
+}
+
+fn classify_command(state: &mut crate::app::AppState, text: &str) -> Option<AcpCommand> {
     let text = text.trim();
     let catalog = catalog();
     let name = command_name(text, &catalog)?;
@@ -578,6 +588,28 @@ mod tests {
         };
         assert_eq!(report("status"), Some(true.into()));
         assert_eq!(report("compact"), None);
+    }
+
+    #[test]
+    fn a_model_prompt_gets_the_agent_tools_the_session_allows() {
+        let mut state = crate::app::AppState::new();
+        state.config.delegation_enabled = true;
+        state.delegation_sticky = true;
+        assert!(classify(&mut state, "investigate the failing build").is_none());
+        assert!(state.delegation_active);
+
+        state.delegation_sticky = false;
+        state.delegation_armed = true;
+        assert!(classify(&mut state, "once with agents").is_none());
+        assert!(state.delegation_active);
+        assert!(!state.delegation_armed);
+        assert!(classify(&mut state, "then without").is_none());
+        assert!(!state.delegation_active);
+
+        state.delegation_sticky = true;
+        state.config.delegation_enabled = false;
+        assert!(classify(&mut state, "host disabled").is_none());
+        assert!(!state.delegation_active);
     }
 
     #[test]
