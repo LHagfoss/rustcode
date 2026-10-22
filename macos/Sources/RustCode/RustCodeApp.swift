@@ -1531,7 +1531,9 @@ final class DesktopModel: ObservableObject {
             await catchUpInbound(on: connection)
             stopped = result["stopReason"]?.stringValue == "cancelled"
             if stopped { failure = "Cancelled." }
+            requeueSteers(in: id, unused: ACPRequests.unusedSteers(in: result))
         } catch {
+            requeueSteers(in: id, unused: nil)
             self.error = String(describing: error)
             stopped = true
             failure = "The turn failed."
@@ -1555,6 +1557,83 @@ final class DesktopModel: ObservableObject {
         guard !stopped, let next = queuedPrompts.first(where: { $0.sessionId == id }) else { return }
         removeQueued(next)
         await run(next)
+    }
+
+    /// Messages handed to each chat's running turn, until that turn ends.
+    private var steered: [String: [QueuedPrompt]] = [:]
+
+    /// ⌘⏎ can hand the shown chat's running turn a message.
+    var canSteer: Bool { isTurnRunning && capabilities?.steer == true }
+
+    /// ⌘⏎: while the shown chat's turn runs, the composer's message steers
+    /// it, read after its current step instead of waiting for the turn to
+    /// end; with nothing typed, the oldest queued message goes instead.
+    /// Commands, images, and a turn that cannot take a steer right now queue
+    /// as ⏎ does. With no turn running, ⌘⏎ sends like ⏎.
+    func steerOrSubmit() async {
+        MarkedText.commitInWindows()
+        guard canSteer, let id = selectedSession else { return await submit() }
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed.isEmpty, attachments.isEmpty, images.isEmpty, draftCommand == nil {
+            if let next = selectedQueue.first { await sendNow(next) }
+            return
+        }
+        guard draftCommand == nil, images.isEmpty, !typed.hasPrefix("/"), !typed.hasPrefix("!") else {
+            return await submit()
+        }
+        let prompt = QueuedPrompt(sessionId: id, typed: typed, text: Self.prompt(typed, attaching: attachments, in: chatProject), images: [])
+        draft = ""
+        attachments = []
+        if await !steer(prompt) {
+            queuedPrompts.append(prompt)
+            confirm("Queued: the turn is waiting for you", systemImage: "text.line.last.and.arrowtriangle.forward")
+        }
+    }
+
+    /// A queued message's Send Now, and ⌘⏎ with nothing typed: the running
+    /// turn reads it after its current step. The rest of the queue keeps its
+    /// order.
+    func sendNow(_ prompt: QueuedPrompt) async {
+        guard prompt.images.isEmpty else {
+            return confirm("Images wait for the next turn", systemImage: "photo")
+        }
+        if await steer(prompt) {
+            removeQueued(prompt)
+        } else {
+            confirm("The turn can't take it now. It stays queued", systemImage: "text.line.last.and.arrowtriangle.forward")
+        }
+    }
+
+    /// Hand `prompt` to its chat's running turn. False when the turn did not
+    /// take it, as while it waits on an approval or a question.
+    private func steer(_ prompt: QueuedPrompt) async -> Bool {
+        guard let connection = engine?.connection, runningSessions.contains(prompt.sessionId) else { return false }
+        let params = ACPRequests.steer(sessionId: prompt.sessionId, text: prompt.text)
+        guard let result = try? await connection.request(ACPMethod.steer, params: params, timeout: .seconds(10)),
+              result["accepted"]?.boolValue == true else { return false }
+        steered[prompt.sessionId, default: []].append(prompt)
+        appendToTranscript(of: prompt.sessionId) { $0.appendUser(prompt.text) }
+        confirm("Steering: read after the current step", systemImage: "arrow.turn.down.right")
+        return true
+    }
+
+    /// The turn ended: steers it never read leave the chat and run next,
+    /// first in its queue, in the order they were sent, so each shows where
+    /// its answer starts. `unused` nil means the turn failed and any of them
+    /// may be unread.
+    private func requeueSteers(in session: String, unused: [String]?) {
+        guard let sent = steered.removeValue(forKey: session) else { return }
+        var left = unused?.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let unread = sent.filter { prompt in
+            guard left != nil else { return true }
+            guard let index = left!.firstIndex(of: prompt.text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+            left!.remove(at: index)
+            return true
+        }
+        appendToTranscript(of: session) { transcript in
+            for prompt in unread { transcript.removeLastUser(prompt.text) }
+        }
+        queuedPrompts.insert(contentsOf: unread, at: queuedPrompts.firstIndex { $0.sessionId == session } ?? queuedPrompts.endIndex)
     }
 
     /// Send a report command now, beside any running turn: it never joins

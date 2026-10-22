@@ -119,6 +119,34 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2255, #2256: ⌘⏎ steers the running turn instead of queueing; with
+    /// nothing typed it sends the first queued message now; a steer the turn
+    /// ended before reading runs next, shown once.
+    func testCommandReturnSteersTheRunningTurn() async throws {
+        let model = try await started()
+        await model.newSession()
+        model.draft = "long turn"
+        let first = Task { await model.submit() }
+        try await until { model.canSteer }
+        model.draft = "steer read"
+        await model.steerOrSubmit()
+        XCTAssertTrue(model.selectedQueue.isEmpty, "a steer does not queue")
+        await send("queued unread", in: model)
+        XCTAssertEqual(model.selectedQueue.map(\.typed), ["queued unread"], "⏎ still queues")
+        await model.steerOrSubmit()
+        XCTAssertTrue(model.selectedQueue.isEmpty, "⌘⏎ with nothing typed sends the queued message now")
+        await first.value
+        try await until { model.runningSessions.isEmpty && model.queuedPrompts.isEmpty }
+        let typed = model.transcript.items.compactMap { item -> String? in
+            if case .user(let text) = item.content { return text }
+            return nil
+        }
+        XCTAssertEqual(typed, ["long turn", "steer read", "queued unread"])
+        let replies = model.transcript.items.filter { if case .assistant = $0.content { true } else { false } }
+        XCTAssertEqual(replies.count, 2, "the unread steer ran as the next turn")
+        model.stop()
+    }
+
     /// Picking a chat back while its first load still runs shows it once it is in.
     func testReturningToALoadingChatShowsItWhenLoaded() async throws {
         let model = try await started()
@@ -278,13 +306,17 @@ final class SessionFlowTests: XCTestCase {
     # The folder each chat was created in, as the engine records it.
     cwds = {"elsewhere": "/tmp/rustcode-elsewhere"}
     created = 0
+    steers = {}
     def handle(message):
         global created
         method, params, rid = message.get("method"), message.get("params", {}), message.get("id")
         result = {}
         if method == "initialize":
             result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True,
-                      "sessionCapabilities": {"list": {}, "close": {}}}}
+                      "sessionCapabilities": {"list": {}, "close": {}}, "_meta": {"rustcode": {"steer": 1}}}}
+        elif method == "_rustcode/steer":
+            steers.setdefault(params["sessionId"], []).append(params["text"])
+            result = {"accepted": True}
         elif method == "session/new":
             created += 1
             sid = "new-%d" % created
@@ -307,10 +339,14 @@ final class SessionFlowTests: XCTestCase {
         elif method == "session/prompt":
             sid = params["sessionId"]
             text = params["prompt"][0]["text"]
-            time.sleep(0.15)
+            time.sleep(0.8 if text.startswith("long") else 0.15)
             update(sid, "agent_message_chunk", "reply to " + text)
             stored[sid] += [text, "reply to " + text]
             result = {"stopReason": "end_turn"}
+            # Steers the turn "read" are consumed; one marked unread comes back.
+            unused = [steer for steer in steers.pop(sid, []) if "unread" in steer]
+            if unused:
+                result["_meta"] = {"rustcode": {"unusedSteers": unused}}
         if rid is not None:
             send({"jsonrpc": "2.0", "id": rid, "result": result})
     for line in sys.stdin:
