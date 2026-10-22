@@ -195,7 +195,10 @@ final class DesktopModel: ObservableObject {
     @Published var selectedSession: String? {
         didSet {
             if let selectedSession { unseenReplies.remove(selectedSession) }
-            if oldValue != selectedSession { showAgents(of: selectedSession) }
+            if oldValue != selectedSession {
+                showAgents(of: selectedSession)
+                openToolRuns = []
+            }
         }
     }
     /// Chats whose turn finished while another chat was on screen, marked
@@ -573,6 +576,14 @@ final class DesktopModel: ObservableObject {
             showToast(Toast(style: .success, systemImage: "checkmark.circle.fill", title: chatTitle(session),
                             message: reply.isEmpty ? "Finished." : reply, session: session))
         }
+    }
+
+    /// Folded runs of tool calls the reader opened in the shown chat, by the
+    /// id of each run's first call.
+    @Published private(set) var openToolRuns: Set<Int> = []
+
+    func toggleToolRun(_ run: Int) {
+        if openToolRuns.remove(run) == nil { openToolRuns.insert(run) }
     }
 
     // MARK: - Subagents
