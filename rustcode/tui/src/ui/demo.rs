@@ -106,7 +106,7 @@ pub(crate) fn demo_state(mut view: RenderState) -> DemoState {
     view.delegation_active = false;
     view.auto_confirm = false;
     view.config = rustcode::controller::AppConfig::default();
-    view.verbosity = Verbosity::Low;
+    view.verbosity = Verbosity::High;
     view.model_name = "TUI demo".to_owned();
     view.api_base_url.clear();
     view.active_session_id = "static-visual-demo".to_owned();

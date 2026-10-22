@@ -73,6 +73,7 @@ pub(crate) struct RenderSnapshot {
     last_copy_text: Option<(String, std::time::Instant)>,
     transient_notice: Option<String>,
     expanded_thoughts: std::collections::HashSet<usize>,
+    expanded_tool_runs: std::collections::HashSet<usize>,
     agent_mode: rustcode::controller::AgentMode,
     subagents: Vec<SubAgentSnapshot>,
     selected_subagent_id: Option<u32>,
@@ -268,6 +269,7 @@ impl RenderSnapshot {
             last_copy_text: view.last_copy_text.clone(),
             transient_notice: view.transient_notice.clone(),
             expanded_thoughts: view.expanded_thoughts.clone(),
+            expanded_tool_runs: view.expanded_tool_runs.clone(),
             agent_mode: view.agent_mode,
             subagents: view
                 .subagents
@@ -623,6 +625,10 @@ impl RenderSnapshot {
     /// Whether the tool body at `index` renders open. The stored set records
     /// flips from the verbosity's default, which is open only for a file
     /// edit at `edits` verbosity.
+    /// Whether the folded run of tool calls starting at `first` is open.
+    pub(crate) fn tool_run_open(&self, first: usize) -> bool {
+        self.expanded_tool_runs.contains(&first)
+    }
     pub(crate) fn tool_body_expanded(&self, index: usize, is_edit: bool) -> bool {
         self.expanded_thoughts.contains(&index) != (is_edit && self.verbosity.edits_open())
     }

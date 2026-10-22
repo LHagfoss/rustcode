@@ -1289,7 +1289,6 @@ const SHORT_EXPAND_HINT: &str = " (o)";
 /// Maximum terminal rows in a collapsed tool-result preview, including the
 /// omission marker (#1602).
 pub(super) const COLLAPSED_TOOL_BODY_MAX_LINES: usize = 5;
-const COLLAPSED_FILE_DIFF_PREVIEW_LINES: usize = 5;
 
 /// Row window shared by committed and live tool previews. Callers supply their
 /// own marker text so live output can retain its omitted-byte note.
@@ -1889,44 +1888,6 @@ pub(super) fn indent_full_tool_body(
     indented
 }
 
-/// Keep the first five wrapped diff rows visible while leaving the complete
-/// diff available through Ctrl+O.
-fn indent_file_edit_preview_body(
-    lines: Vec<Line<'static>>,
-    width: u16,
-    show_picker: bool,
-) -> Vec<Line<'static>> {
-    let mut indented = indent_full_tool_body(lines, width, show_picker)
-        .into_iter()
-        .filter(|line| {
-            !line
-                .to_string()
-                .trim_start()
-                .trim_start_matches('│')
-                .trim()
-                .is_empty()
-        })
-        .collect::<Vec<_>>();
-    if indented.len() <= COLLAPSED_FILE_DIFF_PREVIEW_LINES {
-        return indented;
-    }
-    let omitted = indented.len() - COLLAPSED_FILE_DIFF_PREVIEW_LINES;
-    indented.truncate(COLLAPSED_FILE_DIFF_PREVIEW_LINES);
-    indented.push(Line::from(vec![
-        tool_body_spine(show_picker),
-        Span::styled(
-            format!("… +{omitted} lines"),
-            get_themed_style(
-                COLOR_MUTED(),
-                COLOR_BG(),
-                Modifier::ITALIC | Modifier::DIM,
-                show_picker,
-            ),
-        ),
-    ]));
-    indented
-}
-
 /// Whether an edit entry carries an expandable diff body.
 ///
 /// Successful edits with changed lines (embedded or synthesized diffs, #1567)
@@ -1987,14 +1948,14 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
 }
 
 /// [`render_committed_tool_result_group_snapshot`] and, for each of its rows,
-/// the history index of the call the row belongs to. The heading and the
-/// spacing belong to no call.
+/// the call the row belongs to, or the folded run a summary row stands for.
+/// The heading and the spacing belong to neither.
 pub(crate) fn render_committed_tool_result_group_rows(
     state: &RenderSnapshot,
     message_indices: &[usize],
     width: u16,
     show_picker: bool,
-) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
+) -> (Vec<Line<'static>>, Vec<Option<ToolBlock>>) {
     render_tool_result_group_detailed(state, message_indices, width, show_picker, true)
 }
 
@@ -2026,7 +1987,7 @@ fn render_tool_result_group_detailed(
     width: u16,
     show_picker: bool,
     include_header: bool,
-) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
+) -> (Vec<Line<'static>>, Vec<Option<ToolBlock>>) {
     let entries = fold_task_completions(
         message_indices
             .iter()
@@ -2034,149 +1995,191 @@ fn render_tool_result_group_detailed(
             .collect(),
     );
     let mut lines = Vec::new();
-    // The call each row belongs to, row for row with `lines`.
-    let mut owners = Vec::new();
-    let mut index = 0;
-    while index < entries.len() {
-        // `message_indices` represents one provider batch (and may include
-        // tool-only assistant turns joined by the scrollback layer). Keep it
-        // as one visual group even when the provider mixed command, read, or
-        // edit tools. The child rows retain their kind-specific formatting.
-        let group_end = entries.len();
-        let group = &entries[index..group_end];
-        if include_header && !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        {
-            if include_header {
-                // What each call was is on its own row, and so is how it
-                // ended.
-                lines.push(tool_group_header(TOOL_BLOCK_HEADING, show_picker));
-            }
-            let mut seen = std::collections::HashSet::new();
-            // Pre-filter duplicate exploration rows so the last *rendered*
-            // child gets the closing `└` connector (#1725).
-            let visible: Vec<&ToolTranscriptEntry> = group
-                .iter()
-                .filter(|entry| {
-                    entry.kind != ToolTranscriptKind::Explored
-                        || seen.insert(format!("{}\0{}", entry.action, entry.target))
-                })
-                .collect();
-            for (child_index, entry) in visible.iter().enumerate() {
-                {
-                    owners.resize(lines.len(), None);
-                    let is_expanded = state
-                        .tool_body_expanded(entry.message_index, edit_entry_is_expandable(entry));
-                    // Command, generic Tool, and Edit-with-diff entries collapse
-                    // their bodies with the same expand affordance; Explored
-                    // rows keep their kind-specific formatting. Edit previews
-                    // differ: the collapsed form already shows a compact diff
-                    // window (#1567), while Tool/Command show bounded previews.
-                    let expandable = matches!(
-                        entry.kind,
-                        ToolTranscriptKind::Tool
-                            | ToolTranscriptKind::Command
-                            | ToolTranscriptKind::Explored
-                    ) || edit_entry_is_expandable(entry);
-                    let full_rows = if entry.kind == ToolTranscriptKind::Edit {
-                        indent_full_tool_body(entry.body.clone(), width, show_picker).len()
-                    } else {
-                        indent_tool_result_body(
-                            entry.body.clone(),
-                            &entry.tool_name,
-                            &state.verbosity(),
-                            width,
-                            true,
-                        )
-                        .len()
-                    };
-                    let low = matches!(state.verbosity(), rustcode::controller::Verbosity::Low);
-                    // A task completion stays one row until opened, so any
-                    // output at all is worth the hint.
-                    let closed_until_opened = entry.tool_name == TASK_COMPLETION_TOOL;
-                    let show_hint = expandable
-                        && (full_rows > COLLAPSED_TOOL_BODY_MAX_LINES
-                            || (closed_until_opened && full_rows > 0))
-                        && !is_expanded
-                        && low;
-                    // A continuation batch renders under a heading an earlier
-                    // frame already committed, so scrollback can never be
-                    // revised: only `include_header` batches know their last
-                    // child is final. Continuations keep the downward connector
-                    // instead of every sibling claiming `└` (#1725).
-                    let is_last = include_header && child_index + 1 == visible.len();
-                    // A row that stays closed has nothing under it for the hint
-                    // to follow, so the hint is part of the row and the target
-                    // makes room for it. It is the first thing a narrow row
-                    // gives up, and then it goes below after all.
-                    let hint_in_row = show_hint && closed_until_opened;
-                    let title = if entry.kind == ToolTranscriptKind::Command {
-                        command_child_lines(entry, is_last, hint_in_row, width, show_picker)
-                    } else {
-                        tool_child_line(entry, is_last, hint_in_row, width, show_picker)
-                    };
-                    let hint = expand_hint_span(width, show_picker);
-                    let hint_drawn = hint_in_row
-                        && title.first().is_some_and(|line| {
-                            line.spans
-                                .last()
-                                .is_some_and(|span| span.content == hint.content)
-                        });
-                    // Verbosity sets the default: low shows a five-row preview,
-                    // high shows the row alone. An opened entry shows it all.
-                    let mut body = Vec::new();
-                    if entry.kind == ToolTranscriptKind::Edit && edit_entry_is_expandable(entry) {
-                        if is_expanded {
-                            body.extend(indent_full_tool_body(
-                                entry.body.clone(),
-                                width,
-                                show_picker,
-                            ));
-                        } else if low {
-                            body.extend(indent_file_edit_preview_body(
-                                entry.body.clone(),
-                                width,
-                                show_picker,
-                            ));
-                        }
-                    } else if expandable && (is_expanded || (low && !closed_until_opened)) {
-                        if entry.kind == ToolTranscriptKind::Command {
-                            body.extend(indent_tool_result_body(
-                                entry.body.clone(),
-                                &entry.tool_name,
-                                &state.verbosity(),
-                                width,
-                                is_expanded,
-                            ));
-                        } else {
-                            body.extend(indent_generic_tool_body(
-                                entry.body.clone(),
-                                &state.verbosity(),
-                                width,
-                                show_picker,
-                                is_expanded,
-                            ));
-                        }
-                    }
-                    append_tool_preview(
-                        &mut lines,
-                        title,
-                        body,
-                        entry,
-                        show_hint && !hint_drawn,
-                        width,
-                        show_picker,
-                    );
-                    owners.resize(lines.len(), Some(entry.message_index));
-                }
+    // What each row belongs to, row for row with `lines`: a call, or the run
+    // of calls a compact summary row stands for.
+    let mut owners: Vec<Option<ToolBlock>> = Vec::new();
+    if entries.is_empty() {
+        return (lines, owners);
+    }
+    // `message_indices` represents one provider batch (and may include
+    // tool-only assistant turns joined by the scrollback layer). Keep it as
+    // one visual group even when the provider mixed command, read, or edit
+    // tools. The child rows retain their kind-specific formatting.
+    if include_header {
+        // What each call was is on its own row, and so is how it ended.
+        lines.push(tool_group_header(TOOL_BLOCK_HEADING, show_picker));
+    }
+    let mut seen = std::collections::HashSet::new();
+    // Pre-filter duplicate exploration rows so the last *rendered* child gets
+    // the closing `└` connector (#1725).
+    let visible: Vec<&ToolTranscriptEntry> = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind != ToolTranscriptKind::Explored
+                || seen.insert(format!("{}\0{}", entry.action, entry.target))
+        })
+        .collect();
+    let verbosity = state.verbosity();
+    // At low and edits verbosity a run of calls folds into one `N tool calls`
+    // row until it is opened; edits verbosity keeps file changes out of the
+    // runs, shown as they are.
+    let segments = tool_row_segments(&visible, verbosity);
+    for segment in segments {
+        let run = &visible[segment.clone()];
+        let folded = verbosity.compact() && run.len() > 1 && run_is_foldable(run, verbosity);
+        if folded {
+            let block = (run[0].message_index, run[run.len() - 1].message_index + 1);
+            let open = state.tool_run_open(block.0);
+            owners.resize(lines.len(), None);
+            lines.push(tool_run_summary(run, open, width, show_picker));
+            owners.push(Some(block));
+            if !open {
+                continue;
             }
         }
-
-        index = group_end;
+        for (offset, entry) in run.iter().enumerate() {
+            let child_index = segment.start + offset;
+            // A continuation batch renders under a heading an earlier frame
+            // already committed, so scrollback can never be revised: only
+            // `include_header` batches know their last child is final.
+            // Continuations keep the downward connector instead of every
+            // sibling claiming `└` (#1725).
+            let is_last = include_header && child_index + 1 == visible.len();
+            owners.resize(lines.len(), None);
+            render_tool_row(state, entry, is_last, width, show_picker, &mut lines);
+            owners.resize(
+                lines.len(),
+                Some((entry.message_index, entry.message_index + 1)),
+            );
+        }
     }
     owners.resize(lines.len(), None);
     (lines, owners)
+}
+
+/// The rows of a tool group, split where compact verbosity folds: each range
+/// is a run of calls, or at edits verbosity a lone file change between runs.
+fn tool_row_segments(
+    visible: &[&ToolTranscriptEntry],
+    verbosity: &rustcode::controller::Verbosity,
+) -> Vec<std::ops::Range<usize>> {
+    let stands_alone = |entry: &ToolTranscriptEntry| {
+        verbosity.edits_open() && entry.kind == ToolTranscriptKind::Edit
+    };
+    let mut segments: Vec<std::ops::Range<usize>> = Vec::new();
+    for (index, entry) in visible.iter().enumerate() {
+        match segments.last_mut() {
+            Some(last) if !stands_alone(entry) && !stands_alone(visible[last.start]) => {
+                last.end = index + 1;
+            }
+            _ => segments.push(index..index + 1),
+        }
+    }
+    segments
+}
+
+/// Whether a run folds: a lone file change at edits verbosity stays open.
+fn run_is_foldable(
+    run: &[&ToolTranscriptEntry],
+    verbosity: &rustcode::controller::Verbosity,
+) -> bool {
+    !(verbosity.edits_open()
+        && run
+            .iter()
+            .all(|entry| entry.kind == ToolTranscriptKind::Edit))
+}
+
+/// The row a folded run of calls shows: how many there were and how many
+/// failed, with a hint that a click opens it.
+fn tool_run_summary(
+    run: &[&ToolTranscriptEntry],
+    open: bool,
+    width: u16,
+    show_picker: bool,
+) -> Line<'static> {
+    let failed = run
+        .iter()
+        .filter(|entry| entry.status != "running" && !entry.success)
+        .count();
+    let mut text = format!("{} {} tool calls", if open { '▾' } else { '▸' }, run.len());
+    if failed > 0 {
+        text.push_str(&format!(" · {failed} failed"));
+    }
+    let prefix = tool_tree_prefix(false, show_picker);
+    let text = truncate_to_display_width(
+        &text,
+        usize::from(width).saturating_sub(prefix.content.width() + 1),
+    );
+    let mut spans = vec![
+        prefix,
+        Span::styled(
+            text,
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+    ];
+    let hint = if open {
+        " (click to fold)"
+    } else {
+        " (click to show)"
+    };
+    if usize::from(width) >= spans_width(&spans) + hint.len() {
+        spans.push(Span::styled(
+            hint,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// One call's rows: its title and, when open, its whole body.
+fn render_tool_row(
+    state: &RenderSnapshot,
+    entry: &ToolTranscriptEntry,
+    is_last: bool,
+    width: u16,
+    show_picker: bool,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let verbosity = state.verbosity().row_level();
+    let is_expanded =
+        state.tool_body_expanded(entry.message_index, edit_entry_is_expandable(entry));
+    let title = if entry.kind == ToolTranscriptKind::Command {
+        command_child_lines(entry, is_last, false, width, show_picker)
+    } else {
+        tool_child_line(entry, is_last, false, width, show_picker)
+    };
+    // Command, generic Tool, Explored and Edit-with-diff entries open to their
+    // body; a closed one is the row alone.
+    let mut body = Vec::new();
+    if is_expanded {
+        if entry.kind == ToolTranscriptKind::Edit && edit_entry_is_expandable(entry) {
+            body.extend(indent_full_tool_body(
+                entry.body.clone(),
+                width,
+                show_picker,
+            ));
+        } else if entry.kind == ToolTranscriptKind::Command {
+            body.extend(indent_tool_result_body(
+                entry.body.clone(),
+                &entry.tool_name,
+                &verbosity,
+                width,
+                true,
+            ));
+        } else if matches!(
+            entry.kind,
+            ToolTranscriptKind::Tool | ToolTranscriptKind::Explored
+        ) {
+            body.extend(indent_generic_tool_body(
+                entry.body.clone(),
+                &verbosity,
+                width,
+                show_picker,
+                true,
+            ));
+        }
+    }
+    append_tool_preview(lines, title, body, entry, false, width, show_picker);
 }
 
 /// What a right-click on a call's rows copies: the call as its row names it,

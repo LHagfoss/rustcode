@@ -49,7 +49,7 @@ pub(in crate::ui) fn render_verbosity_picker_modal(
         (
             "Low",
             rustcode::controller::Verbosity::Low,
-            "Tool calls with a five-row preview of their output",
+            "Runs of tool calls fold into one row · click opens",
         ),
         (
             "High",
@@ -59,7 +59,7 @@ pub(in crate::ui) fn render_verbosity_picker_modal(
         (
             "Edits",
             rustcode::controller::Verbosity::Edits,
-            "Tool calls only · file edits open · ctrl+d toggles",
+            "Like low · file edits stay open · ctrl+d toggles",
         ),
     ];
 

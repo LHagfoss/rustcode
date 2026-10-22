@@ -437,6 +437,9 @@ pub struct AppState {
     pub verbosity: Verbosity,
     /// How far the expand key has opened tool batches at high verbosity.
     pub expanded_thoughts: std::collections::HashSet<usize>,
+    /// Folded runs of tool calls opened at low or edits verbosity, by the
+    /// history index of each run's first call.
+    pub expanded_tool_runs: std::collections::HashSet<usize>,
     /// Message index the single-entry expand step is currently pointed at.
     ///
     /// `ctrl+shift+o` toggles the focused entry. `ctrl+o` is the
@@ -1553,6 +1556,7 @@ impl AppState {
             theme_picker_initial: String::new(),
             verbosity,
             expanded_thoughts: std::collections::HashSet::new(),
+            expanded_tool_runs: std::collections::HashSet::new(),
             expanded_thought_focus: None,
             show_command_picker: false,
             command_picker_index: 0,

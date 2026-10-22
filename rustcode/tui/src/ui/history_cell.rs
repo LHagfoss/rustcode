@@ -84,7 +84,7 @@ pub(crate) struct TranscriptState {
     pub(crate) task_log_max_scroll_row: usize,
     committed_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Line<'static>>>>>,
     /// For each cached tool chain, the call every one of its rows belongs to.
-    tool_owner_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Option<usize>>>>>,
+    tool_owner_cache: Option<super::lru::LruCache<CommittedKey, Arc<Vec<Option<ToolBlock>>>>>,
     /// `(inputs fingerprint, (expanded, collapsible))` of the last expand
     /// readout. Finding the collapsible rows renders every tool result in the
     /// session, which is far too much to redo on each frame.
@@ -934,7 +934,7 @@ impl TranscriptState {
         end: usize,
         width: u16,
         key: CommittedKey,
-    ) -> (Arc<Vec<Line<'static>>>, Arc<Vec<Option<usize>>>) {
+    ) -> (Arc<Vec<Line<'static>>>, Arc<Vec<Option<ToolBlock>>>) {
         let indices = (first..end)
             .filter(|&index| state.history()[index].role == "tool")
             .collect::<Vec<_>>();
@@ -952,15 +952,15 @@ impl TranscriptState {
         (lines, owners)
     }
 
-    /// For each row of [`Self::committed_tool_group`], the history index of
-    /// the call it belongs to.
+    /// For each row of [`Self::committed_tool_group`], the call it belongs
+    /// to, or the folded run a summary row stands for.
     pub(crate) fn committed_tool_group_owners(
         &mut self,
         state: &super::RenderSnapshot,
         first: usize,
         end: usize,
         width: u16,
-    ) -> Arc<Vec<Option<usize>>> {
+    ) -> Arc<Vec<Option<ToolBlock>>> {
         let key = self.committed_key(state, first, end, width);
         if let Some(owners) = self.tool_owner_cache().get(&key) {
             return Arc::clone(owners);
@@ -994,6 +994,7 @@ impl TranscriptState {
                 .expanded_thoughts()
                 .contains(&message)
                 .hash(&mut theme_hash);
+            state.tool_run_open(message).hash(&mut theme_hash);
         }
         // A sorted table or collapsed tree draws different rows.
         if end == index {
@@ -1076,7 +1077,7 @@ impl TranscriptState {
 
     fn tool_owner_cache(
         &mut self,
-    ) -> &mut super::lru::LruCache<CommittedKey, Arc<Vec<Option<usize>>>> {
+    ) -> &mut super::lru::LruCache<CommittedKey, Arc<Vec<Option<ToolBlock>>>> {
         self.tool_owner_cache
             .get_or_insert_with(|| super::lru::LruCache::new(COMMITTED_CACHE_BLOCKS))
     }

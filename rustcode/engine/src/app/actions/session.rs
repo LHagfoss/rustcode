@@ -353,6 +353,7 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.history_index = None;
     s.temp_input.clear();
     s.expanded_thoughts.clear();
+    s.expanded_tool_runs.clear();
     s.expanded_thought_focus = None;
     s.enter_idle();
     s.subagents.clear();

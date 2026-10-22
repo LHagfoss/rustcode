@@ -38,8 +38,11 @@ scrollback is not revised.
 
 Every tool row carries what the tool returned: command output, a file edit's
 diff, the lines a read or search found, an MCP or skill result. Output hangs
-under its row on a `│` spine. Verbosity only sets whether it starts
-open: `high` shows the rows alone, `low` shows a five-row preview. Hovering a
+under its row on a `│` spine. Rows start closed. At `low` verbosity a run of
+calls folds into one `▸ N tool calls` row, and while tools run only the
+current call shows; clicking the row opens the run to its calls, each of which
+opens as at `high`, and clicking it again folds it. `edits` folds the same way
+but keeps file edits out of the runs, their diffs open. Hovering a
 call lights its row and its output, not the rest of the block. Clicking it
 opens or closes that call's output, and a right-click copies the call and
 everything it returned. `ctrl+o` opens or closes every call, and
