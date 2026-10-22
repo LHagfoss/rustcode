@@ -204,6 +204,9 @@ enum DebugDriver {
                     try? await Task.sleep(for: .milliseconds(50))
                 }
             }
+        case "viewimage":
+            // `viewimage <path>`: open a file in the image viewer.
+            model.viewedImage = .file(URL(fileURLWithPath: parts[1]))
         case "wheelstream":
             // `wheelstream <steps> <points> [nostream|nowheel]`: a reply
             // streams while the reader scrolls up `steps` times by `points`, a

@@ -262,6 +262,8 @@ final class DesktopModel: ObservableObject {
     /// ⌘F: the find bar over the chat. Its query and matches live in `find`,
     /// so typing in it redraws the find bar, not every view watching the model.
     @Published var showsFind = false
+    /// The image open in the window's viewer.
+    @Published var viewedImage: ViewedImage?
     let find = ChatFind()
     /// The sidebar lists chats from every project, or only the open one.
     @Published var showsAllProjects = UserDefaults.standard.object(forKey: "showsAllProjects") as? Bool ?? true {
@@ -1320,7 +1322,7 @@ final class DesktopModel: ObservableObject {
     /// A sheet or panel is open over the chat, which keeps its keys.
     var coversChat: Bool {
         showsSettings || renamingSession != nil || contextSheet != nil || commandResult != nil || composerPanel != nil
-            || showsSwitcher || showsVisualizationGuide
+            || showsSwitcher || showsVisualizationGuide || viewedImage != nil
     }
 
     /// The request shown for the selected session, if any.
