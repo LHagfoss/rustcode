@@ -23,6 +23,8 @@ public enum ACPMethod {
     public static let remoteStart = "_rustcode/remote/start"
     public static let remotePair = "_rustcode/remote/pair"
     public static let remoteStop = "_rustcode/remote/stop"
+    /// Hands a running turn a message to read after its current step.
+    public static let steer = "_rustcode/steer"
 }
 
 public struct AgentInfo: Equatable, Sendable {
@@ -34,6 +36,8 @@ public struct AgentInfo: Equatable, Sendable {
     public var promptImages: Bool
     /// The engine implements the `_rustcode/remote*` sharing bridge.
     public var remote: Bool
+    /// The engine takes `_rustcode/steer` for a running turn.
+    public var steer: Bool
 
     public init(initializeResult result: JSONValue) throws {
         guard let version = result["protocolVersion"]?.intValue else {
@@ -49,6 +53,7 @@ public struct AgentInfo: Equatable, Sendable {
         closeSession = capabilities?["sessionCapabilities"]?["close"] != nil
         promptImages = capabilities?["promptCapabilities"]?["image"]?.boolValue ?? false
         remote = capabilities?["_meta"]?["rustcode"]?["remote"]?.intValue != nil
+        steer = capabilities?["_meta"]?["rustcode"]?["steer"]?.intValue != nil
     }
 }
 
@@ -114,6 +119,15 @@ public enum ACPRequests {
         var blocks: [JSONValue] = text.isEmpty && !images.isEmpty ? [] : [["type": "text", "text": .string(text)]]
         blocks += images.map(\.block)
         return ["sessionId": .string(sessionId), "prompt": .array(blocks)]
+    }
+
+    public static func steer(sessionId: String, text: String) -> JSONValue {
+        ["sessionId": .string(sessionId), "text": .string(text)]
+    }
+
+    /// Steers a finished turn never read, from its `session/prompt` answer.
+    public static func unusedSteers(in result: JSONValue) -> [String] {
+        (result["_meta"]?["rustcode"]?["unusedSteers"]?.arrayValue ?? []).compactMap(\.stringValue)
     }
 
     public static func session(_ sessionId: String) -> JSONValue {

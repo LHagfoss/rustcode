@@ -1593,7 +1593,8 @@ private struct Composer: View {
                     // A dead key's accent still waiting for its letter goes
                     // in as typed first, or the cleared field keeps the prompt.
                     MarkedText.commitInWindows()
-                    // ⇧⏎ (and ⌥⏎) start a new line at the cursor.
+                    // ⇧⏎ (and ⌥⏎) start a new line at the cursor; ⌘⏎ steers a
+                    // running turn.
                     if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
                         NSApp.sendAction(#selector(NSText.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
                         return .handled
@@ -1606,7 +1607,11 @@ private struct Composer: View {
                         model.completeCommand()
                         if takesArguments { return .handled }
                     }
-                    Task { await model.submit() }
+                    if press.modifiers.contains(.command) {
+                        Task { await model.steerOrSubmit() }
+                    } else {
+                        Task { await model.submit() }
+                    }
                     return .handled
                 }
                 .onKeyPress(.tab) {
@@ -1706,6 +1711,7 @@ private struct Composer: View {
     private var placeholder: String {
         if model.draftCommand?.takesArguments == true { return "Arguments" }
         if model.draftCommand != nil { return "" }
+        if model.canSteer { return "⏎ queues for the next turn, ⌘⏎ steers this one…" }
         return model.busy ? "Queue a message…" : "Message RustCode…"
     }
 
@@ -1878,7 +1884,8 @@ private struct QueuedPromptList: View {
             HStack(spacing: 6) {
                 Image(systemName: "text.line.last.and.arrowtriangle.forward")
                 Text("Queued").fontWeight(.semibold)
-                Text("· sent when this turn ends").foregroundStyle(.secondary)
+                Text(model.canSteer ? "· sent when this turn ends, or now with ⌘⏎" : "· sent when this turn ends")
+                    .foregroundStyle(.secondary)
             }
             .font(.caption)
             .foregroundStyle(Color.brand)
@@ -1892,6 +1899,12 @@ private struct QueuedPromptList: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if !prompt.images.isEmpty {
                         Image(systemName: "photo").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if model.canSteer && prompt.images.isEmpty {
+                        Button { Task { await model.sendNow(prompt) } } label: { Image(systemName: "arrow.up.circle") }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Send now: the running turn reads it after its current step")
                     }
                     Button { model.editQueued(prompt) } label: { Image(systemName: "pencil") }
                         .buttonStyle(.plain)
