@@ -103,6 +103,32 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2258: each chat keeps its own unsent draft, and so does a new chat.
+    func testDraftsStayWithTheirChat() async throws {
+        let model = try await started()
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        let slow = try XCTUnwrap(model.sessions.first { $0.id == "slow" })
+        model.draft = "for the new chat"
+        await model.select(quick)
+        XCTAssertEqual(model.draft, "")
+        model.draft = "for quick"
+        await model.select(slow)
+        XCTAssertEqual(model.draft, "")
+        await model.select(quick)
+        XCTAssertEqual(model.draft, "for quick")
+        await model.newSession()
+        XCTAssertEqual(model.draft, "for the new chat")
+        model.draft = ""
+        await model.select(quick)
+        XCTAssertEqual(model.draft, "for quick")
+        model.draft = ""
+        await model.newSession()
+        XCTAssertEqual(model.draft, "", "a cleared draft stays cleared")
+        await model.select(quick)
+        XCTAssertEqual(model.draft, "", "a cleared draft stays cleared")
+        model.stop()
+    }
+
     /// Picking a chat back while its first load still runs shows it once it is in.
     func testReturningToALoadingChatShowsItWhenLoaded() async throws {
         let model = try await started()
