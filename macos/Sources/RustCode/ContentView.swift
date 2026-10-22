@@ -739,23 +739,40 @@ private struct ChatView: View {
 
     @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
 
-    var body: some View {
-        let transcript = chat.transcript
+    /// The rows the chat draws once the verbosity folds its tool calls: the
+    /// lazy older ones, the eager newer ones, and the ids the scroller maps
+    /// (the earlier-messages row, the shown items and the working row).
+    private struct ShownRows {
+        var folding: ToolFolding
+        var older: [TranscriptItem]
+        var newer: [TranscriptItem]
+        var scroll: [Int]
+    }
+
+    private func shownRows(_ transcript: Transcript, first: Int, split: Int) -> ShownRows {
         let folding = ToolFolding(items: transcript.items, verbosity: verbosity,
                                   open: model.openToolRuns, running: isReplyStreaming)
+        let shown = { (item: TranscriptItem) in !folding.hidden.contains(item.id) }
+        let older = transcript.items[first..<split].filter(shown)
+        let newer = transcript.items[split...].filter(shown)
+        var scroll: [Int] = first > 0 ? [Self.earlierRow] : []
+        scroll += (older + newer).map(\.id)
+        if isReplyStreaming { scroll.append(Self.workingRow) }
+        return ShownRows(folding: folding, older: older, newer: newer, scroll: scroll)
+    }
+
+    var body: some View {
+        let transcript = chat.transcript
         let currentMatch = model.showsFind ? find.currentMatch : nil
         let lastId = transcript.items.last?.id
         let first = window.firstShown(identity: transcript.identity, count: transcript.items.count)
-        // The rows the scroller maps: the earlier-messages row, the shown
-        // items without those a folded run hides, and the working row.
-        var scrollRows: [Int] = first > 0 ? [Self.earlierRow] : []
-        scrollRows += transcript.items[first...].lazy.map(\.id).filter { !folding.hidden.contains($0) }
-        if isReplyStreaming { scrollRows.append(Self.workingRow) }
+
         // Older rows are lazy: laid out eagerly, every resize re-measured the
         // whole chat (170 ms a step in a 250-message session). The newest rows
         // stay eager, so the part being read never changes height under the
         // reader while scrolling near the end.
         let split = ChatLayout.split(count: transcript.items.count, firstShown: first)
+        let rows = shownRows(transcript, first: first, split: split)
         ScrollViewReader { proxy in
             ScrollView {
                 // The newest rows and the end of the chat sit below the lazy
@@ -777,9 +794,9 @@ private struct ChatView: View {
                                 EarlierMessages(count: first)
                                     .reportsChatRow(Self.earlierRow, to: scroll)
                             }
-                            ForEach(transcript.items[first..<split].filter { !folding.hidden.contains($0.id) }) { item in
+                            ForEach(rows.older) { item in
                                 TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                                              fold: folding.fold(for: item.id))
+                                              fold: rows.folding.fold(for: item.id))
                                     .equatable()
                                     .reportsChatRow(item.id, to: scroll)
                                     .id(item.id)
@@ -787,10 +804,10 @@ private struct ChatView: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 18) {
-                        ForEach(transcript.items[split...].filter { !folding.hidden.contains($0.id) }) { item in
+                        ForEach(rows.newer) { item in
                             TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
                                           isStreaming: isReplyStreaming && item.id == lastId,
-                                          fold: folding.fold(for: item.id))
+                                          fold: rows.folding.fold(for: item.id))
                                 .equatable()
                                 .reportsChatRow(item.id, to: scroll)
                                 .id(item.id)
@@ -882,7 +899,7 @@ private struct ChatView: View {
             .onChange(of: transcript.identity, initial: true) { _, identity in
                 window.open(identity: identity, count: chat.transcript.items.count)
             }
-            .onChange(of: scrollRows, initial: true) { _, rows in
+            .onChange(of: rows.scroll, initial: true) { _, rows in
                 scroll.setRows(rows)
             }
             .onChange(of: chat.transcript) { old, new in
