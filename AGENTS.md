@@ -28,12 +28,59 @@ instructions for work in this repository.
   (it can create a merge commit) and never forced. If the working tree is dirty,
   leave it alone and say so instead.
 - Inspect first; make the smallest scoped change and preserve unrelated work.
-- Run `cargo check --workspace --tests` and `cargo test --workspace`. Without
-  `--workspace` only the engine package is built, and a TUI change passes
-  unchecked. CI also runs `cargo fmt --all -- --check`.
+- Run the checks for what the change touches; CI runs the same split.
+  - Rust (`rustcode/`, `Cargo.*`): `cargo check --workspace --tests` and
+    `cargo test --workspace`. Without `--workspace` only the engine package is
+    built, and a TUI change passes unchecked. CI also runs
+    `cargo fmt --all -- --check`.
+  - macOS app (`macos/`): `scripts/swift-test.sh [TestClass]`. It hides the
+    test host's Contacts noise and fails a filter that matches nothing
+    (filter by class or test name; `RustCodeTests.X` matches nothing).
+  - A Swift-only change needs no cargo run, and a Rust-only one no Swift run,
+    unless the change crosses the ACP boundary between them.
 - The iOS app lives in `ios/` with its own checks; see `ios/AGENTS.md`.
 - For releases, load `~/.agents/skills/release-automation/SKILL.md`;
-  use `scripts/release.sh` as the source of truth.
+  use `scripts/release.sh` as the source of truth. Draft the notes with
+  `scripts/release-notes.sh > notes.md` (each PR's `## Changelog` line, else
+  its title), edit, then pass `--notes-file`. Release once per batch of merged
+  work, not per PR.
+
+## Pull requests
+
+- One issue per PR, but issues that change the same code path go in one PR
+  (for example two fixes to what happens when the chat changes): separate PRs
+  there conflict with each other and each needs another CI run.
+- Once checks pass locally, open the PR and queue it:
+  `gh pr merge <n> --squash --auto --delete-branch` when the user asked for
+  merging. GitHub merges it when CI is green; do not poll checks in a loop.
+- Before starting the next issue in files a queued PR touches, wait for that
+  PR to merge and branch from the new `main`, instead of resolving the same
+  conflict later.
+- Avoid stacked PRs. When an engine change and its client change depend on
+  each other, ship them in one PR. If a stack is unavoidable, retarget the
+  upper PR to `main` (`gh pr edit <n> --base main`) before merging the lower
+  one: `--delete-branch` on the base closes the PR stacked on it.
+- Fill in the PR template's `## Changelog` line; it becomes the release note.
+
+## Issues
+
+- Put what can be checked in text: the exact error, diff lines, commands and
+  messages. Screenshot attachments do not reach an agent working the issue.
+- When an issue depends on something only a person can do (secrets, a
+  physical device), say exactly what is needed and leave it open; do not
+  re-investigate it on every pass.
+
+## Checking macOS app behavior
+
+- Build with `swift build --package-path macos` and drive the debug app with
+  `DebugDriver` (`macos/Sources/RustCode/DebugDriver.swift`): start
+  `.build/debug/RustCode` with `RUSTCODE_DRIVE=<dir>`, write commands to
+  `<dir>/cmd`, read timings from `<dir>/time`. `snap <file.png>` captures the
+  window; `wheelstream`, `timescroll` and `stream` measure scrolling and
+  streaming. Run a measurement under `sample <pid> 3` to see where the main
+  thread goes.
+- Synthesized wheel, drag and pinch events do not reach SwiftUI views from the
+  driver. Say in the PR when real pointer input was not exercised.
 
 ## Naming
 
