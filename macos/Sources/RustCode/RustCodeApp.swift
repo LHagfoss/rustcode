@@ -143,7 +143,12 @@ final class DesktopModel: ObservableObject {
     let keybindings = KeybindingStore()
     /// Keeps the real menu's key equivalents in step with `keybindings`.
     private lazy var keybindingMenuSync = KeybindingMenuSync(store: keybindings)
-    @Published var composerPanel: ComposerPanel?
+    @Published var composerPanel: ComposerPanel? {
+        didSet {
+            if composerPanel == .model, oldValue != .model { startPanelTypeahead() }
+            else if composerPanel != .model, !showsSwitcher { stopPanelTypeahead() }
+        }
+    }
     /// The `/context` breakdown shown in its sheet.
     @Published var contextSheet: ContextBreakdown?
     /// Chats being opened, each with its replayed transcript until it is in.
@@ -248,13 +253,14 @@ final class DesktopModel: ObservableObject {
     private var remoteSessionID: String?
     /// ⌘K: the chat switcher over the window.
     @Published var showsSwitcher = false {
-        didSet { if !showsSwitcher { stopSwitcherTypeahead() } }
+        didSet { if !showsSwitcher { stopPanelTypeahead() } }
     }
-    /// Text typed between ⌘K and the switcher's field taking the keyboard,
-    /// which SwiftUI gives it a frame later. Without this, a fast typist's
-    /// first letters went to whatever had focus, such as the sidebar search.
-    private(set) var switcherTypeahead = ""
-    private var switcherTypeaheadMonitor: Any?
+    /// Text typed between ⌘K or the model picker opening and its field
+    /// taking the keyboard, which SwiftUI gives it a frame later. Without
+    /// this, a fast typist's first letters went to whatever had focus, such
+    /// as the sidebar search.
+    private(set) var panelTypeahead = ""
+    private var panelTypeaheadMonitor: Any?
     /// The switcher has text typed, so it searches the whole history.
     var switcherSearches = false {
         didSet { if switcherSearches { readAllSessionsForFilter() } }
@@ -734,39 +740,39 @@ final class DesktopModel: ObservableObject {
             showsSwitcher = false
         } else if !coversChat {
             showsSwitcher = true
-            startSwitcherTypeahead()
+            startPanelTypeahead()
         }
     }
 
-    /// Holds keys typed before the switcher's field has focus, and takes
-    /// the keyboard from the field that had it.
-    private func startSwitcherTypeahead() {
-        stopSwitcherTypeahead()
-        switcherTypeahead = ""
-        NSApp.keyWindow?.makeFirstResponder(nil)
-        switcherTypeaheadMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+    /// Holds keys typed before the switcher's or model picker's field has
+    /// focus, and takes the keyboard from the field that had it.
+    private func startPanelTypeahead() {
+        stopPanelTypeahead()
+        panelTypeahead = ""
+        (NSApp.keyWindow ?? NSApp.mainWindow)?.makeFirstResponder(nil)
+        panelTypeaheadMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let text = SessionSwitcher.typeahead(event.characters,
                                                        commandKey: !event.modifierFlags.isDisjoint(with: [.command, .control]))
             else { return event }
             let taken = MainActor.assumeIsolated { () -> Bool in
-                guard let self, self.showsSwitcher else { return false }
-                self.switcherTypeahead += text
+                guard let self, self.showsSwitcher || self.composerPanel == .model else { return false }
+                self.panelTypeahead += text
                 return true
             }
             return taken ? nil : event
         }
     }
 
-    /// The switcher's field has the keyboard: hands it what was typed so far.
-    func takeSwitcherTypeahead() -> String {
-        stopSwitcherTypeahead()
-        defer { switcherTypeahead = "" }
-        return switcherTypeahead
+    /// The panel's field has the keyboard: hands it what was typed so far.
+    func takePanelTypeahead() -> String {
+        stopPanelTypeahead()
+        defer { panelTypeahead = "" }
+        return panelTypeahead
     }
 
-    private func stopSwitcherTypeahead() {
-        if let switcherTypeaheadMonitor { NSEvent.removeMonitor(switcherTypeaheadMonitor) }
-        switcherTypeaheadMonitor = nil
+    private func stopPanelTypeahead() {
+        if let panelTypeaheadMonitor { NSEvent.removeMonitor(panelTypeaheadMonitor) }
+        panelTypeaheadMonitor = nil
     }
 
     /// Open the chat picked in the switcher.

@@ -194,9 +194,10 @@ private struct SessionSidebar: View {
                     .onChange(of: model.focusSessionSearch) { _, focus in
                         if focus { searchFocused = true; model.focusSessionSearch = false }
                     }
-                    // ⌘K's switcher takes the keyboard: typing must not keep
-                    // filtering the sidebar underneath it.
-                    .onChange(of: model.showsSwitcher) { _, shown in
+                    // ⌘K's switcher and the composer's panels take the
+                    // keyboard: typing must not keep filtering the sidebar
+                    // underneath them.
+                    .onChange(of: model.showsSwitcher || model.composerPanel != nil) { _, shown in
                         if shown { searchFocused = false }
                     }
                     .onKeyPress(.escape) {
@@ -2158,6 +2159,23 @@ struct ModelListPanel: View {
             focused = true
             highlighted = choices.firstIndex { $0.id == model.selectedModel } ?? 0
         }
+        // As in the ⌘K switcher: the field is in the window only once the
+        // panel's transition has inserted it, so focus is asked for again a
+        // tick later, and letters typed meanwhile filter the list.
+        .task {
+            await Task.yield()
+            focused = true
+            try? await Task.sleep(for: .milliseconds(60))
+            if focused { takeTypeahead() } else { focused = true }
+        }
+        .onChange(of: focused) { _, on in
+            if on { takeTypeahead() }
+        }
+    }
+
+    private func takeTypeahead() {
+        let typed = model.takePanelTypeahead()
+        if !typed.isEmpty { filter = typed + filter }
     }
 
     private func pick(_ choice: ModelChoice) {

@@ -209,7 +209,7 @@ private struct SessionSwitcherPanel: View {
 
     /// Letters typed after ⌘K but before the field had focus come first.
     private func takeTypeahead() {
-        let typed = model.takeSwitcherTypeahead()
+        let typed = model.takePanelTypeahead()
         if !typed.isEmpty { query = typed + query }
     }
 
