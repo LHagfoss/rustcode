@@ -737,16 +737,42 @@ private struct ChatView: View {
     /// The folder this chat works in: its own, which may not be the default.
     private var projectName: String { model.chatProject.lastPathComponent }
 
+    @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
+
+    /// The rows the chat draws once the verbosity folds its tool calls: the
+    /// lazy older ones, the eager newer ones, and the ids the scroller maps
+    /// (the earlier-messages row, the shown items and the working row).
+    private struct ShownRows {
+        var folding: ToolFolding
+        var older: [TranscriptItem]
+        var newer: [TranscriptItem]
+        var scroll: [Int]
+    }
+
+    private func shownRows(_ transcript: Transcript, first: Int, split: Int) -> ShownRows {
+        let folding = ToolFolding(items: transcript.items, verbosity: verbosity,
+                                  open: model.openToolRuns, running: isReplyStreaming)
+        let shown = { (item: TranscriptItem) in !folding.hidden.contains(item.id) }
+        let older = transcript.items[first..<split].filter(shown)
+        let newer = transcript.items[split...].filter(shown)
+        var scroll: [Int] = first > 0 ? [Self.earlierRow] : []
+        scroll += (older + newer).map(\.id)
+        if isReplyStreaming { scroll.append(Self.workingRow) }
+        return ShownRows(folding: folding, older: older, newer: newer, scroll: scroll)
+    }
+
     var body: some View {
         let transcript = chat.transcript
         let currentMatch = model.showsFind ? find.currentMatch : nil
         let lastId = transcript.items.last?.id
         let first = window.firstShown(identity: transcript.identity, count: transcript.items.count)
+
         // Older rows are lazy: laid out eagerly, every resize re-measured the
         // whole chat (170 ms a step in a 250-message session). The newest rows
         // stay eager, so the part being read never changes height under the
         // reader while scrolling near the end.
         let split = ChatLayout.split(count: transcript.items.count, firstShown: first)
+        let rows = shownRows(transcript, first: first, split: split)
         ScrollViewReader { proxy in
             ScrollView {
                 // The newest rows and the end of the chat sit below the lazy
@@ -768,8 +794,9 @@ private struct ChatView: View {
                                 EarlierMessages(count: first)
                                     .reportsChatRow(Self.earlierRow, to: scroll)
                             }
-                            ForEach(transcript.items[first..<split]) { item in
-                                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch)
+                            ForEach(rows.older) { item in
+                                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
+                                              fold: rows.folding.fold(for: item.id))
                                     .equatable()
                                     .reportsChatRow(item.id, to: scroll)
                                     .id(item.id)
@@ -777,9 +804,10 @@ private struct ChatView: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 18) {
-                        ForEach(transcript.items[split...]) { item in
+                        ForEach(rows.newer) { item in
                             TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                                          isStreaming: isReplyStreaming && item.id == lastId)
+                                          isStreaming: isReplyStreaming && item.id == lastId,
+                                          fold: rows.folding.fold(for: item.id))
                                 .equatable()
                                 .reportsChatRow(item.id, to: scroll)
                                 .id(item.id)
@@ -871,8 +899,7 @@ private struct ChatView: View {
             .onChange(of: transcript.identity, initial: true) { _, identity in
                 window.open(identity: identity, count: chat.transcript.items.count)
             }
-            .onChange(of: (first > 0 ? [Self.earlierRow] : []) + transcript.items[first...].map(\.id)
-                        + (isReplyStreaming ? [Self.workingRow] : []), initial: true) { _, rows in
+            .onChange(of: rows.scroll, initial: true) { _, rows in
                 scroll.setRows(rows)
             }
             .onChange(of: chat.transcript) { old, new in
@@ -907,6 +934,8 @@ private struct ChatView: View {
         }
         .environment(\.findQuery, model.showsFind ? find.appliedQuery : "")
         .environment(\.projectRoot, model.chatProject.path)
+        .environment(\.editsOpenByDefault, verbosity.editsOpen)
+        .environment(\.toggleToolRun, { [model] run in model.toggleToolRun(run) })
         .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {

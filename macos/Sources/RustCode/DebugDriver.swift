@@ -288,6 +288,27 @@ enum DebugDriver {
             }
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
+        case "tools":
+            // A turn's tool calls: three commands (one failed), an edit, two
+            // more commands, then the answer.
+            for (index, kind) in "ttxett".enumerated() {
+                let id = "drive-tool-\(index)"
+                model.transcript.apply(.toolCall(id: id, title: "run_command", kind: "execute",
+                                                 status: kind == "x" ? .failed : .completed, input: nil,
+                                                 detail: "cargo test --package step-\(index)"))
+                if kind == "e" {
+                    model.transcript.apply(.toolCallUpdate(id: id, title: "Edit", status: .completed, output: nil,
+                                                           diffs: [FileDiff(path: "/tmp/lib.rs", oldText: "let a = 1;\n", newText: "let a = 2;\n")]))
+                }
+            }
+            model.transcript.apply(.agentText("All steps ran."))
+        case "verbosity":
+            // `verbosity low|high|edits`: the Settings picker's value.
+            UserDefaults.standard.set(parts[1], forKey: ToolVerbosity.key)
+        case "openrun":
+            if let first = model.transcript.items.first(where: { if case .tool = $0.content { true } else { false } }) {
+                model.toggleToolRun(first.id)
+            }
         case "agents":
             // `agents [open]`: two subagents above the composer; `open` shows
             // the first one's panel.
