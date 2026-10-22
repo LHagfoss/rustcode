@@ -204,6 +204,9 @@ enum DebugDriver {
                     try? await Task.sleep(for: .milliseconds(50))
                 }
             }
+        case "viewimage":
+            // `viewimage <path> [zoom]`: open a file in the image viewer.
+            model.viewedImage = .file(URL(fileURLWithPath: parts[1]))
         case "scrollby":
             // `scrollby <points> [steps]`: move the chat, negative up, a step a frame.
             let steps = Int(parts.count > 2 ? parts[2] : "1") ?? 1

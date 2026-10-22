@@ -41,6 +41,15 @@ struct ContentView: View {
         .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
         .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
         .overlay { SessionSwitcherOverlay(model: model) }
+        .overlay {
+            if let image = model.viewedImage {
+                ImageViewer(image: image) { model.viewedImage = nil }
+                    .id(image.id)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: model.viewedImage)
+        .environment(\.openImage) { [model] in model.viewedImage = $0 }
         // Centered on the chat, not the window: the sidebar and the preview
         // beside it are left out.
         .overlay {

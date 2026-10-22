@@ -1,5 +1,4 @@
 import AppKit
-import QuickLook
 import RustCodeKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -56,13 +55,13 @@ extension ImageAttachment {
     }
 }
 
-/// An image in the transcript: a local file or a web image, opened in Quick
-/// Look with a click.
+/// An image in the transcript: a local file or a web image, opened in the
+/// window's image viewer with a click.
 struct InlineImage: View {
     let url: URL
     var alt = ""
     var maxSize: CGFloat = 420
-    @State private var preview: URL?
+    @Environment(\.openImage) private var openImage
     @State private var loaded: NSImage?
     @State private var failed = false
 
@@ -86,10 +85,10 @@ struct InlineImage: View {
         .frame(maxWidth: maxSize, maxHeight: maxSize, alignment: .leading)
         .clipShape(.rect(cornerRadius: 12))
         .contentShape(.rect)
-        .onTapGesture { if url.isFileURL { preview = url } else { NSWorkspace.shared.open(url) } }
+        .onTapGesture { openImage(url.isFileURL ? .file(url) : .web(url)) }
         .help(alt.isEmpty ? url.lastPathComponent : alt)
         .accessibilityLabel(alt.isEmpty ? "Image" : alt)
-        .quickLookPreview($preview)
+        .accessibilityAddTraits(.isButton)
         // Decoded off the main thread, at the size it is shown: a chat with
         // many screenshots read every file in full on each redraw.
         .task(id: url) {
@@ -160,10 +159,12 @@ enum Thumbnails {
     }
 }
 
-/// An image waiting in the composer, with a button to take it out.
+/// An image waiting in the composer, with a button to take it out. A click
+/// opens it in the image viewer.
 struct ImageChip: View {
     let image: ImageAttachment
     let remove: () -> Void
+    @Environment(\.openImage) private var openImage
 
     var body: some View {
         Group {
@@ -175,6 +176,9 @@ struct ImageChip: View {
         }
         .frame(width: 56, height: 56)
         .clipShape(.rect(cornerRadius: 10))
+        .contentShape(.rect)
+        .onTapGesture { openImage(.attachment(image)) }
+        .help("View")
         .overlay(alignment: .topTrailing) {
             Button(action: remove) {
                 Image(systemName: "xmark.circle.fill")
