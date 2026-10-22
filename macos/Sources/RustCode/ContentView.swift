@@ -36,6 +36,7 @@ struct ContentView: View {
         .clickAwayPanel(isPresented: $model.showsSettings) { SettingsView(model: model) }
         .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0) }
+        .clickAwayPanel(item: $model.viewedAgent) { AgentPanel(model: model, agent: $0) }
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
         .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
         .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
@@ -1580,6 +1581,7 @@ private struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !model.subagents.isEmpty { AgentStrip(model: model) }
             if !model.selectedQueue.isEmpty { QueuedPromptList(model: model) }
             if !model.images.isEmpty { imageChips }
             if !model.attachments.isEmpty { attachmentChips }

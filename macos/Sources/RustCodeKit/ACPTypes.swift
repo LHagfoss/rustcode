@@ -25,6 +25,9 @@ public enum ACPMethod {
     public static let remoteStop = "_rustcode/remote/stop"
     /// Hands a running turn a message to read after its current step.
     public static let steer = "_rustcode/steer"
+    /// Lists the chat's subagents, reads one's conversation, sends it more
+    /// instructions or cancels it.
+    public static let agents = "_rustcode/agents"
 }
 
 public struct AgentInfo: Equatable, Sendable {
@@ -38,6 +41,8 @@ public struct AgentInfo: Equatable, Sendable {
     public var remote: Bool
     /// The engine takes `_rustcode/steer` for a running turn.
     public var steer: Bool
+    /// The engine answers `_rustcode/agents`.
+    public var agents: Bool
 
     public init(initializeResult result: JSONValue) throws {
         guard let version = result["protocolVersion"]?.intValue else {
@@ -54,6 +59,7 @@ public struct AgentInfo: Equatable, Sendable {
         promptImages = capabilities?["promptCapabilities"]?["image"]?.boolValue ?? false
         remote = capabilities?["_meta"]?["rustcode"]?["remote"]?.intValue != nil
         steer = capabilities?["_meta"]?["rustcode"]?["steer"]?.intValue != nil
+        agents = capabilities?["_meta"]?["rustcode"]?["agents"]?.intValue != nil
     }
 }
 

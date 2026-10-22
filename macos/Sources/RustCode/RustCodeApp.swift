@@ -193,7 +193,10 @@ final class DesktopModel: ObservableObject {
     }
     @Published var sessions: [SessionSummary] = []
     @Published var selectedSession: String? {
-        didSet { if let selectedSession { unseenReplies.remove(selectedSession) } }
+        didSet {
+            if let selectedSession { unseenReplies.remove(selectedSession) }
+            if oldValue != selectedSession { showAgents(of: selectedSession) }
+        }
     }
     /// Chats whose turn finished while another chat was on screen, marked
     /// with a dot in the sidebar until opened.
@@ -359,6 +362,14 @@ final class DesktopModel: ObservableObject {
     /// The debug driver's stand-in for a turn, without an engine.
     func debugTurn(_ running: Bool, in session: String) {
         if running { _ = turnActivity.begin(session) } else { endAllTurns(failure: nil) }
+    }
+
+    /// The debug driver's stand-in for the agents list and an open agent.
+    func debugAgents(_ agents: [SubagentInfo], viewing transcript: Transcript?) {
+        subagents = agents
+        viewedAgent = transcript.flatMap { transcript in
+            agents.first.map { ViewedAgent(info: $0, transcript: transcript, loadedCount: $0.messageCount) }
+        }
     }
     #endif
     @Published var error: String?
@@ -561,6 +572,116 @@ final class DesktopModel: ObservableObject {
         if NSApp.isActive, session != selectedSession {
             showToast(Toast(style: .success, systemImage: "checkmark.circle.fill", title: chatTitle(session),
                             message: reply.isEmpty ? "Finished." : reply, session: session))
+        }
+    }
+
+    // MARK: - Subagents
+
+    /// A subagent's conversation, open in its panel.
+    struct ViewedAgent: Identifiable {
+        var info: SubagentInfo
+        var transcript = Transcript()
+        /// The child's message count when `transcript` was read.
+        var loadedCount = -1
+        var id: Int { info.id }
+    }
+
+    /// The shown chat's subagents, listed above the composer as the terminal's
+    /// agent picker lists them.
+    @Published private(set) var subagents: [SubagentInfo] = []
+    /// The subagent open in the agent panel.
+    @Published var viewedAgent: ViewedAgent?
+    private var agentPollTask: Task<Void, Never>?
+
+    /// Another chat is on screen: its agents replace the last one's.
+    private func showAgents(of session: String?) {
+        agentPollTask?.cancel()
+        agentPollTask = nil
+        subagents = []
+        viewedAgent = nil
+        if session != nil { pollAgents() }
+    }
+
+    /// Read the shown chat's agents once a second while its turn runs, a child
+    /// is still working, or a child's panel is open; then once more, so the
+    /// last state shows.
+    func pollAgents() {
+        guard agentPollTask == nil, capabilities?.agents == true,
+              let session = selectedSession, let connection = engine?.connection else { return }
+        agentPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.selectedSession == session, self.engine?.connection === connection else { return }
+                await self.readAgents(of: session, on: connection)
+                guard !Task.isCancelled else { return }
+                if !(self.isTurnRunning || self.subagents.contains(where: \.isActive) || self.viewedAgent != nil) {
+                    self.agentPollTask = nil
+                    return
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func readAgents(of session: String, on connection: ACPConnection) async {
+        guard let result = try? await connection.request(
+            ACPMethod.agents, params: ACPRequests.agents(sessionId: session), timeout: .seconds(10)),
+              selectedSession == session else { return }
+        let agents = SubagentInfo.list(from: result)
+        if agents != subagents { subagents = agents }
+        guard var viewed = viewedAgent else { return }
+        if let info = agents.first(where: { $0.id == viewed.id }) { viewed.info = info }
+        if viewed.info.messageCount != viewed.loadedCount,
+           let history = try? await connection.request(
+            ACPMethod.agents, params: ACPRequests.agentHistory(sessionId: session, id: viewed.id), timeout: .seconds(10)),
+           viewedAgent?.id == viewed.id {
+            viewed.transcript = SubagentInfo.transcript(from: history)
+            viewed.loadedCount = viewed.info.messageCount
+        }
+        if viewedAgent?.id == viewed.id { viewedAgent = viewed }
+    }
+
+    /// Open `agent`'s conversation in the agent panel.
+    func openAgent(_ agent: SubagentInfo) {
+        viewedAgent = ViewedAgent(info: agent)
+        agentPollTask?.cancel()
+        agentPollTask = nil
+        pollAgents()
+    }
+
+    /// Open the agent a `spawn_agent` card started, by the id in its result.
+    func openAgent(id: Int) {
+        if let agent = subagents.first(where: { $0.id == id }) { openAgent(agent) }
+    }
+
+    /// More instructions for the open agent: an idle child starts on them, a
+    /// running one reads them at its next step.
+    func sendToViewedAgent(_ text: String) async {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let agent = viewedAgent, let session = selectedSession,
+              let connection = engine?.connection else { return }
+        do {
+            let result = try await connection.request(
+                ACPMethod.agents, params: ACPRequests.agentSend(sessionId: session, id: agent.id, text: text),
+                timeout: .seconds(10))
+            if result["queued"]?.boolValue == true {
+                confirm("Queued for \(agent.info.name)", systemImage: "text.line.last.and.arrowtriangle.forward")
+            }
+            pollAgents()
+        } catch {
+            self.error = "\(agent.info.name) did not take the message: \(error)"
+        }
+    }
+
+    /// Stop the open agent and the agents it started.
+    func cancelViewedAgent() async {
+        guard let agent = viewedAgent, let session = selectedSession, let connection = engine?.connection else { return }
+        do {
+            _ = try await connection.request(
+                ACPMethod.agents, params: ACPRequests.agentCancel(sessionId: session, id: agent.id), timeout: .seconds(10))
+            confirm("Stopping \(agent.info.name)", systemImage: "stop.circle")
+            pollAgents()
+        } catch {
+            self.error = "\(agent.info.name) could not be stopped: \(error)"
         }
     }
 
@@ -1328,7 +1449,7 @@ final class DesktopModel: ObservableObject {
     /// A sheet or panel is open over the chat, which keeps its keys.
     var coversChat: Bool {
         showsSettings || renamingSession != nil || contextSheet != nil || commandResult != nil || composerPanel != nil
-            || showsSwitcher || showsVisualizationGuide || viewedImage != nil
+            || showsSwitcher || showsVisualizationGuide || viewedImage != nil || viewedAgent != nil
     }
 
     /// The request shown for the selected session, if any.
@@ -1574,6 +1695,7 @@ final class DesktopModel: ObservableObject {
         // Ended exactly once below however the turn ends, so the chat cannot
         // keep spinning after its answer.
         let turn = isCommand ? nil : turnActivity.begin(id)
+        if turn != nil, id == selectedSession { pollAgents() }
         var stopped = false
         var failure: String?
         do {
