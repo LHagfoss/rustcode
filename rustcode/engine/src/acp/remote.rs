@@ -204,6 +204,7 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
             Arc::clone(&session.client),
             session.auto_approve,
             Some(session.remote.clone()),
+            Arc::downgrade(&session.turns),
         )
         .await;
         session

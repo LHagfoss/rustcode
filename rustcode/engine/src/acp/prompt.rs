@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
 
 use super::permissions::AcpPolicy;
@@ -119,40 +119,16 @@ impl BackgroundTurnTasks {
         }
     }
 
-    fn observe_event(
-        &mut self,
-        event: &TaskEvent,
-        known_task_ids: &Arc<std::sync::Mutex<KnownTaskIds>>,
-    ) -> bool {
-        let id = event.task_id().to_string();
-        if !event.is_terminal() {
-            return false;
-        }
-        if event.notify_on_complete() == Some(false) {
-            known_task_ids
-                .lock()
-                .expect("ACP known task IDs mutex poisoned")
-                .remove(&id);
-            return false;
-        }
-        if self.existing.contains(&id) {
-            if event.is_terminal() {
-                known_task_ids
-                    .lock()
-                    .expect("ACP known task IDs mutex poisoned")
-                    .remove(&id);
-            }
-            return false;
-        }
-        self.pending.insert(id.clone());
-        if event.is_terminal() {
-            self.terminal.insert(id);
-            known_task_ids
-                .lock()
-                .expect("ACP known task IDs mutex poisoned")
-                .remove(event.task_id().as_str());
-        }
-        true
+    /// Mark as finished the pending tasks that are no longer `live`, whether
+    /// or not their completion is still retained.
+    fn observe_finished(&mut self, live: &HashSet<String>) {
+        let finished = self
+            .pending
+            .iter()
+            .filter(|id| !live.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.terminal.extend(finished);
     }
 
     fn complete(&self) -> bool {
@@ -278,6 +254,7 @@ pub(crate) async fn run_prompt(
     client: Arc<reqwest::Client>,
     auto_approve: bool,
     remote: Option<super::remote::RemoteManager>,
+    turns: std::sync::Weak<super::session::SessionTurnState>,
 ) -> Result<StopReason, agent_client_protocol::Error> {
     let turn = scheduled_turn.begin().await;
     // ACP turns get the same identity as terminal turns. Remote projection,
@@ -428,13 +405,10 @@ pub(crate) async fn run_prompt(
         )
         .await?;
 
-        while matches!(
+        if matches!(
             context.lifecycle.stop_reason,
             Some(crate::network::lifecycle::StopReason::BackgroundPending)
         ) {
-            if turn.cancel_token().is_cancelled() {
-                return Ok(StopReason::Cancelled);
-            }
             turn_tasks.observe_live_tasks(task_manager, &session_id);
             turn_tasks.observe_retained_completions(task_manager.completions(&session_id));
             if turn_tasks.pending.is_empty() {
@@ -443,62 +417,26 @@ pub(crate) async fn run_prompt(
                 context.lifecycle.task_completed = true;
                 context.lifecycle.stop_reason =
                     Some(crate::network::lifecycle::StopReason::Completed);
-                break;
+            } else {
+                // The model is done until a background command it is owed
+                // finishes. The turn ends here, as in the terminal, so the
+                // chat is free meanwhile; a server that never exits used to
+                // keep it busy for good (#2280). The command's completion
+                // resumes the turn.
+                tokio::spawn(resume_after_background(BackgroundWakeup {
+                    state: Arc::clone(&state),
+                    cwd: cwd.clone(),
+                    turns: turns.clone(),
+                    session_id: session_id.clone(),
+                    client: Arc::clone(&client),
+                    connection: connection.clone(),
+                    auto_approve,
+                    remote: remote.clone(),
+                    turn_tasks,
+                    context,
+                }));
+                return Ok(StopReason::EndTurn);
             }
-            loop {
-                if turn.cancel_token().is_cancelled() {
-                    return Ok(StopReason::Cancelled);
-                }
-                if terminal_overflow.load(Ordering::Acquire) {
-                    return Err(agent_client_protocol::Error::internal_error().data(
-                    "ACP background task completion backlog overflowed; session must be reopened",
-                ));
-                }
-                let event = loop {
-                    match try_receive_task_event(&task_events, &terminal_backlog) {
-                        Ok(event) => break event,
-                        Err(TryRecvError::Empty) => {
-                            if let Some(event) = try_receive_terminal_backlog(&terminal_backlog) {
-                                break event;
-                            }
-                            tokio::select! {
-                                _ = turn.cancel_token().cancelled() => {
-                                    return Ok(StopReason::Cancelled);
-                                }
-                                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
-                            }
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            return Err(agent_client_protocol::Error::internal_error()
-                                .data("ACP background task subscription closed"));
-                        }
-                    }
-                };
-                if turn.cancel_token().is_cancelled() {
-                    return Ok(StopReason::Cancelled);
-                }
-                turn_tasks.observe_event(&event, &known_task_ids);
-                turn_tasks.observe_live_tasks(task_manager, &session_id);
-                if turn_tasks.complete() {
-                    break;
-                }
-            }
-            context = run_prompt_continuation(
-                &client,
-                &state,
-                turn.cancel_token(),
-                &policy,
-                &stream_buffer,
-                String::new(),
-                events.clone(),
-                &mut receiver,
-                &connection,
-                &session_id,
-                &mut event_stream,
-                context,
-                remote.as_ref(),
-            )
-            .await?;
         }
         let harness_reason = context
             .lifecycle
@@ -522,23 +460,131 @@ pub(crate) async fn run_prompt(
     result
 }
 
-fn try_receive_task_event(
-    task_events: &Arc<std::sync::Mutex<Receiver<TaskEvent>>>,
-    terminal_backlog: &Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
-) -> Result<TaskEvent, TryRecvError> {
-    let result = task_events
-        .lock()
-        .expect("ACP task event mutex poisoned")
-        .try_recv();
-    if let Ok(event) = &result
-        && event.is_terminal()
-    {
-        terminal_backlog
-            .lock()
-            .expect("ACP terminal backlog mutex poisoned")
-            .retain(|queued| queued.task_id() != event.task_id());
+/// A turn parked on background commands, resumed once they finish.
+struct BackgroundWakeup {
+    state: Arc<Mutex<crate::app::AppState>>,
+    cwd: PathBuf,
+    /// Gone once the session closes, which ends the wait.
+    turns: std::sync::Weak<super::session::SessionTurnState>,
+    session_id: String,
+    client: Arc<reqwest::Client>,
+    connection: ConnectionTo<Client>,
+    auto_approve: bool,
+    remote: Option<super::remote::RemoteManager>,
+    turn_tasks: BackgroundTurnTasks,
+    context: crate::network::TurnContext,
+}
+
+/// How often a parked turn checks its background commands.
+const BACKGROUND_WAKEUP_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Wait for the commands `wakeup` is owed, then continue its turn under the
+/// session's turn gate, streaming to the client as a prompt would. A prompt
+/// sent meanwhile runs first; the continuation waits for it.
+fn resume_after_background(
+    wakeup: BackgroundWakeup,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(resume_after_background_inner(wakeup))
+}
+
+async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
+    let task_manager = crate::tools::background_task_manager();
+    let session_id = wakeup.session_id.clone();
+    loop {
+        tokio::time::sleep(BACKGROUND_WAKEUP_POLL).await;
+        if wakeup.turns.upgrade().is_none() {
+            return;
+        }
+        let live = task_manager
+            .list(&session_id)
+            .into_iter()
+            .map(|task| task.id.to_string())
+            .collect::<HashSet<_>>();
+        wakeup.turn_tasks.observe_finished(&live);
+        if wakeup.turn_tasks.complete() {
+            break;
+        }
     }
-    result
+    let Some(turns) = wakeup.turns.upgrade() else {
+        return;
+    };
+    let scheduled = turns.schedule();
+    drop(turns);
+    let turn = scheduled.begin().await;
+    let turn_id = {
+        let mut state = wakeup.state.lock().await;
+        state.status = crate::app::AppStatus::Streaming;
+        state.current_turn_started_at = Some(std::time::Instant::now());
+        state.begin_turn_identity()
+    };
+    let state = Arc::clone(&wakeup.state);
+    crate::logger::scope_session(session_id.clone(), async {
+        crate::tools::set_active_session_id(Some(session_id.clone()));
+        crate::config::set_active_session_id(&session_id);
+        crate::tools::set_active_workspace_context(
+            state.lock().await.workspace_root.clone(),
+            Some(wakeup.cwd.clone()),
+            false,
+            None,
+        );
+        let policy = Arc::new(AcpPolicy {
+            connection: wakeup.connection.clone(),
+            session_id: session_id.clone(),
+            auto_approve: wakeup.auto_approve,
+        });
+        let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
+        let (events, mut receiver) = crate::network::AgentUiEventSender::channel();
+        let mut event_stream = AcpEventStream::new().with_cwd(wakeup.cwd.clone());
+        let context = run_prompt_continuation(
+            &wakeup.client,
+            &state,
+            turn.cancel_token(),
+            &policy,
+            &stream_buffer,
+            String::new(),
+            events,
+            &mut receiver,
+            &wakeup.connection,
+            &session_id,
+            &mut event_stream,
+            wakeup.context,
+            wakeup.remote.as_ref(),
+        )
+        .await;
+        // Parked again on a later command: wait for that one in turn.
+        if let Ok(context) = context
+            && matches!(
+                context.lifecycle.stop_reason,
+                Some(crate::network::lifecycle::StopReason::BackgroundPending)
+            )
+            && !turn.cancel_token().is_cancelled()
+        {
+            let mut turn_tasks = BackgroundTurnTasks {
+                existing: wakeup.turn_tasks.pending,
+                pending: HashSet::new(),
+                terminal: HashSet::new(),
+            };
+            turn_tasks.observe_live_tasks(task_manager, &session_id);
+            if !turn_tasks.pending.is_empty() {
+                tokio::spawn(resume_after_background(BackgroundWakeup {
+                    state: Arc::clone(&state),
+                    cwd: wakeup.cwd.clone(),
+                    turns: wakeup.turns.clone(),
+                    session_id: session_id.clone(),
+                    client: Arc::clone(&wakeup.client),
+                    connection: wakeup.connection.clone(),
+                    auto_approve: wakeup.auto_approve,
+                    remote: wakeup.remote.clone(),
+                    turn_tasks,
+                    context,
+                }));
+            }
+        }
+    })
+    .await;
+    let mut state = state.lock().await;
+    state.end_turn_identity(&turn_id);
+    state.enter_idle();
 }
 
 fn drain_task_events(
@@ -564,15 +610,6 @@ fn drain_task_events(
         }
     }
     events
-}
-
-fn try_receive_terminal_backlog(
-    terminal_backlog: &Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
-) -> Option<TaskEvent> {
-    terminal_backlog
-        .lock()
-        .expect("ACP terminal backlog mutex poisoned")
-        .pop_front()
 }
 
 async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
@@ -845,74 +882,26 @@ mod tests {
     }
 
     #[test]
-    fn background_tracker_ignores_old_tasks_and_handles_cancellation() {
-        let known_task_ids = Arc::new(std::sync::Mutex::new({
-            let mut ids = super::super::session::KnownTaskIds::default();
-            ids.insert("old-task".to_owned());
-            ids
-        }));
+    fn a_parked_turn_wakes_once_its_tasks_leave_the_live_list() {
         let mut tracker = BackgroundTurnTasks {
-            existing: ["old-task".to_owned()].into_iter().collect(),
-            pending: Default::default(),
-            terminal: Default::default(),
-        };
-        let old = TaskEvent::Finished {
-            id: "old-task".into(),
-            session_id: "session".into(),
-            call_id: None,
-            command: "sleep 1".to_owned(),
-            notify_on_complete: true,
-            output: Ok(rustcode_command::CommandOutput {
-                success: true,
-                exit_code: Some(0),
-                signal: None,
-                downstream_consumer_terminated: false,
-                stdout: Default::default(),
-                stderr: Default::default(),
-            }),
-        };
-        assert!(!tracker.observe_event(&old, &known_task_ids));
-        assert!(
-            !known_task_ids
-                .lock()
-                .unwrap()
-                .snapshot()
-                .any(|id| id == "old-task")
-        );
-
-        let started = TaskEvent::Started {
-            id: "new-task".into(),
-            session_id: "session".into(),
-            call_id: None,
-            pid: 42,
-        };
-        assert!(!tracker.observe_event(&started, &known_task_ids));
-        assert!(!tracker.complete());
-        let cancelled = TaskEvent::Cancelled {
-            id: "new-task".into(),
-            session_id: "session".into(),
-            call_id: None,
-            command: "sleep 1".to_owned(),
-            notify_on_complete: true,
-        };
-        assert!(tracker.observe_event(&cancelled, &known_task_ids));
-        assert!(tracker.complete());
-
-        let mut silent_tracker = BackgroundTurnTasks {
             existing: HashSet::new(),
-            pending: HashSet::new(),
+            pending: ["build".to_owned(), "tests".to_owned()]
+                .into_iter()
+                .collect(),
             terminal: HashSet::new(),
         };
-        let silent = TaskEvent::Cancelled {
-            id: "silent-task".into(),
-            session_id: "session".into(),
-            call_id: None,
-            command: "sleep 30".to_owned(),
-            notify_on_complete: false,
+        let live = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| (*id).to_owned())
+                .collect::<HashSet<_>>()
         };
-        assert!(!silent_tracker.observe_event(&silent, &known_task_ids));
-        assert!(silent_tracker.pending.is_empty());
-        assert!(!silent_tracker.complete());
+        tracker.observe_finished(&live(&["build", "tests", "server"]));
+        assert!(!tracker.complete());
+        tracker.observe_finished(&live(&["tests", "server"]));
+        assert!(!tracker.complete(), "one owed task still runs");
+        // A server the turn is not owed keeps running; it does not hold it.
+        tracker.observe_finished(&live(&["server"]));
+        assert!(tracker.complete());
     }
 
     #[test]
