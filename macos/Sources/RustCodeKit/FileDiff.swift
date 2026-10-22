@@ -199,7 +199,7 @@ public enum LineDiff {
         let newMiddle = Array(new[head..<(new.count - tail)])
 
         var kinds: [DiffLine.Kind] = Array(repeating: .context, count: head)
-        kinds += middle(oldMiddle, newMiddle)
+        kinds += grouped(middle(oldMiddle, newMiddle), new: newMiddle)
         kinds += Array(repeating: .context, count: tail)
 
         var result: [DiffLine] = []
@@ -221,6 +221,67 @@ public enum LineDiff {
             }
         }
         return result
+    }
+
+    /// The edit script with a change that only a blank line or a lone brace
+    /// split in two read as one: such a line matched between edits on both
+    /// sides, at most as long as either, is replaced like its neighbours, and
+    /// each changed run lists its removals before its additions. Without
+    /// this, a `}` or blank line kept as context left a removal stranded after
+    /// it, away from the additions that replaced it. Real context, and any
+    /// run longer than the edits around it, stays.
+    static func grouped(_ kinds: [DiffLine.Kind], new: [String]) -> [DiffLine.Kind] {
+        // The script as runs: a context run with the new lines it covers, or
+        // a changed run's counts.
+        enum Run { case context(Range<Int>), change(removed: Int, added: Int) }
+        var runs: [Run] = []
+        var newIndex = 0
+        for kind in kinds {
+            switch (kind, runs.last) {
+            case (.context, .context(let range)?):
+                runs[runs.count - 1] = .context(range.lowerBound..<(range.upperBound + 1))
+            case (.context, _):
+                runs.append(.context(newIndex..<(newIndex + 1)))
+            case (.removed, .change(let removed, let added)?):
+                runs[runs.count - 1] = .change(removed: removed + 1, added: added)
+            case (.added, .change(let removed, let added)?):
+                runs[runs.count - 1] = .change(removed: removed, added: added + 1)
+            case (.removed, _):
+                runs.append(.change(removed: 1, added: 0))
+            case (.added, _):
+                runs.append(.change(removed: 0, added: 1))
+            }
+            if kind != .removed { newIndex += 1 }
+        }
+        var merged: [Run] = []
+        var index = 0
+        while index < runs.count {
+            if case .context(let range) = runs[index], index > 0, index + 1 < runs.count,
+               case .change(let removedBefore, let addedBefore)? = merged.last,
+               case .change(let removedAfter, let addedAfter) = runs[index + 1],
+               range.count <= max(removedBefore, addedBefore), range.count <= max(removedAfter, addedAfter),
+               new[range].allSatisfy(isFiller) {
+                merged[merged.count - 1] = .change(removed: removedBefore + range.count + removedAfter,
+                                                   added: addedBefore + range.count + addedAfter)
+                index += 2
+                continue
+            }
+            merged.append(runs[index])
+            index += 1
+        }
+        return merged.flatMap { run -> [DiffLine.Kind] in
+            switch run {
+            case .context(let range): Array(repeating: .context, count: range.count)
+            case .change(let removed, let added):
+                Array(repeating: .removed, count: removed) + Array(repeating: .added, count: added)
+            }
+        }
+    }
+
+    /// A line that says nothing on its own: blank, or only brackets and
+    /// separators such as `}` or `});`.
+    private static func isFiller(_ line: String) -> Bool {
+        line.allSatisfy { $0.isWhitespace || "{}()[];,".contains($0) }
     }
 
     /// The edit script for the differing middle: removals before additions
