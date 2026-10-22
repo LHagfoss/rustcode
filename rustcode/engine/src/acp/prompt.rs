@@ -288,6 +288,7 @@ pub(crate) async fn run_prompt(
         state.current_turn_started_at = Some(std::time::Instant::now());
         state.current_turn_token_usage = None;
         state.current_turn_token_usage_is_estimated = false;
+        super::steer::begin(&mut state, &session_id);
         state.begin_turn_identity()
     };
     // Unscoped debug lines and operational events follow the session whose
@@ -514,6 +515,9 @@ pub(crate) async fn run_prompt(
         let mut state = state.lock().await;
         state.end_turn_identity(&turn_id);
         state.enter_idle();
+        if state.active_turn_steerable_session.as_deref() == Some(session_id.as_str()) {
+            state.active_turn_steerable_session = None;
+        }
     }
     result
 }
