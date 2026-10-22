@@ -7330,8 +7330,8 @@ fn footer_counts_tasks_and_reports_where_the_counter_is() {
                     None,
                     false,
                     false,
-                )
-                .tasks_chip;
+                    false,
+                );
             })
             .unwrap();
         let row = (0..80)
@@ -8854,7 +8854,7 @@ fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
 }
 
 #[test]
-fn empty_composer_is_a_band_with_settings_and_location_in_the_footer() {
+fn empty_composer_is_framed_with_settings_inside_and_location_footer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
     use crate::inline_terminal::InlineTerminal as Terminal;
@@ -8887,8 +8887,8 @@ fn empty_composer_is_a_band_with_settings_and_location_in_the_footer() {
         Some(prompt_row - 1),
         "shutdown should know where the transient composer begins"
     );
-    // A blank band row above and below the prompt, then the footer. No
-    // outline (#2246); the settings moved to the footer (#2276).
+    // A blank band row above the input, the prompt, a gap row, the settings
+    // row, a blank band row under it, then the footer. No outline (#2246).
     let band_top = row_text(prompt_row - 1);
     assert!(band_top.trim().is_empty(), "band top: {band_top:?}");
     assert!(
@@ -8897,26 +8897,44 @@ fn empty_composer_is_a_band_with_settings_and_location_in_the_footer() {
         row_text(prompt_row)
     );
     assert!(!row_text(prompt_row).contains('│'), "no outline (#2246)");
-    let band_bottom = row_text(prompt_row + 1);
+    let gap = row_text(prompt_row + 1);
+    assert!(gap.trim().is_empty(), "gap row: {gap:?}");
+    let settings = row_text(prompt_row + 2);
+    assert!(
+        settings.starts_with(&format!("    Build · ask · {}", state.model_name)),
+        "settings row: {settings:?}"
+    );
+    let band_bottom = row_text(prompt_row + 3);
     assert!(
         band_bottom.trim().is_empty(),
         "band bottom: {band_bottom:?}"
     );
-    assert_eq!(footer_row, prompt_row + 2);
+    assert_eq!(footer_row, prompt_row + 4);
 
     let footer = row_text(footer_row);
     assert!(
-        footer.starts_with(&format!(
-            "  Build · ask · {} · main · ~/code/project",
-            state.model_name
-        )),
+        footer.starts_with("  main · ~/code/project"),
         "composer footer: {footer:?}"
     );
+    for moved in [
+        state.model_name.as_str(),
+        "Build",
+        "ask",
+        "auto-approve",
+        "Plan",
+    ] {
+        assert!(
+            !footer.contains(moved),
+            "{moved} moved into the composer: {footer:?}"
+        );
+    }
     // The whole band is the composer panel colour, above and below the input,
     // and the footer keeps the transcript background.
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(2, prompt_row)].bg, COLOR_PANEL());
     assert_eq!(buffer[(2, prompt_row + 1)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(2, prompt_row + 2)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(2, prompt_row + 3)].bg, COLOR_PANEL());
     assert_eq!(buffer[(98, prompt_row)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
 }
@@ -8952,7 +8970,7 @@ fn draw_framed_composer(
 }
 
 #[test]
-fn footer_names_the_mode_and_shows_the_approval_posture() {
+fn settings_row_names_the_mode_and_shows_the_approval_posture() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use rustcode::controller::AgentMode;
 
@@ -8970,48 +8988,98 @@ fn footer_names_the_mode_and_shows_the_approval_posture() {
         assert_eq!(super::mode_token(&snapshot), expected_mode);
         assert_eq!(super::approval_token(&snapshot), expected_approval);
 
-        for width in [100, 60] {
-            let mut transcript = TranscriptState::default();
-            let (rows, area, _) = draw_framed_composer(&mut state, &mut transcript, width, 12);
-            // The composer holds only the input; the footer leads with the
-            // posture, then the model (#2276).
-            assert!(
-                rows[usize::from(area.y)..usize::from(area.bottom())]
-                    .iter()
-                    .all(|row| !row.contains(expected_approval)),
-                "{mode:?}/{auto_confirm} at {width}: posture left in the composer"
-            );
-            // A narrower row clips the model and location, never the posture.
-            let footer = &rows[11];
-            let expected = if width == 100 {
-                format!(
-                    "  {expected_mode} · {expected_approval} · {}",
-                    state.model_name
-                )
-            } else {
-                format!("  {expected_mode} · {expected_approval} · ")
-            };
-            assert!(
-                footer.starts_with(&expected),
-                "{mode:?}/{auto_confirm} at {width}: {footer:?}"
-            );
-            // Plan mode is read-only, so auto-approve never shows beside it.
-            if mode == AgentMode::Plan {
-                assert!(!footer.contains("auto-approve"), "{footer:?}");
-            }
+        let mut transcript = TranscriptState::default();
+        let (rows, area, _) = draw_framed_composer(&mut state, &mut transcript, 100, 12);
+        let settings = &rows[usize::from(area.bottom() - 2)];
+        assert!(
+            settings.starts_with(&format!(
+                "    {expected_mode} · {expected_approval} · {}",
+                state.model_name
+            )),
+            "{mode:?}/{auto_confirm}: {settings:?}"
+        );
+        // Plan mode is read-only, so auto-approve never shows beside it. The
+        // default `Build · ask` never leaks into the footer once the composer
+        // carries it; only a plan/auto-approve badge appears without a frame.
+        assert!(!settings.contains('│'), "no outline (#2246)");
+        if mode == AgentMode::Plan {
+            assert!(!settings.contains("auto-approve"), "{settings:?}");
+        }
+        let footer = &rows[11];
+        for token in ["read-only", "auto-approve", "Plan"] {
+            assert!(!footer.contains(token), "{token} leaked into {footer:?}");
+        }
 
-            // The posture label (mode and approval) is a click target over
-            // exactly its cells, never the model beside it.
-            let chip = transcript.posture_chip.expect("posture is clickable");
-            assert_eq!(chip.y, 11);
-            let painted = footer
-                .chars()
-                .skip(usize::from(chip.x))
-                .take(usize::from(chip.width))
-                .collect::<String>();
-            assert_eq!(painted, format!("{expected_mode} · {expected_approval}"));
+        // The posture label (mode and approval) is a click target over exactly
+        // its cells, never the model beside it.
+        let chip = transcript.posture_chip.expect("posture is clickable");
+        assert_eq!(chip.y, area.bottom() - 2);
+        let painted = (chip.x..chip.right())
+            .map(|x| settings.chars().nth(usize::from(x)).unwrap())
+            .collect::<String>();
+        assert_eq!(painted, format!("{expected_mode} · {expected_approval}"));
+
+        // Below the fallback width there is no band and no outline.
+        let narrow = render_state_to_text(&mut state, super::COMPOSER_FRAME_MIN_WIDTH - 1, 12);
+        assert!(!narrow.contains('╭'), "{narrow}");
+        assert!(!narrow.contains("Build · ask"), "{narrow}");
+
+        // The unframed footer carries the model plus only a non-default
+        // posture. Plan mode always shows there, since it changes what Enter
+        // lets the model do; the default `Build · ask` stays out of it.
+        let badges = super::footer_session_badges(&snapshot);
+        assert_eq!(badges[0], state.model_name);
+        match (mode, auto_confirm) {
+            (AgentMode::Plan, _) => {
+                assert_eq!(badges[1], "Plan · read-only", "{badges:?}");
+                assert!(!badges.iter().any(|b| b.contains("auto-approve")));
+            }
+            (AgentMode::Build, true) => assert_eq!(badges[1], "auto-approve", "{badges:?}"),
+            (AgentMode::Build, false) => assert_eq!(badges.len(), 1, "{badges:?}"),
         }
     }
+}
+
+#[test]
+fn settings_row_drops_the_posture_before_the_model() {
+    let mut state = RenderState::new();
+    state.model_name = "gemini-3.6-flash".to_owned();
+    let snapshot = render_snapshot(&state);
+    let model = Some("gemini-3.6-flash".to_owned());
+    // Two columns of indent and the free cursor column come off the width.
+    // `Build · ask` (11) and the separators cost 14 columns before the model.
+    assert_eq!(
+        super::composer_settings(&snapshot, 33),
+        super::ComposerSettings {
+            mode: Some("Build"),
+            approval: Some("ask"),
+            model: model.clone()
+        }
+    );
+    assert_eq!(
+        super::composer_settings(&snapshot, 32),
+        super::ComposerSettings {
+            mode: None,
+            approval: None,
+            model: model.clone()
+        }
+    );
+    assert_eq!(
+        super::composer_settings(&snapshot, 19),
+        super::ComposerSettings {
+            mode: None,
+            approval: None,
+            model
+        }
+    );
+    assert_eq!(
+        super::composer_settings(&snapshot, 18),
+        super::ComposerSettings {
+            mode: None,
+            approval: None,
+            model: None
+        }
+    );
 }
 
 #[test]
@@ -9148,9 +9216,9 @@ fn notices_and_hints_replace_the_footer_without_moving_the_composer() {
             rows[13]
         );
         assert_eq!(
-            rows[usize::from(area.bottom() - 1)],
-            idle_rows[usize::from(area.bottom() - 1)],
-            "{label} changed the composer band"
+            rows[usize::from(area.bottom() - 2)],
+            idle_rows[usize::from(area.bottom() - 2)],
+            "{label} changed the settings row"
         );
     }
 }
@@ -9553,12 +9621,13 @@ fn active_subagent_context_is_named_in_the_composer_footer() {
     state.cwd_and_branch = "~/code/project:main".to_owned();
     let rendered = render_state_to_text(&mut state, 100, 30);
 
-    // The subagent leads the footer, then the session settings (#2276).
+    // The subagent leads the footer; the model now sits inside the composer.
     assert!(
-        rendered.contains(&format!(
-            "agent-1 · Build · ask · {} · main · ~/code/project",
-            state.model_name
-        )),
+        rendered.contains("agent-1 · main · ~/code/project"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("ask · {}", state.model_name)),
         "{rendered}"
     );
 }
@@ -10980,7 +11049,15 @@ fn footer_shows_the_model_without_a_running_indicator() {
                 .unwrap();
         terminal
             .draw(|frame| {
-                super::render_composer_footer(frame, frame.area(), &snapshot, None, false, false);
+                super::render_composer_footer(
+                    frame,
+                    frame.area(),
+                    &snapshot,
+                    None,
+                    false,
+                    false,
+                    false,
+                );
             })
             .unwrap();
         let row = (0..160)
@@ -11415,36 +11492,6 @@ fn slash_popup_is_flush_with_composer_when_tools_are_expanded() {
         2,
         "only composer top padding belongs between picker and input: {rendered}"
     );
-}
-
-#[test]
-fn slash_popup_band_spans_the_composer_width() {
-    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
-    use crate::inline_terminal::InlineTerminal as Terminal;
-    use ratatui::backend::TestBackend;
-
-    let mut state = RenderState::new();
-    state.input_buffer = "/mo".to_owned();
-    state.cursor_position = state.input_buffer.len();
-    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-    let mut input_area = ratatui::layout::Rect::default();
-    terminal
-        .draw(|frame| input_area = super::render(frame, &mut state).1)
-        .unwrap();
-    let buffer = terminal.backend().buffer();
-    let popup_row = (0..input_area.y)
-        .rev()
-        .find(|y| (0..80).any(|x| buffer[(x, *y)].symbol() == "/"))
-        .expect("popup row");
-    // Both edges of the popup line up with the composer band (#2275).
-    for x in [input_area.x, input_area.right() - 1] {
-        assert_eq!(
-            buffer[(x, popup_row)].bg,
-            buffer[(x, input_area.y)].bg,
-            "column {x}"
-        );
-    }
-    assert_eq!(buffer[(input_area.x, popup_row)].bg, COLOR_PANEL());
 }
 
 #[test]
