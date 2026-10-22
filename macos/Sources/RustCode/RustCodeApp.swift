@@ -320,6 +320,17 @@ final class DesktopModel: ObservableObject {
     @Published var attachments: [URL] = []
     /// Images pasted, dropped or attached; sent as ACP image blocks.
     @Published var images: [ImageAttachment] = []
+    /// What the composer held for each chat not on screen, so a draft never
+    /// follows the user into another chat. The new-chat draft is kept under
+    /// `newChatQueue`.
+    private var parkedDrafts: [String: ParkedDraft] = [:]
+
+    struct ParkedDraft {
+        var text: String
+        var command: SlashCommand?
+        var attachments: [URL]
+        var images: [ImageAttachment]
+    }
     /// Prompt turns in flight. Each chat runs its own turns, so a new chat is
     /// ready while another one works.
     @Published private(set) var turnActivity = TurnActivity()
@@ -944,10 +955,11 @@ final class DesktopModel: ObservableObject {
         sessionPages.remove(session.id)
         startedSessions[session.id] = nil
         confirm("Moved to the Trash", systemImage: "trash.fill")
+        parkedDrafts[session.id] = nil
         if selectedSession == session.id {
             selectedSession = nil
             transcript.removeAll()
-            await newSession()
+            await newSession(keepingDraft: false)
         }
     }
 
@@ -1104,12 +1116,15 @@ final class DesktopModel: ObservableObject {
 
     /// A new chat starts as an empty draft. The engine session is created when
     /// the first message is sent, so opening and leaving it leaves nothing behind.
-    func newSession() async {
+    /// `keepingDraft` false drops what the composer holds instead of keeping
+    /// it for the chat on screen, as when that chat is gone.
+    func newSession(keepingDraft: Bool = true) async {
         stashSelectedSession()
+        if keepingDraft { parkDraft() }
+        restoreDraft(for: nil)
         terminal.hide()
         selectedSession = nil
         transcript.removeAll()
-        draftCommand = nil
         composerPanel = nil
         draftProject = nil
         startDraftFromDefaults()
@@ -1284,6 +1299,14 @@ final class DesktopModel: ObservableObject {
         rememberPinned()
     }
 
+    /// A turn just ended in `id`: it is the latest activity until the engine's
+    /// list says so too.
+    private func touchSession(_ id: String) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[index].updatedAt = Date()
+        sessions = SessionSummary.byActivity(sessions)
+    }
+
     /// Keep what the sidebar knows of each pinned chat for the next launch.
     private func rememberPinned() {
         let shown = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1305,10 +1328,29 @@ final class DesktopModel: ObservableObject {
         permissionQueue.first { $0.sessionId == selectedSession }
     }
 
+    /// Keep the composer's contents for the chat on screen.
+    private func parkDraft() {
+        let parked = ParkedDraft(text: draft, command: draftCommand, attachments: attachments, images: images)
+        let empty = parked.text.isEmpty && parked.command == nil && parked.attachments.isEmpty && parked.images.isEmpty
+        parkedDrafts[selectedSession ?? Self.newChatQueue] = empty ? nil : parked
+    }
+
+    /// Fill the composer with what was kept for `session`, or empty it.
+    private func restoreDraft(for session: String?) {
+        let parked = parkedDrafts.removeValue(forKey: session ?? Self.newChatQueue)
+        draft = parked?.text ?? ""
+        draftCommand = parked?.command
+        attachments = parked?.attachments ?? []
+        images = parked?.images ?? []
+        composer.commandSelection = 0
+    }
+
     func select(_ session: SessionSummary) async {
         guard let connection = engine?.connection, capabilities?.loadSession == true,
               session.id != selectedSession else { return }
         stashSelectedSession()
+        parkDraft()
+        restoreDraft(for: session.id)
         // Another chat opens without the terminal; ⇧⌘T brings it back.
         terminal.hide()
         if !session.cwd.isEmpty { sessionProjects[session.id] = session.cwd }
@@ -1548,8 +1590,10 @@ final class DesktopModel: ObservableObject {
         } else if !stopped {
             notifyFinished(id)
         }
-        // The list refreshes behind the answer: waiting for it kept the chat
-        // spinning until the engine listed every session.
+        // The chat just used moves to the top at once; the list refreshes
+        // behind the answer: waiting for it kept the chat spinning until the
+        // engine listed every session.
+        touchSession(id)
         Task { await refreshSessions() }
         if let turn { turnActivity.end(turn) }
         // A queued message starts at once, with no wait in between, so

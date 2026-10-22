@@ -39,6 +39,29 @@ final class DiffTests: XCTestCase {
         XCTAssertEqual(kinds, [.removed, .added, .context, .removed, .added, .added])
     }
 
+    /// #2247: a closing brace kept as context between edits left a removal
+    /// stranded below it; the change reads as one block instead.
+    func testLineDiffKeepsAChangeSplitByABraceTogether() {
+        let old = ["fn a() {", "    let x = 1;", "    }", "    old_tail();", "}"]
+        let new = ["fn a() {", "    let x = 2;", "    let y = 3;", "    }", "    new_tail();", "}"]
+        let lines = LineDiff.lines(old: old, new: new, oldStart: 8937, newStart: 8937)
+        XCTAssertEqual(lines.map(\.kind), [.context, .removed, .removed, .removed, .added, .added, .added, .added, .context])
+        XCTAssertEqual(lines.filter { $0.kind == .removed }.map(\.text), ["    let x = 1;", "    }", "    old_tail();"])
+        XCTAssertEqual(lines.filter { $0.kind == .added }.map(\.text), ["    let x = 2;", "    let y = 3;", "    }", "    new_tail();"])
+        XCTAssertEqual(lines.filter { $0.kind == .removed }.compactMap(\.oldNumber), [8938, 8939, 8940])
+        XCTAssertEqual(lines.filter { $0.kind == .added }.compactMap(\.newNumber), [8938, 8939, 8940, 8941])
+        XCTAssertEqual(lines.last, DiffLine(kind: .context, text: "}", oldNumber: 8941, newNumber: 8942))
+    }
+
+    /// Real context between edits, or filler longer than the edits around
+    /// it, still separates them.
+    func testLineDiffKeepsMeaningfulContext() {
+        XCTAssertEqual(LineDiff.lines(old: ["x", "keep", "y"], new: ["p", "keep", "q"]).map(\.kind),
+                       [.removed, .added, .context, .removed, .added])
+        XCTAssertEqual(LineDiff.lines(old: ["x", "", "", "y"], new: ["p", "", "", "q"]).map(\.kind),
+                       [.removed, .added, .context, .context, .removed, .added])
+    }
+
     func testHugeInputsFallBackToRemoveThenAdd() {
         let old = (0..<3000).map { "old \($0)" }
         let new = (0..<3000).map { "new \($0)" }
