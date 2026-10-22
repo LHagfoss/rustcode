@@ -1,3 +1,17 @@
+## [v0.90.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.90.0) - 2026-10-22
+
+### Features
+- The macOS app can start subagents again. (#2282)
+- Typing right after opening the model picker filters models instead of the sidebar's chat search. (#2283)
+- Diffs in the macOS app show one line-number column, GitHub style, instead of paired old/new numbers. (#2284)
+- The TUI shows mode, approval, model and reasoning effort in the footer, and the completion popup lines up with the composer. (#2285)
+- The macOS app lists a chat's subagents above the composer; open one to read its conversation, send it instructions, or cancel it. (#2286)
+- A model that rejects images despite its profile no longer fails every later message: older images are described by the vision model or left out. (#2287)
+- TUI verbosity: low folds runs of tool calls into one clickable `N tool calls` row and shows only the running call; edits does the same but keeps file diffs open. (#2288)
+- The macOS app folds tool calls by verbosity like the terminal: low shows one "N tool calls" row and only the running call, edits keeps file diffs open, set in Settings. (#2289)
+- In the macOS app, a chat no longer stays busy while a background command it started runs; the reply continues when the command finishes. (#2290)
+- The macOS app's message menu has Retry, which re-runs a message in place (after confirming when later messages would be removed) instead of appending a duplicate. (#2291)
+- The macOS chat input suggests the next word as you type (Apple's on-device predictions; Tab accepts), with a switch in Settings. (#2292)
 ## [v0.89.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.89.0) - 2026-10-22
 
 ### Features
