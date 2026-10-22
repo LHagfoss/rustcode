@@ -1,3 +1,8 @@
+## [v0.91.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.91.0) - 2026-10-22
+
+### Features
+- The mode and model sit inside the chat input again, padded above and below. (#2296)
+- Tool calls say what they do in the app and terminal, and the app folds every run of calls, a lone call included, under a row naming the tools. (#2297)
 ## [v0.90.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.90.1) - 2026-10-22
 
 ### Features
