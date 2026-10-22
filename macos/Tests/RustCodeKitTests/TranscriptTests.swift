@@ -189,4 +189,19 @@ final class TranscriptIdentityTests: XCTestCase {
         first.removeAll()
         XCTAssertNotEqual(first.identity, before, "a cleared chat is a new one")
     }
+
+    func testRetryRewindsFromAUserMessage() {
+        var transcript = Transcript()
+        transcript.appendUser("first")
+        transcript.apply(.agentText("one"))
+        transcript.appendUser("second")
+        transcript.apply(.agentText("two"))
+        transcript.appendUser("third")
+        let ids = transcript.items.map(\.id)
+        XCTAssertEqual(transcript.userIndex(of: ids[2]), 1)
+        XCTAssertNil(transcript.userIndex(of: ids[1]), "an answer is not a message")
+        XCTAssertEqual(transcript.userMessages(after: ids[2]), 1)
+        transcript.removeFrom(ids[2])
+        XCTAssertEqual(transcript.items.map(\.content), [.user("first"), .assistant("one")])
+    }
 }

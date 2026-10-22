@@ -243,7 +243,8 @@ final class DesktopModel: ObservableObject {
     /// changed the environment of every message and redrew them all.
     private(set) lazy var messageActions = MessageActions(
         edit: { [weak self] in self?.edit($0) },
-        retry: { [weak self] text in Task { await self?.retry(text) } })
+        retry: { [weak self] text in Task { await self?.retry(text) } },
+        retryMessage: { [weak self] id in Task { await self?.retryMessage(id) } })
     @Published var showsSidebar = true
     @Published var showsSettings = false
     /// `/remote`: the pairing panel over the chat.
@@ -1114,6 +1115,39 @@ final class DesktopModel: ObservableObject {
         let message = ImageMarkers.split(text)
         draft = message.text
         images = message.images.compactMap { try? ImageAttachment.load($0) }
+    }
+
+    /// Retry: the chat goes back to just before message `id` and sends it
+    /// again, so it does not show twice (#2278). Messages after it go too,
+    /// once the user confirms. An engine without rewind sends it again below.
+    func retryMessage(_ id: Int) async {
+        guard !busy, let item = transcript.items.first(where: { $0.id == id }),
+              case .user(let text) = item.content else { return }
+        guard capabilities?.rewind == true, let session = selectedSession,
+              let connection = engine?.connection, let index = transcript.userIndex(of: id) else {
+            return await retry(text)
+        }
+        let later = transcript.userMessages(after: id)
+        if later > 0 {
+            let alert = NSAlert()
+            alert.messageText = "Retry this message?"
+            alert.informativeText = later == 1
+                ? "The message after it and its reply will be removed."
+                : "The \(later) messages after it and their replies will be removed."
+            alert.addButton(withTitle: "Retry")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        do {
+            _ = try await connection.request(
+                ACPMethod.rewind, params: ACPRequests.rewind(sessionId: session, userIndex: index, text: text),
+                timeout: .seconds(10))
+        } catch {
+            self.error = "Could not retry the message: \(error)"
+            return
+        }
+        transcript.removeFrom(id)
+        await retry(text)
     }
 
     /// Send a message again as a new prompt.

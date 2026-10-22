@@ -25,7 +25,7 @@ struct TranscriptRow: View, Equatable {
     @ViewBuilder
     private var content: some View {
         switch item.content {
-        case .user(let text): UserMessage(text: text)
+        case .user(let text): UserMessage(id: item.id, text: text)
         case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming)
         case .thinking(let text): ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration)
         case .tool(let tool):
@@ -119,6 +119,7 @@ private struct SummaryCard: View {
 }
 
 private struct UserMessage: View {
+    let id: Int
     let text: String
     @Environment(\.messageActions) private var messageActions
 
@@ -134,20 +135,21 @@ private struct UserMessage: View {
                 .contextMenu {
                     if let actions = messageActions {
                         Button("Edit and Resend", systemImage: "pencil") { actions.edit(text) }
-                        Button("Send Again", systemImage: "arrow.clockwise") { actions.retry(text) }
+                        Button("Retry", systemImage: "arrow.clockwise") { actions.retryMessage(id) }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.leading, 80)
             }
             if !message.text.isEmpty || message.images.isEmpty {
-                UserBubble(text: message.text, original: text)
+                UserBubble(id: id, text: message.text, original: text)
             }
         }
     }
 }
 
 private struct UserBubble: View {
+    let id: Int
     let text: String
     /// The message as sent, image markers included, for edit and resend.
     let original: String
@@ -172,7 +174,7 @@ private struct UserBubble: View {
                 if let actions = messageActions {
                     Divider()
                     Button("Edit and Resend", systemImage: "pencil") { actions.edit(original) }
-                    Button("Send Again", systemImage: "arrow.clockwise") { actions.retry(original) }
+                    Button("Retry", systemImage: "arrow.clockwise") { actions.retryMessage(id) }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -730,7 +732,10 @@ struct WorkingIndicator: View {
 /// What a message's context menu can ask the chat to do.
 struct MessageActions {
     var edit: (String) -> Void
+    /// Run a host command again.
     var retry: (String) -> Void
+    /// Send message `id` again in its place (#2278).
+    var retryMessage: (Int) -> Void
 }
 
 extension EnvironmentValues {
