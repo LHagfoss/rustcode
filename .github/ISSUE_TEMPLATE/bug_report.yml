@@ -17,6 +17,15 @@ body:
               1. Run `rustcode` in ...
               2. Ask ...
               3. See ...
+    - type: textarea
+      id: text
+      attributes:
+          label: Exact text
+          description: |
+              Paste the text involved: the error, the diff lines, the command, the
+              message you sent. Screenshots help people, but an agent fixing the
+              issue cannot see them.
+          render: text
     - type: input
       id: version
       attributes:
