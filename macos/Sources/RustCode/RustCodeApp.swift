@@ -1100,6 +1100,7 @@ final class DesktopModel: ObservableObject {
     /// the first message is sent, so opening and leaving it leaves nothing behind.
     func newSession() async {
         stashSelectedSession()
+        terminal.hide()
         selectedSession = nil
         transcript.removeAll()
         draftCommand = nil
@@ -1302,6 +1303,8 @@ final class DesktopModel: ObservableObject {
         guard let connection = engine?.connection, capabilities?.loadSession == true,
               session.id != selectedSession else { return }
         stashSelectedSession()
+        // Another chat opens without the terminal; ⇧⌘T brings it back.
+        terminal.hide()
         if !session.cwd.isEmpty { sessionProjects[session.id] = session.cwd }
         if let open = openSessions[session.id] {
             selectedSession = session.id
