@@ -14,6 +14,49 @@ pub(crate) fn has_image_markers(history: &[ChatMessage]) -> bool {
         .any(|message| message.role == "user" && message.content.contains(IMAGE_MARKER))
 }
 
+/// Whether the newest user message, the one being answered, holds images.
+pub(crate) fn latest_user_message_has_images(history: &[ChatMessage]) -> bool {
+    history
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .is_some_and(|message| message.content.contains(IMAGE_MARKER))
+}
+
+/// Replace every image marker in user messages with `placeholder`.
+pub(crate) fn omit_images(history: &mut [ChatMessage], placeholder: &str) {
+    for message in history.iter_mut().filter(|message| message.role == "user") {
+        while let Some(start) = message.content.find(IMAGE_MARKER) {
+            let path_start = start + IMAGE_MARKER.len();
+            let Some(path_len) = message.content[path_start..].find(')') else {
+                break;
+            };
+            message
+                .content
+                .replace_range(start..path_start + path_len + 1, placeholder);
+        }
+    }
+}
+
+/// Whether a provider error says the model takes no image input, as
+/// `deepseek-v4.1-flash does not take image, audio, video or file input`.
+pub(crate) fn rejects_image_input(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("image")
+        && [
+            "does not take",
+            "does not support",
+            "doesn't support",
+            "not supported",
+            "unsupported",
+            "cannot accept",
+            "does not accept",
+            "no vision",
+        ]
+        .iter()
+        .any(|phrase| error.contains(phrase))
+}
+
 pub(crate) fn extend_bounded_cache(
     cache: &mut HashMap<String, String>,
     additions: HashMap<String, String>,
@@ -434,6 +477,38 @@ fn vision_response_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn earlier_images_are_left_out_and_the_latest_message_is_checked() {
+        let mut history = vec![
+            ChatMessage::new(
+                "user",
+                "see ![image](file:///tmp/a.png) and ![image](file:///tmp/b.png)",
+            ),
+            ChatMessage::new("assistant", "ok"),
+            ChatMessage::new("user", "now fix it"),
+        ];
+        assert!(has_image_markers(&history));
+        assert!(!latest_user_message_has_images(&history));
+        omit_images(&mut history, "[left out]");
+        assert_eq!(history[0].content, "see [left out] and [left out]");
+        assert!(!has_image_markers(&history));
+
+        history.push(ChatMessage::new("user", "this ![image](file:///tmp/c.png)"));
+        assert!(latest_user_message_has_images(&history));
+    }
+
+    #[test]
+    fn provider_image_rejections_are_recognised() {
+        assert!(rejects_image_input(
+            r#"stream_failure:provider_error status=400 detail={"error":{"message":"deepseek-v4.1-flash does not take image, audio, video or file input"}}"#
+        ));
+        assert!(rejects_image_input(
+            "Image input is not supported for this model"
+        ));
+        assert!(!rejects_image_input("status=400 detail=Invalid schema"));
+        assert!(!rejects_image_input("model_not_supported"));
+    }
     use crate::app::ChatMessage;
     use crate::config::ModelProfile;
     use std::collections::HashMap;

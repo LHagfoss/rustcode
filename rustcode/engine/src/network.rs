@@ -1623,61 +1623,86 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     // exactly one current copy.
     let developer_instructions = current_snapshot.project_instructions();
 
+    // A model whose provider refused image input this session reads images
+    // through the fallback from then on, whatever its profile claims (#2281).
+    let (active_profile, vision_profile) = {
+        let s = state.lock().await;
+        (
+            active_profile.map(|profile| s.with_image_rejection(profile)),
+            vision_profile.map(|profile| s.with_image_rejection(profile)),
+        )
+    };
     if image_fallback::has_image_markers(&history_snapshot) {
         let active_profile = active_profile.ok_or_else(|| {
             "image analysis failed: active model profile is not configured".to_string()
         })?;
         if active_profile.image_input_supported() != Some(true) {
-            let Some(vision_profile) = vision_profile else {
-                // Issue: a stale vision_model name (or none at all) used to
-                // fail with a generic "configure a dedicated vision_model
-                // profile" that named neither the bad value nor the valid
-                // options. Say both so the user can fix config in one edit.
-                let guard = state.lock().await;
-                let wanted = guard.config.vision_model.clone();
-                let available: Vec<String> = guard
-                    .config
-                    .models
-                    .iter()
-                    .map(|profile| profile.name.clone())
-                    .collect();
-                drop(guard);
-                return Err(vision_profile_missing_error(wanted.as_deref(), &available));
-            };
-            let request_client = client.clone();
-            let request_cancel = cancel_token.clone();
-            let mut image_cache = {
+            // Without a vision model, images from earlier turns are left out
+            // rather than failing every later message (#2281); one in the
+            // message being sent still needs a vision model.
+            if vision_profile.is_none()
+                && !image_fallback::latest_user_message_has_images(&history_snapshot)
+            {
+                image_fallback::omit_images(
+                    history_snapshot.as_mut_vec(),
+                    &format!(
+                        "[Earlier image left out: {} does not take image input]",
+                        active_profile.name
+                    ),
+                );
+            }
+            if image_fallback::has_image_markers(&history_snapshot) {
+                let Some(vision_profile) = vision_profile else {
+                    // Issue: a stale vision_model name (or none at all) used to
+                    // fail with a generic "configure a dedicated vision_model
+                    // profile" that named neither the bad value nor the valid
+                    // options. Say both so the user can fix config in one edit.
+                    let guard = state.lock().await;
+                    let wanted = guard.config.vision_model.clone();
+                    let available: Vec<String> = guard
+                        .config
+                        .models
+                        .iter()
+                        .map(|profile| profile.name.clone())
+                        .collect();
+                    drop(guard);
+                    return Err(vision_profile_missing_error(wanted.as_deref(), &available));
+                };
+                let request_client = client.clone();
+                let request_cancel = cancel_token.clone();
+                let mut image_cache = {
+                    let mut guard = state.lock().await;
+                    std::mem::take(&mut guard.image_analysis_cache)
+                };
+                let preprocessing = image_fallback::preprocess_history_with(
+                    history_snapshot.as_mut_vec(),
+                    &active_profile,
+                    &vision_profile,
+                    &mut image_cache,
+                    |profile, bytes| {
+                        let profile = profile.clone();
+                        let request_client = request_client.clone();
+                        let request_cancel = request_cancel.clone();
+                        async move {
+                            image_fallback::request_vision_analysis(
+                                &request_client,
+                                &profile,
+                                bytes,
+                                &request_cancel,
+                            )
+                            .await
+                        }
+                    },
+                )
+                .await;
                 let mut guard = state.lock().await;
-                std::mem::take(&mut guard.image_analysis_cache)
-            };
-            let preprocessing = image_fallback::preprocess_history_with(
-                history_snapshot.as_mut_vec(),
-                &active_profile,
-                &vision_profile,
-                &mut image_cache,
-                |profile, bytes| {
-                    let profile = profile.clone();
-                    let request_client = request_client.clone();
-                    let request_cancel = request_cancel.clone();
-                    async move {
-                        image_fallback::request_vision_analysis(
-                            &request_client,
-                            &profile,
-                            bytes,
-                            &request_cancel,
-                        )
-                        .await
-                    }
-                },
-            )
-            .await;
-            let mut guard = state.lock().await;
-            image_fallback::extend_bounded_cache(&mut guard.image_analysis_cache, image_cache);
-            let session_id = guard.active_session_id.clone();
-            let current_cache = guard.image_analysis_cache.clone();
-            drop(guard);
-            crate::config::save_session_image_cache(&session_id, &current_cache);
-            preprocessing?;
+                image_fallback::extend_bounded_cache(&mut guard.image_analysis_cache, image_cache);
+                let session_id = guard.active_session_id.clone();
+                let current_cache = guard.image_analysis_cache.clone();
+                drop(guard);
+                crate::config::save_session_image_cache(&session_id, &current_cache);
+                preprocessing?;
+            }
         }
     }
 

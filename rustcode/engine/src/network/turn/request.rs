@@ -977,6 +977,25 @@ pub(super) async fn collect_round(
                     stream_output_phase(&error),
                     transport_retry_attempts >= usize::from(MAX_STREAM_RECOVERY_ATTEMPTS),
                 )
+            } else if super::super::image_fallback::rejects_image_input(&error_message)
+                && super::super::image_fallback::has_image_markers(&s.history)
+                && let Some(profile) = s.active_model_profile()
+            {
+                // The profile says the model reads images but the provider
+                // refused them: later requests send its images through the
+                // fallback instead of failing on the same history (#2281).
+                s.image_rejecting_profiles.insert(profile.name.clone());
+                crate::logger::operational_event(
+                    "turn.image_input_rejected",
+                    serde_json::json!({
+                        "session_id": request_session_id,
+                        "profile": profile.name,
+                    }),
+                );
+                format!(
+                    "`{model_name}` does not take image input, though its profile says it does. Images in this chat are now described by the vision model, or left out when none is set; send your message again. Set `supports_vision = false` on the `{}` profile to keep this.",
+                    profile.name
+                )
             } else {
                 provider_error_notice(&error_message, &model_name)
             };
