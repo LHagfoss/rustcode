@@ -737,8 +737,12 @@ private struct ChatView: View {
     /// The folder this chat works in: its own, which may not be the default.
     private var projectName: String { model.chatProject.lastPathComponent }
 
+    @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
+
     var body: some View {
         let transcript = chat.transcript
+        let folding = ToolFolding(items: transcript.items, verbosity: verbosity,
+                                  open: model.openToolRuns, running: isReplyStreaming)
         let currentMatch = model.showsFind ? find.currentMatch : nil
         let lastId = transcript.items.last?.id
         let first = window.firstShown(identity: transcript.identity, count: transcript.items.count)
@@ -768,8 +772,9 @@ private struct ChatView: View {
                                 EarlierMessages(count: first)
                                     .reportsChatRow(Self.earlierRow, to: scroll)
                             }
-                            ForEach(transcript.items[first..<split]) { item in
-                                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch)
+                            ForEach(transcript.items[first..<split].filter { !folding.hidden.contains($0.id) }) { item in
+                                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
+                                              fold: folding.fold(for: item.id))
                                     .equatable()
                                     .reportsChatRow(item.id, to: scroll)
                                     .id(item.id)
@@ -777,9 +782,10 @@ private struct ChatView: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 18) {
-                        ForEach(transcript.items[split...]) { item in
+                        ForEach(transcript.items[split...].filter { !folding.hidden.contains($0.id) }) { item in
                             TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                                          isStreaming: isReplyStreaming && item.id == lastId)
+                                          isStreaming: isReplyStreaming && item.id == lastId,
+                                          fold: folding.fold(for: item.id))
                                 .equatable()
                                 .reportsChatRow(item.id, to: scroll)
                                 .id(item.id)
@@ -871,7 +877,8 @@ private struct ChatView: View {
             .onChange(of: transcript.identity, initial: true) { _, identity in
                 window.open(identity: identity, count: chat.transcript.items.count)
             }
-            .onChange(of: (first > 0 ? [Self.earlierRow] : []) + transcript.items[first...].map(\.id)
+            .onChange(of: (first > 0 ? [Self.earlierRow] : [])
+                        + transcript.items[first...].map(\.id).filter { !folding.hidden.contains($0) }
                         + (isReplyStreaming ? [Self.workingRow] : []), initial: true) { _, rows in
                 scroll.setRows(rows)
             }
@@ -907,6 +914,8 @@ private struct ChatView: View {
         }
         .environment(\.findQuery, model.showsFind ? find.appliedQuery : "")
         .environment(\.projectRoot, model.chatProject.path)
+        .environment(\.editsOpenByDefault, verbosity.editsOpen)
+        .environment(\.toggleToolRun, { [model] run in model.toggleToolRun(run) })
         .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {

@@ -6,6 +6,8 @@ struct TranscriptRow: View, Equatable {
     var isCurrentMatch = false
     /// This is the reply the agent is still writing.
     var isStreaming = false
+    /// The folded run of tool calls this row starts, if any.
+    var fold: ToolRunFold? = nil
 
     var body: some View {
         content
@@ -26,7 +28,15 @@ struct TranscriptRow: View, Equatable {
         case .user(let text): UserMessage(text: text)
         case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming)
         case .thinking(let text): ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration)
-        case .tool(let tool): if !tool.isBlank { ToolRow(tool: tool) }
+        case .tool(let tool):
+            if let fold {
+                VStack(alignment: .leading, spacing: 18) {
+                    ToolRunSummary(fold: fold)
+                    if fold.isOpen, !tool.isBlank { ToolRow(tool: tool) }
+                }
+            } else if !tool.isBlank {
+                ToolRow(tool: tool)
+            }
         case .command(let input, let output): CommandCard(input: input, output: output)
         }
     }
@@ -299,14 +309,15 @@ private struct ThinkingBlock: View {
 
 private struct ToolRow: View {
     let tool: ToolItem
-    /// Nil until the user toggles it: an edit opens on its diff, anything
-    /// else starts closed.
+    /// Nil until the user toggles it: at edits verbosity an edit opens on its
+    /// diff; anything else starts closed.
     @State private var expanded: Bool?
     @Environment(\.projectRoot) private var projectRoot
+    @Environment(\.editsOpenByDefault) private var editsOpen
 
     private var hasDetail: Bool { tool.input != nil || tool.output != nil || !tool.changes.isEmpty }
     private var isExpanded: Binding<Bool> {
-        Binding(get: { expanded ?? !tool.changes.isEmpty }, set: { expanded = $0 })
+        Binding(get: { expanded ?? (editsOpen && !tool.changes.isEmpty) }, set: { expanded = $0 })
     }
 
     private var isRunning: Bool { tool.status == .pending || tool.status == .inProgress }
@@ -726,6 +737,48 @@ extension EnvironmentValues {
     @Entry var messageActions: MessageActions? = nil
     /// The open chat's project directory, for paths shown relative to it.
     @Entry var projectRoot: String? = nil
+    /// File edits start open on their diff (edits verbosity).
+    @Entry var editsOpenByDefault = true
+    /// Opens or folds the run of tool calls a summary row stands for.
+    @Entry var toggleToolRun: @MainActor (Int) -> Void = { _ in }
+}
+
+extension ToolVerbosity {
+    /// Where the app starts before the reader picks a level: the terminal's
+    /// `verbosity` in `~/.config/rustcode/config.toml`, else high.
+    static let terminalDefault: ToolVerbosity = {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/rustcode/config.toml")
+        return (try? String(contentsOf: path, encoding: .utf8)).flatMap(ToolVerbosity.configured(in:)) ?? .high
+    }()
+}
+
+/// The row a folded run of tool calls shows: how many and how many failed.
+/// A click opens the run to its cards, and folds it again.
+private struct ToolRunSummary: View {
+    let fold: ToolRunFold
+    @Environment(\.toggleToolRun) private var toggle
+
+    var body: some View {
+        Button { toggle(fold.run) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
+                    .foregroundStyle(.secondary)
+                Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
+                Text("\(fold.count) tool call\(fold.count == 1 ? "" : "s")").font(.callout.weight(.medium))
+                if fold.failed > 0 {
+                    Text("· \(fold.failed) failed").font(.callout).foregroundStyle(.red)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(fold.isOpen ? "Fold these tool calls" : "Show these tool calls")
+        .animation(.snappy(duration: 0.15), value: fold.isOpen)
+    }
 }
 
 /// Content as wide as it needs, scrolling sideways only when it is wider than

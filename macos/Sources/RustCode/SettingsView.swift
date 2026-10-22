@@ -183,6 +183,15 @@ private struct GeneralSettings: View {
     @AppStorage(TurnNotifier.enabledKey) private var notifyTurns = true
     @AppStorage(DesktopModel.autoApproveKey) private var autoApprove = false
     @AppStorage(StreamingProse.revealKey) private var revealsText = true
+    @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
+
+    private var verbositySubtitle: String {
+        switch verbosity {
+        case .low: "Runs of tool calls fold into one row; only the running call shows"
+        case .high: "Every tool call is its own card"
+        case .edits: "Like Low, but file edits stay open on their diff"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -215,6 +224,15 @@ private struct GeneralSettings: View {
                     Toggle("Fade in new text", isOn: $revealsText)
                         .labelsHidden()
                         .toggleStyle(.switch)
+                }
+                RowDivider()
+                SettingsRow(title: "Tool calls", subtitle: verbositySubtitle) {
+                    Picker("Tool calls", selection: $verbosity) {
+                        ForEach(ToolVerbosity.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
                 }
                 RowDivider()
                 SettingsRow(title: "Auto-approve tools",
