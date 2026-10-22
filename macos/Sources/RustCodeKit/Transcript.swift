@@ -91,6 +91,13 @@ public struct Transcript: Equatable, Sendable {
         append(.user(text))
     }
 
+    /// Take back the latest message the user sent as `text`, as a steer the
+    /// turn ended before reading, which is sent again as its own turn.
+    public mutating func removeLastUser(_ text: String) {
+        guard let index = items.lastIndex(where: { if case .user(text) = $0.content { true } else { false } }) else { return }
+        items.remove(at: index)
+    }
+
     /// A host command the user sent; the engine's reply fills it in.
     public mutating func appendCommand(_ input: String) {
         append(.command(input: input, output: ""))
