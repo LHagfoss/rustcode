@@ -204,6 +204,52 @@ enum DebugDriver {
                     try? await Task.sleep(for: .milliseconds(50))
                 }
             }
+        case "wheelstream":
+            // `wheelstream <steps> <points> [nostream|nowheel]`: a reply
+            // streams while the reader scrolls up `steps` times by `points`, a
+            // frame apart, then rests (#2260). Reports how far the chat moved
+            // against how far it was scrolled, how far it drifted at rest as
+            // output kept coming, and the main thread's worst stall. Run it
+            // under `sample` to see where the main thread goes.
+            let steps = Int(parts.count > 1 ? parts[1] : "20") ?? 20
+            let points = Int32(parts.count > 2 ? parts[2] : "40") ?? 40
+            guard let scroll = ChatScrollState.current?.scrollView else { break }
+            let streaming = Task { @MainActor in
+                for index in 0..<400 {
+                    guard !Task.isCancelled, !parts.contains("nostream") else { return }
+                    model.transcript.apply(.agentText(index % 12 == 0 ? "\n\nNext paragraph with `code` and **bold** " : "word "))
+                    try? await Task.sleep(for: .milliseconds(30))
+                }
+            }
+            var worstGap = 0.0
+            var last = Date()
+            let ticker = Timer.scheduledTimer(withTimeInterval: 0.008, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    worstGap = max(worstGap, Date().timeIntervalSince(last) * 1000)
+                    last = Date()
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(600))
+            // Synthesized wheel events do not reach SwiftUI's scroll view, so
+            // each step tells the input monitor what a wheel event would, then
+            // moves the chat by its delta as the scroll view does.
+            func wheel(_ delta: Int32) {
+                ChatScrollInput.shared.debugObserve(deltaY: Double(delta))
+                ChatScrollState.current?.scroll(by: -Double(delta), animated: false)
+            }
+            let startY = scroll.contentView.bounds.minY
+            worstGap = 0
+            for _ in 0..<steps {
+                if !parts.contains("nowheel") { wheel(points) }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            let wheeledY = scroll.contentView.bounds.minY
+            let wheelGap = worstGap
+            try? await Task.sleep(for: .milliseconds(1500))
+            let restY = scroll.contentView.bounds.minY
+            streaming.cancel()
+            ticker.invalidate()
+            report("wheelstream \(steps)x\(points): moved \(Int(startY - wheeledY)) of \(Int(steps) * Int(points)), drift at rest \(Int(restY - wheeledY)), worst stall wheeling \(Int(wheelGap)) ms, overall \(Int(worstGap)) ms")
         case "scrollby":
             // `scrollby <points> [steps]`: move the chat, negative up, a step a frame.
             let steps = Int(parts.count > 2 ? parts[2] : "1") ?? 1

@@ -33,7 +33,6 @@ struct ContentView: View {
         .background(Color.sidebarBackground)
         .ignoresSafeArea()
         .tint(.brand)
-        .background(WindowChrome())
         .clickAwayPanel(isPresented: $model.showsSettings) { SettingsView(model: model) }
         .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0) }
@@ -51,15 +50,29 @@ struct ContentView: View {
     }
 }
 
-/// Lets the window be dragged from any empty area, as it has no title bar.
-private struct WindowChrome: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { view.window?.isMovableByWindowBackground = true }
-        return view
-    }
+/// Moves the window from the empty parts of a top bar, as the title bar it
+/// lacks would, and acts on a double-click as the system setting says.
+///
+/// Not `isMovableByWindowBackground`: with it set, AppKit worked out the
+/// window's draggable region again on every frame, asking each hosting view
+/// whether it takes focus, which walked the whole chat. While a reply
+/// streamed that was a third of the main thread, and scrolling lagged (#2260).
+private struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { DragView() }
 
     func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class DragView: NSView {
+        override func mouseDown(with event: NSEvent) {
+            guard let window else { return }
+            guard event.clickCount == 2 else { return window.performDrag(with: event) }
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "Minimize": window.performMiniaturize(nil)
+            case "None": break
+            default: window.performZoom(nil)
+            }
+        }
+    }
 }
 
 /// A borderless icon button for the window's top bar.
@@ -162,6 +175,7 @@ private struct SessionSidebar: View {
             .padding(.trailing, 10)
             .frame(height: Self.barHeight)
             .padding(.top, Self.barTopInset)
+            .background(WindowDragArea())
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -691,7 +705,11 @@ private struct ChatView: View {
     @State private var composerHeight: CGFloat = 60
     /// The chat keeps the newest output in view. Scrolling up hands control to
     /// the reader and shows the Latest button; scrolling back down follows again.
-    @State private var follow = ChatFollow()
+    @StateObject private var following = FollowState()
+    private var follow: ChatFollow {
+        get { following.value }
+        nonmutating set { following.value = newValue }
+    }
     /// Real row heights for the chat's own scroller. Held, not observed:
     /// measuring redraws only the scroller.
     @State private var scroll = ChatScrollState()
@@ -818,7 +836,7 @@ private struct ChatView: View {
                               showVisualizations: { model.showsVisualizationGuide = true })
                 }
             }
-            .followsLatest($follow, scroll: scroll) { scrollToEnd(proxy) }
+            .followsLatest(Binding { following.value } set: { following.value = $0 }, scroll: scroll) { scrollToEnd(proxy) }
             .onAppear {
                 scroll.earlierRow = Self.earlierRow
                 scroll.nearTop = { showEarlier(proxy) }
@@ -989,6 +1007,7 @@ private struct ChatView: View {
         .frame(height: SessionSidebar.barHeight)
         .padding(.top, SessionSidebar.barTopInset)
         .padding(.bottom, 8)
+        .background(WindowDragArea())
         .background(Color.chatBackground.opacity(0.94))
     }
 
@@ -1154,6 +1173,23 @@ private struct LatestButton: View {
     }
 }
 
+/// The chat view's `ChatFollow`. Its geometry changes on every scrolled
+/// frame and with every streamed token; kept in view state, each change
+/// redrew the whole chat view, so scrolling while a reply streamed lagged
+/// (#2260). Only what the view draws from it publishes: whether it follows,
+/// which picks the scroll anchor, and whether Latest shows.
+@MainActor
+final class FollowState: ObservableObject {
+    var value = ChatFollow() {
+        didSet {
+            if follows != value.follows { follows = value.follows }
+            if showsLatest != value.showsLatest { showsLatest = value.showsLatest }
+        }
+    }
+    @Published private(set) var follows = true
+    @Published private(set) var showsLatest = false
+}
+
 private extension View {
     /// Drives `follow` the way chat apps do: any scroll up by the reader lets
     /// go of the end at once, reaching the end again holds on. While held, the
@@ -1221,7 +1257,7 @@ private extension View {
 /// The reader's own scrolling of the chat: wheel and trackpad events, and
 /// drags of its scroller, over the chat's frame.
 @MainActor
-private final class ChatScrollInput {
+final class ChatScrollInput {
     static let shared = ChatScrollInput()
     /// The chat's scroll view in window coordinates, top-left origin.
     var chatFrame: CGRect = .zero
@@ -1241,6 +1277,15 @@ private final class ChatScrollInput {
             return event
         }
     }
+
+    #if DEBUG
+    /// The debug driver's wheel event over the chat, as `observe` sees one.
+    func debugObserve(deltaY: Double) {
+        lastInput = Date()
+        if deltaY != 0 { isTowardEnd = deltaY < 0 }
+        if deltaY > 0 { onScrollUp() }
+    }
+    #endif
 
     private func observe(_ event: NSEvent) {
         guard let content = event.window?.contentView else { return }
