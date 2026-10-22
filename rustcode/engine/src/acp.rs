@@ -9,6 +9,7 @@ mod preview;
 mod prompt;
 mod questions;
 mod remote;
+mod rewind;
 mod session;
 mod steer;
 mod streaming;
@@ -90,6 +91,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "remote": remote::REMOTE_CAPABILITY_VERSION,
                 "steer": steer::STEER_CAPABILITY_VERSION,
                 "agents": agents::AGENTS_CAPABILITY_VERSION,
+                "rewind": 1,
             }),
         )]))
 }
@@ -929,6 +931,23 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: presence::SetPresenceRequest, responder, _connection| {
                     responder.respond(server.presence.set_enabled(request)?)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: rewind::RewindRequest, responder, _connection| {
+                    let Some((state, _)) = server.session_handle(&request.session_id).await else {
+                        return responder.respond_with_error(unknown_session(&request.session_id));
+                    };
+                    let answer =
+                        rewind::rewind(&mut *state.lock().await, request.user_index, &request.text);
+                    match answer {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder.respond_with_error(error),
+                    }
                 }
             },
             agent_client_protocol::on_receive_request!(),

@@ -98,6 +98,26 @@ public struct Transcript: Equatable, Sendable {
         items.remove(at: index)
     }
 
+    /// Which of the user's messages item `id` is, counting from 0, as the
+    /// engine counts them for `_rustcode/rewind`.
+    public func userIndex(of id: Int) -> Int? {
+        guard let position = items.firstIndex(where: { $0.id == id }),
+              case .user = items[position].content else { return nil }
+        return items[..<position].filter { if case .user = $0.content { true } else { false } }.count
+    }
+
+    /// How many of the user's messages follow item `id`.
+    public func userMessages(after id: Int) -> Int {
+        guard let position = items.firstIndex(where: { $0.id == id }) else { return 0 }
+        return items[(position + 1)...].filter { if case .user = $0.content { true } else { false } }.count
+    }
+
+    /// Drop item `id` and everything after it, as a retry rewinds the chat.
+    public mutating func removeFrom(_ id: Int) {
+        guard let position = items.firstIndex(where: { $0.id == id }) else { return }
+        items.removeSubrange(position...)
+    }
+
     /// A host command the user sent; the engine's reply fills it in.
     public mutating func appendCommand(_ input: String) {
         append(.command(input: input, output: ""))
