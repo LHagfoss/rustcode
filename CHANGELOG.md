@@ -1,3 +1,16 @@
+## [v0.89.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.89.0) - 2026-10-22
+
+### Features
+- **macOS:** ⌘⏎ steers a running turn: the message is read after the current step instead of waiting for the turn to end. ⏎ still queues, and ⇧⏎/⌥⏎ start a new line. With an empty composer, ⌘⏎ sends the oldest queued message now, and each queued message has a Send Now button. A steer the turn ends before reading runs next as its own turn. The engine gains `_rustcode/steer` for ACP clients, with unread steers returned in `_meta.rustcode.unusedSteers` (#2268, #2271).
+- **macOS:** images open in an in-app viewer instead of Quick Look or the browser: chat images and images waiting in the composer, fitted to the window, with pinch, ⌘+/⌘−/⌘0 and double-click zoom, Copy Image, and Esc or a click beside the image to close. Only the file's name is shown (#2272).
+- **macOS:** after each turn its chat moves to the top of the sidebar, which lists loaded chats by latest activity (#2266). The running spinner and the waiting-for-answer badge move to the leading edge of sidebar rows, and a chat that finished while another was open shows a blue dot until opened (#2265).
+
+### Fixes
+- **macOS:** scrolling stays smooth while a reply streams. The window no longer recomputes its draggable region on every frame (it now moves from its top bars), and scroll geometry no longer redraws the whole chat view; main-thread time while streaming drops by about 40% (#2270).
+- **macOS:** each chat keeps its own unsent draft, including attachments, instead of the draft following you into another chat (#2264).
+- **macOS:** ⌘W closes the active terminal tab, and the panel only with its last tab (#2263). Switching chats closes the terminal panel (#2262).
+- **macOS:** inline diffs keep a change split by a blank line or lone brace together as one block, removals before additions (#2267).
+- Web search tool cards and activity lines show the searched query instead of the word `query` (#2261).
 ## [v0.88.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.88.1) - 2026-10-21
 
 ### Fixes
