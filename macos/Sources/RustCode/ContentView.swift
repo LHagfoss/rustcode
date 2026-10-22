@@ -746,6 +746,11 @@ private struct ChatView: View {
         let currentMatch = model.showsFind ? find.currentMatch : nil
         let lastId = transcript.items.last?.id
         let first = window.firstShown(identity: transcript.identity, count: transcript.items.count)
+        // The rows the scroller maps: the earlier-messages row, the shown
+        // items without those a folded run hides, and the working row.
+        var scrollRows: [Int] = first > 0 ? [Self.earlierRow] : []
+        scrollRows += transcript.items[first...].lazy.map(\.id).filter { !folding.hidden.contains($0) }
+        if isReplyStreaming { scrollRows.append(Self.workingRow) }
         // Older rows are lazy: laid out eagerly, every resize re-measured the
         // whole chat (170 ms a step in a 250-message session). The newest rows
         // stay eager, so the part being read never changes height under the
@@ -877,9 +882,7 @@ private struct ChatView: View {
             .onChange(of: transcript.identity, initial: true) { _, identity in
                 window.open(identity: identity, count: chat.transcript.items.count)
             }
-            .onChange(of: (first > 0 ? [Self.earlierRow] : [])
-                        + transcript.items[first...].map(\.id).filter { !folding.hidden.contains($0) }
-                        + (isReplyStreaming ? [Self.workingRow] : []), initial: true) { _, rows in
+            .onChange(of: scrollRows, initial: true) { _, rows in
                 scroll.setRows(rows)
             }
             .onChange(of: chat.transcript) { old, new in
