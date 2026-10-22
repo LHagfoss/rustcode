@@ -103,6 +103,22 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2253: switching chats closes the terminal panel, and it stays
+    /// closed until opened again.
+    func testSwitchingChatsClosesTheTerminal() async throws {
+        let model = try await started()
+        defer { model.terminal.manager.terminateAll() }
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        model.terminal.open()
+        XCTAssertTrue(model.terminal.isShown)
+        await model.select(quick)
+        XCTAssertFalse(model.terminal.isShown)
+        model.terminal.open()
+        await model.newSession()
+        XCTAssertFalse(model.terminal.isShown)
+        model.stop()
+    }
+
     /// Picking a chat back while its first load still runs shows it once it is in.
     func testReturningToALoadingChatShowsItWhenLoaded() async throws {
         let model = try await started()
