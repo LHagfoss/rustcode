@@ -19,7 +19,7 @@ trap 'rm -f "$LOG"' EXIT
 args=()
 [[ $# -gt 0 ]] && args=(--filter "$1")
 
-swift test --package-path "$ROOT/macos" "${args[@]}" >"$LOG" 2>&1
+swift test --package-path "$ROOT/macos" ${args[@]+"${args[@]}"} >"$LOG" 2>&1
 status=$?
 
 grep -v '^CoreData' "$LOG" \

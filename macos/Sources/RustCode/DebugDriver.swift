@@ -288,6 +288,9 @@ enum DebugDriver {
             }
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
+        case "panel":
+            // `panel model|effort|add|none`: open a composer panel as its chip does.
+            model.composerPanel = ["model": .model, "effort": .effort, "add": .add][parts[1]]
         case "snap":
             // `snap <file.png>`: the window drawn to a file, for when
             // `screencapture` cannot see the screen.
