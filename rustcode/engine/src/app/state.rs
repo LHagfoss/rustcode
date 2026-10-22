@@ -192,6 +192,10 @@ pub struct AppState {
     pub function_calling_support: std::collections::HashMap<String, bool>,
     /// Successful image analyses keyed by the image bytes' stable hash.
     pub image_analysis_cache: std::collections::HashMap<String, String>,
+    /// Profiles whose provider refused image input this session, whatever
+    /// their `supports_vision` says (#2281). Their images go through the
+    /// image fallback from then on.
+    pub image_rejecting_profiles: std::collections::HashSet<String>,
     pub config: crate::config::AppConfig,
     pub cwd_and_branch: String,
     /// Cached workspace path and Git branch used by the composer footer.
@@ -1526,6 +1530,7 @@ impl AppState {
             api_base_url,
             function_calling_support: std::collections::HashMap::new(),
             image_analysis_cache: std::collections::HashMap::new(),
+            image_rejecting_profiles: std::collections::HashSet::new(),
             model_name,
             config,
             cwd_and_branch,
@@ -1780,6 +1785,18 @@ impl AppState {
     /// Context window of the active profile, in tokens.
     pub fn active_context_window(&self) -> u32 {
         self.active_context_budget().context_window
+    }
+
+    /// `profile` as image handling must see it: without image input once its
+    /// provider refused images this session.
+    pub(crate) fn with_image_rejection(
+        &self,
+        mut profile: crate::config::ModelProfile,
+    ) -> crate::config::ModelProfile {
+        if self.image_rejecting_profiles.contains(&profile.name) {
+            profile.supports_vision = Some(false);
+        }
+        profile
     }
 
     pub fn active_model_profile(&self) -> Option<crate::config::ModelProfile> {
