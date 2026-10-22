@@ -276,9 +276,9 @@ pub(crate) fn render_with_transcript_snapshot(
 
     let inner_width = f.area().width.max(1);
     let chat_width = f.area().width.max(1);
-    // The framed composer wraps inside its border and adds a settings row;
-    // narrow terminals fall back to the unframed composer.
-    let composer_chrome = composer_chrome_rows(state, inner_width);
+    // The framed composer wraps inside its band; narrow terminals fall back
+    // to the unframed composer.
+    let composer_chrome = COMPOSER_CHROME_ROWS;
     let raw_input_lines =
         input_line_count(state, usize::from(composer_text_width(state, inner_width)));
     let approval_active =
@@ -588,21 +588,6 @@ pub(crate) fn render_with_transcript_snapshot(
     } else {
         Composer::default().render(f, &composer_chunks, state)
     };
-    // The posture token on the framed composer's settings row is a click
-    // target that cycles ask -> auto-approve -> plan.
-    let composer_painted = !approval_active && !question_active;
-    let settings_in_composer = composer_painted && composer_frame_shown(state, chunks[8].width);
-    transcript.posture_chip = if settings_in_composer {
-        composer_posture_rect(state, chunks[8])
-    } else {
-        None
-    };
-    if let Some(chip) = transcript.posture_chip
-        && transcript.posture_chip_hovered
-    {
-        f.buffer_mut()
-            .set_style(chip, Style::default().bg(COLOR_HOVER_BG()));
-    }
     if footer_visible {
         // A live selection is the modal gesture, so the footer names the copy
         // key for as long as it lasts and drops it the moment the selection is
@@ -610,7 +595,7 @@ pub(crate) fn render_with_transcript_snapshot(
         // content-drift clear in `refresh_view` below cannot fire while a
         // selection is live: reading the range here is already its answer.
         let tasks_hovered = transcript.tasks_chip_hovered;
-        transcript.tasks_chip = render_composer_footer(
+        let targets = render_composer_footer(
             f,
             chunks[9],
             state,
@@ -619,13 +604,30 @@ pub(crate) fn render_with_transcript_snapshot(
                 || transcript.panel_selection.has_selection()
                 || state.composer_selection_range().is_some(),
             tasks_hovered,
-            settings_in_composer,
         );
+        transcript.tasks_chip = targets.tasks_chip;
+        // The posture cycles ask -> auto-approve -> plan on a click.
+        transcript.posture_chip = targets.posture_chip;
+        if let Some(chip) = transcript.posture_chip
+            && transcript.posture_chip_hovered
+        {
+            f.buffer_mut()
+                .set_style(chip, Style::default().bg(COLOR_HOVER_BG()));
+        }
     } else {
         transcript.tasks_chip = None;
+        transcript.posture_chip = None;
     }
 
-    if !slash_rows.is_empty() {
+    if !slash_rows.is_empty() || !at_files.is_empty() {
+        // The popup is a band as wide as the composer below it, with its rows
+        // aligned to the input text (#2275).
+        let band =
+            ratatui::layout::Rect::new(chunks[8].x, chunks[7].y, chunks[8].width, chunks[7].height);
+        f.render_widget(
+            ratatui::widgets::Block::default().style(Style::default().bg(COLOR_PANEL())),
+            band,
+        );
         let input_inner = chunks[8].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
@@ -633,16 +635,11 @@ pub(crate) fn render_with_transcript_snapshot(
             input_inner.width,
             chunks[7].height,
         );
-        render_popup_rows(f, state, &slash_rows, slash_search, popup_area);
-    } else if !at_files.is_empty() {
-        let input_inner = chunks[8].inner(input_margin);
-        let popup_area = ratatui::layout::Rect::new(
-            input_inner.x,
-            chunks[7].y,
-            input_inner.width,
-            chunks[7].height,
-        );
-        render_at_popup_menu(f, state, &at_files, popup_area);
+        if !slash_rows.is_empty() {
+            render_popup_rows(f, state, &slash_rows, slash_search, popup_area);
+        } else {
+            render_at_popup_menu(f, state, &at_files, popup_area);
+        }
     }
 
     let input_box_area = question_area.unwrap_or(chunks[8]);

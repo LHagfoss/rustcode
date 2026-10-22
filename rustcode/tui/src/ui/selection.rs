@@ -1330,7 +1330,7 @@ mod tests {
         state: &RenderState,
         transcript: &mut super::super::history_cell::TranscriptState,
     ) -> Buffer {
-        rendered_transcript_size(state, transcript, 32, 14)
+        rendered_transcript_size(state, transcript, 32, 13)
     }
 
     fn rendered_transcript_size(
@@ -1816,7 +1816,7 @@ mod tests {
              ```\n+------+------+\n| name | value |\n+------+------+\n| a    | 1    |\n+------+------+\n```",
         ));
         let mut transcript = super::super::history_cell::TranscriptState::default();
-        let _ = rendered_transcript_size(&state, &mut transcript, 40, 21);
+        let _ = rendered_transcript_size(&state, &mut transcript, 40, 20);
         let area = transcript.selection.area;
         transcript.selection.begin_with_snapshot(
             mouse(MouseEventKind::Down(MouseButton::Left), area.x, area.y + 1),
