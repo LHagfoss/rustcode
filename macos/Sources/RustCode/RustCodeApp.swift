@@ -1283,6 +1283,14 @@ final class DesktopModel: ObservableObject {
         rememberPinned()
     }
 
+    /// A turn just ended in `id`: it is the latest activity until the engine's
+    /// list says so too.
+    private func touchSession(_ id: String) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[index].updatedAt = Date()
+        sessions = SessionSummary.byActivity(sessions)
+    }
+
     /// Keep what the sidebar knows of each pinned chat for the next launch.
     private func rememberPinned() {
         let shown = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1543,8 +1551,10 @@ final class DesktopModel: ObservableObject {
         } else if !stopped {
             notifyFinished(id)
         }
-        // The list refreshes behind the answer: waiting for it kept the chat
-        // spinning until the engine listed every session.
+        // The chat just used moves to the top at once; the list refreshes
+        // behind the answer: waiting for it kept the chat spinning until the
+        // engine listed every session.
+        touchSession(id)
         Task { await refreshSessions() }
         if let turn { turnActivity.end(turn) }
         // A queued message starts at once, with no wait in between, so

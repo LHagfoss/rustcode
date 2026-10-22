@@ -117,6 +117,16 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(SessionSummary.merging(listed, started: started).map(\.id), ["new", "a", "b"])
     }
 
+    /// #2254: a chat used since it started moves above newer, idle ones.
+    func testSessionListPutsLatestActivityFirst() {
+        let now = Date()
+        let listed = [SessionSummary(id: "new", cwd: "/p", updatedAt: now.addingTimeInterval(-60)),
+                      SessionSummary(id: "undated", cwd: "/p"),
+                      SessionSummary(id: "old", cwd: "/p", updatedAt: now),
+                      SessionSummary(id: "older", cwd: "/p", updatedAt: now.addingTimeInterval(-60))]
+        XCTAssertEqual(SessionSummary.merging(listed, started: []).map(\.id), ["old", "new", "older", "undated"])
+    }
+
     func testAvailableCommandsCarryActionAndArguments() {
         let update = SessionUpdate(notificationParams: ["sessionId": "s", "update": [
             "sessionUpdate": "available_commands_update",
