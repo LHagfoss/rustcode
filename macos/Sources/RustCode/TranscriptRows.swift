@@ -636,19 +636,14 @@ private struct FileChangeView: View {
         for (index, row) in rows.enumerated() {
             if index > 0 { result += AttributedString("\n") }
             guard case .line(let line) = row else {
-                result += AttributedString(String(repeating: " ", count: digits * 2 + 3))
+                result += AttributedString(String(repeating: " ", count: digits + 2))
                 continue
             }
-            // The old-file column sits a step dimmer, so a pair that differs
-            // reads as old then new rather than as a repeat.
-            let cells = line.gutter(digits: digits)
-            var old = AttributedString(cells.old + " ")
-            old.foregroundColor = .secondary.opacity(0.4)
-            var new = AttributedString(cells.new + " ")
-            new.foregroundColor = .secondary.opacity(0.6)
+            var number = AttributedString(line.gutter(digits: digits) + " ")
+            number.foregroundColor = .secondary.opacity(0.6)
             var mark = AttributedString(sign(line.kind))
             mark.foregroundColor = tint(line.kind) ?? .secondary
-            result += old + new + mark
+            result += number + mark
         }
         return result
     }

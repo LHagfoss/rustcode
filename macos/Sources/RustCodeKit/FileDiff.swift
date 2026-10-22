@@ -53,16 +53,15 @@ public struct DiffLine: Equatable, Sendable {
         self.newNumber = newNumber
     }
 
-    /// The old- and new-file cells of this line's gutter, each right-aligned
-    /// to `digits`. An unchanged line whose numbers match prints the number
-    /// once, in the new-file column, so it does not read as doubled.
-    public func gutter(digits: Int) -> (old: String, new: String) {
-        func padded(_ value: Int?) -> String {
-            let text = value.map(String.init) ?? ""
-            return String(repeating: " ", count: max(digits - text.count, 0)) + text
-        }
-        let old = kind == .context && oldNumber == newNumber ? nil : oldNumber
-        return (padded(old), padded(newNumber))
+    /// The number the gutter shows, as GitHub's single column does: where a
+    /// removed line was in the old file, else where the line is in the new
+    /// one, so the numbers follow the file as it is now.
+    public var number: Int? { kind == .removed ? oldNumber : newNumber }
+
+    /// This line's gutter cell, right-aligned to `digits`.
+    public func gutter(digits: Int) -> String {
+        let text = number.map(String.init) ?? ""
+        return String(repeating: " ", count: max(digits - text.count, 0)) + text
     }
 }
 
@@ -83,12 +82,12 @@ public struct FileChange: Equatable, Sendable, Identifiable {
 
     public var id: String { path }
 
-    /// The width of each gutter column: the widest number in the change, so
-    /// the columns do not shift between rows.
+    /// The width of the gutter: the widest number in the change, so the
+    /// code does not shift between rows.
     public var gutterDigits: Int {
         rows.reduce(2) { result, row in
             guard case .line(let line) = row else { return result }
-            return max(result, String(line.oldNumber ?? 0).count, String(line.newNumber ?? 0).count)
+            return max(result, String(line.number ?? 0).count)
         }
     }
 
