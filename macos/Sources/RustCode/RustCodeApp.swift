@@ -187,7 +187,12 @@ final class DesktopModel: ObservableObject {
         _modify { yield &chat.transcript }
     }
     @Published var sessions: [SessionSummary] = []
-    @Published var selectedSession: String?
+    @Published var selectedSession: String? {
+        didSet { if let selectedSession { unseenReplies.remove(selectedSession) } }
+    }
+    /// Chats whose turn finished while another chat was on screen, marked
+    /// with a dot in the sidebar until opened.
+    @Published private(set) var unseenReplies: Set<String> = []
     /// The default project: new chats start here unless one is given its own
     /// folder. Set in Settings; the engine, terminal and preview run in it.
     @Published var workspace: URL {
@@ -544,6 +549,7 @@ final class DesktopModel: ObservableObject {
             reply = notificationSnippet(text)
         }
         TurnNotifier.shared.notify(session: session, title: chatTitle(session), body: reply.isEmpty ? "Finished." : reply)
+        if session != selectedSession { unseenReplies.insert(session) }
         if NSApp.isActive, session != selectedSession {
             showToast(Toast(style: .success, systemImage: "checkmark.circle.fill", title: chatTitle(session),
                             message: reply.isEmpty ? "Finished." : reply, session: session))
@@ -1116,6 +1122,7 @@ final class DesktopModel: ObservableObject {
         stashSelectedSession()
         if keepingDraft { parkDraft() }
         restoreDraft(for: nil)
+        terminal.hide()
         selectedSession = nil
         transcript.removeAll()
         composerPanel = nil
@@ -1336,6 +1343,8 @@ final class DesktopModel: ObservableObject {
         stashSelectedSession()
         parkDraft()
         restoreDraft(for: session.id)
+        // Another chat opens without the terminal; ⇧⌘T brings it back.
+        terminal.hide()
         if !session.cwd.isEmpty { sessionProjects[session.id] = session.cwd }
         if let open = openSessions[session.id] {
             selectedSession = session.id

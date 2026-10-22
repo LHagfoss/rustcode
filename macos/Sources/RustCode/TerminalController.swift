@@ -70,12 +70,13 @@ final class TerminalController: ObservableObject {
         withAnimation(.snappy(duration: 0.25)) { isShown = false }
     }
 
-    /// ⌘W: hide the panel when it is open. Shells keep running, as with
-    /// ⇧⌘T. Returns whether there was a panel to close.
+    /// ⌘W: close the selected terminal tab when the panel is open, asking
+    /// first while something runs in it; closing the last tab hides the
+    /// panel. Returns whether there was a panel to act on.
     @discardableResult
-    func closePanel() -> Bool {
+    func closeSelectedTab() -> Bool {
         guard isShown else { return false }
-        hide()
+        if let session = manager.selectedSession { requestClose(session) } else { hide() }
         return true
     }
 
@@ -111,9 +112,12 @@ final class TerminalController: ObservableObject {
         close(session)
     }
 
+    /// The panel goes with the project's last tab; otherwise the tab beside
+    /// the closed one takes the keyboard.
     func close(_ session: TerminalSession) {
         views.removeValue(forKey: session.id)?.removeFromSuperview()
         manager.close(session.id)
+        if manager.projectSessions.isEmpty { hide() } else { focusRequest += 1 }
     }
 
     /// The emulator showing a session. It lives as long as the session, so
@@ -208,16 +212,16 @@ struct TerminalMenuItems: View {
     }
 }
 
-/// File > Close Terminal (⌘W), in place of AppKit's Close: it hides the
-/// terminal panel when one is open and does nothing otherwise, so ⌘W never
-/// closes the app's only window. The item stays enabled: SwiftUI did not
+/// File > Close Terminal Tab (⌘W), in place of AppKit's Close: it closes the
+/// selected terminal tab when the panel is open, and the panel with its last
+/// tab, and does nothing otherwise, so ⌘W never closes the app's only window. The item stays enabled: SwiftUI did not
 /// re-enable it in time when the panel opened, which swallowed the key.
 struct CloseTerminalMenuItem: View {
     @ObservedObject var terminal: TerminalController
     @ObservedObject var keybindings: KeybindingStore
 
     var body: some View {
-        Button("Close Terminal") { terminal.closePanel() }
+        Button("Close Terminal Tab") { terminal.closeSelectedTab() }
             .keyboardShortcut(keybindings.shortcut(for: .closeTerminal))
     }
 }
