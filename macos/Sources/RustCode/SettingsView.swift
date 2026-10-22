@@ -184,6 +184,7 @@ private struct GeneralSettings: View {
     @AppStorage(DesktopModel.autoApproveKey) private var autoApprove = false
     @AppStorage(StreamingProse.revealKey) private var revealsText = true
     @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
+    @AppStorage(ComposerPredictions.key) private var predictions = true
 
     private var verbositySubtitle: String {
         switch verbosity {
@@ -222,6 +223,13 @@ private struct GeneralSettings: View {
                 SettingsRow(title: "Fade in new text",
                             subtitle: "Replies fade in softly as they stream. Off with Reduce Motion") {
                     Toggle("Fade in new text", isOn: $revealsText)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                RowDivider()
+                SettingsRow(title: "Word predictions",
+                            subtitle: "Suggest the next word while you type a message; Tab accepts it. On this Mac only") {
+                    Toggle("Word predictions", isOn: $predictions)
                         .labelsHidden()
                         .toggleStyle(.switch)
                 }

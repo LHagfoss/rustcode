@@ -1596,6 +1596,26 @@ enum MarkedText {
 
 /// The floating message field, laid out like the iOS composer: the text on
 /// top, and below it the + menu, the model and Send. ⏎ sends, ⇧⏎ breaks the line.
+/// Apple's on-device inline predictions in the composer: the next word in
+/// grey ahead of the cursor, which Tab accepts. A window's text fields share
+/// one field editor, so the others go back to the system default when the
+/// composer lets go.
+@MainActor
+enum ComposerPredictions {
+    static let key = "composerPredictions"
+
+    static func apply(composerFocused: Bool) {
+        let enabled = UserDefaults.standard.object(forKey: key) as? Bool ?? true
+        // The field editor becomes first responder a moment after focus moves.
+        DispatchQueue.main.async {
+            let window = NSApp.keyWindow ?? NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+            guard let editor = window?.firstResponder as? NSTextView else { return }
+            let type: NSTextInputTraitType = composerFocused && enabled ? .yes : .default
+            if editor.inlinePredictionType != type { editor.inlinePredictionType = type }
+        }
+    }
+}
+
 private struct Composer: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var composer: ComposerDraft
@@ -1763,6 +1783,10 @@ private struct Composer: View {
             .font(.body)
             .lineLimit(1...10)
             .focused($focused)
+            .onChange(of: focused, initial: true) { _, on in ComposerPredictions.apply(composerFocused: on) }
+            // Focus can settle before the field editor takes over: typing is
+            // when the setting matters, so it is checked again then.
+            .onChange(of: composer.text) { _, _ in if focused { ComposerPredictions.apply(composerFocused: true) } }
             .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
                 if let suffix = model.commandCompletionSuffix {
                     Text(ghost(suffix))

@@ -426,7 +426,8 @@ enum DebugDriver {
             let editor = window?.firstResponder as? NSTextView
             let lines = ["draft [\(model.draft)]", "field [\(editor?.string ?? "-")] marked \(editor?.hasMarkedText() ?? false)",
                          "selected \(model.selectedSession ?? "-") pinned \(model.isSelectedPinned)",
-                         "toasts \(model.toasts.map(\.title))", "key \(window?.isKeyWindow ?? false) responder \(String(describing: window?.firstResponder.map { type(of: $0) }))"]
+                         "toasts \(model.toasts.map(\.title))", "key \(window?.isKeyWindow ?? false) responder \(String(describing: window?.firstResponder.map { type(of: $0) }))",
+                         "predictions \(editor.map { $0.inlinePredictionType == .yes ? "yes" : "default" } ?? "-")"]
             try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/state",
                                                      atomically: true, encoding: .utf8)
         case "scope": model.showsAllProjects = parts[1] == "all"
