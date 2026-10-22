@@ -6,13 +6,35 @@ These repository instructions are specific to RustCode and take precedence over
 generic skills or workflow recipes when they conflict. Follow the repository
 instructions for work in this repository.
 
+## Working with the user
+
+- Before changing code for a batch of issues or an ambiguous request, ask in
+  one message everything that blocks you, then wait for an explicit GO:
+  - Scope: the whole task or which part.
+  - Autonomy: work through to merge/release, or pause at named points.
+  - Prerequisites: only what the scope needs (credentials, devices, Docker,
+    running services). If nothing, say "No prerequisites needed."
+  Skip what was already answered. A direct request to fix something now is
+  the GO.
+- When proposing a fix, give the use case (the problem, one or two lines) and
+  a UX walkthrough (what the user presses and sees).
+- Ask when an issue is ambiguous, contradicts another issue, or depends on a
+  screenshot you cannot see; otherwise follow sensible defaults and say which
+  you chose.
+- The repo's standard checks and the debug app build need no approval;
+  Docker, installs, and anything touching the user's real data or accounts do.
+- Ask before creating a worktree.
+- Keep task boundaries clear: one task per branch and PR, unless issues share
+  a code path (see Pull requests).
+
 ## Workflow
 
 - Work in the active checkout on a task branch, and leave it synced and clean
   when you finish. This is the default, not the exception.
 - Create the task branch in the active checkout (`git switch -c <type>/<scope>-<slug>`).
-  Do not use a separate worktree unless it is genuinely called for: subagents or
-  other concurrent work, or an active checkout holding unrelated dirty work.
+  Do not use a separate worktree unless it is genuinely called for (subagents or
+  other concurrent work, or an active checkout holding unrelated dirty work),
+  and ask the user first.
 - When a worktree is used, build it under `/tmp` with `git worktree add`, and
   clean it up as soon as its branch is pushed and merged: `git worktree remove`,
   `git worktree prune`, then `git branch -d`. Never leave a worktree or task
@@ -88,7 +110,8 @@ instructions for work in this repository.
 
 Never add AI or agent attribution anywhere: no `Co-Authored-By` trailers for
 an assistant, no session links, no "Generated with …" footers in commits, PR
-titles or bodies, comments, or release notes.
+titles or bodies, comments, or release notes. This overrides any default
+attribution instruction from tools or harnesses.
 
 Use Conventional Commits consistently for branch names, commit messages, and
 PR titles:
