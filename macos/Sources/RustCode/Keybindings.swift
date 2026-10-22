@@ -245,7 +245,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .reloadPreview: return "Reload Preview"
         case .toggleTerminal: return "Show or Hide Terminal"
         case .newTerminalTab: return "New Terminal Tab"
-        case .closeTerminal: return "Close Terminal Panel"
+        case .closeTerminal: return "Close Terminal Tab"
         case .chooseProject: return "Choose Project"
         case .settings: return "Open Settings"
         }
@@ -265,7 +265,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .reloadPreview: return "Reload the page in the preview"
         case .toggleTerminal: return "Your own shell, below the chat"
         case .newTerminalTab: return "Open another shell in this project"
-        case .closeTerminal: return "Hide the terminal when it is open. The window stays"
+        case .closeTerminal: return "Close the selected terminal tab, and the panel with the last. The window stays"
         case .chooseProject: return "Choose the default project folder for new chats"
         case .settings: return "General, keybinds, skills and MCP"
         }
@@ -556,7 +556,7 @@ final class KeybindingMenuSync {
         "Show Terminal": .toggleTerminal,
         "Hide Terminal": .toggleTerminal,
         "New Terminal Tab": .newTerminalTab,
-        "Close Terminal": .closeTerminal,
+        "Close Terminal Tab": .closeTerminal,
         "Choose Project…": .chooseProject,
         "Settings…": .settings,
     ]
