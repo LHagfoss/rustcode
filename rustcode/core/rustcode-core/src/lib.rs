@@ -722,11 +722,15 @@ pub enum ToolProtocol {
 #[derive(Debug, PartialEq, Clone, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Verbosity {
+    /// Compact: a run of tool calls folds into one `N tool calls` row that
+    /// opens to the calls as `High` shows them. While tools run, only the
+    /// current call shows.
     Low,
+    /// Every tool call is a single row that opens to its output.
     #[default]
     High,
-    /// Like `High`, but file changes (write, edit, replace, delete) show
-    /// their diff open while every other tool call stays a single row.
+    /// Like `Low`, but file changes (write, edit, replace, delete) stay out
+    /// of the folded runs and show their diff open.
     Edits,
 }
 
@@ -767,6 +771,19 @@ impl Verbosity {
     /// Whether file-change bodies start open.
     pub fn edits_open(&self) -> bool {
         matches!(self, Verbosity::Edits)
+    }
+
+    /// Whether runs of tool calls fold into one row (low and edits).
+    pub fn compact(&self) -> bool {
+        matches!(self, Verbosity::Low | Verbosity::Edits)
+    }
+
+    /// How each tool row itself renders: low folds runs of `High` rows.
+    pub fn row_level(&self) -> Verbosity {
+        match self {
+            Verbosity::Low => Verbosity::High,
+            other => other.clone(),
+        }
     }
 }
 

@@ -216,10 +216,17 @@ fn render_live_tail_mode(
     }
 
     if has_visible_active_cell {
+        // Compact verbosity shows only the call running now; the calls before
+        // it fold into the committed block's `N tool calls` row.
+        let live_calls = if state.verbosity().compact() {
+            &visible_live_tool_calls[visible_live_tool_calls.len().saturating_sub(1)..]
+        } else {
+            &visible_live_tool_calls[..]
+        };
         let mut tool_lines = super::history_cell::render_live_tool_cell_at_refs(
-            &visible_live_tool_calls,
+            live_calls,
             width,
-            state.verbosity(),
+            &state.verbosity().row_level(),
             false,
             std::time::Instant::now(),
             state.home_path(),
@@ -568,10 +575,8 @@ pub(crate) fn render_visible_conversation_with_transcript(
             let owners = tool_block.map(|(first, end)| {
                 transcript.committed_tool_group_owners(state, first, end, width)
             });
-            tool_lines.extend((from..through).map(|row| {
-                let call = owners.as_ref()?.get(row).copied().flatten()?;
-                Some((call, call + 1))
-            }));
+            tool_lines
+                .extend((from..through).map(|row| owners.as_ref()?.get(row).copied().flatten()));
             // A message is one target from its first row to its last: the
             // blank rows between its paragraphs belong to it, the spacing
             // around it and the timing line under it do not.
@@ -1556,90 +1561,6 @@ mod projection_tests {
         transcript.jump_to_latest();
         let _ = visible_text(&state, &mut transcript, 40, 8);
         assert!(!transcript.unseen_activity());
-    }
-
-    #[test]
-    fn growing_foreground_output_stays_reachable_with_a_bounded_preview() {
-        let _guard = crate::ui::tests::THEME_TEST_LOCK.lock().unwrap();
-        for width in [24, 80] {
-            let mut state = RenderState::new();
-            state.verbosity = rustcode::controller::Verbosity::Low;
-            state.status = AppStatus::Streaming;
-            state
-                .history
-                .push(ChatMessage::new("assistant", streamed_rows(0..30)));
-            let mut call = rustcode::controller::LiveToolCall::new(
-                "foreground-1",
-                None,
-                "run_command",
-                "Bash",
-                "echo rows",
-            );
-            call.execution_started = true;
-            call.output
-                .push_back(rustcode::controller::LiveToolOutputChunk {
-                    stderr: false,
-                    text: "command row 00 界\ncommand row 01 界".to_owned(),
-                });
-            std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
-            let mut transcript = TranscriptState::default();
-            let initial = visible_text(&state, &mut transcript, width, 8).join("\n");
-            assert!(
-                initial.contains("command row 01 界"),
-                "width={width}: {initial}"
-            );
-
-            transcript.scroll_up(12);
-            let reading = visible_text(&state, &mut transcript, width, 8);
-            assert!(reading.join("\n").contains("live row"), "{reading:?}");
-            assert!(!transcript.is_following());
-            std::sync::Arc::make_mut(&mut state.live_tool_calls)[0]
-                .output
-                .push_back(rustcode::controller::LiveToolOutputChunk {
-                    stderr: false,
-                    text: (2..10)
-                        .map(|row| format!("command row {row:02} 界"))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                });
-            assert_eq!(
-                visible_text(&state, &mut transcript, width, 8),
-                reading,
-                "foreground body growth must preserve history reading at width={width}"
-            );
-            assert!(transcript.unseen_activity());
-
-            transcript.scroll_down(transcript.scroll_rows().saturating_sub(1));
-            let near_live = visible_text(&state, &mut transcript, width, 8).join("\n");
-            assert!(
-                near_live.contains("command row 08 界"),
-                "width={width}: {near_live}"
-            );
-            assert!(!transcript.is_following());
-            transcript.jump_to_latest();
-            let latest = visible_text(&state, &mut transcript, width, 8);
-            let latest_text = latest.join("\n");
-            assert!(
-                latest_text.contains("command row 09 界"),
-                "width={width}: {latest_text}"
-            );
-            assert!(latest_text.contains("… +6 lines"), "{latest_text}");
-            assert_eq!(
-                latest
-                    .iter()
-                    .filter(|row| row.contains("command row"))
-                    .count(),
-                4,
-                "the five-row body keeps two head rows, the omission marker, and two tail rows"
-            );
-            assert!(!latest_text.contains("command row 02"), "{latest_text}");
-            assert!(
-                latest.iter().all(|row| row.width() <= usize::from(width)),
-                "{latest:?}"
-            );
-            assert!(transcript.is_following());
-            assert!(!transcript.unseen_activity());
-        }
     }
 
     #[test]

@@ -409,8 +409,16 @@ fn with_visible_expansion<R>(
 }
 
 /// Open or close the output of one tool block: open while any of its calls is
-/// closed, close once all are open.
+/// closed, close once all are open. A block of several calls is a folded run
+/// at low or edits verbosity, which opens to its calls instead.
 fn toggle_tool_block(state: &mut AppState, width: u16, (first, end): ui::ToolBlock) {
+    if end - first > 1 && state.verbosity.compact() {
+        if !state.expanded_tool_runs.remove(&first) {
+            state.expanded_tool_runs.insert(first);
+        }
+        state.request_redraw();
+        return;
+    }
     let snapshot = ui::render_snapshot::render_snapshot(&rustcode::controller::render_state(state));
     let calls = ui::collapsible_tool_indices(&snapshot, width)
         .into_iter()
@@ -2851,6 +2859,18 @@ mod tests {
 
         super::toggle_tool_block(&mut state, 80, (3, 4));
         assert!(state.expanded_thoughts.is_empty());
+    }
+
+    #[test]
+    fn clicking_a_folded_run_opens_and_folds_it() {
+        let mut state = AppState::new();
+        state.verbosity = rustcode::app::Verbosity::Low;
+        // A summary row stands for the calls from history index 1 up to 4.
+        super::toggle_tool_block(&mut state, 80, (1, 4));
+        assert!(state.expanded_tool_runs.contains(&1));
+        assert!(state.expanded_thoughts.is_empty(), "no call body opens");
+        super::toggle_tool_block(&mut state, 80, (1, 4));
+        assert!(state.expanded_tool_runs.is_empty());
     }
 
     #[test]

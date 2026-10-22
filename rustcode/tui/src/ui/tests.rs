@@ -3078,7 +3078,8 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
+    state.expanded_thoughts.insert(1);
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -3957,41 +3958,41 @@ fn generic_tool_output_follows_verbosity_without_mutating_history() {
     );
     let history = state.history.clone();
 
+    let render = |state: &RenderState| {
+        super::render_committed_tool_result_group(state, &[1], 80, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+    };
     state.verbosity = Verbosity::Low;
-    let low = super::render_committed_tool_result_group(&state, &[1], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
+    let low = render(&state);
     state.verbosity = Verbosity::High;
-    let high = super::render_committed_tool_result_group(&state, &[1], 80, false)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
+    let high = render(&state);
 
-    // Low previews the result like a command's: its first and last rows
-    // around an omission marker, with the hint to open the rest.
-    assert!(low.iter().any(|line| line.contains("completed")), "{low:?}");
-    assert!(low.iter().any(|line| line.contains("line 49")), "{low:?}");
-    assert!(!low.iter().any(|line| line.contains("line 25")), "{low:?}");
-    assert!(low.iter().any(|line| line.contains("lines")), "{low:?}");
-    assert!(
-        low.iter().any(|line| line.contains("(ctrl+o all")),
-        "{low:?}"
-    );
-    // High shows the row alone.
+    // Every level shows a lone call as its row alone; low folds only runs.
     assert_eq!(high.len(), 2, "{high:?}");
+    assert_eq!(low, high);
     assert!(!high.iter().any(|line| line.contains("line 49")));
-    assert!(!high.iter().any(|line| line.contains("(ctrl+o all")));
+    // Opened, it shows everything it returned.
+    state.expanded_thoughts.insert(1);
+    let opened = render(&state);
+    assert!(
+        opened.iter().any(|line| line.contains("line 25")),
+        "{opened:?}"
+    );
+    assert!(
+        opened.iter().any(|line| line.contains("line 49")),
+        "{opened:?}"
+    );
     assert!(state.history == history);
 }
 
 #[test]
-fn low_verbosity_generic_output_is_shown_and_wraps_when_narrow() {
+fn generic_output_opens_and_wraps_when_narrow() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -4013,19 +4014,14 @@ fn low_verbosity_generic_output_is_shown_and_wraps_when_narrow() {
             }),
     );
 
-    // A result that fits the preview is shown whole, so there is nothing
-    // further to open and no hint.
+    // Closed, the call is its row alone.
     let collapsed = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(collapsed.len(), 3, "{collapsed:?}");
+    assert_eq!(collapsed.len(), 2, "{collapsed:?}");
     assert_eq!(collapsed[0], "• Ran");
-    assert!(
-        collapsed[1].contains("McpCustomTool") && !collapsed[1].contains("(ctrl+o all"),
-        "a fully visible result needs no expansion hint: {collapsed:?}"
-    );
-    assert!(collapsed[2].contains(long_line), "{collapsed:?}");
+    assert!(collapsed[1].contains("McpCustomTool"), "{collapsed:?}");
 
     state.expanded_thoughts.insert(1);
     let expanded = super::render_committed_tool_result_group(&state, &[1], 30, false)
@@ -4073,11 +4069,11 @@ fn collapsed_tool_bodies_cap_wrapped_unicode_output_at_five_rows() {
 }
 
 #[test]
-fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded() {
+fn committed_shell_output_is_one_row_when_closed_and_complete_when_expanded() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -4110,21 +4106,8 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert!(!collapsed[0].contains("ctrl+o"), "{collapsed:?}");
-    assert!(
-        collapsed.last().unwrap().contains("(ctrl+o all"),
-        "{collapsed:?}"
-    );
-    let body_start = collapsed
-        .iter()
-        .position(|line| line.contains("│"))
-        .expect("rendered shell output begins below its command header");
-    assert!(
-        collapsed.len() - body_start - 1 <= 5,
-        "collapsed body rows: {collapsed:?}"
-    );
-    assert!(collapsed.iter().any(|line| line.contains("lines")));
-    assert!(collapsed.iter().any(|line| line.contains('日')));
+    assert_eq!(collapsed.len(), 2, "{collapsed:?}");
+    assert!(!collapsed.iter().any(|line| line.contains('日')));
 
     state.expanded_thoughts.insert(1);
     let expanded = super::render_committed_tool_result_group(&state, &[1], 36, false)
@@ -4143,11 +4126,11 @@ fn committed_shell_output_is_five_rows_when_collapsed_and_complete_when_expanded
 }
 
 #[test]
-fn low_verbosity_keeps_errors_and_exit_status_visible() {
+fn closed_command_keeps_errors_and_exit_status_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -4187,8 +4170,8 @@ fn low_verbosity_keeps_errors_and_exit_status_visible() {
         "fully visible shell output needs no expansion hint: {rendered:?}"
     );
     assert!(
-        rendered.iter().any(|line| line.contains("build failed")),
-        "short error output remains visible while collapsed: {rendered:?}"
+        rendered.iter().any(|line| line.contains("✗")),
+        "the row shows the call failed: {rendered:?}"
     );
 
     state.expanded_thoughts.insert(1);
@@ -4257,7 +4240,7 @@ fn expanded_command_body_renders_full_not_window() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -4305,17 +4288,11 @@ fn expanded_command_body_renders_full_not_window() {
             }),
     );
 
-    // Collapsed: the five-row preview keeps the output head and tail.
+    // Collapsed: the row alone.
     let collapsed = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert!(
-        collapsed
-            .iter()
-            .any(|line| line.contains("Bash") && line.contains("(ctrl+o all")),
-        "collapsed command carries hint: {collapsed:?}"
-    );
     assert!(
         !collapsed.iter().any(|line| line.contains("output line 15")),
         "collapsed command hides body: {collapsed:?}"
@@ -4344,11 +4321,11 @@ fn expanded_command_body_renders_full_not_window() {
 }
 
 #[test]
-fn homogeneous_command_batch_collapses_with_hint_and_expands_fully() {
+fn homogeneous_command_batch_stays_closed_and_expands_fully() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -4377,24 +4354,12 @@ fn homogeneous_command_batch_collapses_with_hint_and_expands_fully() {
         }),
     );
 
-    // Homogeneous command output stays compact until the user expands it.
+    // Command output stays closed until the user expands it.
     let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert!(rendered.iter().any(|line| line.contains("(ctrl+o all")));
-    assert!(rendered.iter().any(|line| line.contains("homo line 0")));
-    assert!(rendered.iter().any(|line| line.contains("homo line 19")));
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("+") && line.contains("lines")),
-        "collapsed command output has an omission marker: {rendered:?}"
-    );
-    assert!(
-        rendered.iter().any(|line| line.contains("ctrl+o")),
-        "collapsed command output has an expand hint: {rendered:?}"
-    );
+    assert!(!rendered.iter().any(|line| line.contains("homo line 0")));
 
     state.expanded_thoughts.insert(1);
     let expanded = super::render_committed_tool_result_group(&state, &[1], 80, false)
@@ -4412,12 +4377,12 @@ fn homogeneous_command_batch_collapses_with_hint_and_expands_fully() {
 }
 
 #[test]
-fn low_verbosity_frame_keeps_hierarchy_and_diff_visible() {
+fn edits_verbosity_frame_keeps_hierarchy_and_diff_visible() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::Edits;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -4453,7 +4418,7 @@ fn low_verbosity_frame_keeps_hierarchy_and_diff_visible() {
 }
 
 #[test]
-fn low_verbosity_frame_shows_every_tool_result_and_high_shows_none() {
+fn low_verbosity_folds_the_run_and_high_shows_each_row() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
@@ -4548,28 +4513,37 @@ fn low_verbosity_frame_shows_every_tool_result_and_high_shows_none() {
         "failure status stays visible: {high}"
     );
 
-    // Low shows what every tool returned, and every one of them can be opened.
+    // Low folds the run into one row that counts the calls and failures.
     state.verbosity = Verbosity::Low;
+    let folded = render_state_to_text(&mut state, 100, 40);
+    assert!(folded.contains("▸ 5 tool calls · 1 failed"), "{folded}");
+    for payload in payloads {
+        assert!(!folded.contains(payload), "{payload}: {folded}");
+    }
+    assert!(!folded.contains("Bash printf"), "{folded}");
+
+    // Opened, the run lists its calls as high does, and each one opens.
+    state.expanded_tool_runs.insert(1);
+    let opened = render_state_to_text(&mut state, 100, 40);
+    assert!(opened.contains("▾ 5 tool calls"), "{opened}");
+    assert!(opened.contains("Bash printf"), "{opened}");
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 100);
     assert_eq!(candidates, [1, 2, 3, 4, 5], "every tool result expands");
-
-    let collapsed = render_state_to_text(&mut state, 100, 40);
-    for payload in payloads {
-        assert!(collapsed.contains(payload), "{payload}: {collapsed}");
-    }
-    assert!(collapsed.contains("failed"), "{collapsed}");
-
     state.expanded_thoughts.extend(candidates);
     let expanded = render_state_to_text(&mut state, 100, 40);
     for payload in payloads {
         assert!(expanded.contains(payload), "{payload}: {expanded}");
     }
+    state.expanded_tool_runs.clear();
 
     // Edits keeps every row closed except the file edit, which starts open;
     // a stored toggle on it closes it again.
+    // Edits folds the other calls too; the file edit stays out of the run,
+    // open.
     state.expanded_thoughts.clear();
     state.verbosity = Verbosity::Edits;
     let edits = render_state_to_text(&mut state, 100, 40);
+    assert!(edits.contains("▸ 4 tool calls · 1 failed"), "{edits}");
     assert!(edits.contains("edit-diff-marker"), "{edits}");
     for payload in [
         "read-payload-marker",
@@ -4708,11 +4682,12 @@ fn committed_file_write_is_labeled_as_a_write() {
 }
 
 #[test]
-fn low_verbosity_write_shows_added_lines_preview() {
+fn opened_write_shows_added_lines() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
+    state.expanded_thoughts.insert(1);
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -4738,7 +4713,7 @@ fn low_verbosity_write_shows_added_lines_preview() {
         }),
     );
 
-    // Low verbosity keeps the path label but also shows the added lines
+    // An opened write keeps the path label and shows the added lines
     // instead of only the filename/count summary (#1567).
     let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
         .into_iter()
@@ -4753,20 +4728,16 @@ fn low_verbosity_write_shows_added_lines_preview() {
         rendered.iter().any(|line| line.contains("pub fn new")),
         "added content renders inline: {rendered:?}"
     );
-    assert!(
-        !rendered.iter().any(|line| line.contains("ctrl+o")),
-        "fully visible edit preview needs no expansion hint: {rendered:?}"
-    );
     let candidates = super::collapsible_tool_indices(&render_snapshot(&state), 80);
     assert_eq!(candidates, [1]);
 }
 
 #[test]
-fn low_verbosity_write_diff_shows_first_five_lines_and_expands_completely() {
+fn write_diff_stays_closed_and_expands_completely() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     let content = (1..=12)
         .map(|index| format!("pub fn item_{index}() {{}}"))
         .collect::<Vec<_>>()
@@ -4793,24 +4764,8 @@ fn low_verbosity_write_diff_shows_first_five_lines_and_expands_completely() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    for index in 1..=5 {
-        assert!(
-            collapsed
-                .iter()
-                .any(|line| line.contains(&format!("item_{index}"))),
-            "{collapsed:?}"
-        );
-    }
     assert!(
-        !collapsed.iter().any(|line| line.contains("item_6")),
-        "{collapsed:?}"
-    );
-    assert!(
-        collapsed.iter().any(|line| line.contains("… +7 lines")),
-        "{collapsed:?}"
-    );
-    assert!(
-        collapsed.iter().any(|line| line.contains("ctrl+o")),
+        !collapsed.iter().any(|line| line.contains("item_1")),
         "{collapsed:?}"
     );
 
@@ -4836,7 +4791,7 @@ fn write_and_edit_render_the_same_diff_body_when_collapsed_and_expanded() {
     let diff = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,2 +1,3 @@\n-let old_value = 1;\n+let value = 2;\n+let second_value = 3;\n+let third_value = 4;\n+let fourth_value = 5;\n+let fifth_value = 6;\n";
     let render = |tool_name: &str, result: &str, expanded: bool| {
         let mut state = RenderState::new();
-        state.verbosity = Verbosity::Low;
+        state.verbosity = Verbosity::High;
         state.history.push(
             ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
                 id: "call-1".to_owned(),
@@ -4877,31 +4832,20 @@ fn write_and_edit_render_the_same_diff_body_when_collapsed_and_expanded() {
             &edited[2..],
             "Write and Edit should render the same diff rows when expanded={expanded}"
         );
+        if !expanded {
+            assert_eq!(wrote.len(), 2, "a closed write is its row alone: {wrote:?}");
+            continue;
+        }
         assert!(wrote.iter().any(|line| line.contains("old_value = 1;")));
-        for value in if expanded {
-            vec![2, 3, 4, 5, 6]
-        } else {
-            vec![2, 3, 4, 5]
-        } {
+        for value in [2, 3, 4, 5, 6] {
             assert!(
                 wrote
                     .iter()
                     .any(|line| line.contains(&format!("value = {value};"))),
-                "expanded={expanded}: {wrote:?}"
-            );
-        }
-        if !expanded {
-            assert!(
-                !wrote.iter().any(|line| line.contains("value = 6;")),
                 "{wrote:?}"
             );
-            assert!(
-                wrote.iter().any(|line| line.contains("… +1 lines")),
-                "{wrote:?}"
-            );
-        } else {
-            assert!(!wrote.iter().any(|line| line.contains("… +")), "{wrote:?}");
         }
+        assert!(!wrote.iter().any(|line| line.contains("… +")), "{wrote:?}");
     }
 }
 
@@ -5078,13 +5022,13 @@ fn high_verbosity_shows_the_file_diff_once_opened() {
 }
 
 #[test]
-fn low_verbosity_write_expand_round_trip_changes_body_and_hint() {
+fn write_expand_round_trip_opens_the_body() {
     use rustcode::controller::{
         ChatMessage, ExpandOutcome, ToolCallRef, ToolResultRecord, Verbosity,
     };
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     let content = (0..20)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
@@ -5120,15 +5064,10 @@ fn low_verbosity_write_expand_round_trip_changes_body_and_hint() {
             .collect::<Vec<_>>()
     };
     let collapsed = render(&state);
-    assert!(
-        collapsed
-            .iter()
-            .any(|line| line.contains("+") && line.contains("lines")),
-        "collapsed preview truncates with an omitted count: {collapsed:?}"
-    );
-    assert!(
-        collapsed.iter().any(|line| line.contains("ctrl+o")),
-        "collapsed preview advertises expansion: {collapsed:?}"
+    assert_eq!(
+        collapsed.len(),
+        2,
+        "a closed write is its row: {collapsed:?}"
     );
 
     let mut focus = None;
@@ -5210,11 +5149,12 @@ fn write_noop_and_failure_keep_truthful_status_without_hint() {
 }
 
 #[test]
-fn low_verbosity_edit_diff_wraps_at_narrow_width() {
+fn opened_edit_diff_wraps_at_narrow_width() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
+    state.expanded_thoughts.insert(1);
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -5435,11 +5375,11 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
 }
 
 #[test]
-fn command_preview_preserves_the_output_tail() {
+fn opened_command_keeps_the_output_tail() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -5478,18 +5418,12 @@ fn command_preview_preserves_the_output_tail() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    // The collapsed window keeps the beginning and actionable error tail.
+    // Closed, the row says the command failed and shows none of its output.
     assert!(
-        rendered.iter().any(|line| line.contains("… +")),
-        "collapsed output reports omitted rows: {rendered:?}"
+        rendered.iter().any(|line| line.contains("exit 1")),
+        "{rendered:?}"
     );
-    assert!(rendered.iter().any(|line| line.contains("line 0")));
-    assert!(rendered.iter().any(|line| line.contains("line 19")));
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("error: build failed"))
-    );
+    assert!(!rendered.iter().any(|line| line.contains("line 0")));
 
     state.expanded_thoughts.insert(1);
     let expanded = super::render_committed_history_block(&state, 1, 80)
@@ -5504,6 +5438,11 @@ fn command_preview_preserves_the_output_tail() {
             "expanded output keeps line {index}: {expanded:?}"
         );
     }
+    assert!(
+        expanded
+            .iter()
+            .any(|line| line.contains("error: build failed"))
+    );
 }
 
 #[test]
@@ -5554,11 +5493,11 @@ fn expanded_generic_tool_shows_its_result_under_the_action_row() {
 }
 
 #[test]
-fn mixed_batch_command_entry_shows_expand_hint_and_body() {
+fn mixed_batch_command_entry_opens_on_its_own_row() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -5610,20 +5549,10 @@ fn mixed_batch_command_entry_shows_expand_hint_and_body() {
         "fully visible command needs no expansion hint: {rendered:?}"
     );
 
-    // The hint belongs to the row it describes. Appending it to the last
-    // wrapped line of the command preview lands it between the two tool rows,
-    // so it reads as annotating the `GetTime` row below and splits the group
-    // (#1541).
     assert_eq!(
         rendered,
-        [
-            "• Ran",
-            "  ✓ Bash git status --short",
-            "  │ M src/main.rs",
-            "  ✓ GetTime",
-            "  │ Thursday, 08:30",
-        ],
-        "each hint stays on the row of the entry it expands: {rendered:?}"
+        ["• Ran", "  ✓ Bash git status --short", "  ✓ GetTime"],
+        "closed rows: {rendered:?}"
     );
     assert!(
         !rendered
@@ -5656,7 +5585,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
     };
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -5710,7 +5639,7 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
         "a result with no output has nothing to open"
     );
     assert!(
-        render(&state)
+        !render(&state)
             .iter()
             .any(|line| line.contains("M src/main.rs")),
         "the command body starts collapsed"
@@ -5767,10 +5696,10 @@ fn ctrl_o_round_trips_the_last_collapsed_tool_body() {
     assert!(state.expanded_thoughts.is_empty());
     assert_eq!(focus, None);
     assert!(
-        render(&state)
+        !render(&state)
             .iter()
             .any(|line| line.contains("M src/main.rs")),
-        "collapsing retains the bounded visible preview: {:?}",
+        "collapsing closes the body again: {:?}",
         render(&state)
     );
 }
@@ -5780,7 +5709,7 @@ fn homogeneous_command_batch_has_independent_collapsible_candidates() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = RenderState::new();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     state
         .history
         .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
@@ -7286,16 +7215,15 @@ fn verbosity_sets_whether_output_starts_open_and_opening_an_entry_shows_it_all()
         ["• Ran", "  ✓ Bash cargo test", "  ✓ Read src/main.rs"]
     );
 
-    // Low: a five-row preview of the command's output.
+    // Low: the run folds into one row.
     state.verbosity = rustcode::controller::Verbosity::Low;
-    let low = render(&state);
-    assert_eq!(low[0], "• Ran");
-    assert!(low[1].starts_with("  ✓ Bash cargo test"), "{low:?}");
-    assert!(low.contains(&"  │ line 1".to_owned()), "{low:?}");
-    assert!(low.contains(&"  │ line 9".to_owned()), "{low:?}");
-    assert!(!low.contains(&"  │ line 5".to_owned()), "{low:?}");
+    assert_eq!(
+        render(&state),
+        ["• Ran", "  ▸ 2 tool calls (click to show)"]
+    );
 
     // Opened: all of it, at either verbosity.
+    state.expanded_tool_runs.insert(1);
     for verbosity in [
         rustcode::controller::Verbosity::Low,
         rustcode::controller::Verbosity::High,
@@ -7679,6 +7607,30 @@ fn speculative_tool_without_target_is_not_rendered() {
     let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false);
 
     assert!(rendered.is_empty());
+}
+
+#[test]
+fn low_verbosity_live_tools_show_only_the_current_call() {
+    use rustcode::controller::{LiveToolCall, Verbosity};
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
+    let mut state = RenderState::new();
+    state.status = AppStatus::Streaming;
+    for (id, target) in [("call-1", "first-target"), ("call-2", "second-target")] {
+        let mut call = LiveToolCall::new(id, None, "run_command", "Bash", target);
+        call.execution_started = true;
+        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(call);
+    }
+    state.verbosity = Verbosity::High;
+    let high = render_state_to_text(&mut state, 80, 20);
+    assert!(
+        high.contains("first-target") && high.contains("second-target"),
+        "{high}"
+    );
+    state.verbosity = Verbosity::Low;
+    let low = render_state_to_text(&mut state, 80, 20);
+    assert!(!low.contains("first-target"), "{low}");
+    assert!(low.contains("second-target"), "{low}");
 }
 
 #[test]
@@ -10807,7 +10759,7 @@ fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
     use rustcode::controller::{ExpandOutcome, Verbosity};
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut state = state_with_a_scrollable_transcript();
-    state.verbosity = Verbosity::Low;
+    state.verbosity = Verbosity::High;
     // Only commands and edit diffs expose expandable tool bodies.
     let call = &mut state.history[24].tool_calls[0];
     call.name = "run_command".to_owned();
@@ -10819,7 +10771,6 @@ fn expanded_bodies_are_bounded_and_collapsing_restores_the_collapsed_rows() {
     let mut transcript = TranscriptState::default();
 
     let collapsed = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 30);
-    assert!(collapsed.contains("(ctrl+o all"), "{collapsed}");
     assert!(
         !collapsed.contains("row 300"),
         "the collapsed window hides the body: {collapsed}"
@@ -11636,6 +11587,12 @@ fn low_verbosity_command_batch_keeps_one_group_and_per_call_outcomes() {
                 }),
         );
     }
+    let folded = super::render_committed_tool_result_group(&state, &[1, 2], 80, false);
+    assert!(
+        folded[1].to_string().contains("▸ 2 tool calls · 1 failed"),
+        "{folded:?}"
+    );
+    state.expanded_tool_runs.insert(1);
     let lines = super::render_committed_tool_result_group(&state, &[1, 2], 80, false);
     let text = lines
         .iter()
@@ -12463,8 +12420,9 @@ fn is_row_line(line: &str) -> bool {
 fn tool_rows_keep_their_state_on_the_row_at_every_width() {
     use rustcode::controller::Verbosity;
     let (mut state, indices) = long_row_block();
+    // Low opens its folded run to the same rows high shows.
+    state.expanded_tool_runs.insert(indices[0]);
     for verbosity in [Verbosity::High, Verbosity::Low] {
-        let low = matches!(verbosity, Verbosity::Low);
         state.verbosity = verbosity;
         for width in [20u16, 40, 80, 120, 200] {
             let lines = super::render_committed_tool_result_group(&state, &indices, width, false);
@@ -12488,7 +12446,9 @@ fn tool_rows_keep_their_state_on_the_row_at_every_width() {
                     rows.push(line);
                 } else {
                     assert!(
-                        (index == 0 && line == "• Ran") || line.starts_with("  │"),
+                        (index == 0 && line == "• Ran")
+                            || line.starts_with("  │")
+                            || line.starts_with("  ▾ "),
                         "width {width}: stray line {line:?}\n{text}"
                     );
                 }
@@ -12514,13 +12474,6 @@ fn tool_rows_keep_their_state_on_the_row_at_every_width() {
             }
             // The launch receipt is for the model; the row says what it says.
             assert!(!text.contains("Task started in background"), "{text}");
-            // A closed row carries its own hint where it fits.
-            if low && width >= 80 {
-                assert!(
-                    rows[5].ends_with("(1 failed) (ctrl+o all · shift+o one)"),
-                    "{text}"
-                );
-            }
         }
     }
 }

@@ -146,6 +146,7 @@ pub struct RenderState {
     pub live_tool_calls: Arc<Vec<LiveToolCall>>,
     pub stream_tracker: Option<StreamTracker>,
     pub expanded_thoughts: std::collections::HashSet<usize>,
+    pub expanded_tool_runs: std::collections::HashSet<usize>,
     pub last_copy_text: Option<(String, std::time::Instant)>,
     /// Transient notice, already filtered for expiry.
     pub transient_notice: Option<String>,
@@ -369,6 +370,7 @@ pub fn render_state(state: &AppState) -> RenderState {
         live_tool_calls: Arc::clone(&state.live_tool_calls),
         stream_tracker: state.stream_tracker.clone(),
         expanded_thoughts: state.expanded_thoughts.clone(),
+        expanded_tool_runs: state.expanded_tool_runs.clone(),
         last_copy_text: state.last_copy_text.clone(),
         transient_notice: state.active_transient_notice().map(str::to_owned),
         verbosity: state.verbosity.clone(),
