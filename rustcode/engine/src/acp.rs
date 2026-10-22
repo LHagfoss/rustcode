@@ -1200,6 +1200,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     // perform many network and tool operations, so awaiting it here
                     // prevents the connection from processing any other messages.
                     let scheduled_turn = turns.schedule();
+                    let wakeup_turns = Arc::downgrade(&turns);
                     let prompt_server = server.clone();
                     let task_connection = connection.clone();
                     let presence_cwd = cwd.clone();
@@ -1219,6 +1220,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             prompt_server.client,
                             prompt_server.auto_approve,
                             Some(prompt_server.remote.clone()),
+                            wakeup_turns,
                         )
                         .await;
                         prompt_server
