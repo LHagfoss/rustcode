@@ -3368,6 +3368,34 @@ fn test_parse_multimodal_content_with_image_nonexistent() {
     assert_eq!(arr[2]["text"], " interesting!");
 }
 
+#[test]
+fn test_parse_multimodal_content_downscales_large_screenshots() {
+    use base64::{Engine as _, engine::general_purpose};
+    let dir = tempfile::tempdir().expect("temporary directory");
+    // Noise compresses badly, so the PNG is well past the send-as-is size.
+    let path = dir.path().join("shot.png");
+    let mut seed = 1u32;
+    let image = image::RgbImage::from_fn(3000, 1800, |_, _| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        image::Rgb([(seed >> 24) as u8, (seed >> 16) as u8, (seed >> 8) as u8])
+    });
+    image.save(&path).expect("write png");
+    let original = std::fs::metadata(&path).unwrap().len() as usize;
+
+    let text = format!("see ![image](file://{})", path.display());
+    let first = parse_multimodal_content(&text);
+    let url = first[1]["image_url"]["url"].as_str().expect("image part");
+    let data = url
+        .strip_prefix("data:image/jpeg;base64,")
+        .expect("re-encoded as JPEG");
+    let bytes = general_purpose::STANDARD.decode(data).unwrap();
+    assert!(bytes.len() < original);
+    let sent = image::load_from_memory(&bytes).unwrap();
+    assert_eq!(sent.width().max(sent.height()), 1568);
+    // A replay of the same attachment gets the same bytes.
+    assert_eq!(parse_multimodal_content(&text), first);
+}
+
 #[tokio::test]
 async fn test_confirm_and_execute_bypassed() {
     // Write into a throwaway workspace: the repository checkout must not

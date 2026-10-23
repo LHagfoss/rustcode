@@ -117,6 +117,81 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
     }
 }
 
+/// Longest side, in pixels, an attached image is sent at. Providers scale
+/// larger images down anyway; sending them whole only costs bandwidth on
+/// every request of the session.
+const IMAGE_MAX_SIDE: u32 = 1568;
+/// Below this an image is sent as it is, whatever its size in pixels.
+const IMAGE_SEND_AS_IS_BYTES: usize = 300 * 1024;
+
+/// The `data:` URL an attached image is sent as, downscaled once and cached
+/// by path, size and modification time: every request of a session replays
+/// the same attachments, and re-reading and re-encoding a screenshot each
+/// time sent megabytes per request.
+fn image_data_url(path: &std::path::Path) -> Option<std::sync::Arc<str>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Key = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+    static CACHE: OnceLock<Mutex<HashMap<Key, Arc<str>>>> = OnceLock::new();
+
+    let meta = std::fs::metadata(path).ok()?;
+    let key = (path.to_path_buf(), meta.len(), meta.modified().ok());
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(url) = cache.lock().ok()?.get(&key) {
+        return Some(Arc::clone(url));
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let url: Arc<str> = encode_image(&bytes, &path.to_string_lossy()).into();
+    let mut cache = cache.lock().ok()?;
+    if cache.len() >= 64 {
+        cache.clear();
+    }
+    cache.insert(key, Arc::clone(&url));
+    Some(url)
+}
+
+/// `bytes` as a `data:` URL: as they are when small, else scaled to fit
+/// `IMAGE_MAX_SIDE` and re-encoded as JPEG. An image that cannot be decoded
+/// goes as it is, typed by its extension.
+fn encode_image(bytes: &[u8], path: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose};
+    if bytes.len() > IMAGE_SEND_AS_IS_BYTES
+        && let Ok(image) = image::load_from_memory(bytes)
+    {
+        let image = if image.width().max(image.height()) > IMAGE_MAX_SIDE {
+            image.resize(
+                IMAGE_MAX_SIDE,
+                IMAGE_MAX_SIDE,
+                image::imageops::FilterType::Triangle,
+            )
+        } else {
+            image
+        };
+        let mut jpeg = Vec::new();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85);
+        if image.to_rgb8().write_with_encoder(encoder).is_ok() && jpeg.len() < bytes.len() {
+            return format!(
+                "data:image/jpeg;base64,{}",
+                general_purpose::STANDARD.encode(jpeg)
+            );
+        }
+    }
+    let mime = if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if path.ends_with(".gif") {
+        "image/gif"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else {
+        "image/png"
+    };
+    format!(
+        "data:{};base64,{}",
+        mime,
+        general_purpose::STANDARD.encode(bytes)
+    )
+}
+
 pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
     let clean_text = rustcode_core::paste::expand(text);
 
@@ -140,22 +215,11 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
         let rest = &remaining[path_start..];
         if let Some(end_idx) = rest.find(')') {
             let path_str = &rest[..end_idx];
-            if let Ok(bytes) = std::fs::read(path_str) {
-                use base64::{Engine as _, engine::general_purpose};
-                let base64_str = general_purpose::STANDARD.encode(bytes);
-                let mime = if path_str.ends_with(".jpg") || path_str.ends_with(".jpeg") {
-                    "image/jpeg"
-                } else if path_str.ends_with(".gif") {
-                    "image/gif"
-                } else if path_str.ends_with(".webp") {
-                    "image/webp"
-                } else {
-                    "image/png"
-                };
+            if let Some(url) = image_data_url(std::path::Path::new(path_str)) {
                 parts.push(serde_json::json!({
                     "type": "image_url",
                     "image_url": {
-                        "url": format!("data:{};base64,{}", mime, base64_str),
+                        "url": &*url,
                     }
                 }));
             } else {
