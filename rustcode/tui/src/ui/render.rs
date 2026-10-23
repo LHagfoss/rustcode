@@ -276,11 +276,9 @@ pub(crate) fn render_with_transcript_snapshot(
 
     let inner_width = f.area().width.max(1);
     let chat_width = f.area().width.max(1);
-    // The framed composer wraps inside its border and adds a settings row;
-    // narrow terminals fall back to the unframed composer.
-    let composer_chrome = composer_chrome_rows(state, inner_width);
-    let raw_input_lines =
-        input_line_count(state, usize::from(composer_text_width(state, inner_width)));
+    // The composer is a compact band: one pad row above and below the text.
+    let composer_chrome = COMPOSER_CHROME_ROWS;
+    let raw_input_lines = input_line_count(state, inner_width as usize);
     let approval_active =
         *state.status() == AppStatus::AwaitingToolConfirmation && !state.user_overlay_open();
     let question_active =
@@ -588,21 +586,6 @@ pub(crate) fn render_with_transcript_snapshot(
     } else {
         Composer::default().render(f, &composer_chunks, state)
     };
-    // The posture token on the framed composer's settings row is a click
-    // target that cycles ask -> auto-approve -> plan.
-    let composer_painted = !approval_active && !question_active;
-    let settings_in_composer = composer_painted && composer_frame_shown(state, chunks[8].width);
-    transcript.posture_chip = if settings_in_composer {
-        composer_posture_rect(state, chunks[8])
-    } else {
-        None
-    };
-    if let Some(chip) = transcript.posture_chip
-        && transcript.posture_chip_hovered
-    {
-        f.buffer_mut()
-            .set_style(chip, Style::default().bg(COLOR_HOVER_BG()));
-    }
     if footer_visible {
         // A live selection is the modal gesture, so the footer names the copy
         // key for as long as it lasts and drops it the moment the selection is
@@ -610,7 +593,7 @@ pub(crate) fn render_with_transcript_snapshot(
         // content-drift clear in `refresh_view` below cannot fire while a
         // selection is live: reading the range here is already its answer.
         let tasks_hovered = transcript.tasks_chip_hovered;
-        transcript.tasks_chip = render_composer_footer(
+        let targets = render_composer_footer(
             f,
             chunks[9],
             state,
@@ -619,10 +602,19 @@ pub(crate) fn render_with_transcript_snapshot(
                 || transcript.panel_selection.has_selection()
                 || state.composer_selection_range().is_some(),
             tasks_hovered,
-            settings_in_composer,
         );
+        transcript.tasks_chip = targets.tasks_chip;
+        // The posture cycles ask -> auto-approve -> plan on a click.
+        transcript.posture_chip = targets.posture_chip;
+        if let Some(chip) = transcript.posture_chip
+            && transcript.posture_chip_hovered
+        {
+            f.buffer_mut()
+                .set_style(chip, Style::default().bg(COLOR_HOVER_BG()));
+        }
     } else {
         transcript.tasks_chip = None;
+        transcript.posture_chip = None;
     }
 
     if !slash_rows.is_empty() || !at_files.is_empty() {
