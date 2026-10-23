@@ -214,6 +214,7 @@ private struct SessionSidebar: View {
     var didSelect: () -> Void = {}
     @State private var query = ""
     @State private var showsNewSession = false
+    @State private var copiedIDCount = 0
 
     private var sessions: [SessionSummary] {
         let query = query.trimmingCharacters(in: .whitespaces)
@@ -299,12 +300,14 @@ private struct SessionSidebar: View {
                         Button("Copy Workspace Path", systemImage: "folder") {
                             Clipboard.copy(session.workspace)
                         }
+                        copySessionIDButton(session.id)
                         if session.id == store.selectedSessionID {
                             Button("Detach", systemImage: "eye.slash") {
                                 store.detach()
                             }
                         }
                     }
+                    .accessibilityAction(named: "Copy Session ID") { copySessionID(session.id) }
                     .swipeActions(edge: .leading) {
                         // Detaching only stops following the session from this device.
                         if session.id == store.selectedSessionID {
@@ -379,6 +382,7 @@ private struct SessionSidebar: View {
             .padding(.top, 8)
             .padding(.bottom, 8)
         }
+        .copyConfirmation("Session ID Copied", trigger: copiedIDCount)
         .background(ChatSurface.sidebar.ignoresSafeArea())
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
@@ -396,6 +400,16 @@ private struct SessionSidebar: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ConnectionStatusBar()
         }
+    }
+
+    /// The host's session identifier, never the title or workspace shown in the row.
+    private func copySessionIDButton(_ id: String) -> some View {
+        Button("Copy Session ID", systemImage: "number") { copySessionID(id) }
+    }
+
+    private func copySessionID(_ id: String) {
+        Clipboard.copy(id)
+        copiedIDCount += 1
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -434,7 +448,9 @@ private struct SessionSidebar: View {
                     Clipboard.copy(workspace)
                 }
             }
+            copySessionIDButton(session.id)
         }
+        .accessibilityAction(named: "Copy Session ID") { copySessionID(session.id) }
         .onAppear {
             // Continue the listing as its end scrolls into view.
             if session.id == store.recentSessions.last?.id, store.hasMoreSavedSessions {

@@ -966,6 +966,79 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(close.isHittable)
     }
 
+    func testSessionListCopiesSessionIDNotTitle() {
+        let app = launchChat(draft: "Copy ID test")
+        let show = app.buttons["Show sessions"]
+        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        XCTAssertTrue(show.waitForExistence(timeout: 5))
+        show.tap()
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+
+        // Dismissing the menu copies nothing.
+        UIPasteboard.general.string = "untouched"
+        let live = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Page the session store")).firstMatch
+        XCTAssertTrue(live.waitForExistence(timeout: 3))
+        live.press(forDuration: 1)
+        let copy = app.buttons["Copy Session ID"]
+        XCTAssertTrue(copy.waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(copy.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(UIPasteboard.general.string, "untouched")
+
+        // A live session copies its host identifier, not its title or workspace.
+        live.press(forDuration: 1)
+        XCTAssertTrue(copy.waitForExistence(timeout: 3))
+        copy.tap()
+        let copied = XCTAttachment(screenshot: app.screenshot())
+        copied.name = "Session ID copied from the session list"
+        copied.lifetime = .keepAlways
+        add(copied)
+        close.tap()
+        XCTAssertEqual(pasteIntoEmptyComposer(app), "demo-store")
+
+        // A saved session copies its own identifier too.
+        show.tap()
+        let saved = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Fix the flaky parser test")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        saved.press(forDuration: 1)
+        XCTAssertTrue(copy.waitForExistence(timeout: 3))
+        copy.tap()
+        XCTAssertTrue(copy.waitForNonExistence(timeout: 3))
+        close.tap()
+        XCTAssertEqual(pasteIntoEmptyComposer(app), "demo-saved-parser")
+    }
+
+    func testChatActionsCopySessionID() {
+        let app = launchChat(draft: "Copy ID from chat")
+        app.buttons["Chat actions"].tap()
+        app.buttons["More"].tap()
+        let copy = app.buttons["Copy Session ID"]
+        XCTAssertTrue(copy.waitForExistence(timeout: 3))
+        copy.tap()
+        XCTAssertTrue(app.staticTexts["Session ID Copied"].waitForExistence(timeout: 3))
+        XCTAssertEqual(composer(in: app).value as? String, "Copy ID from chat")
+        XCTAssertEqual(pasteIntoEmptyComposer(app), "demo-notes")
+    }
+
+    /// The test runner may not read what the app copied, so paste it over the draft instead.
+    private func pasteIntoEmptyComposer(_ app: XCUIApplication) -> String? {
+        let field = composer(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.press(forDuration: 1)
+        if editMenuItem("Select All", in: app).waitForExistence(timeout: 3) {
+            editMenuItem("Select All", in: app).tap()
+        }
+        let paste = editMenuItem("Paste", in: app)
+        XCTAssertTrue(paste.waitForExistence(timeout: 3))
+        paste.tap()
+        return field.value as? String
+    }
+
+    private func editMenuItem(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.menuItems[title].exists ? app.menuItems[title] : app.buttons[title]
+    }
+
     func testMinimalComposerActionsPreserveDraftAndOfferSlashCommands() {
         let app = launchChat(draft: "Keep my actions draft")
         XCTAssertTrue(app.buttons["Model and effort"].exists)

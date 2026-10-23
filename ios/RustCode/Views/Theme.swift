@@ -110,3 +110,45 @@ enum Clipboard {
         UIPasteboard.general.string = text
     }
 }
+
+extension View {
+    /// Confirms a copy each time `trigger` grows: a success haptic, a short
+    /// "Copied" capsule and a VoiceOver announcement. With `.top` the capsule sits just
+    /// above the view instead of over its content.
+    func copyConfirmation(_ message: String, trigger: Int, alignment: Alignment = .bottom) -> some View {
+        modifier(CopyConfirmation(message: message, trigger: trigger, alignment: alignment))
+    }
+}
+
+private struct CopyConfirmation: ViewModifier {
+    let message: String
+    let trigger: Int
+    let alignment: Alignment
+    @State private var isVisible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: alignment) {
+                if isVisible {
+                    Label(message, systemImage: "checkmark")
+                        .font(.footnote.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .glassSurface(in: .capsule)
+                        .padding(8)
+                        .alignmentGuide(.top) { alignment == .top ? $0[.bottom] : $0[.top] }
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
+            }
+            .sensoryFeedback(.success, trigger: trigger) { old, new in new > old }
+            .task(id: trigger) {
+                guard trigger > 0 else { return }
+                AccessibilityNotification.Announcement(message).post()
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { isVisible = true }
+                guard (try? await Task.sleep(for: .seconds(1.5))) != nil else { return }
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { isVisible = false }
+            }
+    }
+}
