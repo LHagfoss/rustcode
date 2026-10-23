@@ -33,6 +33,8 @@ pub mod gateway;
 #[cfg(unix)]
 pub mod lifecycle;
 #[cfg(unix)]
+pub mod orphan;
+#[cfg(unix)]
 pub mod owner_client;
 #[cfg(unix)]
 pub mod pairing_watch;
