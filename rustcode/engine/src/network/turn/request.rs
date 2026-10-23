@@ -586,11 +586,7 @@ pub(super) async fn collect_round(
         (
             s.api_base_url.clone(),
             s.model_name.clone(),
-            crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
-                s.delegation_active,
-                s.agent_mode,
-                compact_tool_prompt,
-            ),
+            crate::network::root_schema_policy(&s, compact_tool_prompt),
             s.active_session_id.clone(),
         )
     };
