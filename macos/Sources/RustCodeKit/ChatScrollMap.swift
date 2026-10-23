@@ -90,6 +90,17 @@ public struct ChatScrollMap: Equatable, Sendable {
         return layout()[index]
     }
 
+    /// The tops of `ids` in the content, nil for ids not in the map, in one
+    /// pass over the rows (the session timeline's turns, #2309).
+    public mutating func tops(of ids: [Int]) -> [Double?] {
+        guard !ids.isEmpty else { return [] }
+        let wanted = Set(ids)
+        let tops = layout()
+        var found: [Int: Double] = [:]
+        for (index, row) in rows.enumerated() where wanted.contains(row) { found[row] = tops[index] }
+        return ids.map { found[$0] }
+    }
+
     /// The row at `y` from the top of the content, and how far into it `y`
     /// is. Above the first row is the first row; below the last, the last.
     public mutating func row(at y: Double) -> (row: Int, offset: Double)? {
