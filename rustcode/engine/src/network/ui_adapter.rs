@@ -25,6 +25,12 @@ pub enum AgentUiEvent {
     TextDelta {
         text: String,
     },
+    /// Whether the reasoning in the `<think>` spans that follow is the
+    /// provider's summary (`true`) or the model's own reasoning text. Sent
+    /// before the text it applies to, whenever it changes.
+    ReasoningSource {
+        summary: bool,
+    },
     ToolStarted {
         name: String,
         id: String,
@@ -87,6 +93,8 @@ struct ResponseDeltaTracker {
     /// can tell whether it still needs to deliver the completed response.
     emitted_content_len: usize,
     emitted_content_hash: DefaultHasher,
+    /// The reasoning source last announced with `ReasoningSource`.
+    reasoning_summary: bool,
 }
 
 impl AgentUiEventSender {
@@ -298,6 +306,7 @@ async fn publish_snapshot_with_mode(
         history,
         history_len,
         subagents,
+        reasoning_summary,
     ) = {
         let state = state.lock().await;
         (
@@ -353,6 +362,7 @@ async fn publish_snapshot_with_mode(
                 .iter()
                 .map(|agent| (agent.id, (agent.status, agent.active_turn)))
                 .collect::<Vec<_>>(),
+            state.history.reasoning_summary(),
         )
     };
 
@@ -382,6 +392,12 @@ async fn publish_snapshot_with_mode(
         String::new()
     };
     if !text.is_empty() {
+        if reasoning_summary != previous_response.reasoning_summary {
+            previous_response.reasoning_summary = reasoning_summary;
+            sender.send(AgentUiEvent::ReasoningSource {
+                summary: reasoning_summary,
+            });
+        }
         let text_len = text.len();
         if extends_previous_response {
             previous_response.emitted_content_len = previous_response

@@ -394,6 +394,11 @@ pub struct ChatMessage {
     /// tolerant parsing cannot turn an unexecuted fragment into a call.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unexecuted_tool_call_checkpoint: bool,
+    /// The `<think>` spans in `content` are the provider's reasoning summary
+    /// (OpenAI Responses `reasoning_summary_text`), not the model's own
+    /// reasoning text, so clients label them "Reasoning summary".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reasoning_summary: bool,
 }
 
 impl ChatMessage {
@@ -416,6 +421,7 @@ impl ChatMessage {
             compaction_boundary: None,
             conversation_recap: false,
             unexecuted_tool_call_checkpoint: false,
+            reasoning_summary: false,
         }
     }
 
@@ -508,11 +514,36 @@ pub struct History {
     last_rewrite_revision: u64,
     /// Ephemeral attribution scope; never assigned when loading old messages.
     turn: Option<TurnTiming>,
+    /// The reasoning streaming now is a provider summary. An assistant
+    /// message pushed while it is set, carrying `<think>` spans, is marked
+    /// `reasoning_summary`.
+    reasoning_summary: bool,
 }
 
 impl History {
     pub fn set_turn(&mut self, turn: Option<TurnTiming>) {
         self.turn = turn;
+    }
+
+    /// Say whether the reasoning the provider is streaming now is a summary.
+    pub fn set_reasoning_summary(&mut self, summary: bool) {
+        self.reasoning_summary = summary;
+    }
+
+    pub fn reasoning_summary(&self) -> bool {
+        self.reasoning_summary
+    }
+
+    fn attribute(&self, message: &mut ChatMessage) {
+        if message.turn.is_none() && !message.conversation_recap {
+            message.turn = self.turn.clone();
+        }
+        if self.reasoning_summary
+            && message.role == "assistant"
+            && message.content.contains("<think>")
+        {
+            message.reasoning_summary = true;
+        }
     }
 
     /// Update only messages already attributed to this logical turn.
@@ -586,9 +617,7 @@ impl History {
     }
 
     pub fn push(&mut self, mut message: ChatMessage) {
-        if message.turn.is_none() && !message.conversation_recap {
-            message.turn = self.turn.clone();
-        }
+        self.attribute(&mut message);
         Arc::make_mut(&mut self.messages).push(message);
         self.bump();
     }
@@ -633,6 +662,7 @@ impl From<Vec<ChatMessage>> for History {
             revision: 0,
             last_rewrite_revision: 0,
             turn: None,
+            reasoning_summary: false,
         }
     }
 }
@@ -662,13 +692,14 @@ impl std::ops::DerefMut for History {
 impl Extend<ChatMessage> for History {
     fn extend<T: IntoIterator<Item = ChatMessage>>(&mut self, iter: T) {
         let before = self.messages.len();
-        let turn = self.turn.clone();
-        Arc::make_mut(&mut self.messages).extend(iter.into_iter().map(|mut message| {
-            if message.turn.is_none() && !message.conversation_recap {
-                message.turn = turn.clone();
-            }
-            message
-        }));
+        let messages = iter
+            .into_iter()
+            .map(|mut message| {
+                self.attribute(&mut message);
+                message
+            })
+            .collect::<Vec<_>>();
+        Arc::make_mut(&mut self.messages).extend(messages);
         if self.messages.len() != before {
             self.bump();
         }

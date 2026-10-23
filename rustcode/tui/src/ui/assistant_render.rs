@@ -109,6 +109,8 @@ pub(super) struct AssistantRenderOptions {
     pub(super) response_time_ms: Option<u64>,
     pub(super) thought_time_ms: Option<u64>,
     pub(super) thought_tokens: Option<u32>,
+    /// The `<think>` spans are the provider's reasoning summary.
+    pub(super) reasoning_summary: bool,
     pub(super) is_generating: bool,
     pub(super) viewport_width: u16,
     pub(super) show_picker: bool,
@@ -185,34 +187,12 @@ pub(super) fn thought_preview_spans(
     spans
 }
 
-pub(super) fn is_reasoning_preamble(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    const PREAMBLE_STARTS: &[&str] = &[
-        "Okay,",
-        "First,",
-        "The project",
-        "Thinking:",
-        "Thought:",
-        "thought",
-        "Thought",
-        "Let's",
-        "I should",
-        "I need to",
-        "Reasoning:",
-        "Plan:",
-        "Step 1",
-        "• Okay",
-        "• First",
-        "• The project",
-    ];
-    PREAMBLE_STARTS
-        .iter()
-        .any(|prefix| trimmed.starts_with(prefix))
-}
-
+/// Split `<think>` spans out of an assistant message: the answer, and the
+/// first line of its reasoning for the folded header. Only delimited text is
+/// reasoning. Prose before a span stays the answer however it begins, so a
+/// reply is never relabelled as thinking for sounding like a plan (#2299).
+/// The one exception is text before a lone `</think>` at the start: some
+/// chat templates open the span in the prompt and stream only its close.
 pub(super) fn split_thought_blocks(content: &str) -> (String, Option<String>) {
     const OPEN: &str = "<think>";
     const CLOSE: &str = "</think>";
@@ -231,11 +211,7 @@ pub(super) fn split_thought_blocks(content: &str) -> (String, Option<String>) {
             (Some(o_idx), Some(c_idx)) if o_idx < c_idx => {
                 let preamble = &rest[..o_idx];
                 if !preamble.trim().is_empty() {
-                    if is_first_segment && is_reasoning_preamble(preamble) {
-                        thoughts_collected.push(preamble);
-                    } else {
-                        answer.push_str(preamble);
-                    }
+                    answer.push_str(preamble);
                 }
                 let thought = &rest[o_idx + OPEN.len()..c_idx];
                 thoughts_collected.push(thought);
@@ -245,11 +221,7 @@ pub(super) fn split_thought_blocks(content: &str) -> (String, Option<String>) {
             (Some(o_idx), None) => {
                 let preamble = &rest[..o_idx];
                 if !preamble.trim().is_empty() {
-                    if is_first_segment && is_reasoning_preamble(preamble) {
-                        thoughts_collected.push(preamble);
-                    } else {
-                        answer.push_str(preamble);
-                    }
+                    answer.push_str(preamble);
                 }
                 let thought = &rest[o_idx + OPEN.len()..];
                 thoughts_collected.push(thought);
@@ -258,7 +230,7 @@ pub(super) fn split_thought_blocks(content: &str) -> (String, Option<String>) {
             }
             (None, Some(c_idx)) => {
                 let thought = &rest[..c_idx];
-                if is_first_segment || is_reasoning_preamble(thought) {
+                if is_first_segment {
                     thoughts_collected.push(thought);
                 } else {
                     answer.push_str(thought);
@@ -268,7 +240,7 @@ pub(super) fn split_thought_blocks(content: &str) -> (String, Option<String>) {
             }
             (Some(_), Some(c_idx)) => {
                 let thought = &rest[..c_idx];
-                if is_first_segment || is_reasoning_preamble(thought) {
+                if is_first_segment {
                     thoughts_collected.push(thought);
                 } else {
                     answer.push_str(thought);
@@ -412,6 +384,7 @@ pub(super) fn render_assistant_message_with_cache<'a>(
         response_time_ms,
         thought_time_ms,
         thought_tokens,
+        reasoning_summary,
         is_generating,
         viewport_width,
         show_picker,
@@ -465,11 +438,17 @@ pub(super) fn render_assistant_message_with_cache<'a>(
                 }
             });
 
-        let thought_meta = match (time_str, tokens_str) {
-            (Some(t), Some(k)) => format!("Thought for {t}, {k}"),
-            (Some(t), None) => format!("Thought for {t}"),
-            (None, Some(k)) => format!("Thought for {k}"),
-            (None, None) => "Thought".to_string(),
+        // A summary is what the provider shows of reasoning it keeps
+        // hidden, so it is not labelled as the model's thought (#2299).
+        let thought_meta = match (reasoning_summary, time_str, tokens_str) {
+            (true, Some(t), Some(k)) => format!("Reasoning summary · {t}, {k}"),
+            (true, Some(t), None) => format!("Reasoning summary · {t}"),
+            (true, None, Some(k)) => format!("Reasoning summary · {k}"),
+            (true, None, None) => "Reasoning summary".to_string(),
+            (false, Some(t), Some(k)) => format!("Thought for {t}, {k}"),
+            (false, Some(t), None) => format!("Thought for {t}"),
+            (false, None, Some(k)) => format!("Thought for {k}"),
+            (false, None, None) => "Thought".to_string(),
         };
 
         let preview_width = (viewport_width as usize).saturating_sub(2).min(64);

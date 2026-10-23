@@ -322,6 +322,10 @@ impl RenderSnapshot {
     pub(crate) fn history_display_start(&self) -> usize {
         self.history_display_start
     }
+    /// The reasoning streaming in the main chat is the provider's summary.
+    pub(crate) fn live_reasoning_summary(&self) -> bool {
+        self.selected_subagent.is_none() && self.history.reasoning_summary()
+    }
     pub(crate) fn active_history(&self) -> &[ChatMessage] {
         self.selected_subagent
             .as_ref()

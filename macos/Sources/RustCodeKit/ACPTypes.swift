@@ -329,7 +329,10 @@ public enum SessionUpdate: Equatable, Sendable {
     case agentText(String)
     /// The `/context` reply: its Markdown text and the breakdown it carries.
     case contextReport(text: String, context: ContextBreakdown)
-    case thoughtText(String)
+    /// Reasoning text. `summary` says it is the provider's summary of
+    /// reasoning it keeps hidden rather than the model's own reasoning;
+    /// `durationMs` is how long the reasoning took, sent with replayed history.
+    case thoughtText(String, summary: Bool = false, durationMs: Int? = nil)
     /// A harness notice, such as why a turn stopped. It is shown as a
     /// toast, never as part of the conversation.
     case notice(String)
@@ -365,7 +368,10 @@ public enum SessionUpdate: Equatable, Sendable {
                 self = .agentText(Self.text(update["content"]))
             }
         case "agent_thought_chunk":
-            self = .thoughtText(Self.text(update["content"]))
+            let meta = update["_meta"]?["rustcode"]
+            self = .thoughtText(Self.text(update["content"]),
+                                summary: meta?["thoughtSource"]?.stringValue == "summary",
+                                durationMs: meta?["thoughtMs"]?.intValue)
         case "tool_call":
             self = .toolCall(
                 id: update["toolCallId"]?.stringValue ?? UUID().uuidString,

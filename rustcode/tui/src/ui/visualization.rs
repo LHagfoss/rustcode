@@ -945,6 +945,7 @@ mod tests {
                 response_time_ms: None,
                 thought_time_ms: None,
                 thought_tokens: None,
+                reasoning_summary: false,
                 is_generating: generating,
                 viewport_width: width,
                 show_picker: false,

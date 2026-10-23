@@ -1817,6 +1817,16 @@ impl AppState {
         profile
     }
 
+    /// The active model writes reasoning behind bare `thought` markers.
+    pub fn active_model_writes_bare_thought_markers(&self) -> bool {
+        let model = self
+            .active_model_profile_index()
+            .map_or(self.config.default.big(), |index| {
+                self.config.models[index].model.as_str()
+            });
+        rustcode_tool_protocol::text::model_writes_bare_thought_markers(model)
+    }
+
     pub fn active_model_profile(&self) -> Option<crate::config::ModelProfile> {
         self.active_model_profile_index()
             .map(|index| self.config.models[index].clone())
