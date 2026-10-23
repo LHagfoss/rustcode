@@ -663,6 +663,11 @@ workspace or ID contains it, ignoring case. Each entry has `session_id`,
 | `shared` | It is in the live list. | attach to it |
 | `open` | A terminal, the app or a session owner holds it without sharing it. | nothing, or `request_share` for a terminal |
 
+An `open` entry may also carry `open_in`, what holds it: `app` (the RustCode
+app on the Mac), `terminal` or `remote` (a session owner started for a device).
+It is absent from older hosts and when the holder did not say; clients then
+name no place, and treat a value they do not know the same way.
+
 Only sessions the host's session store lists, whose files lie inside the
 store, are reported: the same rule as ACP's `session/list`.
 

@@ -1538,6 +1538,17 @@
           "minimum": 0,
           "type": "integer"
         },
+        "open_in": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SavedSessionHolder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What has an `open` session open, when the host knows. Absent from\nolder hosts and when the holder did not say; clients then name no\nplace."
+        },
         "session_id": {
           "type": "string"
         },
@@ -2077,6 +2088,26 @@
         }
       ]
     },
+    "SavedSessionHolder": {
+      "description": "The kind of process that has a saved session open.",
+      "oneOf": [
+        {
+          "const": "app",
+          "description": "The RustCode app on the Mac.",
+          "type": "string"
+        },
+        {
+          "const": "terminal",
+          "description": "A RustCode terminal.",
+          "type": "string"
+        },
+        {
+          "const": "remote",
+          "description": "A session owner the gateway started for a device.",
+          "type": "string"
+        }
+      ]
+    },
     "SavedSessionState": {
       "oneOf": [
         {
@@ -2091,7 +2122,7 @@
         },
         {
           "const": "open",
-          "description": "A terminal or session owner holds it without sharing it. It cannot\nbe resumed; a terminal can be asked with `request_share`.",
+          "description": "A terminal, the app or a session owner holds it without sharing it.\nIt cannot be resumed; a terminal can be asked with `request_share`.",
           "type": "string"
         }
       ]

@@ -86,6 +86,16 @@ fn open_elsewhere_message(holder: Option<crate::config::SessionHolder>) -> &'sta
     }
 }
 
+/// How the saved-session list names what has a session open.
+fn saved_session_holder(holder: crate::config::SessionHolder) -> SavedSessionHolder {
+    use crate::config::SessionHolder;
+    match holder {
+        SessionHolder::App => SavedSessionHolder::App,
+        SessionHolder::Terminal => SavedSessionHolder::Terminal,
+        SessionHolder::Remote => SavedSessionHolder::Remote,
+    }
+}
+
 /// Sessions with a running owner process, registered with the gateway or not.
 pub(crate) fn live_owner_sessions(lifecycle: &super::lifecycle::RemoteLifecycle) -> Vec<String> {
     let owners = lifecycle.owners_directory();
@@ -348,8 +358,15 @@ fn list_saved_sessions(
                 chrono::DateTime::<chrono::Utc>::from(modified)
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             });
+        let state = state_of(&session_id);
+        let open_in = (state == SavedSessionState::Open)
+            .then(|| crate::config::session_open_by(config, &session_id))
+            .flatten()
+            .flatten()
+            .map(saved_session_holder);
         let session = RemoteSavedSession {
-            state: state_of(&session_id),
+            state,
+            open_in,
             title: meta
                 .title
                 .chars()
@@ -2054,6 +2071,15 @@ mod tests {
                 .iter()
                 .all(|session| session.state == SavedSessionState::Open)
         );
+        // The list says where each one is open, so the device can too.
+        let holder_of = |id: &str| {
+            sessions
+                .iter()
+                .find(|session| session.session_id == id)
+                .and_then(|session| session.open_in)
+        };
+        assert_eq!(holder_of(&ids[0]), Some(SavedSessionHolder::App));
+        assert_eq!(holder_of(&ids[1]), Some(SavedSessionHolder::Terminal));
     }
 
     #[tokio::test]

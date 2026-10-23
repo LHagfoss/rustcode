@@ -1008,6 +1008,28 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertEqual(pasteIntoEmptyComposer(app), "demo-saved-parser")
     }
 
+    func testSavedSessionsOpenElsewhereSayWhereTheyAreOpen() {
+        let app = launchChat(draft: "Where is it open")
+        app.buttons["Show sessions"].tap()
+        XCTAssertTrue(app.navigationBars["Sessions"].waitForExistence(timeout: 3))
+        func row(_ title: String) -> XCUIElement {
+            let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+            for _ in 0..<4 where !row.exists || !row.isHittable { app.swipeUp() }
+            XCTAssertTrue(row.waitForExistence(timeout: 5), title)
+            return row
+        }
+        let inApp = row("Review the sandbox profile")
+        XCTAssertTrue(inApp.label.contains("open in the RustCode app on your Mac"), inApp.label)
+        XCTAssertFalse(inApp.isEnabled)
+        let inTerminal = row("Profile slow startup")
+        XCTAssertTrue(inTerminal.label.contains("open in a terminal on your Mac"), inTerminal.label)
+        XCTAssertFalse(inTerminal.isEnabled)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Saved sessions open in the Mac app and in a terminal"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testChatActionsCopySessionID() {
         let app = launchChat(draft: "Copy ID from chat")
         app.buttons["Chat actions"].tap()

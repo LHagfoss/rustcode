@@ -720,7 +720,9 @@ public actor DemoRemoteClient: RemoteClient {
             SavedSession(id: "demo-saved-parser", title: "Fix the flaky parser test", workspace: "~/code/rustcode",
                          updatedAt: now.addingTimeInterval(-3 * 3600), messageCount: 24),
             SavedSession(id: "demo-saved-terminal", title: "Profile slow startup", workspace: "~/code/rustcode",
-                         updatedAt: now.addingTimeInterval(-26 * 3600), messageCount: 57, state: .open),
+                         updatedAt: now.addingTimeInterval(-26 * 3600), messageCount: 57, state: .open, openIn: .terminal),
+            SavedSession(id: "demo-saved-app", title: "Review the sandbox profile", workspace: "~/code/rustcode",
+                         updatedAt: now.addingTimeInterval(-2 * 86400), messageCount: 31, state: .open, openIn: .app),
             SavedSession(id: "demo-saved-docs", title: "Write the pairing guide", workspace: "~/code/docs",
                          updatedAt: now.addingTimeInterval(-4 * 86400), messageCount: 12),
         ]
