@@ -21,6 +21,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
 
     @State private var sendCount = 0
     @State private var stopCount = 0
+    @State private var copiedIDCount = 0
     @Binding var showsActions: Bool
     @Binding var nextAction: ChatAction?
     @State private var showsFolder = false
@@ -94,6 +95,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             if !presented { performNextAction() }
         }
         .sensoryFeedback(.selection, trigger: showsActions)
+        .copyConfirmation("Session ID Copied", trigger: copiedIDCount, alignment: .top)
         .sensoryFeedback(.success, trigger: images.count) { old, new in new > old }
         .sheet(isPresented: $showsFolder) { NewSessionView() }
         .fullScreenCover(isPresented: $showsCamera) {
@@ -368,6 +370,9 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             Task { await store.createSession(directory: nil) }
         case .folder:
             showsFolder = true
+        case .copySessionID:
+            Clipboard.copy(sessionID)
+            copiedIDCount += 1
         case .commands:
             if text.isEmpty { text = "/" }
             isFocused = true

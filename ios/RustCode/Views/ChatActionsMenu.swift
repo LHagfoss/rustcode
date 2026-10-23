@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum ChatAction: Equatable { case newSession, commands, folder, camera, photos, files, dismissKeyboard, stop }
+enum ChatAction: Equatable { case newSession, commands, folder, copySessionID, camera, photos, files, dismissKeyboard, stop }
 
 /// Locate the attachment button in the transcript overlay without changing layout.
 struct ChatActionsAnchor: PreferenceKey {
@@ -21,7 +21,7 @@ struct ChatActionsMenu: View {
     @State private var showingMore = false
 
     private var rowCount: Int {
-        showingMore ? 4 + (isRunning ? 1 : 0) + (hadKeyboard ? 1 : 0) : 4
+        showingMore ? 5 + (isRunning ? 1 : 0) + (hadKeyboard ? 1 : 0) : 4
     }
 
     var body: some View {
@@ -38,6 +38,7 @@ struct ChatActionsMenu: View {
                     action("New Session", symbol: "square.and.pencil", .newSession)
                     action("Slash Commands", symbol: "command", .commands)
                     action("New Session in Folder", symbol: "folder.badge.plus", .folder)
+                    action("Copy Session ID", symbol: "number", .copySessionID)
                     if isRunning { action("Stop the running turn", symbol: "stop.circle", .stop) }
                     if hadKeyboard { action("Dismiss Keyboard", symbol: "keyboard.chevron.compact.down", .dismissKeyboard) }
                 } else {
