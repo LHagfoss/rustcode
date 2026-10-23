@@ -40,7 +40,14 @@ struct RustCodeApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { Task { await model.newSession() } }
                     .keyboardShortcut(model.keybindings.shortcut(for: .newChat))
-                Button("New Chat in Folder…") { Task { await model.chooseChatProject() } }
+                // A chat with messages stays in its folder, so from one
+                // this starts a new chat; the title says which it does.
+                Button(model.selectedSession == nil ? "Choose Folder for This Chat…" : "New Chat in Folder…") {
+                    Task { await model.chooseChatProject() }
+                }
+                .keyboardShortcut(model.keybindings.shortcut(for: .chooseChatProject))
+                Button("Choose Default Project…") { model.chooseWorkspace() }
+                    .keyboardShortcut(model.keybindings.shortcut(for: .chooseProject))
             }
             // AppKit's File > Close (⌘W) would close the only window.
             CommandGroup(replacing: .saveItem) {
@@ -59,8 +66,6 @@ struct RustCodeApp: App {
                     model.showsSettings = true
                     Task { await model.updater.check() }
                 }
-                Button("Choose Project…") { model.chooseWorkspace() }
-                    .keyboardShortcut(model.keybindings.shortcut(for: .chooseProject))
             }
             // Settings open as a sheet in the main window, not a window of their own.
             CommandGroup(replacing: .appSettings) {
@@ -198,6 +203,7 @@ final class DesktopModel: ObservableObject {
             if oldValue != selectedSession {
                 showAgents(of: selectedSession)
                 openToolRuns = []
+                syncTerminalProject()
             }
         }
     }
@@ -205,17 +211,19 @@ final class DesktopModel: ObservableObject {
     /// with a dot in the sidebar until opened.
     @Published private(set) var unseenReplies: Set<String> = []
     /// The default project: new chats start here unless one is given its own
-    /// folder. Set in Settings; the engine, terminal and preview run in it.
+    /// folder. Set in Settings; the engine and preview run in it.
     @Published var workspace: URL {
         didSet {
             UserDefaults.standard.set(workspace.path, forKey: "workspacePath")
             preview.setWorkspace(workspace.path)
-            terminal.setWorkspace(workspace.path)
+            syncTerminalProject()
         }
     }
     /// The folder picked for the new-chat draft only, leaving the default
     /// alone. Nil starts the chat in the default project.
-    @Published var draftProject: URL?
+    @Published var draftProject: URL? {
+        didSet { syncTerminalProject() }
+    }
     /// The folder each chat opened or created here works in. The engine keeps
     /// a chat in the folder it was created in, so this never goes stale.
     private var sessionProjects: [String: String] = [:]
@@ -225,6 +233,13 @@ final class DesktopModel: ObservableObject {
     var chatProject: URL {
         let cwd = selectedSession.flatMap { id in sessionProjects[id] ?? sessions.first { $0.id == id }?.cwd }
         return ProjectFolder.forChat(sessionCwd: cwd, draft: draftProject, default: workspace)
+    }
+
+    /// The terminal shows the shells of the chat on screen's folder, not the
+    /// default project's. Each folder keeps its own shells, so going back to
+    /// a chat finds them where they were, `cd` and all.
+    private func syncTerminalProject() {
+        terminal.setWorkspace(chatProject.path)
     }
     /// The localhost preview beside the chat, remembered per project. The
     /// agent can use it only through `localhost_preview`, after the user
@@ -782,6 +797,8 @@ final class DesktopModel: ObservableObject {
         } catch { self.error = String(describing: error) }
     }
 
+    /// ⇧⌘O: pick the default project for new chats. Cancelling changes
+    /// nothing.
     func chooseWorkspace() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -789,26 +806,56 @@ final class DesktopModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.directoryURL = workspace
         panel.prompt = "Use as Default"
-        panel.message = "New chats start in this folder."
-        if panel.runModal() == .OK, let url = panel.url {
-            workspace = url
-            draftProject = ProjectFolder.override(draftProject, default: url)
-            Task { await restartForWorkspace() }
-        }
+        panel.message = "New chats start in this folder. Open chats keep their own."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await setDefaultProject(url) }
     }
 
-    /// Pick the folder for the new-chat draft only. From an open chat, this
-    /// starts a new chat in the folder picked.
+    /// Make `folder` the default project. The engine restarts there, and the
+    /// chat on screen opens again in its own folder rather than moving.
+    func setDefaultProject(_ folder: URL) async {
+        guard usableProject(folder) else { return }
+        let open = selectedSession.flatMap { id in sessions.first { $0.id == id } }
+        // Keep the open chat's unsent text with it, and the composer for the
+        // new chat the restart leaves on screen until it opens again.
+        if open != nil {
+            parkDraft()
+            restoreDraft(for: nil)
+        }
+        workspace = folder
+        draftProject = ProjectFolder.override(draftProject, default: folder)
+        await restartForWorkspace()
+        if let open { await select(open) }
+    }
+
+    /// ⌘O: pick the folder for the new-chat draft only. A chat with messages
+    /// stays in its own folder, so from one this starts a new chat in the
+    /// folder picked. Cancelling changes nothing.
     func chooseChatProject() async {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.directoryURL = chatProject
-        panel.prompt = "Use for This Chat"
-        panel.message = "This chat works in the folder you pick. New chats still start in \(workspace.lastPathComponent)."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if selectedSession == nil {
+            panel.prompt = "Use for This Chat"
+            panel.message = "This chat works in the folder you pick. New chats still start in \(workspace.lastPathComponent)."
+        } else {
+            panel.prompt = "Start New Chat"
+            panel.message = "A new chat starts in the folder you pick. This chat stays in \(chatProject.lastPathComponent)."
+        }
+        guard panel.runModal() == .OK, let url = panel.url, usableProject(url) else { return }
         await newSession(in: url)
+    }
+
+    /// A folder that cannot be read is no project: say so and keep things
+    /// as they were.
+    private func usableProject(_ folder: URL) -> Bool {
+        guard !ProjectFolder.isUsable(folder) else { return true }
+        showToast(Toast(style: .warning, systemImage: "folder.badge.questionmark",
+                        title: "Can't use \(folder.lastPathComponent)",
+                        message: "RustCode cannot read \(folder.path.abbreviatingHome). Nothing was changed."))
+        return false
     }
 
     /// Start a new chat draft in `folder`, or in the default project.
@@ -1296,7 +1343,6 @@ final class DesktopModel: ObservableObject {
         stashSelectedSession()
         if keepingDraft { parkDraft() }
         restoreDraft(for: nil)
-        terminal.hide()
         selectedSession = nil
         transcript.removeAll()
         composerPanel = nil
@@ -1525,8 +1571,7 @@ final class DesktopModel: ObservableObject {
         stashSelectedSession()
         parkDraft()
         restoreDraft(for: session.id)
-        // Another chat opens without the terminal; ⇧⌘T brings it back.
-        terminal.hide()
+        // An open terminal stays open, showing this chat's folder's shells.
         if !session.cwd.isEmpty { sessionProjects[session.id] = session.cwd }
         if let open = openSessions[session.id] {
             selectedSession = session.id

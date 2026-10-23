@@ -264,4 +264,69 @@ final class KeybindingTests: XCTestCase {
         XCTAssertEqual(settings.keyEquivalent, "")
         XCTAssertEqual(settings.keyEquivalentModifierMask, [])
     }
+
+    /// #2306: ⌘O picks this chat's folder, ⇧⌘O the default project, and the
+    /// File menu items carry them under every title they take.
+    func testCommandOIsTheChatFolderAndShiftCommandOTheDefault() {
+        let store = makeStore()
+        XCTAssertEqual(store.display(for: .chooseChatProject), "⌘O")
+        XCTAssertEqual(store.display(for: .chooseProject), "⇧⌘O")
+        XCTAssertNil(store.conflictingAction(for: KeyCombo(key: "o", modifiers: .command), excluding: .chooseChatProject))
+
+        _ = NSApplication.shared
+        let previous = NSApp.mainMenu
+        defer { NSApp.mainMenu = previous }
+        let menu = NSMenu()
+        let draft = NSMenuItem(title: "Choose Folder for This Chat…", action: nil, keyEquivalent: "")
+        let open = NSMenuItem(title: "New Chat in Folder…", action: nil, keyEquivalent: "")
+        let fallback = NSMenuItem(title: "Choose Default Project…", action: nil, keyEquivalent: "")
+        for item in [draft, open, fallback] { menu.addItem(item) }
+        NSApp.mainMenu = menu
+        KeybindingMenuSync(store: store).apply()
+        XCTAssertEqual(draft.keyEquivalent, "o")
+        XCTAssertEqual(draft.keyEquivalentModifierMask, .command)
+        XCTAssertEqual(open.keyEquivalent, "o")
+        XCTAssertEqual(fallback.keyEquivalentModifierMask, [.command, .shift])
+    }
+
+    /// #2306: shortcuts saved before ⌘O and ⇧⌘O moved keep the keys the user
+    /// gave other commands; the new defaults step aside instead.
+    func testSavedShortcutsKeepTheirKeysOverTheMovedDefaults() throws {
+        // Saved by an older build: the user moved New Chat to ⌘O and Find
+        // Next to ⇧⌘O, the keys the two folder commands now ship with.
+        let combos: [String: KeyCombo] = [
+            "newChat": KeyCombo(key: "o", modifiers: .command),
+            "findNext": KeyCombo(key: "o", modifiers: [.command, .shift]),
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [
+            "overrides": try combos.mapValues { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) },
+            "disabled": [String](),
+        ])
+        defaults.set(data, forKey: KeybindingStore.defaultsKey)
+
+        let store = makeStore()
+        XCTAssertEqual(store.display(for: .newChat), "⌘O")
+        XCTAssertEqual(store.display(for: .findNext), "⇧⌘O")
+        XCTAssertNil(store.combo(for: .chooseChatProject))
+        XCTAssertNil(store.combo(for: .chooseProject))
+        XCTAssertTrue(store.isCustomized(.chooseChatProject))
+        // Every key is held by one command only.
+        let held = KeybindingAction.allCases.compactMap { store.combo(for: $0) }
+        XCTAssertEqual(held.count, Set(held).count)
+
+        // Giving the key back brings the default with a reset.
+        store.reset(.newChat)
+        store.reset(.chooseChatProject)
+        XCTAssertEqual(store.display(for: .chooseChatProject), "⌘O")
+    }
+
+    /// A user's own key for the default project stays on it.
+    func testAChosenKeyForTheDefaultProjectIsKept() {
+        let first = makeStore()
+        let combo = KeyCombo(key: "o", modifiers: [.command, .option])
+        first.assign(combo, to: .chooseProject)
+        let reopened = makeStore()
+        XCTAssertEqual(reopened.combo(for: .chooseProject), combo)
+        XCTAssertEqual(reopened.display(for: .chooseChatProject), "⌘O")
+    }
 }

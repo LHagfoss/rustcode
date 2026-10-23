@@ -345,7 +345,7 @@ private struct SessionSidebar: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .help(model.keybindings.help("Choose the default project folder for new chats", .chooseProject))
+                .help(model.keybindings.help("Choose the default project for new chats. Open chats keep their own folder", .chooseProject))
                 ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.showsSettings = true }
             }
             .padding(.horizontal, 8)
@@ -1547,7 +1547,7 @@ private struct ChatProjectMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Project folder: \(model.chatProject.path.abbreviatingHome)")
+        .help(ProjectFolder.help(chat: model.chatProject, default: model.workspace))
         .accessibilityLabel("Project folder \(name)")
     }
 }

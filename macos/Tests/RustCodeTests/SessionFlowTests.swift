@@ -1,6 +1,7 @@
 import AppKit
 import XCTest
 import RustCodeKit
+import RustCodeTerminal
 @testable import RustCode
 
 /// The model against a scripted ACP engine: chats are created, prompted,
@@ -129,19 +130,67 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
-    /// #2253: switching chats closes the terminal panel, and it stays
-    /// closed until opened again.
-    func testSwitchingChatsClosesTheTerminal() async throws {
+    /// #2304: the terminal shows the shells of the chat on screen's folder.
+    /// An open panel stays open across a switch, and each folder keeps its
+    /// own shells for when its chat is opened again.
+    func testTerminalFollowsTheChatsFolder() async throws {
+        let other = directory.appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
         let model = try await started()
         defer { model.terminal.manager.terminateAll() }
+        let manager = model.terminal.manager
         let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
-        model.terminal.open()
-        XCTAssertTrue(model.terminal.isShown)
+        let elsewhere = try XCTUnwrap(model.sessions.first { $0.id == "elsewhere" })
+
         await model.select(quick)
-        XCTAssertFalse(model.terminal.isShown)
         model.terminal.open()
+        XCTAssertEqual(manager.project, TerminalSessionManager.standardize(model.chatProject.path))
+        let shell = try XCTUnwrap(manager.selectedSession)
+
+        await model.select(elsewhere)
+        XCTAssertTrue(model.terminal.isShown, "an open terminal stays open")
+        XCTAssertEqual(manager.project, "/tmp/rustcode-elsewhere")
+        XCTAssertTrue(manager.projectSessions.isEmpty, "no shell of another folder is shown, none is started")
+
+        await model.select(quick)
+        XCTAssertEqual(manager.selectedSession?.id, shell.id, "the chat's folder keeps its shell")
+
+        await model.newSession(in: other)
+        XCTAssertEqual(manager.project, TerminalSessionManager.standardize(other.path))
         await model.newSession()
-        XCTAssertFalse(model.terminal.isShown)
+        XCTAssertEqual(manager.project, TerminalSessionManager.standardize(directory.path))
+        model.terminal.hide()
+        await model.select(elsewhere)
+        XCTAssertFalse(model.terminal.isShown, "a closed terminal stays closed")
+        model.stop()
+    }
+
+    /// #2306: a new default project leaves the open chat in its own folder,
+    /// open and with its unsent text; a folder that cannot be read changes
+    /// nothing.
+    func testChangingTheDefaultKeepsTheOpenChat() async throws {
+        let other = directory.appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        let model = try await started()
+        let elsewhere = try XCTUnwrap(model.sessions.first { $0.id == "elsewhere" })
+        model.draft = "for the new chat"
+        await model.select(elsewhere)
+        model.draft = "for elsewhere"
+
+        await model.setDefaultProject(other)
+        XCTAssertEqual(model.workspace, other)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "workspacePath"), other.path)
+        XCTAssertEqual(model.selectedSession, "elsewhere")
+        XCTAssertEqual(model.chatProject.path, "/tmp/rustcode-elsewhere")
+        XCTAssertEqual(model.draft, "for elsewhere")
+        XCTAssertNil(model.error)
+        await model.newSession()
+        XCTAssertEqual(model.chatProject, other, "new chats start in the new default")
+        XCTAssertEqual(model.draft, "for the new chat")
+
+        await model.setDefaultProject(directory.appendingPathComponent("missing", isDirectory: true))
+        XCTAssertEqual(model.workspace, other)
+        XCTAssertEqual(model.toasts.last?.style, .warning)
         model.stop()
     }
 

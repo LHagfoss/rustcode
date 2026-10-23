@@ -26,4 +26,28 @@ final class ProjectFolderTests: XCTestCase {
         XCTAssertNil(ProjectFolder.override(URL(fileURLWithPath: "/Users/me/code/x/../app"), default: home))
         XCTAssertEqual(ProjectFolder.override(other, default: home), other)
     }
+
+    /// #2306: the tooltip tells this chat's folder from the default.
+    func testHelpNamesTheChatFolderAndTheDefault() {
+        XCTAssertEqual(ProjectFolder.help(chat: home, default: home), "This chat's folder: /Users/me/code/app, the default project")
+        XCTAssertEqual(ProjectFolder.help(chat: other, default: home),
+                       "This chat's folder: /Users/me/code/site\nDefault project for new chats: /Users/me/code/app")
+    }
+
+    /// #2306: a missing or unreadable folder is refused before anything changes.
+    func testOnlyAReadableFolderIsUsable() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("rustcode-folder-\(UUID().uuidString)")
+        XCTAssertFalse(ProjectFolder.isUsable(folder))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        XCTAssertTrue(ProjectFolder.isUsable(folder))
+        let file = folder.appendingPathComponent("file")
+        try Data().write(to: file)
+        XCTAssertFalse(ProjectFolder.isUsable(file), "a file is no folder")
+        let locked = folder.appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+        XCTAssertFalse(ProjectFolder.isUsable(locked))
+    }
 }

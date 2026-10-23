@@ -209,8 +209,16 @@ private struct GeneralSettings: View {
 
             SettingsGroup(title: "Chat") {
                 SettingsRow(title: "Default project folder",
-                            subtitle: "\(model.workspace.path.abbreviatingHome) · New chats start here") {
+                            subtitle: "\(model.workspace.path.abbreviatingHome) · New chats start here. Open chats keep their own") {
                     Button("Choose…") { model.chooseWorkspace() }.buttonStyle(PillButtonStyle())
+                        .help(model.keybindings.help("Choose Default Project", .chooseProject))
+                }
+                if !ProjectFolder.same(model.chatProject, model.workspace) {
+                    RowDivider()
+                    SettingsRow(title: "This chat's folder",
+                                subtitle: "\(model.chatProject.path.abbreviatingHome) · Only the chat on screen works here") {
+                        Button("Show in Finder") { NSWorkspace.shared.open(model.chatProject) }.buttonStyle(PillButtonStyle())
+                    }
                 }
                 RowDivider()
                 SettingsRow(title: "Notifications", subtitle: "When a chat finishes or needs you while RustCode is in the background") {
