@@ -844,6 +844,28 @@ pub(super) fn running_spinner_char(state: &RenderSnapshot) -> char {
 /// The footer's task counter: how many background tasks are running, and how
 /// many finished without the model having read the result yet. `None` when
 /// there is nothing to count. `/tasks`, or a click on it, lists them.
+/// `● 2 agents` while the session's subagents work, else nothing: the
+/// footer gives agents no room once they finished, and their rows in the
+/// transcript (and `/agents`) still reach them (#2327).
+pub(super) fn agents_working_label(state: &RenderSnapshot) -> Option<String> {
+    use rustcode::controller::SubAgentStatus;
+    let working = state
+        .subagents()
+        .iter()
+        .filter(|agent| {
+            matches!(
+                agent.status,
+                SubAgentStatus::Queued | SubAgentStatus::Running
+            )
+        })
+        .count();
+    match working {
+        0 => None,
+        1 => Some("● 1 agent".to_owned()),
+        count => Some(format!("● {count} agents")),
+    }
+}
+
 pub(super) fn tasks_chip_label(state: &RenderSnapshot) -> Option<String> {
     let running = state.background_tasks().len();
     let done = state
@@ -1355,6 +1377,9 @@ pub(super) fn footer_metadata(state: &RenderSnapshot, available: usize) -> (Stri
     let mut lead = Vec::new();
     if let Some(agent) = state.selected_subagent() {
         lead.push(agent.name().to_string());
+    }
+    if let Some(working) = agents_working_label(state) {
+        lead.push(working);
     }
     let posture_offset = 2 + lead
         .iter()

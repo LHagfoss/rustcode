@@ -2,7 +2,8 @@ import XCTest
 @testable import RustCodeKit
 
 final class ToolFoldingTests: XCTestCase {
-    /// `t` a finished call, `x` a failed one, `e` an edit, `s` some text.
+    /// `t` a finished call, `x` a failed one, `e` an edit, `a` a spawned
+    /// agent, `s` some text.
     private func items(_ shape: String) -> [TranscriptItem] {
         var transcript = Transcript()
         for (index, kind) in shape.enumerated() {
@@ -11,7 +12,7 @@ final class ToolFoldingTests: XCTestCase {
             case "s":
                 transcript.apply(.agentText("step \(index)"))
             default:
-                transcript.apply(.toolCall(id: id, title: "run_command", kind: "execute",
+                transcript.apply(.toolCall(id: id, title: kind == "a" ? "spawn_agent" : "run_command", kind: "execute",
                                            status: kind == "x" ? .failed : .completed, input: nil, detail: "cmd \(index)"))
                 if kind == "e" {
                     transcript.apply(.toolCallUpdate(id: id, title: nil, status: .completed, output: nil,
@@ -85,5 +86,27 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertEqual(ToolVerbosity.configured(in: "theme = \"x\"\nverbosity = \"edits\"\n"), .edits)
         XCTAssertNil(ToolVerbosity.configured(in: "theme = \"x\""))
         XCTAssertNil(ToolVerbosity.configured(in: "verbosity = \"loud\""))
+    }
+
+    /// Agents started together are one row at every verbosity, and never
+    /// fold into a run of tool calls (#2327).
+    func testSpawnedAgentsGroupAndStayOutOfTheRuns() {
+        let list = items("ttaaatsa")
+        for verbosity in ToolVerbosity.allCases {
+            let folding = ToolFolding(items: list, verbosity: verbosity, open: [], running: false)
+            XCTAssertEqual(folding.agents(for: list[2].id), [list[2].id, list[3].id, list[4].id], "\(verbosity)")
+            XCTAssertEqual(folding.agents(for: list[7].id), [list[7].id])
+            XCTAssertNil(folding.agents(for: list[3].id))
+            XCTAssertTrue(folding.hidden.isSuperset(of: [list[3].id, list[4].id]))
+            XCTAssertFalse(folding.hidden.contains(list[2].id))
+            XCTAssertNil(folding.fold(for: list[2].id))
+        }
+        let low = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        XCTAssertEqual(low.fold(for: list[0].id)?.count, 2, "the calls before the agents fold on their own")
+        XCTAssertEqual(low.fold(for: list[5].id)?.count, 1, "and so does the call after them")
+        // While a turn runs, an agent at the end is still shown.
+        let live = ToolFolding(items: Array(list.prefix(3)), verbosity: .low, open: [], running: true)
+        XCTAssertEqual(live.agents(for: list[2].id), [list[2].id])
+        XCTAssertEqual(live.fold(for: list[0].id)?.count, 2)
     }
 }

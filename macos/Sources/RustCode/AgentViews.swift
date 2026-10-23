@@ -1,36 +1,164 @@
 import RustCodeKit
 import SwiftUI
 
-/// The shown chat's subagents above the composer, one chip each, as the
-/// terminal's agent picker lists them. A chip opens that agent's panel.
-struct AgentStrip: View {
+/// While the shown chat's agents work, a small pill over the composer's top
+/// edge: `● 2 agents working ▾`. A click lists them as chips, and a chip
+/// opens that agent's panel. It takes no room in the composer and goes once
+/// every agent finished; their rows in the chat still open them (#2327).
+struct AgentPill: View {
     @ObservedObject var model: DesktopModel
+    @State private var showsList = false
 
     var body: some View {
-        let agents = model.subagents
-        let active = agents.filter(\.isActive).count
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "person.2")
-                Text("Agents").fontWeight(.semibold)
-                Text(active > 0 ? "· \(active) working" : "· \(agents.count) finished")
-                    .foregroundStyle(.secondary)
-            }
-            .font(.caption)
-            .foregroundStyle(Color.brand)
-            .padding(.horizontal, 6)
-            ScrollView(.horizontal) {
+        if let label = SubagentInfo.workingLabel(model.subagents) {
+            Button { showsList.toggle() } label: {
                 HStack(spacing: 6) {
-                    ForEach(agents) { agent in
-                        Button { model.openAgent(agent) } label: { AgentChip(agent: agent) }
-                            .buttonStyle(.plain)
-                            .help("\(agent.name): \(agent.task)")
+                    Circle().fill(Color.brand).frame(width: 6, height: 6)
+                        .modifier(Pulse())
+                    Text(label).fontWeight(.medium).monospacedDigit()
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(showsList ? 180 : 0))
+                }
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .contentShape(.capsule)
+                .interactiveGlassSurface(in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Show the agents at work")
+            .accessibilityLabel(label)
+            .accessibilityHint("Lists the agents. Choose one to open its conversation.")
+            .popover(isPresented: $showsList, arrowEdge: .top) {
+                AgentList(model: model) { showsList = false }
+            }
+            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+        }
+    }
+}
+
+/// The dot of the pill breathing while agents work.
+private struct Pulse: ViewModifier {
+    @State private var dim = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(dim ? 0.5 : 1)
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true }
+            }
+    }
+}
+
+/// The pill's popover: every agent of the chat, one chip each, the working
+/// ones first.
+private struct AgentList: View {
+    @ObservedObject var model: DesktopModel
+    let close: () -> Void
+
+    var body: some View {
+        let agents = model.subagents.filter(\.isActive) + model.subagents.filter { !$0.isActive }
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Agents").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(agents) { agent in
+                Button {
+                    close()
+                    model.openAgent(agent)
+                } label: { AgentChip(agent: agent) }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .help("\(agent.name): \(agent.task)")
+                    .accessibilityLabel("\(agent.name), \(agent.isActive ? "working" : agent.status.label)")
+                    .accessibilityHint("Opens the agent's conversation")
+            }
+        }
+        .padding(12)
+        .frame(minWidth: 220, alignment: .leading)
+        .animation(.snappy(duration: 0.2), value: agents)
+    }
+}
+
+/// The agents a turn started, where it started them: a row each, with how
+/// it stands, its name, role and task, and how long it ran. A click opens
+/// the agent's panel. Several started together share one header (#2327).
+struct AgentSpawnGroup: View {
+    let spawns: [AgentSpawn]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if spawns.count > 1 {
+                Label("Started \(spawns.count) agents", systemImage: "person.2")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 2)
+            }
+            ForEach(spawns) { spawn in AgentSpawnRow(spawn: spawn) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct AgentSpawnRow: View {
+    let spawn: AgentSpawn
+    @Environment(\.openAgent) private var openAgent
+
+    var body: some View {
+        let id = spawn.info?.id
+        Button { if let id { openAgent?(id) } } label: {
+            HStack(spacing: 8) {
+                mark.frame(width: 16)
+                Text(spawn.name).fontWeight(.medium).lineLimit(1)
+                if let type = spawn.info?.agentType, type != "default" {
+                    Text(type).foregroundStyle(.secondary)
+                }
+                if let task = spawn.task {
+                    Text(task).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: 8)
+                if let info = spawn.info {
+                    if info.isActive {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(info.elapsed(now: context.date) ?? "").foregroundStyle(.tertiary).monospacedDigit()
+                        }
+                    } else {
+                        Text([info.status.label, info.elapsed()].compactMap { $0 }.joined(separator: " · "))
+                            .foregroundStyle(info.status == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+                            .monospacedDigit()
                     }
                 }
+                if id != nil {
+                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                }
             }
-            .scrollIndicators(.never)
+            .font(.callout)
+            .frame(height: 22)
+            .contentShape(.rect)
         }
-        .animation(.snappy(duration: 0.2), value: agents)
+        .buttonStyle(.plain)
+        .disabled(id == nil || openAgent == nil)
+        .hoverHighlight(cornerRadius: 8, padding: 5)
+        .help(spawn.info.map { "Open \($0.name)'s conversation" } ?? spawn.task ?? "")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spawn.accessibilityLabel())
+        .accessibilityHint(id != nil ? "Opens the agent's conversation" : "")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    @ViewBuilder
+    private var mark: some View {
+        if let info = spawn.info {
+            AgentStatusMark(agent: info)
+        } else if spawn.status == .failed {
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+        } else {
+            ProgressView().controlSize(.mini)
+        }
     }
 }
 

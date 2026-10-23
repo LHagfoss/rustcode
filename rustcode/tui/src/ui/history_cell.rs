@@ -974,6 +974,32 @@ impl TranscriptState {
             && super::conversation_render::live_tools_join_committed_block(state)
     }
 
+    /// The state of the child a `spawn_agent` result at `message` started, as
+    /// its row draws it: a row follows its agent live (#2327). A running
+    /// child's clock is not part of it, so its row is not redrawn each second.
+    fn spawned_agent_state(
+        state: &super::RenderSnapshot,
+        message: usize,
+    ) -> Option<(u32, u8, Option<u64>)> {
+        let message = state.history().get(message)?;
+        if message.role != "tool" {
+            return None;
+        }
+        let result = message.content.strip_prefix("spawn_agent: ")?;
+        let id = super::tool_transcript::spawn_receipt_agent_id(result)?;
+        let agent = state.subagents().iter().find(|agent| agent.id == id)?;
+        use rustcode::controller::SubAgentStatus;
+        let finished = !matches!(
+            agent.status,
+            SubAgentStatus::Queued | SubAgentStatus::Running
+        );
+        Some((
+            id,
+            agent.status as u8,
+            finished.then_some(agent.elapsed_ms / 1000),
+        ))
+    }
+
     /// `end == index` names a single block; a tool chain uses its exclusive
     /// end, which is always greater, so the two never share a key.
     fn committed_key(
@@ -995,6 +1021,7 @@ impl TranscriptState {
                 .contains(&message)
                 .hash(&mut theme_hash);
             state.tool_run_open(message).hash(&mut theme_hash);
+            Self::spawned_agent_state(state, message).hash(&mut theme_hash);
         }
         // A sorted table or collapsed tree draws different rows.
         if end == index {
