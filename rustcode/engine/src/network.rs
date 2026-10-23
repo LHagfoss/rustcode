@@ -198,6 +198,25 @@ pub(crate) const CHATGPT_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 /// synchronous MCP/filesystem work. Cache metadata is snapshotted before the
 /// computation and sticky names are committed only if that snapshot is still
 /// current when the computation finishes.
+/// The root agent's tool policy for a request. The system prompt and the
+/// provider request both build it here, so a tool the prompt describes
+/// (`localhost_preview`) is always in the request's `tools` too.
+pub(crate) fn root_schema_policy(
+    s: &AppState,
+    compact_tool_prompt: bool,
+) -> crate::tools::ToolSchemaPolicy {
+    let policy = crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
+        s.delegation_active,
+        s.agent_mode,
+        compact_tool_prompt,
+    );
+    if s.preview_client.is_some() && !compact_tool_prompt {
+        policy.with_preview_tool()
+    } else {
+        policy
+    }
+}
+
 pub(crate) async fn prepare_native_tool_schemas(
     state: &Arc<Mutex<AppState>>,
     policy: crate::tools::ToolSchemaPolicy,
@@ -1558,16 +1577,9 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             && !matches!(protocol, crate::config::ToolProtocol::ApiNative);
         let session_title_tool_available =
             s.session_title_tool_available && agent_mode != crate::config::AgentMode::Plan;
-        let mut schema_policy = crate::tools::ToolSchemaPolicy::root_for_mode_with_compact_prompt(
-            delegation_active,
-            agent_mode,
-            compact_tool_prompt,
-        );
+        let mut schema_policy = root_schema_policy(&s, compact_tool_prompt);
         if session_title_tool_available {
             schema_policy = schema_policy.with_session_title_tool();
-        }
-        if s.preview_client.is_some() && !compact_tool_prompt {
-            schema_policy = schema_policy.with_preview_tool();
         }
         // The session-title tool only changes the native `tools` field; its
         // guidance goes in the context tail so the system prompt (and the

@@ -754,6 +754,28 @@ mod tests {
         })
     }
 
+    /// The prompt's hint and the provider request's `tools` come from one
+    /// policy: a session with a preview offers the tool it is told about.
+    #[test]
+    fn request_policy_offers_preview_with_a_client() {
+        let mut state = crate::app::AppState::new();
+        assert!(!crate::network::root_schema_policy(&state, false).include_preview_tool);
+        state.preview_client = Some(answering(Value::Null) as Arc<dyn PreviewClient>);
+        let policy = crate::network::root_schema_policy(&state, false);
+        assert!(policy.include_preview_tool);
+        let mut prompt = String::new();
+        crate::tools::schema::append_preview_hint(&mut prompt, policy);
+        assert!(prompt.contains(PREVIEW_TOOL_NAME));
+        let tools = crate::tools::native_tools_schema_for_context(policy, &[]).0;
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.to_string().contains(PREVIEW_TOOL_NAME))
+        );
+        // A compact prompt describes no preview, so offers none.
+        assert!(!crate::network::root_schema_policy(&state, true).include_preview_tool);
+    }
+
     fn no_save(_: &[u8], _: &str) -> std::io::Result<PathBuf> {
         panic!("nothing should be saved")
     }
