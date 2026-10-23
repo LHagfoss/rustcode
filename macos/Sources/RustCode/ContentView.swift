@@ -731,6 +731,7 @@ private struct ChatView: View {
     @State private var pendingTop: (row: Int, minY: Double)?
     /// Opens or folds a long message where it is (#2303).
     @State private var messageToggle = MessageToggle()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
@@ -856,6 +857,11 @@ private struct ChatView: View {
                 if delta < 0 { follow.letGo() }
                 scroll.scroll(by: delta, animated: animated)
             }
+            // In the gutter left of the column; only it observes the
+            // markers, so scrolling redraws the rail and not the chat.
+            .overlay(alignment: .topLeading) {
+                TimelineRail(state: scroll.rail) { id in jumpToTurn(id, proxy) }
+            }
             // Over the chat rather than a pinned footer inside it: a pinned
             // view re-lays out its whole section on every scrolled frame.
             .overlay(alignment: .bottom) {
@@ -894,6 +900,7 @@ private struct ChatView: View {
                 scroll.debugLetGo = { follow.letGo() }
                 scroll.debugFollows = { follow.follows }
                 scroll.debugToggleMessage = { [messageToggle] in messageToggle.action($0) }
+                scroll.debugJumpToTurn = { jumpToTurn($0, proxy) }
                 #endif
                 messageToggle.action = { [model, scroll] id in
                     // The message keeps its place rather than the chat its end.
@@ -920,6 +927,7 @@ private struct ChatView: View {
             }
             .onChange(of: rows.scroll, initial: true) { _, rows in
                 scroll.setRows(rows)
+                scroll.setTurns(TimelineTurn.turns(in: chat.transcript.items))
             }
             .onChange(of: following.follows, initial: true) { _, follows in scroll.anchoredToTop = !follows }
             .onChange(of: chat.transcript) { old, new in
@@ -1124,6 +1132,28 @@ private struct ChatView: View {
                 if follow.follows { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
             }
         }
+    }
+
+    /// A marker on the session timeline was chosen: go to its message, at
+    /// the top of the view, joining it to the rows shown first if it is
+    /// older. Rows above it take their real height as it lands, which
+    /// pushed it down by hundreds of points: it is held at the top until
+    /// they have, as rows joining above the view hold the reader's.
+    private func jumpToTurn(_ id: Int, _ proxy: ScrollViewProxy) {
+        follow.letGo()
+        scroll.willJump()
+        let items = chat.transcript.items
+        let land = { [scroll] in
+            proxy.scrollTo(id, anchor: .top)
+            scroll.hold(id, at: 0)
+        }
+        if let index = items.firstIndex(where: { $0.id == id }),
+           window.reveal(index, identity: chat.transcript.identity, count: items.count) {
+            DispatchQueue.main.async(execute: land)
+        } else {
+            land()
+        }
+        scroll.flash()
     }
 
     private func jumpToLatest(_ proxy: ScrollViewProxy) {
