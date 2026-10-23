@@ -234,9 +234,8 @@ struct CodeBlock: View {
     }
 }
 
-/// Copy, then a checkmark for a moment. Both labels are always laid out on
-/// top of each other and cross-fade, so the button keeps one size and nothing
-/// beside it moves when it is pressed.
+/// Copy, then a checkmark for a moment. The button grows to fit "Copied"
+/// and shrinks back, cross-fading between the labels.
 struct CopyButton: View {
     let help: String
     let action: () -> Void
@@ -251,13 +250,15 @@ struct CopyButton: View {
             action()
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { copiedAt = Date() }
         } label: {
-            ZStack(alignment: .leading) {
-                Label("Copy", systemImage: "doc.on.doc")
-                    .opacity(showsCopied ? 0 : 1)
-                Label("Copied", systemImage: "checkmark")
-                    .foregroundStyle(.green)
-                    .opacity(showsCopied ? 1 : 0)
+            Group {
+                if showsCopied {
+                    Label("Copied", systemImage: "checkmark")
+                        .foregroundStyle(.green)
+                } else {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
             }
+            .transition(.opacity)
             .labelStyle(CopyLabelStyle())
             .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
