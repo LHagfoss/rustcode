@@ -202,22 +202,13 @@ enum DebugDriver {
             }
         case "rail":
             // `rail [tag]`: the session timeline's markers (#2309): how many
-            // turns and markers, the current turn, and how far each marker
-            // in view is from its message's first line.
+            // turns and ticks, the current turn, and how many ticks' messages
+            // are in view.
             guard let state = ChatScrollState.current else { break }
             let layout = state.rail.layout
-            var worst = 0.0, inView = 0
-            for marker in layout.markers where marker.isInView {
-                guard let frame = state.debugFrame(marker.id) else { continue }
-                let y = Double(frame.minY) + TimelineLayout.firstLine
-                // Clamped clear of the stacks at the ends.
-                guard y > TimelineLayout.margin + Double(TimelineLayout.stackLimit) * TimelineLayout.stackStep,
-                      y < state.visible - TimelineLayout.margin - Double(TimelineLayout.stackLimit) * TimelineLayout.stackStep else { continue }
-                inView += 1
-                worst = max(worst, abs(marker.y - y))
-            }
+            let inView = layout.markers.filter(\.isInView).count
             let current = layout.markers.first(where: \.isCurrent).map { "turn \($0.number) row \($0.id)" } ?? "-"
-            report("rail \(parts.count > 1 ? parts[1] : "-") turns \(state.rail.turnCount) markers \(layout.markers.count) current \(current) in view \(inView) worst misalign \(Int(worst.rounded()))")
+            report("rail \(parts.count > 1 ? parts[1] : "-") turns \(state.rail.turnCount) markers \(layout.markers.count) current \(current) in view \(inView)")
         case "railjump":
             // `railjump <turn>`: go to turn `turn` (from 1) as its marker
             // does, then where its message is in the view over the next
