@@ -249,4 +249,80 @@ final class TranscriptIdentityTests: XCTestCase {
         transcript.removeFrom(ids[2])
         XCTAssertEqual(transcript.items.map(\.content), [.user("first"), .assistant("one")])
     }
+
+    // #2307: a finished turn's last reply says how long the turn took and when.
+
+    func testCompletedTurnTimesItsLastReply() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var transcript = Transcript()
+        transcript.beginTurn(at: start)
+        transcript.appendUser("hi")
+        XCTAssertEqual(transcript.turnStartedAt, start)
+        transcript.apply(.agentText("Looking."), at: start)
+        transcript.apply(.toolCall(id: "t1", title: "read_file", kind: nil, status: .completed, input: nil), at: start)
+        transcript.apply(.agentText("Done."), at: start)
+        transcript.finishTurn(at: start.addingTimeInterval(72))
+        XCTAssertNil(transcript.items[1].turn)
+        XCTAssertEqual(transcript.items[3].turn,
+                       TurnTiming(finished: start.addingTimeInterval(72), elapsed: 72, outcome: .completed))
+        XCTAssertNil(transcript.turnStartedAt)
+    }
+
+    func testStoppedTurnSaysSoAndFailedTurnShowsNoFinish() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var stopped = Transcript()
+        stopped.beginTurn(at: start)
+        stopped.appendUser("hi")
+        stopped.apply(.agentText("Half"), at: start)
+        stopped.finishTurn(at: start.addingTimeInterval(8), failure: "Cancelled.", cancelled: true)
+        XCTAssertEqual(stopped.items[1].turn?.outcome, .cancelled)
+        XCTAssertEqual(stopped.items[1].turn?.label(), "Stopped after 8s")
+
+        var failed = Transcript()
+        failed.beginTurn(at: start)
+        failed.appendUser("hi")
+        failed.apply(.agentText("Half"), at: start)
+        failed.finishTurn(at: start.addingTimeInterval(8), failure: "The turn failed.")
+        XCTAssertNil(failed.items[1].turn)
+        XCTAssertNil(failed.turnStartedAt)
+    }
+
+    func testSteerKeepsTheTurnClockAndAnEarlierTurnKeepsItsReply() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var transcript = Transcript()
+        transcript.beginTurn(at: start)
+        transcript.appendUser("first")
+        transcript.apply(.agentText("One."), at: start)
+        transcript.finishTurn(at: start.addingTimeInterval(5))
+        transcript.beginTurn(at: start.addingTimeInterval(10))
+        transcript.appendUser("second")
+        // A steer joins the running turn without restarting its clock.
+        transcript.beginTurn(at: start.addingTimeInterval(20))
+        transcript.appendUser("steer")
+        XCTAssertEqual(transcript.turnStartedAt, start.addingTimeInterval(10))
+        transcript.finishTurn(at: start.addingTimeInterval(30))
+        // The second turn wrote nothing, so the first turn's reply is not re-stamped.
+        XCTAssertEqual(transcript.items[1].turn?.elapsed, 5)
+    }
+
+    func testReplayWithoutTimingShowsNone() {
+        var transcript = Transcript()
+        transcript.apply(.userText("hi"))
+        transcript.apply(.agentText("Done"))
+        transcript.finishTurn(at: Date())
+        XCTAssertNil(transcript.items[1].turn)
+    }
+
+    func testReplayedTurnTimingStaysOnItsLastReply() {
+        let timing = TurnTiming(id: "turn:1", finished: Date(timeIntervalSince1970: 2_000), elapsed: 12, outcome: .completed)
+        var transcript = Transcript()
+        transcript.apply(.userText("hi"))
+        transcript.apply(.agentText("Looking.", turn: timing))
+        transcript.apply(.toolCall(id: "t1", title: "read_file", kind: nil, status: .completed, input: nil))
+        transcript.apply(.agentText("Done.", turn: timing))
+        transcript.apply(.userText("next"))
+        let other = TurnTiming(id: "turn:2", finished: Date(timeIntervalSince1970: 3_000), elapsed: 3, outcome: .completed)
+        transcript.apply(.agentText("Ok.", turn: other))
+        XCTAssertEqual(transcript.items.map(\.turn), [nil, nil, nil, timing, nil, other])
+    }
 }

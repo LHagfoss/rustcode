@@ -281,6 +281,50 @@ impl AcpEventStream {
     }
 }
 
+/// How long a finished turn took and when it ended, for the client to show
+/// under the turn's last reply. A replayed message carries it on its last
+/// prose chunk as `_meta.rustcode.turn`: `{id, startedAt, endedAt,
+/// elapsedMs, outcome}`. A turn still open has no end to show, so it sends
+/// nothing.
+pub(crate) fn attach_turn_timing(updates: &mut [SessionUpdate], turn: &crate::app::TurnTiming) {
+    let (Some(ended_at), Some(outcome)) = (&turn.ended_at, turn.outcome) else {
+        return;
+    };
+    let Some(SessionUpdate::AgentMessageChunk(chunk)) = updates
+        .iter_mut()
+        .rev()
+        .find(|update| matches!(update, SessionUpdate::AgentMessageChunk(_)))
+    else {
+        return;
+    };
+    let mut timing = serde_json::Map::new();
+    timing.insert("id".into(), turn.turn_id.clone().into());
+    if let Some(started_at) = &turn.started_at {
+        timing.insert("startedAt".into(), started_at.clone().into());
+    }
+    timing.insert("endedAt".into(), ended_at.clone().into());
+    if let Some(ms) = turn.elapsed_work_ms {
+        timing.insert("elapsedMs".into(), ms.into());
+    }
+    let outcome = match outcome {
+        crate::app::TurnOutcome::Completed => "completed",
+        crate::app::TurnOutcome::Cancelled => "cancelled",
+        crate::app::TurnOutcome::Failed => "failed",
+    };
+    timing.insert("outcome".into(), outcome.into());
+    let mut meta = chunk.meta.take().unwrap_or_default();
+    let mut rustcode = meta
+        .remove("rustcode")
+        .and_then(|value| match value {
+            serde_json::Value::Object(map) => Some(map),
+            _ => None,
+        })
+        .unwrap_or_default();
+    rustcode.insert("turn".into(), serde_json::Value::Object(timing));
+    meta.insert("rustcode".into(), serde_json::Value::Object(rustcode));
+    chunk.meta = Some(meta);
+}
+
 fn rustcode_meta(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::from_iter([("rustcode".to_owned(), value)])
 }

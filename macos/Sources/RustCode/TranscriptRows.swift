@@ -26,7 +26,7 @@ struct TranscriptRow: View, Equatable {
     private var content: some View {
         switch item.content {
         case .user(let text): UserMessage(id: item.id, text: text)
-        case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming)
+        case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming, turn: item.turn)
         case .thinking(let text):
             ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
         case .tool(let tool):
@@ -162,7 +162,7 @@ private struct UserBubble: View {
             if text.hasPrefix("/"), findQuery.isEmpty {
                 slashCommandText(text)
             } else {
-                Text(FindHighlight.apply(AttributedString(text), query: findQuery))
+                Text(FindHighlight.apply(ChatLinks.linked(text), query: findQuery))
             }
         }
             .textSelection(.enabled)
@@ -170,13 +170,14 @@ private struct UserBubble: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .background(.fill.tertiary, in: .rect(cornerRadius: 18))
-            .contextMenu {
-                Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }
+            .messageMenu { [text, original, id, messageActions] in
+                var items = [MessageMenuItem(title: "Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }]
                 if let actions = messageActions {
-                    Divider()
-                    Button("Edit and Resend", systemImage: "pencil") { actions.edit(original) }
-                    Button("Retry", systemImage: "arrow.clockwise") { actions.retryMessage(id) }
+                    items.append(MessageMenuItem(title: "Edit and Resend", systemImage: "pencil", action: { actions.edit(original) },
+                                                 startsGroup: true))
+                    items.append(MessageMenuItem(title: "Retry", systemImage: "arrow.clockwise") { actions.retryMessage(id) })
                 }
+                return items
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 80)
@@ -187,7 +188,10 @@ private struct UserBubble: View {
 private struct AssistantMessage: View {
     let text: String
     var isStreaming = false
+    /// On a turn's last reply: how long the turn took and when it ended.
+    var turn: TurnTiming?
     @Environment(\.messageActions) private var messageActions
+    @State private var isHovered = false
 
     private struct Parsed {
         var blocks: [AssistantBlock]
@@ -218,17 +222,48 @@ private struct AssistantMessage: View {
                 }
             }
             if let summary = parsed.summary { SummaryCard(summary: summary) }
+            // Never while the reply is written, so the footer cannot claim it is done.
+            if !isStreaming, let turn { footer(turn) }
         }
-        .contextMenu {
-            Button("Copy Reply", systemImage: "doc.on.doc") { Clipboard.copy(AssistantSummary.split(text).prose) }
-            Button("Copy as Markdown", systemImage: "text.document") { Clipboard.copy(text) }
-            if let actions = messageActions {
-                Divider()
-                Button("Quote in Reply", systemImage: "text.quote") {
-                    actions.edit(AssistantSummary.split(text).prose.split(separator: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n\n")
-                }
+        .onHover { isHovered = $0 }
+        .overlay(alignment: .bottomTrailing) {
+            // Other replies keep Copy out of the way until the pointer is on
+            // them; it floats over the reply, so nothing moves when it shows.
+            if !isStreaming, turn == nil {
+                CopyButton(help: "Copy reply") { Clipboard.copy(AssistantSummary.split(text).prose) }
+                    .background(.regularMaterial, in: .rect(cornerRadius: 7))
+                    .offset(y: 8)
+                    .opacity(isHovered ? 1 : 0)
+                    .animation(.easeOut(duration: 0.12), value: isHovered)
             }
         }
+        .messageMenu { [text, messageActions] in
+            var items = [
+                MessageMenuItem(title: "Copy Reply", systemImage: "doc.on.doc") { Clipboard.copy(AssistantSummary.split(text).prose) },
+                MessageMenuItem(title: "Copy as Markdown", systemImage: "text.document") { Clipboard.copy(text) },
+            ]
+            if let actions = messageActions {
+                items.append(MessageMenuItem(title: "Quote in Reply", systemImage: "text.quote", action: {
+                    actions.edit(AssistantSummary.split(text).prose.split(separator: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n\n")
+                }, startsGroup: true))
+            }
+            return items
+        }
+    }
+
+    /// Copy, then how long the turn took and when it ended, under a turn's
+    /// last reply.
+    private func footer(_ turn: TurnTiming) -> some View {
+        HStack(spacing: 6) {
+            CopyButton(help: "Copy reply") { Clipboard.copy(AssistantSummary.split(text).prose) }
+                .padding(.leading, -8)
+            Text(turn.label())
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
+                .help(turn.finished.formatted(date: .complete, time: .standard))
+        }
+        .padding(.top, -6)
     }
 }
 
@@ -487,6 +522,7 @@ private struct ToolTextBox: View {
                 .buttonStyle(.plain)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
+                .pointingHandCursor()
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
             }
@@ -600,6 +636,7 @@ private struct FileChangeView: View {
                 withAnimation(.snappy(duration: 0.2)) { showsAll = true }
             }
             .buttonStyle(.link)
+            .pointingHandCursor()
             .font(.caption)
         } else if showsAll {
             HStack(spacing: 10) {
@@ -610,6 +647,7 @@ private struct FileChangeView: View {
                     withAnimation(.snappy(duration: 0.2)) { showsAll = false }
                 }
                 .buttonStyle(.link)
+                .pointingHandCursor()
             }
             .font(.caption)
         }
@@ -728,6 +766,7 @@ private struct RowDisclosureStyle: DisclosureGroupStyle {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
             if configuration.isExpanded { configuration.content }
         }
     }
@@ -735,10 +774,24 @@ private struct RowDisclosureStyle: DisclosureGroupStyle {
 
 /// Shown while a turn runs and the agent has not started writing yet.
 struct WorkingIndicator: View {
+    /// When the turn began, for its clock: "Working… 00:12".
+    var startedAt: Date?
+
     var body: some View {
         HStack(spacing: 8) {
             ProgressView().controlSize(.small)
-            Text("Working…").font(.callout).foregroundStyle(.secondary)
+            Group {
+                if let startedAt {
+                    TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                        Text("Working… " + TurnTiming.clock(context.date.timeIntervalSince(startedAt)))
+                            .monospacedDigit()
+                    }
+                } else {
+                    Text("Working…")
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
         }
     }
 }
@@ -802,6 +855,7 @@ private struct ToolRunSummary: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .hoverHighlight(cornerRadius: 8, padding: 5)
         .help(fold.isOpen ? "Fold these tool calls" : "Show these tool calls")
         .animation(.snappy(duration: 0.15), value: fold.isOpen)
     }

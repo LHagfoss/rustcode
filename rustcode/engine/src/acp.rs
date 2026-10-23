@@ -274,11 +274,15 @@ fn replay_history_updates(
             "assistant" => {
                 // Reasoning goes out as thought chunks, as it did live, so
                 // the client labels a replayed thought as it did then.
-                updates.extend(streaming::AcpEventStream::replay_assistant_text(
+                let mut replayed = streaming::AcpEventStream::replay_assistant_text(
                     &message.content,
                     message.reasoning_summary,
                     message.thought_time_ms.filter(|ms| *ms > 0),
-                ));
+                );
+                if let Some(turn) = &message.turn {
+                    streaming::attach_turn_timing(&mut replayed, turn);
+                }
+                updates.extend(replayed);
                 for call in &message.tool_calls {
                     let raw_input = serde_json::from_str(&call.arguments)
                         .unwrap_or_else(|_| serde_json::json!({"raw": call.arguments}));
@@ -2477,6 +2481,50 @@ mod tests {
                 serde_json::json!({"thoughtSource": "summary"})
             )]
         );
+    }
+
+    // #2307: a replayed turn's last reply carries how long the turn took
+    // and when it ended, so the Mac app shows them as it did live. A turn
+    // with no end, as one still open, carries nothing.
+    #[test]
+    fn replayed_reply_carries_its_finished_turn_timing() {
+        let turn = crate::app::TurnTiming {
+            turn_id: "turn:1".into(),
+            started_at: Some("2026-10-22T20:58:02+00:00".into()),
+            ended_at: Some("2026-10-22T20:59:52+00:00".into()),
+            elapsed_work_ms: Some(109_582),
+            outcome: Some(crate::app::TurnOutcome::Completed),
+        };
+        let mut reply = crate::app::ChatMessage::new("assistant", "<think>Hm.</think>Done.");
+        reply.turn = Some(turn.clone());
+        let mut open = crate::app::ChatMessage::new("assistant", "Still going.");
+        open.turn = Some(crate::app::TurnTiming {
+            ended_at: None,
+            outcome: None,
+            ..turn
+        });
+
+        let updates = replay_history_updates(&[reply, open], None);
+
+        let metas = updates
+            .iter()
+            .filter_map(|update| match update {
+                SessionUpdate::AgentMessageChunk(chunk) => Some(chunk.meta.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(metas.len(), 2);
+        assert_eq!(
+            metas[0].as_ref().unwrap()["rustcode"]["turn"],
+            serde_json::json!({
+                "id": "turn:1",
+                "startedAt": "2026-10-22T20:58:02+00:00",
+                "endedAt": "2026-10-22T20:59:52+00:00",
+                "elapsedMs": 109_582,
+                "outcome": "completed",
+            })
+        );
+        assert!(metas[1].is_none());
     }
 
     // #2299: a replayed turn sends its reasoning as thought chunks with the

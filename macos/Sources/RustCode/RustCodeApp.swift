@@ -1168,8 +1168,12 @@ final class DesktopModel: ObservableObject {
     /// again, so it does not show twice (#2278). Messages after it go too,
     /// once the user confirms. An engine without rewind sends it again below.
     func retryMessage(_ id: Int) async {
-        guard !busy, let item = transcript.items.first(where: { $0.id == id }),
+        // A second Retry while the first still asks or rewinds would send the
+        // message twice: the turn only counts as busy once it is sent.
+        guard !busy, !isRetrying, let item = transcript.items.first(where: { $0.id == id }),
               case .user(let text) = item.content else { return }
+        isRetrying = true
+        defer { isRetrying = false }
         guard capabilities?.rewind == true, let session = selectedSession,
               let connection = engine?.connection, let index = transcript.userIndex(of: id) else {
             return await retry(text)
@@ -1196,6 +1200,9 @@ final class DesktopModel: ObservableObject {
         transcript.removeFrom(id)
         await retry(text)
     }
+
+    /// A Retry is between its press and its send.
+    private var isRetrying = false
 
     /// Send a message again as a new prompt.
     func retry(_ text: String) async {
@@ -1780,18 +1787,23 @@ final class DesktopModel: ObservableObject {
         } else {
             let markers = prompt.images.compactMap { $0.writePreview() }.map(ImageMarkers.marker)
             let shown = ([prompt.text] + markers).filter { !$0.isEmpty }.joined(separator: "\n")
-            appendToTranscript(of: id) { $0.appendUser(shown) }
+            appendToTranscript(of: id) {
+                $0.beginTurn(at: Date())
+                $0.appendUser(shown)
+            }
         }
         // Ended exactly once below however the turn ends, so the chat cannot
         // keep spinning after its answer.
         let turn = isCommand ? nil : turnActivity.begin(id)
         if turn != nil, id == selectedSession { pollAgents() }
         var stopped = false
+        var cancelled = false
         var failure: String?
         do {
             let result = try await connection.request(ACPMethod.sessionPrompt, params: ACPRequests.prompt(sessionId: id, text: prompt.text, images: prompt.images))
             await catchUpInbound(on: connection)
             stopped = result["stopReason"]?.stringValue == "cancelled"
+            cancelled = stopped
             if stopped { failure = "Cancelled." }
             requeueSteers(in: id, unused: ACPRequests.unusedSteers(in: result))
         } catch {
@@ -1804,7 +1816,7 @@ final class DesktopModel: ObservableObject {
         // The turn is over, so the engine no longer waits on its requests.
         permissionQueue.removeAll { $0.sessionId == id }
         // A thought the turn ended on stops its clock, and no card keeps spinning.
-        appendToTranscript(of: id) { $0.finishTurn(at: Date(), failure: failure) }
+        appendToTranscript(of: id) { $0.finishTurn(at: Date(), failure: failure, cancelled: cancelled) }
         if isCommand {
             finishCommand(in: id)
         } else if !stopped {
@@ -1921,7 +1933,7 @@ final class DesktopModel: ObservableObject {
         switch update {
         case .contextReport(_, let context):
             if session == selectedSession { contextSheet = context }
-        case .agentText(let text):
+        case .agentText(let text, _):
             showCommandResult(CommandResult(input: input, output: text), in: session)
         default:
             break
@@ -1954,7 +1966,7 @@ final class DesktopModel: ObservableObject {
     private func captureCommandUpdate(_ update: SessionUpdate, in session: String) -> Bool {
         guard var command = runningCommands[session] else { return false }
         switch update {
-        case .agentText(let text):
+        case .agentText(let text, _):
             command.output += text
         case .contextReport(_, let context):
             command.answered = true

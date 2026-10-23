@@ -815,7 +815,7 @@ private struct ChatView: View {
                         // Up for the whole turn, also while a reply streams or the
                         // model plans its next step, so a live turn always says so.
                         if isReplyStreaming {
-                            WorkingIndicator()
+                            WorkingIndicator(startedAt: chat.transcript.turnStartedAt)
                                 .reportsChatRow(Self.workingRow, to: scroll)
                         }
                     }
