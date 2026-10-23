@@ -767,10 +767,11 @@ private struct ChatView: View {
         let lastId = transcript.items.last?.id
         let first = window.firstShown(identity: transcript.identity, count: transcript.items.count)
 
-        // Older rows are lazy: laid out eagerly, every resize re-measured the
-        // whole chat (170 ms a step in a 250-message session). The newest rows
-        // stay eager, so the part being read never changes height under the
-        // reader while scrolling near the end.
+        // Older rows are drawn in full only near the view (`OlderRows`): laid
+        // out in full, every resize re-measured the whole chat (170 ms a step
+        // in a 250-message session). The newest rows are always drawn in full,
+        // so the part being read never changes height under the reader while
+        // scrolling near the end.
         let split = ChatLayout.split(count: transcript.items.count, firstShown: first)
         let rows = shownRows(transcript, first: first, split: split)
         ScrollViewReader { proxy in
@@ -789,19 +790,8 @@ private struct ChatView: View {
                     // however far down the chat is.
                     Color.clear.frame(height: 0).id(topAnchor)
                     if first > 0 || split > first {
-                        LazyVStack(alignment: .leading, spacing: 18) {
-                            if first > 0 {
-                                EarlierMessages(count: first)
-                                    .reportsChatRow(Self.earlierRow, to: scroll)
-                            }
-                            ForEach(rows.older) { item in
-                                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                                              fold: rows.folding.fold(for: item.id))
-                                    .equatable()
-                                    .reportsChatRow(item.id, to: scroll)
-                                    .id(item.id)
-                            }
-                        }
+                        OlderRows(items: rows.older, earlier: first, earlierRow: Self.earlierRow,
+                                  folding: rows.folding, currentMatch: currentMatch, scroll: scroll, drawn: scroll.drawn)
                     }
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(rows.newer) { item in
@@ -831,6 +821,9 @@ private struct ChatView: View {
                         // nothing: the chat showed blank until scrolled.
                         .background(EnclosingScrollView { [scroll] in scroll.scrollView = $0 })
                 }
+                #if DEBUG
+                .coordinateSpace(.named(ChatScrollState.contentSpace))
+                #endif
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28)
                 .padding(.top, 20)
@@ -881,6 +874,7 @@ private struct ChatView: View {
                 scroll.nearTop = { showEarlier(proxy) }
                 #if DEBUG
                 scroll.debugLetGo = { follow.letGo() }
+                scroll.debugFollows = { follow.follows }
                 #endif
                 TranscriptKeyInput.shared.start()
                 TranscriptKeyInput.shared.isCovered = { [model] in model.coversChat }
@@ -902,6 +896,7 @@ private struct ChatView: View {
             .onChange(of: rows.scroll, initial: true) { _, rows in
                 scroll.setRows(rows)
             }
+            .onChange(of: following.follows, initial: true) { _, follows in scroll.anchoredToTop = !follows }
             .onChange(of: chat.transcript) { old, new in
                 find.transcriptChanged(new)
                 // Sending a message always brings the chat back to its end.
@@ -921,6 +916,7 @@ private struct ChatView: View {
             .onChange(of: currentMatch) { _, match in
                 guard let match else { return }
                 follow.letGo()
+                scroll.willJump()
                 // A match older than the window joins it first, then is
                 // scrolled to once its row exists.
                 let items = chat.transcript.items
@@ -1067,6 +1063,7 @@ private struct ChatView: View {
         let transcript = chat.transcript
         guard window.hasEarlier(identity: transcript.identity, count: transcript.items.count) else { return }
         pendingTop = scroll.topRow()
+        scroll.willJump()
         scroll.pauseNearTop()
         window.showEarlier(identity: transcript.identity, count: transcript.items.count)
     }
@@ -1114,6 +1111,7 @@ private struct ChatView: View {
             scroll.scroll(by: page, animated: true)
         case .top:
             follow.letGo()
+            scroll.willJump()
             if window.showAll(identity: chat.transcript.identity, count: chat.transcript.items.count) {
                 DispatchQueue.main.async { proxy.scrollTo(topAnchor, anchor: .top) }
             } else {
@@ -1173,6 +1171,53 @@ private struct CommandSuggestions: View {
                 .frame(maxWidth: .infinity)
             }
             .transition(.opacity)
+        }
+    }
+}
+
+/// The chat's older rows, above the newest ones. Rows near the view are
+/// drawn in full and the rest stand in at the height the chat measured for
+/// them (`DrawnRows`, #2310): a lazy stack here sized itself from the rows
+/// it had laid out just now, and each new guess moved the rows below it,
+/// the ones the reader was on. Stand-ins cost about what a lazy stack's
+/// rows not laid out do. Without the scroll geometry of macOS 15 the chat
+/// cannot tell what is near the view, so it keeps the lazy stack.
+private struct OlderRows: View {
+    let items: [TranscriptItem]
+    /// Older messages not shown yet.
+    let earlier: Int
+    let earlierRow: Int
+    let folding: ToolFolding
+    let currentMatch: Int?
+    let scroll: ChatScrollState
+    @ObservedObject var drawn: DrawnRowsState
+
+    var body: some View {
+        if #available(macOS 15, *) {
+            VStack(alignment: .leading, spacing: 18) { rows(all: false) }
+        } else {
+            LazyVStack(alignment: .leading, spacing: 18) { rows(all: true) }
+        }
+    }
+
+    @ViewBuilder
+    private func rows(all: Bool) -> some View {
+        if earlier > 0 {
+            EarlierMessages(count: earlier)
+                .reportsChatRow(earlierRow, to: scroll)
+        }
+        ForEach(items) { item in
+            if all || drawn.ids.contains(item.id) || item.id == currentMatch {
+                TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
+                              fold: folding.fold(for: item.id))
+                    .equatable()
+                    .reportsChatRow(item.id, to: scroll)
+                    .id(item.id)
+            } else {
+                Color.clear
+                    .frame(height: scroll.standInHeight(of: item.id))
+                    .id(item.id)
+            }
         }
     }
 }

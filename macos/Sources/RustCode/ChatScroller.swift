@@ -23,7 +23,13 @@ final class ChatScrollState: ObservableObject {
     private var hideTask: Task<Void, Never>?
     /// The AppKit scroll view under the chat's SwiftUI one, which the
     /// scroller moves directly by exact distances.
-    weak var scrollView: NSScrollView?
+    weak var scrollView: NSScrollView? {
+        didSet {
+            guard scrollView !== oldValue else { return }
+            observeDocumentSize()
+        }
+    }
+    private var documentObserver: NSObjectProtocol?
 
     /// The scroller's track, between the insets with a small margin.
     static let trackMargin: Double = 6
@@ -34,14 +40,100 @@ final class ChatScrollState: ObservableObject {
         Self.current = self
         #endif
         map.setRows(rows)
+        drawnRows.invalidate()
         setNeedsUpdate()
     }
 
     func rowFrame(_ row: Int, _ frame: CGRect) {
+        let before = map.laidOutHeight(of: row)
         frames[row] = frame
         map.measured(row, height: frame.height)
         holdAnchor(row, frame)
+        keepPlace(above: row, frame, before: before)
         setNeedsUpdate()
+    }
+
+    // MARK: Older rows drawn in full or as stand-ins (`DrawnRows`)
+
+    /// The older rows drawn in full; the rest stand in at their height.
+    let drawn = DrawnRowsState()
+    private var drawnRows = DrawnRows()
+    /// The chat is let go of its end and anchored to its top. Set by the chat.
+    var anchoredToTop = false
+    /// The content offset less the scroll view's own, to tell where the
+    /// view is when no row drawn in full is in it.
+    private var clipShift: Double?
+    /// Rows moved by a scroll back since they last reported.
+    private var keptPlace = false
+    /// A scroll down still owed: rows report a new height before the
+    /// document takes it, and the scroll waits for the room.
+    private var pendingShift: Double?
+
+    /// Until when the chat is going somewhere on purpose, so rows taking
+    /// their height on the way are not scrolled back: that would hold the
+    /// chat where it was.
+    private var jumpUntil = Date.distantPast
+
+    /// The chat is about to go somewhere on purpose: Home, a find match, or
+    /// back to the row in view once older rows joined.
+    func willJump() {
+        jumpUntil = Date().addingTimeInterval(0.5)
+    }
+
+    /// The height `row` stands in at while not drawn in full.
+    func standInHeight(of row: Int) -> Double { map.standInHeight(of: row) }
+
+    /// A row wholly above the view took another height, measured for the
+    /// first time or again: everything below it moved by the difference,
+    /// which is scrolled back so the reader's place stays.
+    private func keepPlace(above row: Int, _ frame: CGRect, before: Double?) {
+        guard anchoredToTop, anchor == nil, Date() >= jumpUntil, let before else { return }
+        let delta = frame.height - before
+        guard abs(delta) > 0.5, frame.minY + before <= 0.5 else { return }
+        shift(by: delta)
+    }
+
+    private func shift(by delta: Double) {
+        let before = clipOffset ?? 0
+        scroll(by: delta, animated: false)
+        let applied = (clipOffset ?? before) - before
+        let owed = delta - applied
+        pendingShift = abs(owed) > 0.5 ? (pendingShift ?? 0) + owed : pendingShift
+        keptPlace = true
+    }
+
+    private func observeDocumentSize() {
+        documentObserver.map(NotificationCenter.default.removeObserver)
+        documentObserver = nil
+        guard let document = scrollView?.documentView else { return }
+        document.postsFrameChangedNotifications = true
+        documentObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: document, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let owed = self.pendingShift else { return }
+                self.pendingShift = nil
+                self.shift(by: owed)
+                // As far as this height allows; a later one owes no more.
+                self.pendingShift = nil
+            }
+        }
+    }
+
+    private func updateDrawn() {
+        guard visible > 0 else { return }
+        var offset: Double?
+        if !keptPlace, let (row, frame) = reference, distance(frame) <= visible, let top = map.top(of: row) {
+            offset = top - frame.minY
+            if let clip = clipOffset { clipShift = top - frame.minY - clip }
+        } else if let clip = clipOffset, let clipShift {
+            offset = clip + clipShift
+        }
+        keptPlace = false
+        guard let offset else { return }
+        if drawnRows.update(map: &map, offset: offset, visible: visible) {
+            drawn.ids = drawnRows.ids
+        }
     }
 
     // MARK: Older rows joining at the top (`TranscriptWindow`)
@@ -51,18 +143,32 @@ final class ChatScrollState: ObservableObject {
     static weak var current: ChatScrollState?
     /// Lets go of the end, as the reader scrolling up does.
     var debugLetGo: () -> Void = {}
+    /// Whether the chat follows its end.
+    var debugFollows: () -> Bool = { false }
     /// The row at the top of the view, where it is, and the rows mapped.
     var debugDescription: String {
         let top = reference.map { "top row \($0.key) at \(Int($0.value.minY))" } ?? "no rows"
         return "\(top), rows \(map.rows.count) first \(map.rows.first.map(String.init) ?? "-")"
     }
+    /// Where `row` is drawn now: its top in the content, which layout
+    /// reports, less the scroll view's own offset. Unlike its frame, never
+    /// stale after the chat was scrolled outside a layout pass.
+    func debugScreenTop(_ row: Int) -> Double? {
+        guard let top = contentTops[row], let offset = clipOffset else { return nil }
+        return top - offset
+    }
+    /// Each row's top in the chat's content, as layout last placed it.
+    private var contentTops: [Int: Double] = [:]
+    /// The name of the chat content's coordinate space.
+    static let contentSpace = "chatContent"
+    func debugContentTop(_ row: Int, _ top: Double) { contentTops[row] = top }
     /// The laid-out rows that reach into the visible area, and the clip's
     /// place and the document's height.
     var debugVisible: String {
         let shown = frames.filter { $0.value.maxY > 0 && $0.value.minY < visible }.keys.sorted()
         let clip = scrollView.map { "clip y \(Int($0.contentView.bounds.minY)) doc \(Int($0.documentView?.frame.height ?? 0))" } ?? "-"
         let rows = shown.map { ($0 == Int.max ? "W" : String($0)) + "@\(Int(frames[$0]!.minY))+\(Int(frames[$0]!.height))" }
-        return "\(clip) visible \(Int(visible)) first \(map.rows.dropFirst().first ?? -1) hold \(isAnchoring) laid \(frames.count) shown [\(rows.joined(separator: ","))]"
+        return "\(debugFollows() ? "follows" : "let go") \(clip) visible \(Int(visible)) first \(map.rows.dropFirst().first ?? -1) hold \(isAnchoring) laid \(frames.count) shown [\(rows.joined(separator: ","))]"
     }
     #endif
 
@@ -213,6 +319,7 @@ final class ChatScrollState: ObservableObject {
     }
 
     private func update() {
+        updateDrawn()
         // While the lazy stack re-anchors, rows can briefly report places far
         // from the visible area; wait for one that spans its top.
         guard let (row, frame) = reference, distance(frame) <= visible, let top = map.top(of: row) else { return }
@@ -267,6 +374,13 @@ final class ChatScrollState: ObservableObject {
             self?.isScrolling = false
         }
     }
+}
+
+/// The older rows the chat draws in full (`DrawnRows`). Only the rows of
+/// older messages observe it.
+@MainActor
+final class DrawnRowsState: ObservableObject {
+    @Published var ids: Set<Int> = []
 }
 
 /// An overlay scroller for the chat, drawn from `ChatScrollState` instead of
@@ -339,6 +453,13 @@ extension View {
     func reportsChatRow(_ row: Int, to state: ChatScrollState) -> some View {
         onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { state.rowFrame(row, $0) }
             .onDisappear { state.rowGone(row) }
+            #if DEBUG
+            // Where layout puts the row in the content, for the debug
+            // driver's measures; unlike its place in the view, never stale.
+            .onGeometryChange(for: Double.self) {
+                $0.frame(in: .named(ChatScrollState.contentSpace)).minY
+            } action: { state.debugContentTop(row, $0) }
+            #endif
     }
 }
 
