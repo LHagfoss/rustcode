@@ -2,10 +2,10 @@ import Foundation
 
 /// Long chat messages fold to their first lines behind Show more (#2303).
 ///
-/// A user message or a finished reply taller than `maxLines` lines, and the
-/// Show more control, shows its first `maxLines` lines under a fade. Only
-/// the drawing changes: copy, the message menu, find and VoiceOver still get
-/// the whole text. A reply never folds while it is written.
+/// A user message taller than `maxLines` lines, and the Show more control,
+/// shows its first `maxLines` lines under a fade. Only the drawing changes:
+/// copy, the message menu, find and VoiceOver still get the whole text.
+/// Replies never fold.
 public enum MessageCollapse {
     /// The lines a folded message shows.
     public static let maxLines = 12
@@ -15,14 +15,10 @@ public enum MessageCollapse {
     /// The height of the Show more control under a folded message.
     public static let controlHeight: Double = 22
 
-    /// Whether a message of this kind folds when it is long: what the reader
-    /// wrote and finished replies, never a reply still being written.
-    public static func folds(_ content: TranscriptItem.Content, isStreaming: Bool) -> Bool {
-        switch content {
-        case .user: true
-        case .assistant: !isStreaming
-        case .thinking, .tool, .command: false
-        }
+    /// Whether a message of this kind folds when it is long: only what the
+    /// reader wrote.
+    public static func folds(_ content: TranscriptItem.Content) -> Bool {
+        if case .user = content { true } else { false }
     }
 
     /// Whether `text` may run past `maxLines` lines: each line wraps every

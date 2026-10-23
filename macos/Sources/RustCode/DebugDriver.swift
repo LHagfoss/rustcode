@@ -363,14 +363,13 @@ enum DebugDriver {
             }
             report("toolstream \(steps): row \(row) from \(Int(start)) scrolled \(Int(scrolled)), now \(Int(last)), worst stray \(Int(worst)), lost \(lost) of \(steps * 2) checks")
         case "fold":
-            // `fold [user|reply] [up]`: opens or folds the first long message
-            // of that kind in view, as its Show more control does (#2303);
+            // `fold [user] [up]`: opens or folds the first long user message
+            // in view, as its Show more control does (#2303);
             // with `up`, the chat is first scrolled so the message's top is
             // above the view. Reports where its top and end are in the view
             // before and over the next frames: opening and folding keep its
             // top, folding one whose top is above keeps its end.
             guard let state = ChatScrollState.current else { break }
-            let wantsUser = parts.count < 2 || parts[1] != "reply"
             let window = NSApp.windows.first { $0.isVisible && $0.contentView != nil }
             func frame(_ id: Int) -> (top: Int, end: Int)? {
                 guard let top = state.debugScreenTop(id), let height = state.debugFrame(id)?.height else { return nil }
@@ -378,8 +377,7 @@ enum DebugDriver {
             }
             let candidates = model.transcript.items.filter { item in
                 switch item.content {
-                case .user(let text): wantsUser && MessageCollapse.mayBeLong(text)
-                case .assistant(let text): !wantsUser && MessageCollapse.mayBeLong(text)
+                case .user(let text): MessageCollapse.mayBeLong(text)
                 default: false
                 }
             }
