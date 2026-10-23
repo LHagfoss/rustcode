@@ -1,3 +1,10 @@
+## [v0.92.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.92.1) - 2026-10-23
+
+### Fixes
+- A remote session left waiting on an approval after the phone disconnects now stops after 10 minutes instead of running forever, and never overwrites history saved by the app in the meantime. (#2331)
+- The iPhone app says whether a saved session is open in the RustCode app or a terminal on your Mac, instead of always saying a terminal. (#2332)
+- Pairing the same iPhone again replaces its device record instead of adding another, and `rustcode remote devices` shows when each device was last seen. (#2333)
+- Subagents now run on the parent's exact model profile and get the parent's tools (web search, MCP, skills); a bad `model` fails at spawn with a short list of valid choices. (#2335)
 ## [v0.92.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.92.0) - 2026-10-23
 
 ### Features
