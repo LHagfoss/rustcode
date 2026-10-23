@@ -27,7 +27,8 @@ struct TranscriptRow: View, Equatable {
         switch item.content {
         case .user(let text): UserMessage(id: item.id, text: text)
         case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming)
-        case .thinking(let text): ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration)
+        case .thinking(let text):
+            ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
         case .tool(let tool):
             if let fold {
                 VStack(alignment: .leading, spacing: 18) {
@@ -233,13 +234,16 @@ private struct AssistantMessage: View {
 
 /// The model's reasoning, muted and folded away, as the iOS app shows it.
 /// While it is being written it stays open on its last lines; once done it
-/// folds to a "Thought for 12s" header unless the reader opened it.
+/// folds to a "Thought for 12s" header, or "Reasoning summary" for a
+/// provider's summary, unless the reader opened it.
 private struct ThinkingBlock: View {
     let text: String
     /// The thought is still being written.
     var isLive = false
-    /// How long it took, when it was watched live.
+    /// How long it took, when it was watched live or the engine recorded it.
     var duration: TimeInterval?
+    /// The provider's summary of its hidden reasoning, not reasoning text.
+    var isSummary = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Nil until the reader toggles it: open while live, closed after.
     @State private var expanded: Bool?
@@ -253,14 +257,12 @@ private struct ThinkingBlock: View {
     }
 
     private var title: String {
-        if isLive { return "Thinking…" }
-        if let duration { return TranscriptItem.thoughtLabel(duration: duration) }
-        return "Thinking"
+        TranscriptItem.thoughtTitle(isLive: isLive, isSummary: isSummary, duration: duration)
     }
 
     var body: some View {
-        // A thought with no text has nothing to show once it is over.
-        if isLive || !trimmed.isEmpty { card }
+        // A thought with no text has nothing to show, live or over.
+        if !trimmed.isEmpty { card }
     }
 
     private var card: some View {
@@ -283,7 +285,9 @@ private struct ThinkingBlock: View {
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 8)
-            .contextMenu { Button("Copy Thinking", systemImage: "doc.on.doc") { Clipboard.copy(trimmed) } }
+            .contextMenu {
+                Button(isSummary ? "Copy Reasoning Summary" : "Copy Thinking", systemImage: "doc.on.doc") { Clipboard.copy(trimmed) }
+            }
         } label: {
             HStack(spacing: 8) {
                 Label(title, systemImage: "brain")

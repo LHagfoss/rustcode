@@ -6020,6 +6020,7 @@ fn code_blocks_render_as_lightweight_transcript_rows() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: width,
             show_picker: false,
@@ -6062,6 +6063,7 @@ fn streamed_markdown_fences_keep_adversarial_content_in_the_code_cell() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: true,
             viewport_width: 80,
             show_picker: false,
@@ -6093,6 +6095,7 @@ fn streamed_markdown_fences_keep_adversarial_content_in_the_code_cell() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -6126,6 +6129,7 @@ fn diff_code_blocks_preserve_patch_context_like_codex() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -6165,6 +6169,7 @@ fn thinking_with_tool_calls_hides_serialized_tool_blocks() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -6208,15 +6213,70 @@ fn thought_parser_handles_missing_open_tag() {
     assert_eq!(preview.as_deref(), Some("Reasoning about user request."));
 }
 
+// #2299: prose before a `<think>` span is the answer however it begins; only
+// delimited text is reasoning, so a reply that sounds like a plan is never
+// relabelled as thinking.
 #[test]
-fn thought_parser_captures_preamble_before_think_tag() {
-    let raw = "Okay, the user is asking hello how are you, which I should respond to politely.\n\nFirst, I must check skills.\n\n<think>\nI will provide a standard friendly response.\n</think>\n\nHello! I am doing well, thank you for asking.";
+fn thought_parser_keeps_plan_like_prose_as_the_answer() {
+    let raw = "Okay, the user is asking hello how are you.\n\nFirst, I must check skills.\n\n<think>\nI will provide a standard friendly response.\n</think>\n\nHello! I am doing well.";
     let (answer, preview) = split_thought_blocks(raw);
-    assert_eq!(answer, "Hello! I am doing well, thank you for asking.");
+    assert!(answer.starts_with("Okay, the user is asking"), "{answer}");
+    assert!(answer.contains("First, I must check skills."), "{answer}");
+    assert!(answer.ends_with("Hello! I am doing well."), "{answer}");
     assert_eq!(
         preview.as_deref(),
-        Some("Okay, the user is asking hello how are you, which I should respond to politely.")
+        Some("I will provide a standard friendly response.")
     );
+
+    // Without any span there is no thought at all.
+    let (answer, preview) = split_thought_blocks("Let's look at the parser first.");
+    assert_eq!(answer, "Let's look at the parser first.");
+    assert_eq!(preview, None);
+}
+
+// #2299: a provider's reasoning summary is labelled as one, raw reasoning keeps
+// "Thought for", and an empty span shows no header at all.
+#[test]
+fn reasoning_summary_header_is_labelled_as_a_summary() {
+    use super::{AssistantRenderOptions, render_assistant_message};
+    let render = |content: &str, reasoning_summary: bool| {
+        let mut lines = Vec::new();
+        let mut copies = Vec::new();
+        render_assistant_message(
+            content,
+            &mut lines,
+            &mut copies,
+            AssistantRenderOptions {
+                token_usage: None,
+                response_time_ms: None,
+                thought_time_ms: Some(4000),
+                thought_tokens: None,
+                reasoning_summary,
+                is_generating: false,
+                viewport_width: 80,
+                show_picker: false,
+                last_copy_text: None,
+            },
+        );
+        lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let content = "<think>\n**Inspecting site and GitHub**\n</think>\n\nDone.";
+
+    let summary = render(content, true);
+    assert!(summary.contains("Reasoning summary · 4s"), "{summary}");
+    assert!(!summary.contains("Thought"), "{summary}");
+    assert!(summary.contains("Inspecting site and GitHub"), "{summary}");
+
+    let raw = render(content, false);
+    assert!(raw.contains("Thought for 4s"), "{raw}");
+
+    let empty = render("<think>\n\n</think>\n\nDone.", true);
+    assert!(!empty.contains("Reasoning summary"), "{empty}");
+    assert!(!empty.contains("Thought"), "{empty}");
 }
 
 fn thought_preview_text(text: &str, max_width: usize) -> String {
@@ -6304,6 +6364,7 @@ fn test_thinking_renders_metadata_and_summary() {
             response_time_ms: Some(3000),
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -6351,6 +6412,7 @@ fn thinking_metadata_uses_thought_stats_not_full_response_stats() {
             response_time_ms: Some(9000),
             thought_time_ms: Some(1250),
             thought_tokens: Some(42),
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -8410,6 +8472,7 @@ fn assistant_messages_use_a_gutter_after_soft_reflow() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 20,
             show_picker: false,
@@ -8453,6 +8516,7 @@ fn assistant_message_uses_one_gutter_across_paragraphs() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -8765,6 +8829,7 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
         response_time_ms: None,
         thought_time_ms: Some(1500),
         thought_tokens: Some(100),
+        reasoning_summary: false,
         is_generating: false,
         viewport_width: 80,
         show_picker: false,
@@ -8783,6 +8848,7 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
         response_time_ms: None,
         thought_time_ms: Some(2000),
         thought_tokens: Some(150),
+        reasoning_summary: false,
         is_generating: false,
         viewport_width: 80,
         show_picker: false,

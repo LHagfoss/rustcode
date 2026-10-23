@@ -307,7 +307,19 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         native_tool_calls,
         stream_termination,
     } = round;
-    ctx.response.final_content = content;
+    // Reasoning a Gemini-family model wrote behind bare `thought` markers
+    // becomes a `<think>` span here, once, so everything after (recovery,
+    // classification, history, clients) sees it as reasoning. No other
+    // model's prose is rewritten.
+    ctx.response.final_content = if state
+        .lock()
+        .await
+        .active_model_writes_bare_thought_markers()
+    {
+        rustcode_tool_protocol::text::promote_bare_thought_markers(&content)
+    } else {
+        content
+    };
     ctx.response.last_stream_termination = stream_termination;
     ctx.response.final_content_persisted = false;
     dbg_log!(

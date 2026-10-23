@@ -848,18 +848,25 @@ fn normalize_responses_event(
         "response.output_text.delta" => {
             delta.map(|delta| serde_json::json!({"choices": [{"delta": {"content": delta}}]}))
         }
-        "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
+        // The model's own reasoning text (open-weight models served over
+        // Responses).
+        "response.reasoning_text.delta" => {
             delta.map(|delta| serde_json::json!({"choices": [{"delta": {"reasoning": delta}}]}))
         }
-        // Summary parts arrive back to back; keep them as separate paragraphs.
-        "response.reasoning_summary_part.added"
-            if value
-                .get("summary_index")
-                .and_then(|v| v.as_u64())
-                .is_some_and(|index| index > 0) =>
-        {
-            Some(serde_json::json!({"choices": [{"delta": {"reasoning": "\n\n"}}]}))
-        }
+        // What OpenAI shows of hidden reasoning: a summary, often only a
+        // bold heading. It is marked so clients label it as a summary.
+        "response.reasoning_summary_text.delta" => delta.map(|delta| {
+            serde_json::json!({"choices": [{"delta": {"reasoning": delta, "reasoning_summary": true}}]})
+        }),
+        // Summary parts arrive back to back, within one reasoning item and
+        // across items (whose `summary_index` starts at 0 again); keep each
+        // its own paragraph. The stream drops the separator when no reasoning
+        // came before it, so it never opens an empty thought.
+        "response.reasoning_summary_part.added" => Some(serde_json::json!({"choices": [{"delta": {
+            "reasoning": "\n\n",
+            "reasoning_summary": true,
+            "reasoning_separator": true,
+        }}]})),
         "response.output_item.added" => {
             let item = value.get("item")?;
             if item.get("type").and_then(|v| v.as_str()) != Some("function_call") {
@@ -2036,6 +2043,69 @@ mod tests {
         server.await.unwrap();
     }
 
+    // #2299: OpenAI reasoning summaries stream as one thought with a
+    // paragraph per part, also across reasoning items whose part index starts
+    // at 0 again; a part with no reasoning before it opens no thought, and
+    // the summary is marked so the message is labelled as one.
+    #[tokio::test]
+    async fn responses_reasoning_summaries_keep_paragraphs_and_are_marked() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+        let body = concat!(
+            "data: {\"type\":\"response.reasoning_summary_part.added\",\"summary_index\":0}\n\n",
+            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"**Searching online**\"}\n\n",
+            "data: {\"type\":\"response.reasoning_summary_part.added\",\"summary_index\":0}\n\n",
+            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"**Inspecting site**\"}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Done.\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+        )
+        .as_bytes()
+        .to_vec();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            write_sse_response(&mut socket, "200 OK", &body).await;
+            socket.shutdown().await.unwrap();
+        });
+
+        let (state, session_id) = stream_test_state(&endpoint).await;
+        state.lock().await.config.models[0].api_protocol =
+            Some(crate::config::ApiProtocol::Responses);
+        let buffer = Arc::new(Mutex::new(StreamBuffer::new()));
+        stream_request(
+            &reqwest::Client::new(),
+            state.clone(),
+            tokio_util::sync::CancellationToken::new(),
+            &endpoint,
+            "stream-test",
+            vec![serde_json::json!({"role": "user", "content": "hello"})],
+            buffer.clone(),
+            false,
+            false,
+            ThinkingMode::Normal,
+            crate::tools::ToolSchemaPolicy::read_only_inspection(),
+            Some(&session_id),
+            None,
+        )
+        .await
+        .expect("summary stream completes");
+
+        assert_eq!(
+            buffer.lock().await.content,
+            "<think>\n**Searching online**\n\n**Inspecting site**\n</think>\n\nDone."
+        );
+        let mut state = state.lock().await;
+        assert!(state.history.reasoning_summary());
+        let message =
+            crate::app::ChatMessage::new("assistant", buffer.lock().await.content.clone());
+        state.history.push(message);
+        assert!(state.history.last().unwrap().reasoning_summary);
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn chatgpt_credentials_never_reach_a_handcrafted_endpoint() {
         use tokio::net::TcpListener;
@@ -2897,20 +2967,50 @@ mod tests {
         .unwrap();
         assert_eq!(text["choices"][0]["delta"]["content"], "hello");
 
-        let first_part = serde_json::json!({
-            "type": "response.reasoning_summary_part.added",
-            "summary_index": 0
-        });
-        assert!(
-            normalize_responses_event(&first_part, &mut call_ids, &mut argument_deltas).is_none()
+        // #2299: every summary part, including the first of a later
+        // reasoning item (whose index starts at 0 again), is its own
+        // paragraph; the stream drops the break before any reasoning text.
+        for index in [0, 1] {
+            let part = serde_json::json!({
+                "type": "response.reasoning_summary_part.added",
+                "summary_index": index
+            });
+            let separator =
+                normalize_responses_event(&part, &mut call_ids, &mut argument_deltas).unwrap();
+            let delta = &separator["choices"][0]["delta"];
+            assert_eq!(delta["reasoning"], "\n\n");
+            assert_eq!(delta["reasoning_separator"], true);
+            assert_eq!(delta["reasoning_summary"], true);
+        }
+        let summary = normalize_responses_event(
+            &serde_json::json!({
+                "type": "response.reasoning_summary_text.delta",
+                "delta": "**Inspecting site**"
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(
+            summary["choices"][0]["delta"]["reasoning"],
+            "**Inspecting site**"
         );
-        let next_part = serde_json::json!({
-            "type": "response.reasoning_summary_part.added",
-            "summary_index": 1
-        });
-        let separator =
-            normalize_responses_event(&next_part, &mut call_ids, &mut argument_deltas).unwrap();
-        assert_eq!(separator["choices"][0]["delta"]["reasoning"], "\n\n");
+        assert_eq!(summary["choices"][0]["delta"]["reasoning_summary"], true);
+        let raw = normalize_responses_event(
+            &serde_json::json!({
+                "type": "response.reasoning_text.delta",
+                "delta": "Let me check"
+            }),
+            &mut call_ids,
+            &mut argument_deltas,
+        )
+        .unwrap();
+        assert_eq!(raw["choices"][0]["delta"]["reasoning"], "Let me check");
+        assert!(
+            raw["choices"][0]["delta"]
+                .get("reasoning_summary")
+                .is_none()
+        );
 
         let added = normalize_responses_event(
             &serde_json::json!({
@@ -5670,6 +5770,13 @@ async fn stream_request_with_timeouts(
     let mut reader = BufReader::with_capacity(4096, wrapped);
     let mut line_buf = String::with_capacity(4096);
     let mut in_reasoning = false;
+    if !quiet {
+        // Until this response reasons, nothing it says is a summary.
+        let mut s = state.lock().await;
+        if expected_session_id.is_none_or(|expected| s.active_session_id == expected) {
+            s.history.set_reasoning_summary(false);
+        }
+    }
     let mut finish_reason: Option<String> = None;
     let mut responses_completed = false;
     let mut stream_bytes_received = 0usize;
@@ -5920,6 +6027,18 @@ async fn stream_request_with_timeouts(
                                                      .or_else(|| d.get("thinking"))
                                              })
                                              .and_then(|r| r.as_str());
+                                         let reasoning_flag = |key: &str| {
+                                             delta
+                                                 .and_then(|d| d.get(key))
+                                                 .and_then(serde_json::Value::as_bool)
+                                                 .unwrap_or(false)
+                                         };
+                                         let reasoning_is_summary = reasoning_flag("reasoning_summary");
+                                         // A paragraph break between summary parts means
+                                         // nothing before any reasoning text.
+                                         let reasoning = reasoning.filter(|_| {
+                                             in_reasoning || !reasoning_flag("reasoning_separator")
+                                         });
                                          let content = delta
                                              .and_then(|d| d.get("content").or_else(|| d.get("text")))
                                              .and_then(|c| c.as_str());
@@ -5970,6 +6089,7 @@ async fn stream_request_with_timeouts(
                                                         return Ok(None);
                                                     }
                                                     s.current_thought_started_at = Some(started);
+                                                    s.history.set_reasoning_summary(reasoning_is_summary);
                                                 }
                                                 chunk.push_str("<think>\n");
                                             }

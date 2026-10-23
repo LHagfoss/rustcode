@@ -107,10 +107,8 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
         .clone()
         .expect("turn finalization always assigns a stop reason");
     if matches!(stop_reason, lifecycle::StopReason::LoopEscalation) {
-        let promoted =
-            rustcode_tool_protocol::text::promote_bare_thought_markers(&ctx.response.final_content);
         let clean = rustcode_tool_protocol::text::strip_tool_call_syntax(
-            &rustcode_tool_protocol::text::strip_think_blocks(&promoted),
+            &rustcode_tool_protocol::text::strip_think_blocks(&ctx.response.final_content),
         );
         ctx.response.final_content = if clean.trim().is_empty() {
             super::recovery::reasoning_loop_final_response().to_string()
@@ -394,9 +392,8 @@ fn answered_without_recovery(ctx: &TurnContext) -> bool {
 }
 
 fn has_substantive_final_prose(content: &str) -> bool {
-    let promoted = rustcode_tool_protocol::text::promote_bare_thought_markers(content);
     let prose = rustcode_tool_protocol::text::strip_tool_call_syntax(
-        &rustcode_tool_protocol::text::strip_think_blocks(&promoted),
+        &rustcode_tool_protocol::text::strip_think_blocks(content),
     );
     !prose.trim().is_empty()
 }
