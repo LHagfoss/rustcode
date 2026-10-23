@@ -30,6 +30,13 @@
           "description": "A label chosen by the device. Never an identity.",
           "type": "string"
         },
+        "install_id": {
+          "description": "A random identifier the app generates once per install and keeps.\nPairing again with the same one replaces that install's earlier\ndevice record and revokes its token, instead of adding a record.\nNot tied to the user; ignored unless it is 16 to 128 printable\nASCII characters. Older apps leave it out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "method": {
           "$ref": "#/$defs/PairingMethod"
         },

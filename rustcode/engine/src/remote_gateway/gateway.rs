@@ -265,8 +265,9 @@ impl Shared {
                 method,
                 secret,
                 device_name,
+                install_id,
                 ..
-            } => self.pair(method, secret.expose(), &device_name),
+            } => self.pair(method, secret.expose(), &device_name, install_id.as_deref()),
             HandshakeRequest::Authenticate {
                 device_id, token, ..
             } => self.authenticate(&device_id, token.expose()),
@@ -278,6 +279,7 @@ impl Shared {
         method: PairingMethod,
         secret: &str,
         device_name: &str,
+        install_id: Option<&str>,
     ) -> Result<Admitted, HandshakeResponse> {
         let mut state = self.state();
         state
@@ -299,8 +301,8 @@ impl Shared {
             return Err(busy("the gateway is at its connection limit"));
         }
         let mut devices = state.devices.clone();
-        let (record, token) = devices
-            .enroll(device_name)
+        let enrolled = devices
+            .enroll_install(device_name, install_id)
             .map_err(|error| busy(error.to_string()))?;
         if let Err(error) = self.store.save(&devices) {
             crate::dbg_log!("remote gateway: device store write failed: {error:#}");
@@ -310,6 +312,12 @@ impl Shared {
             ));
         }
         state.devices = devices;
+        let (record, token) = (enrolled.record, enrolled.token);
+        // The same install paired again: its old token is gone, and so is
+        // anything still connected with it.
+        if let Some(replaced) = enrolled.replaced {
+            close_device(&mut state, &replaced);
+        }
         let welcome = HandshakeResponse::Paired {
             protocol_version: HANDSHAKE_PROTOCOL_VERSION,
             gateway_id: self.gateway_id.clone(),
@@ -333,11 +341,8 @@ impl Shared {
         token: &str,
     ) -> Result<Admitted, HandshakeResponse> {
         let mut state = self.state();
-        let Some(record) = state
-            .devices
-            .verify(device_id, token, chrono::Utc::now())
-            .cloned()
-        else {
+        let now = chrono::Utc::now();
+        let Some(record) = state.devices.verify(device_id, token, now).cloned() else {
             return Err(HandshakeResponse::error(
                 ErrorCode::Unauthorized,
                 "unknown device or token; pair this device again",
@@ -345,6 +350,17 @@ impl Shared {
         };
         if state.live.len() >= self.limits.max_authenticated {
             return Err(busy("the gateway is at its connection limit"));
+        }
+        // Last seen is for the owner's device list; failing to store it
+        // never keeps a device out.
+        let mut devices = state.devices.clone();
+        if devices.mark_seen(&record.id, now) {
+            match self.store.save(&devices) {
+                Ok(()) => state.devices = devices,
+                Err(error) => {
+                    crate::dbg_log!("remote gateway: device store write failed: {error:#}");
+                }
+            }
         }
         let welcome = HandshakeResponse::Authenticated {
             protocol_version: HANDSHAKE_PROTOCOL_VERSION,
@@ -421,15 +437,7 @@ impl Shared {
         devices.remove(&record.id);
         self.store.save(&devices)?;
         state.devices = devices;
-        let mut closed = 0;
-        state.live.retain(|_, live| {
-            if live.device_id != record.id {
-                return true;
-            }
-            live.control.close(ErrorCode::Revoked);
-            closed += 1;
-            false
-        });
+        let closed = close_device(&mut state, &record.id);
         Ok((record, closed))
     }
 
@@ -488,6 +496,20 @@ impl Shared {
         self.advertised.send_replace(advertised);
         Ok(moved)
     }
+}
+
+/// Close every live connection of `device_id` as revoked; how many there were.
+fn close_device(state: &mut State, device_id: &str) -> usize {
+    let mut closed = 0;
+    state.live.retain(|_, live| {
+        if live.device_id != device_id {
+            return true;
+        }
+        live.control.close(ErrorCode::Revoked);
+        closed += 1;
+        false
+    });
+    closed
 }
 
 fn busy(message: impl Into<String>) -> HandshakeResponse {
@@ -835,6 +857,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
             .map(|device| DeviceSummary {
                 id: device.id.clone(),
                 name: device.name.clone(),
+                last_seen_at: device.last_seen_at,
             })
             .collect(),
         pairing: Some(PairingStatus {

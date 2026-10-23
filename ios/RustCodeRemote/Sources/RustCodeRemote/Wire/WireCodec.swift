@@ -62,7 +62,7 @@ public struct WireCodec: RemoteCodec {
         let limit = command.isHandshake ? Self.maximumHandshakeFrameBytes : Self.maximumOutgoingFrameBytes
         let frame: String
         switch command {
-        case .pair(let credential, let deviceName):
+        case .pair(let credential, let deviceName, let installID):
             let (method, secret): (WirePairingMethod, String) = switch credential {
             case .oneTime(let secret): (.credential, secret)
             case .shortCode(let secret): (.code, secret)
@@ -71,7 +71,8 @@ public struct WireCodec: RemoteCodec {
                 protocolVersion: remoteProtocolVersion,
                 method: WireOpen(method),
                 secret: secret,
-                deviceName: deviceName
+                deviceName: deviceName,
+                installID: installID
             )))
         case .authenticate(let device, let deviceToken):
             frame = try Self.text(WireHandshakeRequest.authenticate(.init(

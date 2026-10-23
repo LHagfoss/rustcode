@@ -106,6 +106,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 method: PairingMethod::Credential,
                 secret: Secret::new("q0lYc1o3bXJ3T2d5d0l2Rk5kU2tqeTZqZ0Z2ZUo0V2s"),
                 device_name: "Lars's iPhone".to_owned(),
+                install_id: Some("6F9619FF-8B86-D011-B42D-00C04FC964FF".to_owned()),
             },
         ),
         (
@@ -115,6 +116,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 method: PairingMethod::Code,
                 secret: Secret::new("4821-9034"),
                 device_name: "Lars's iPhone".to_owned(),
+                install_id: None,
             },
         ),
         (

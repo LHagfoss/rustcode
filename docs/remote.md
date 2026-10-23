@@ -181,7 +181,7 @@ remote access on is the short moment before it has registered.
 | `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
 | `rustcode remote off` | Stop the running gateway (alias of `stop`). |
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address, code and expiry time. In a terminal it then counts the challenge down until a device pairs or it ends (Ctrl-C leaves earlier); otherwise it prints and exits. |
-| `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time and expiry. Never a token. |
+| `rustcode remote devices [--json]` | List paired devices: identifier, name, pairing time, when each was last seen and expiry. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
 | `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
@@ -266,6 +266,17 @@ drops. `rustcode remote devices` shows when each pairing expires. An expired
 device is forgotten when the next one pairs and does not count against the
 device limit. Pairings made before this limit existed are counted from the
 day they were made.
+
+Pairing the same app install again replaces its device record instead of
+adding one: the app sends a random install identifier that it keeps, and the
+host drops the earlier record and its token. A connection still open with the
+old token is closed as revoked. Apps that do not send an identifier, and
+records paired before the host kept one, add a record each time; those
+duplicates are not merged. They expire 30 days after they were paired, or can
+be revoked earlier by identifier. `rustcode remote devices` and
+`rustcode remote status` show when each device last paired or connected
+(`unknown` for records stored before this was kept), which tells the stale
+ones from the one in use.
 
 ## Revoking and stopping
 

@@ -113,6 +113,9 @@ pub struct GatewayStatus {
 pub struct DeviceSummary {
     pub id: String,
     pub name: String,
+    /// When the device last paired or connected; `None` when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Where pairing stands, without any secret.

@@ -200,6 +200,7 @@ mod tests {
             .map(|(id, name)| DeviceSummary {
                 id: (*id).into(),
                 name: (*name).into(),
+                last_seen_at: None,
             })
             .collect();
         status

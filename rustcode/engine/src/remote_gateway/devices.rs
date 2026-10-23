@@ -23,6 +23,15 @@ pub const MAX_DEVICES: usize = 32;
 /// Device names are labels typed on a phone; keep them short and printable.
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
 
+/// Install identifiers are opaque strings chosen by the app; anything outside
+/// these bounds is ignored as if the device sent none.
+pub const MAX_INSTALL_ID_CHARS: usize = 128;
+const MIN_INSTALL_ID_CHARS: usize = 16;
+
+/// A connection refreshes the recorded last-seen time at most this often, so
+/// a device that reconnects in a loop does not rewrite the store each time.
+pub const LAST_SEEN_RESOLUTION: chrono::Duration = chrono::Duration::minutes(5);
+
 /// How long a pairing lasts. After it the token is refused like an unknown
 /// one and the device pairs again, which bounds what a copied token is worth.
 pub const DEVICE_LIFETIME: chrono::Duration = chrono::Duration::days(30);
@@ -39,6 +48,14 @@ pub struct DeviceRecord {
     /// Hex SHA-256 of the device token. The token itself is never stored.
     token_sha256: String,
     pub paired_at: DateTime<Utc>,
+    /// Hex SHA-256 of the app install's identifier, when the device sent one.
+    /// Pairing again from the same install replaces this record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    install_sha256: Option<String>,
+    /// When the device last paired or authenticated, to within
+    /// [`LAST_SEEN_RESOLUTION`]. `None` for records stored before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<DateTime<Utc>>,
 }
 
 impl DeviceRecord {
@@ -60,6 +77,7 @@ impl fmt::Debug for DeviceRecord {
             .field("id", &self.id)
             .field("name", &self.name)
             .field("paired_at", &self.paired_at)
+            .field("last_seen_at", &self.last_seen_at)
             .finish_non_exhaustive()
     }
 }
@@ -95,6 +113,16 @@ impl fmt::Display for DeviceError {
 
 impl std::error::Error for DeviceError {}
 
+/// A device just paired, and the record it replaced.
+#[derive(Debug)]
+pub struct Enrollment {
+    pub record: DeviceRecord,
+    /// The only copy of the new token.
+    pub token: Secret,
+    /// Identifier of the earlier record from the same install, now gone.
+    pub replaced: Option<String>,
+}
+
 /// The set of paired devices, as held in memory and written to disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Devices {
@@ -119,9 +147,28 @@ impl Devices {
     /// Add a device and mint its token. The returned token is the only copy.
     /// Expired devices are forgotten first, so they never hold a place.
     pub fn enroll(&mut self, name: &str) -> Result<(DeviceRecord, Secret), DeviceError> {
+        self.enroll_install(name, None)
+            .map(|enrolled| (enrolled.record, enrolled.token))
+    }
+
+    /// [`Self::enroll`] for a device that names its app install. A record
+    /// already paired from that install is replaced: it is dropped with its
+    /// token, and the new record takes its place under a fresh identifier,
+    /// so one install never holds more than one record.
+    pub fn enroll_install(
+        &mut self,
+        name: &str,
+        install_id: Option<&str>,
+    ) -> Result<Enrollment, DeviceError> {
         let now = Utc::now();
         self.devices.retain(|record| !record.is_expired(now));
-        if self.devices.len() >= MAX_DEVICES {
+        let install_sha256 = install_id.and_then(install_digest);
+        let replaced = install_sha256.as_ref().and_then(|install| {
+            self.devices
+                .iter()
+                .position(|record| record.install_sha256.as_ref() == Some(install))
+        });
+        if replaced.is_none() && self.devices.len() >= MAX_DEVICES {
             return Err(DeviceError::Full);
         }
         let mut id_bytes = [0u8; 8];
@@ -134,9 +181,33 @@ impl Devices {
             name: sanitize_name(name),
             token_sha256: hex::encode(digest(token.as_bytes())),
             paired_at: now,
+            install_sha256,
+            last_seen_at: Some(now),
         };
+        let replaced = replaced.map(|index| self.devices.remove(index).id);
         self.devices.push(record.clone());
-        Ok((record, Secret::new(token)))
+        Ok(Enrollment {
+            record,
+            token: Secret::new(token),
+            replaced,
+        })
+    }
+
+    /// Record that `device_id` connected at `now`. True when the record
+    /// changed and is worth writing back; within [`LAST_SEEN_RESOLUTION`] of
+    /// the last record nothing changes.
+    pub fn mark_seen(&mut self, device_id: &str, now: DateTime<Utc>) -> bool {
+        let Some(record) = self.devices.iter_mut().find(|r| r.id == device_id) else {
+            return false;
+        };
+        if record
+            .last_seen_at
+            .is_some_and(|seen| now - seen < LAST_SEEN_RESOLUTION)
+        {
+            return false;
+        }
+        record.last_seen_at = Some(now);
+        true
     }
 
     /// The device `token` belongs to, if `device_id` is paired, the token is
@@ -205,6 +276,16 @@ fn sanitize_name(name: &str) -> String {
     } else {
         cleaned
     }
+}
+
+/// Digest of an install identifier the device sent, or `None` when it is out
+/// of bounds. Only the digest is stored: the identifier says nothing about
+/// the user, but the host has no reason to keep it.
+fn install_digest(install_id: &str) -> Option<String> {
+    let length = install_id.chars().count();
+    let valid = (MIN_INSTALL_ID_CHARS..=MAX_INSTALL_ID_CHARS).contains(&length)
+        && install_id.chars().all(|c| c.is_ascii_graphic());
+    valid.then(|| hex::encode(digest(install_id.as_bytes())))
 }
 
 /// The owner-only file behind [`Devices`].
@@ -478,6 +559,91 @@ mod tests {
         }
         assert_eq!(devices.enroll("one more"), Err(DeviceError::Full));
         assert_eq!(devices.list().len(), MAX_DEVICES);
+    }
+
+    #[test]
+    fn the_same_install_pairs_into_one_record_and_revokes_its_old_token() {
+        let (_dir, store) = store();
+        let mut devices = store.load().unwrap();
+        let install = "A1B2C3D4-0000-4000-8000-1234567890AB";
+        let first = devices.enroll_install("iPhone", Some(install)).unwrap();
+        let other = devices
+            .enroll_install("iPad", Some(&install.replace('A', "B")))
+            .unwrap();
+        let again = devices
+            .enroll_install("Lars's iPhone", Some(install))
+            .unwrap();
+        store.save(&devices).unwrap();
+
+        assert_eq!(again.replaced.as_deref(), Some(first.record.id.as_str()));
+        assert_eq!(other.replaced, None);
+        let loaded = store.load().unwrap();
+        let ids: Vec<&str> = loaded.list().iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, [other.record.id.as_str(), again.record.id.as_str()]);
+        assert_eq!(loaded.list()[1].name, "Lars's iPhone");
+        let now = Utc::now();
+        assert!(
+            loaded
+                .verify(&first.record.id, first.token.expose(), now)
+                .is_none()
+        );
+        assert!(
+            loaded
+                .verify(&again.record.id, again.token.expose(), now)
+                .is_some()
+        );
+        // Only a digest of the install identifier is stored.
+        assert!(
+            !std::fs::read_to_string(store.path())
+                .unwrap()
+                .contains(install)
+        );
+    }
+
+    #[test]
+    fn a_full_store_still_takes_an_install_that_pairs_again() {
+        let mut devices = Devices::default();
+        let install = "install-identifier-0001";
+        devices.enroll_install("phone", Some(install)).unwrap();
+        for index in 1..MAX_DEVICES {
+            devices.enroll(&format!("device {index}")).unwrap();
+        }
+        assert_eq!(devices.enroll("one more").unwrap_err(), DeviceError::Full);
+        let again = devices.enroll_install("phone", Some(install)).unwrap();
+        assert!(again.replaced.is_some());
+        assert_eq!(devices.list().len(), MAX_DEVICES);
+    }
+
+    #[test]
+    fn install_ids_out_of_bounds_are_ignored_and_never_match_each_other() {
+        let mut devices = Devices::default();
+        for unusable in ["", "short", "has spaces in it, too", &"x".repeat(200)] {
+            let first = devices.enroll_install("phone", Some(unusable)).unwrap();
+            let second = devices.enroll_install("phone", Some(unusable)).unwrap();
+            assert_eq!(
+                (first.replaced, second.replaced),
+                (None, None),
+                "{unusable}"
+            );
+        }
+        assert_eq!(devices.list().len(), 8);
+    }
+
+    #[test]
+    fn last_seen_is_kept_coarsely_and_older_records_load_without_it() {
+        let mut devices = Devices::default();
+        let (record, _) = devices.enroll("phone").unwrap();
+        let paired = record.last_seen_at.unwrap();
+        assert!(!devices.mark_seen(&record.id, paired + chrono::Duration::minutes(1)));
+        let later = paired + LAST_SEEN_RESOLUTION;
+        assert!(devices.mark_seen(&record.id, later));
+        assert_eq!(devices.list()[0].last_seen_at, Some(later));
+        assert!(!devices.mark_seen("ffffffffffffffff", later));
+
+        let stored = r#"{"version":1,"devices":[{"id":"0011223344556677","name":"iPhone","token_sha256":"00","paired_at":"2026-10-01T10:00:00Z"}]}"#;
+        let old: Devices = serde_json::from_str(stored).unwrap();
+        assert_eq!(old.list()[0].last_seen_at, None);
+        assert_eq!(serde_json::to_string(&old).unwrap(), stored);
     }
 
     #[test]

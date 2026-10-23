@@ -368,8 +368,8 @@ pub fn format_devices(devices: &[DeviceRecord]) -> String {
     }
     let now = chrono::Utc::now();
     let mut lines = vec![format!(
-        "{:<16}  {:<20}  {:<20}  NAME",
-        "DEVICE", "PAIRED (UTC)", "EXPIRES (UTC)"
+        "{:<16}  {:<20}  {:<20}  {:<20}  NAME",
+        "DEVICE", "PAIRED (UTC)", "LAST SEEN (UTC)", "EXPIRES (UTC)"
     )];
     for device in devices {
         let expires = if device.is_expired(now) {
@@ -378,14 +378,23 @@ pub fn format_devices(devices: &[DeviceRecord]) -> String {
             device.expires_at().format("%Y-%m-%d %H:%M:%S").to_string()
         };
         lines.push(format!(
-            "{:<16}  {:<20}  {:<20}  {}",
+            "{:<16}  {:<20}  {:<20}  {:<20}  {}",
             device.id,
             device.paired_at.format("%Y-%m-%d %H:%M:%S"),
+            last_seen(device.last_seen_at),
             expires,
             device.name
         ));
     }
     lines.join("\n")
+}
+
+/// A last-seen time for a listing; records stored before it was kept have none.
+fn last_seen(at: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    at.map_or_else(
+        || "unknown".to_owned(),
+        |at| at.format("%Y-%m-%d %H:%M:%S").to_string(),
+    )
 }
 
 /// JSON view of the paired devices, without the stored token digests.
@@ -397,6 +406,7 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
                 "id": device.id,
                 "name": device.name,
                 "paired_at": device.paired_at,
+                "last_seen_at": device.last_seen_at,
                 "expires_at": device.expires_at(),
             })
         })
@@ -483,12 +493,15 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
             .connections
             .iter()
             .any(|connection| connection.device_id == device.id);
-        lines.push(format!(
-            "    {}  {}{}",
-            device.id,
-            device.name,
-            if connected { "  (connected)" } else { "" }
-        ));
+        let seen = if connected {
+            "  (connected)".to_owned()
+        } else {
+            device
+                .last_seen_at
+                .map(|at| format!("  (last seen {} UTC)", at.format("%Y-%m-%d %H:%M")))
+                .unwrap_or_default()
+        };
+        lines.push(format!("    {}  {}{seen}", device.id, device.name));
     }
     lines.push(format!("  pairing        {pairing}"));
     lines.push(format!("  connections    {}", status.connections.len()));
@@ -741,10 +754,12 @@ mod tests {
                 DeviceSummary {
                     id: "aa".into(),
                     name: "phone".into(),
+                    last_seen_at: None,
                 },
                 DeviceSummary {
                     id: "bb".into(),
                     name: "tablet".into(),
+                    last_seen_at: Some("2026-10-20T08:15:00Z".parse().unwrap()),
                 },
             ],
             pairing: Some(PairingStatus {
@@ -767,7 +782,7 @@ mod tests {
             "or `--bind 192.168.31.185` for the address it has now",
             "listening on   192.168.31.237:17879  (fixed bind)",
             "aa  phone  (connected)",
-            "bb  tablet",
+            "bb  tablet  (last seen 2026-10-20 08:15 UTC)",
             "challenge open (87 s left, 4 wrong codes allowed)",
             "idle owners    1",
             "gateway log    /config/remote/gateway.log",

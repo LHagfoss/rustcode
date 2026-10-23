@@ -8,8 +8,9 @@ import Foundation
 
 /// The operations of remote protocol v1 and the two handshake requests, in domain terms.
 public enum RemoteCommand: Sendable, Equatable {
-    /// First frame of a pairing connection. Answered by `.handshake(.paired)`.
-    case pair(credential: PairingCredential, deviceName: String)
+    /// First frame of a pairing connection. Answered by `.handshake(.paired)`. `installID`
+    /// lets the host replace the record this install paired before.
+    case pair(credential: PairingCredential, deviceName: String, installID: String? = nil)
     /// First frame of every other connection. Answered by `.handshake(.authenticated)`.
     case authenticate(device: DeviceIdentity, deviceToken: String)
     case subscribeSessions

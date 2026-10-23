@@ -28,6 +28,30 @@ import Testing
         try store.delete()
     }
 
+    @Test func theInstallIdentityIsMadeOnceAndOutlivesThePairing() throws {
+        let service = "com.lhagfoss.rustcode.tests.\(UUID().uuidString)"
+        let identity = KeychainInstallIdentity(service: service)
+        let credentials = KeychainCredentialStore(service: service)
+        defer {
+            identity.reset()
+            try? credentials.delete()
+        }
+
+        let first = try #require(identity.value())
+        #expect(UUID(uuidString: first) != nil)
+        // A fresh instance reads the same item: what a relaunch of the app sees.
+        #expect(KeychainInstallIdentity(service: service).value() == first)
+
+        // Pairing and unpairing replace and delete the credential, never the identity.
+        try credentials.save(makeCredential(token: "token"))
+        try credentials.delete()
+        #expect(identity.value() == first)
+
+        identity.reset()
+        let second = try #require(identity.value())
+        #expect(second != first)
+    }
+
     @Test func storesAreSeparatedByService() throws {
         let a = KeychainCredentialStore(service: "com.lhagfoss.rustcode.tests.\(UUID().uuidString)")
         let b = KeychainCredentialStore(service: "com.lhagfoss.rustcode.tests.\(UUID().uuidString)")
