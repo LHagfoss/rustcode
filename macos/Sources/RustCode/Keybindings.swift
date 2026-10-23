@@ -226,6 +226,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
     case toggleTerminal
     case newTerminalTab
     case closeTerminal
+    case chooseChatProject
     case chooseProject
     case settings
 
@@ -246,7 +247,8 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .toggleTerminal: return "Show or Hide Terminal"
         case .newTerminalTab: return "New Terminal Tab"
         case .closeTerminal: return "Close Terminal Tab"
-        case .chooseProject: return "Choose Project"
+        case .chooseChatProject: return "Choose Folder for This Chat"
+        case .chooseProject: return "Choose Default Project"
         case .settings: return "Open Settings"
         }
     }
@@ -266,14 +268,15 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .toggleTerminal: return "Your own shell, below the chat"
         case .newTerminalTab: return "Open another shell in this project"
         case .closeTerminal: return "Close the selected terminal tab, and the panel with the last. The window stays"
-        case .chooseProject: return "Choose the default project folder for new chats"
+        case .chooseChatProject: return "A new chat's own folder. From an open chat, starts a new chat in it"
+        case .chooseProject: return "Where new chats start. Open chats keep their own folder"
         case .settings: return "General, keybinds, skills and MCP"
         }
     }
 
     var category: KeybindingCategory {
         switch self {
-        case .newChat, .switchChat, .stopTurn, .pinChat: return .chat
+        case .newChat, .switchChat, .stopTurn, .pinChat, .chooseChatProject: return .chat
         case .findInChat, .findNext, .findPrevious: return .find
         case .toggleSidebar, .togglePreview, .reloadPreview, .toggleTerminal, .newTerminalTab, .closeTerminal:
             return .view
@@ -300,7 +303,8 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         // ⌘W never closes the window: there is one, and losing it by
         // habit from a browser or editor is worse than a key doing nothing.
         case .closeTerminal: return KeyCombo(key: "w", modifiers: .command)
-        case .chooseProject: return KeyCombo(key: "o", modifiers: .command)
+        case .chooseChatProject: return KeyCombo(key: "o", modifiers: .command)
+        case .chooseProject: return KeyCombo(key: "o", modifiers: [.command, .shift])
         case .settings: return KeyCombo(key: ",", modifiers: .command)
         }
     }
@@ -478,6 +482,12 @@ final class KeybindingStore: ObservableObject {
             if let action = KeybindingAction(rawValue: id) { overrides[action] = combo }
         }
         disabled = Set(stored.disabled.compactMap(KeybindingAction.init(rawValue:)))
+        // A default added or moved since these were saved can land on a key
+        // the user gave another command; their choice keeps it.
+        for action in KeybindingAction.allCases where overrides[action] == nil && !disabled.contains(action) {
+            guard let combo = action.defaultCombo else { continue }
+            if overrides.contains(where: { $0.key != action && $0.value == combo }) { disabled.insert(action) }
+        }
     }
 
     private func save() {
@@ -557,7 +567,9 @@ final class KeybindingMenuSync {
         "Hide Terminal": .toggleTerminal,
         "New Terminal Tab": .newTerminalTab,
         "Close Terminal Tab": .closeTerminal,
-        "Choose Project…": .chooseProject,
+        "Choose Folder for This Chat…": .chooseChatProject,
+        "New Chat in Folder…": .chooseChatProject,
+        "Choose Default Project…": .chooseProject,
         "Settings…": .settings,
     ]
 }
