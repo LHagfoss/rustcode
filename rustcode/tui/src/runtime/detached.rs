@@ -59,6 +59,9 @@ impl AppRuntime {
         let mut registered = false;
         let mut refusals = 0;
         let mut retry_at: Option<tokio::time::Instant> = None;
+        // Nobody can answer an approval or a question once every device has
+        // left: past the grace, stop the turn and end (see `orphan`).
+        let mut orphan = rustcode::remote_gateway::orphan::OrphanWatch::default();
         let failure = loop {
             tokio::select! { _=interval.tick()=>{}, _=tokio::signal::ctrl_c()=>break None, _=terminate.recv()=>break None }
             // Removing a test/config owner directory is an explicit lease withdrawal.
@@ -75,6 +78,25 @@ impl AppRuntime {
                     Some(rustcode::remote::owner::SharingCommand::Enable);
             }
             runtime.run_remote_iteration().await;
+            let awaiting =
+                rustcode::remote_gateway::orphan::awaiting_user(&*runtime.app_state.lock().await);
+            if orphan.expired(
+                awaiting,
+                runtime.remote.has_attached_device(),
+                std::time::Instant::now(),
+            ) {
+                eprintln!(
+                    "session owner {session_id}: no device attached for {} minutes while the \
+                     turn waits on an approval or a question; stopping the turn and exiting",
+                    rustcode::remote_gateway::orphan::ORPHAN_GRACE.as_secs() / 60
+                );
+                rustcode::app::stop_turn_keeping_draft(
+                    &runtime.app_state,
+                    &mut runtime.current_cancel_token,
+                )
+                .await;
+                break None;
+            }
             if let Some(address) = runtime.remote.gateway_address() {
                 if !registered || refusals > 0 {
                     eprintln!(

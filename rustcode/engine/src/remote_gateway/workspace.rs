@@ -2189,6 +2189,10 @@ pub fn owner_state(
         rustcode_session::canonicalize_best_effort(&recorded.cwd)
             == rustcode_session::canonicalize_best_effort(&workspace)
     });
+    // The lock does not stop a process that opens the session after this
+    // one took it (the app shows it anyway): never overwrite what such a
+    // process saves with this owner's older copy.
+    rustcode_session::SessionStore::new(config).guard_session_history(session_id);
     let history = crate::config::load_session_history_direct(session_id);
     let mut state = crate::acp::build_loaded_app_state(session_id, &workspace, history);
     // A detached owner has no `--yolo` flag: start as the session last was,

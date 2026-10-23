@@ -425,7 +425,61 @@ pub fn queue_history_write(path: PathBuf, history: &[ChatMessage], revision: Opt
     true
 }
 
+/// What a history file looked like when this process last loaded or wrote
+/// it: modification time and length, `None` while it does not exist.
+type HistoryStamp = Option<(std::time::SystemTime, u64)>;
+
+fn history_stamp(path: &Path) -> HistoryStamp {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+enum HistoryGuard {
+    /// Writes go ahead while the file still looks like this.
+    Expect(HistoryStamp),
+    /// Another process changed the file: this one never writes it again.
+    Diverged,
+}
+
+fn guarded_histories() -> &'static Mutex<HashMap<PathBuf, HistoryGuard>> {
+    static GUARDED: OnceLock<Mutex<HashMap<PathBuf, HistoryGuard>>> = OnceLock::new();
+    GUARDED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// From now on, write `path` only over the version this process last loaded
+/// or wrote. Call it just before loading the history. A process that may
+/// outlive its claim on a session (a remote session owner left waiting on a
+/// device) keeps its stale copy instead of replacing what another process
+/// saved since; the refusal is reported once on standard error.
+pub fn guard_history_file(path: &Path) {
+    lock(guarded_histories()).insert(
+        path.to_path_buf(),
+        HistoryGuard::Expect(history_stamp(path)),
+    );
+}
+
 pub fn write_history_file(path: &Path, history: &[ChatMessage]) {
+    let mut guarded = lock(guarded_histories());
+    match guarded.get(path) {
+        Some(HistoryGuard::Diverged) => return,
+        Some(HistoryGuard::Expect(expected)) if history_stamp(path) != *expected => {
+            eprintln!(
+                "{}: changed by another process since this one loaded it; \
+                 not overwriting it with this process's copy",
+                path.display()
+            );
+            guarded.insert(path.to_path_buf(), HistoryGuard::Diverged);
+            return;
+        }
+        _ => {}
+    }
+    write_history_file_unguarded(path, history);
+    if let Some(guard) = guarded.get_mut(path) {
+        *guard = HistoryGuard::Expect(history_stamp(path));
+    }
+}
+
+fn write_history_file_unguarded(path: &Path, history: &[ChatMessage]) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -904,6 +958,11 @@ impl SessionStore {
                 );
             }
         }
+    }
+
+    /// Guard the session's history file (see [`guard_history_file`]).
+    pub fn guard_session_history(&self, session_id: &str) {
+        guard_history_file(&self.history_path_for_id(session_id));
     }
 
     pub fn save_session_history<H: HistorySnapshot + ?Sized>(&self, session_id: &str, history: &H) {

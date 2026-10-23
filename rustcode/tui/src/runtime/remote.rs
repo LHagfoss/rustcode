@@ -199,6 +199,15 @@ impl RemoteBridge {
             .then_some(gateway.advertised_address.as_str())
     }
 
+    /// Whether a device is attached to this session, as the gateway last
+    /// said. False while the gateway cannot be reached.
+    pub(super) fn has_attached_device(&self) -> bool {
+        self.share
+            .as_ref()
+            .and_then(|share| share.gateway.as_ref())
+            .is_some_and(|gateway| gateway.connected && !gateway.attached_devices.is_empty())
+    }
+
     /// Why sharing is off, once per time it stopped.
     pub(super) fn take_stopped(&mut self) -> Option<String> {
         self.stopped.take()
