@@ -308,6 +308,20 @@ async fn run_compiler_check_with_command(
     } else {
         return (CompilerCheckOutcome::Passed, "compiler check");
     };
+    // A JavaScript project whose dependencies are not installed yet fails
+    // on missing type packages, not on its source: say so instead of
+    // spending the check on it.
+    if !cargo && cwd.join("package.json").exists() && !has_node_modules(cwd) {
+        return (
+            CompilerCheckOutcome::UnverifiedInfrastructure {
+                reason:
+                    "was skipped: the project's dependencies are not installed (no node_modules). \
+                         Install them, then verify"
+                        .to_string(),
+            },
+            command,
+        );
+    }
     (
         run_compiler_command_outcome(
             cwd,
@@ -320,6 +334,12 @@ async fn run_compiler_check_with_command(
         .await,
         command,
     )
+}
+
+/// Whether `dir` or a folder above it has `node_modules`, as Node resolves
+/// packages.
+fn has_node_modules(dir: &std::path::Path) -> bool {
+    dir.ancestors().any(|dir| dir.join("node_modules").is_dir())
 }
 
 #[cfg(test)]
@@ -981,6 +1001,28 @@ mod compiler_execution_tests {
             missing_executable,
             CompilerCheckOutcome::UnverifiedInfrastructure { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn typescript_check_waits_for_installed_dependencies() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("package.json"), "{}").unwrap();
+        std::fs::write(project.path().join("tsconfig.json"), "{}").unwrap();
+        let (outcome, _) = run_compiler_check_with_command(
+            project.path(),
+            &CancellationToken::new(),
+            crate::config::SandboxMode::default(),
+        )
+        .await;
+        let CompilerCheckOutcome::UnverifiedInfrastructure { reason } = outcome else {
+            panic!("expected a skipped check, got {outcome:?}");
+        };
+        assert!(reason.contains("not installed"));
+        // Installed in a folder above, as in a workspace, counts.
+        let nested = project.path().join("packages/app");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir(project.path().join("node_modules")).unwrap();
+        assert!(has_node_modules(&nested));
     }
 
     #[cfg(unix)]
