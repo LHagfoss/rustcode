@@ -5,7 +5,6 @@ use tokio::sync::Mutex;
 use super::loop_detect;
 use super::messages::{inject_system_reminder, trim_msgs_to_budget};
 use super::runner;
-use super::stream_request::stream_request;
 use super::{
     StreamBuffer, compact_history_to_budget, confirm_and_execute, final_tool_diff,
     subagent_tool_history_message, tool_result_precludes_preview_fallback,
@@ -217,20 +216,22 @@ pub(crate) async fn run_subagent(
             return Err(format!("error: no subagent with id {agent_id}"));
         }
 
-        let (api_base_url, model_name, budget_token_limit, max_mutating_calls, workspace_root) = {
+        let (
+            profile_name,
+            api_base_url,
+            model_name,
+            budget_token_limit,
+            max_mutating_calls,
+            workspace_root,
+            schema_policy,
+        ) = {
             let s = state.lock().await;
             let subagent = s
                 .subagents
                 .iter()
                 .find(|a| a.id == agent_id)
                 .ok_or_else(|| format!("error: no subagent with id {agent_id}"))?;
-            let target_model_name = subagent.model.as_deref().unwrap_or(&s.model_name);
-            let profile = s
-                .config
-                .models
-                .iter()
-                .find(|p| p.name == target_model_name || p.model == target_model_name)
-                .cloned();
+            let profile = subagent_request_profile(&s, subagent.model.as_deref());
             let (api_base_url, model_name, budget) = profile
                 .as_ref()
                 .map(|profile| {
@@ -252,11 +253,13 @@ pub(crate) async fn run_subagent(
                 .map(|profile| profile.max_mutating_calls_per_response())
                 .unwrap_or(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE);
             (
+                profile.map(|profile| profile.name),
                 api_base_url,
                 model_name,
                 budget,
                 max_mutating_calls,
                 subagent_context_workspace_root(&s, subagent.workspace_root.clone()),
+                crate::tools::ToolSchemaPolicy::for_subagent(subagent.write_access),
             )
         };
         compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
@@ -284,17 +287,14 @@ pub(crate) async fn run_subagent(
 rustcode session. Complete the task you were given, then reply in plain text \
 with NO tool call — that reply is returned to the main agent. Keep the final \
 reply compact and information-dense. {delegation_contract}\n\n{}",
-            crate::tools::tool_system_prompt_for_policy(
-                crate::tools::ToolSchemaPolicy::subagent_with_delegation(),
-                protocol,
-                agent_mode,
-            ),
+            crate::tools::tool_system_prompt_for_policy(schema_policy, protocol, agent_mode),
             workspace_root
                 .as_deref()
                 .map(crate::context::environment_context_at)
                 .unwrap_or_else(crate::context::environment_context)
         );
         crate::tools::append_tool_response_limit(&mut system_prompt, max_mutating_calls);
+        crate::tools::append_mcp_catalogue(&mut system_prompt, schema_policy);
         let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
             "role": "system",
             "content": system_prompt,
@@ -321,6 +321,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let request_buffer = Arc::clone(&stream_buffer);
         let request_api_url = api_base_url.clone();
         let request_model = model_name.clone();
+        let request_profile = profile_name.clone();
         let request_msgs: Arc<[serde_json::Value]> = msgs.into();
         let request_started = std::time::Instant::now();
         let context_bytes = request_msgs
@@ -355,12 +356,14 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 let request_buffer = Arc::clone(&request_buffer);
                 let request_api_url = request_api_url.clone();
                 let request_model = request_model.clone();
+                let request_profile = request_profile.clone();
                 async move {
                     request_buffer.lock().await.reset();
-                    let finish_reason = stream_request(
+                    let finish_reason = super::stream_request::stream_request_for_profile(
                         &request_client,
                         request_state,
                         request_cancel,
+                        request_profile.as_deref(),
                         &request_api_url,
                         &request_model,
                         current_msgs,
@@ -368,7 +371,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         true,
                         true,
                         super::stream_request::ThinkingMode::Normal,
-                        crate::tools::ToolSchemaPolicy::subagent_with_delegation(),
+                        schema_policy,
                         Some(owner_session_id),
                         request.output_token_limit,
                     )
@@ -1027,33 +1030,28 @@ async fn handle_agent_tool_for_parent(
                     "error: missing 'task' argument".to_string(),
                 );
             };
-            let model = args
-                .get("model")
-                .and_then(|m| m.as_str())
-                .filter(|m| !m.trim().is_empty())
-                .map(|s| s.to_string());
-            // An unknown name used to fall back to the parent's model without
-            // a word; say which profiles exist instead.
-            if let Some(requested) = model.as_deref() {
+            // Resolved to a profile name now, so an unusable choice fails
+            // here instead of after the child reports `queued` (#2334).
+            let model = {
                 let s = state.lock().await;
-                if !s
-                    .config
-                    .models
-                    .iter()
-                    .any(|profile| profile.name == requested || profile.model == requested)
-                {
-                    let known = s
-                        .config
-                        .models
+                let parent_profile = match parent_id {
+                    Some(id) => s
+                        .subagents
                         .iter()
-                        .map(|profile| profile.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return crate::tools::ToolExecutionOutput::failure(format!(
-                        "error: unknown model '{requested}'. Available model profiles: {known}"
-                    ));
+                        .find(|agent| agent.id == id)
+                        .and_then(|agent| agent.model.clone()),
+                    None => None,
                 }
-            }
+                .or_else(|| s.active_model_profile().map(|profile| profile.name));
+                match resolve_subagent_profile(
+                    &s.config.models,
+                    parent_profile.as_deref(),
+                    args.get("model").and_then(|m| m.as_str()),
+                ) {
+                    Ok(model) => model,
+                    Err(error) => return crate::tools::ToolExecutionOutput::failure(error),
+                }
+            };
             // A role only presets `write_access`; the checks below apply to
             // a worker exactly as they do to an explicit `write_access`.
             let (agent_type, write_access) = match args
@@ -1840,9 +1838,140 @@ async fn interrupt_subagent_turn(
     Ok(true)
 }
 
+/// Values of `spawn_agent`'s `model` that mean "the parent's model".
+const INHERIT_MODEL_ALIASES: &[&str] = &["inherit", "default", "parent", "same"];
+
+/// How many profiles a spawn error suggests.
+const SUGGESTED_PROFILES: usize = 5;
+
+/// The profile name a new child runs on, from `spawn_agent`'s `model`.
+///
+/// Omitted, empty or an alias in [`INHERIT_MODEL_ALIASES`]: the parent's
+/// profile, with its URL and credentials. `None` when the parent runs on an
+/// endpoint no profile describes; the child then follows the session.
+/// Otherwise an exact profile name, or a model id that only one profile
+/// serves (the parent's profile wins when it serves it). Anything else, or
+/// a profile that cannot send requests, is an error for the caller.
+pub(crate) fn resolve_subagent_profile(
+    profiles: &[crate::config::ModelProfile],
+    parent_profile: Option<&str>,
+    requested: Option<&str>,
+) -> Result<Option<String>, String> {
+    let requested = requested.map(str::trim).unwrap_or_default();
+    let parent = parent_profile.and_then(|name| profiles.iter().find(|p| p.name == name));
+    if requested.is_empty()
+        || INHERIT_MODEL_ALIASES
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(requested))
+    {
+        return Ok(parent.map(|profile| profile.name.clone()));
+    }
+    let omit_hint = match parent {
+        Some(parent) => format!("Omit `model` to run on your own model ({})", parent.name),
+        None => "Omit `model` to run on your own model".to_owned(),
+    };
+    let profile = match profiles.iter().find(|p| p.name == requested) {
+        Some(profile) => profile,
+        None => {
+            let serving = profiles
+                .iter()
+                .filter(|p| p.model == requested)
+                .collect::<Vec<_>>();
+            match (serving.as_slice(), parent) {
+                (_, Some(parent)) if parent.model == requested => parent,
+                ([only], _) => only,
+                ([], _) => {
+                    return Err(format!(
+                        "error: no model profile named '{requested}'. {omit_hint}, or pass a profile name such as: {}.",
+                        suggested_profiles(profiles, parent, requested).join(", ")
+                    ));
+                }
+                (several, _) => {
+                    return Err(format!(
+                        "error: several model profiles serve '{requested}': {}. {omit_hint}, or pass one of these names.",
+                        several
+                            .iter()
+                            .take(SUGGESTED_PROFILES)
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+        }
+    };
+    if super::stream_request::is_chatgpt_credential(Some(profile))
+        && !super::stream_request::chatgpt_endpoint_is_supported(profile)
+    {
+        return Err(format!(
+            "error: model profile '{}' cannot send requests: its ChatGPT plan login needs the https://api.openai.com/v1/responses endpoint. {omit_hint}.",
+            profile.name
+        ));
+    }
+    Ok(Some(profile.name.clone()))
+}
+
+/// A few profile names for a spawn error: the parent's first, then those
+/// that share words with what was asked for (`chatgpt/gpt-5-mini` suggests
+/// other `chatgpt/` and `gpt` profiles), then the rest in config order.
+fn suggested_profiles<'a>(
+    profiles: &'a [crate::config::ModelProfile],
+    parent: Option<&'a crate::config::ModelProfile>,
+    requested: &str,
+) -> Vec<&'a str> {
+    let words = |text: &str| {
+        text.to_ascii_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|word| word.len() > 1)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let wanted = words(requested);
+    let shared = |profile: &crate::config::ModelProfile| {
+        words(&profile.name)
+            .iter()
+            .filter(|word| wanted.contains(word))
+            .count()
+    };
+    let mut ranked = profiles
+        .iter()
+        .filter(|profile| parent.is_none_or(|parent| parent.name != profile.name))
+        .enumerate()
+        .map(|(index, profile)| (std::cmp::Reverse(shared(profile)), index, profile))
+        .collect::<Vec<_>>();
+    ranked.sort_by_key(|(shared, index, _)| (*shared, *index));
+    parent
+        .into_iter()
+        .chain(ranked.into_iter().map(|(_, _, profile)| profile))
+        .take(SUGGESTED_PROFILES)
+        .map(|profile| profile.name.as_str())
+        .collect()
+}
+
+/// The profile a child's request goes out on: the one it was spawned on by
+/// name, else the session's own. A child persisted before profiles were
+/// stored by name may hold a model id; it still finds a profile serving it.
+fn subagent_request_profile(
+    s: &AppState,
+    model: Option<&str>,
+) -> Option<crate::config::ModelProfile> {
+    let Some(model) = model else {
+        return s.active_model_profile();
+    };
+    let profiles = &s.config.models;
+    profiles
+        .iter()
+        .find(|p| p.name == model)
+        .or_else(|| profiles.iter().find(|p| p.model == model))
+        .cloned()
+}
+
 fn is_read_only_subagent_call(call: &crate::tools::ToolCall) -> bool {
     if call.name != "run_command" {
-        return super::is_read_only_tool(&call.name);
+        // The same set the read-only tool schema advertises: reads, web,
+        // skills, and MCP tools marked read-only.
+        return crate::tools::read_only_subagent_runs(&call.name)
+            || crate::tools::is_read_only_call(call);
     }
     if call.name == "run_command" {
         let explicit_enabled = |key: &str| {
@@ -1903,6 +2032,241 @@ fn subagent_context_workspace_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn credential(method: crate::provider_auth::AuthMethod) -> crate::provider_auth::CredentialRef {
+        crate::provider_auth::CredentialRef {
+            provider: "provider".into(),
+            account: "account".into(),
+            method,
+        }
+    }
+
+    /// The #2334 config: one model id at two providers (Copilot listed
+    /// first), and two ChatGPT-plan profiles for one model at one URL.
+    fn issue_profiles() -> Vec<crate::config::ModelProfile> {
+        use crate::provider_auth::AuthMethod;
+        let profile = |name: &str, url: &str, model: &str, method| crate::config::ModelProfile {
+            name: name.into(),
+            url: url.into(),
+            model: model.into(),
+            credential: Some(credential(method)),
+            ..Default::default()
+        };
+        let openai = "https://api.openai.com/v1/responses";
+        vec![
+            profile(
+                "copilot/gpt-6-luna",
+                "https://api.githubcopilot.com/responses",
+                "gpt-6-luna",
+                AuthMethod::GitHubCopilot,
+            ),
+            profile(
+                "chatgpt/gpt-5-6-sol",
+                openai,
+                "gpt-5.6-sol",
+                AuthMethod::ChatGpt,
+            ),
+            profile(
+                "chatgpt/gpt-6-luna",
+                openai,
+                "gpt-6-luna",
+                AuthMethod::ChatGpt,
+            ),
+            profile(
+                "chatgpt/gpt-5-6-sol-N2UEH7zP",
+                openai,
+                "gpt-5.6-sol",
+                AuthMethod::ChatGpt,
+            ),
+            profile(
+                "chatgpt/broken",
+                "https://chatgpt.com/backend-api",
+                "gpt-6-luna",
+                AuthMethod::ChatGpt,
+            ),
+        ]
+    }
+
+    #[test]
+    fn omitted_model_and_inherit_aliases_run_on_the_parents_profile() {
+        let profiles = issue_profiles();
+        for requested in [
+            None,
+            Some(""),
+            Some("  "),
+            Some("default"),
+            Some("inherit"),
+            Some("Parent"),
+        ] {
+            assert_eq!(
+                resolve_subagent_profile(&profiles, Some("chatgpt/gpt-6-luna"), requested),
+                Ok(Some("chatgpt/gpt-6-luna".to_owned())),
+                "{requested:?}"
+            );
+        }
+        // The parent's model id names the parent's profile, not the first
+        // profile serving that id (Copilot, which rejects the model).
+        assert_eq!(
+            resolve_subagent_profile(&profiles, Some("chatgpt/gpt-6-luna"), Some("gpt-6-luna")),
+            Ok(Some("chatgpt/gpt-6-luna".to_owned()))
+        );
+        // An endpoint no profile describes: the child follows the session.
+        assert_eq!(resolve_subagent_profile(&profiles, None, None), Ok(None));
+    }
+
+    #[test]
+    fn explicit_model_resolves_by_profile_name_without_model_id_ambiguity() {
+        let profiles = issue_profiles();
+        assert_eq!(
+            resolve_subagent_profile(
+                &profiles,
+                Some("chatgpt/gpt-6-luna"),
+                Some("chatgpt/gpt-5-6-sol")
+            ),
+            Ok(Some("chatgpt/gpt-5-6-sol".to_owned()))
+        );
+        let several =
+            resolve_subagent_profile(&profiles, Some("chatgpt/gpt-6-luna"), Some("gpt-5.6-sol"))
+                .unwrap_err();
+        assert!(
+            several.contains("chatgpt/gpt-5-6-sol, chatgpt/gpt-5-6-sol-N2UEH7zP"),
+            "{several}"
+        );
+        assert!(several.contains("Omit `model`"), "{several}");
+    }
+
+    #[test]
+    fn unusable_model_fails_at_spawn_with_a_few_choices_and_the_omit_hint() {
+        let mut profiles = issue_profiles();
+        profiles.extend((0..30).map(|index| crate::config::ModelProfile {
+            name: format!("local-{index}"),
+            url: "http://127.0.0.1:1234/v1/chat/completions".into(),
+            model: format!("local-{index}"),
+            ..Default::default()
+        }));
+        let unknown = resolve_subagent_profile(
+            &profiles,
+            Some("chatgpt/gpt-6-luna"),
+            Some("chatgpt/gpt-5-mini"),
+        )
+        .unwrap_err();
+        assert!(
+            unknown.starts_with("error: no model profile named 'chatgpt/gpt-5-mini'."),
+            "{unknown}"
+        );
+        assert!(
+            unknown.contains("Omit `model` to run on your own model (chatgpt/gpt-6-luna)"),
+            "{unknown}"
+        );
+        let suggested = unknown
+            .rsplit_once("such as: ")
+            .map(|(_, list)| list.trim_end_matches('.').split(", ").collect::<Vec<_>>())
+            .unwrap();
+        assert_eq!(suggested.len(), SUGGESTED_PROFILES, "{unknown}");
+        assert_eq!(suggested[0], "chatgpt/gpt-6-luna");
+        assert!(suggested[1].starts_with("chatgpt/"), "{unknown}");
+        assert!(!unknown.contains("local-29"), "{unknown}");
+
+        let broken = resolve_subagent_profile(
+            &profiles,
+            Some("chatgpt/gpt-6-luna"),
+            Some("chatgpt/broken"),
+        )
+        .unwrap_err();
+        assert!(broken.contains("cannot send requests"), "{broken}");
+    }
+
+    #[tokio::test]
+    async fn spawn_rejects_an_unknown_model_before_queueing_a_child() {
+        let mut s = AppState::new();
+        s.delegation_active = true;
+        s.config.models = issue_profiles();
+        s.config.default.set_big("chatgpt/gpt-6-luna".into());
+        s.api_base_url = "https://api.openai.com/v1/responses".into();
+        s.model_name = "gpt-6-luna".into();
+        let state = Arc::new(Mutex::new(s));
+        let result = handle_agent_tool(
+            &reqwest::Client::new(),
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            "spawn_agent",
+            &serde_json::json!({"task": "research", "model": "chatgpt/gpt-5-mini"}),
+        )
+        .await;
+        assert!(!result.success);
+        assert!(
+            result.content.contains("no model profile named"),
+            "{}",
+            result.content
+        );
+        assert!(state.lock().await.subagents.is_empty());
+    }
+
+    #[test]
+    fn child_requests_use_the_profile_it_was_spawned_on() {
+        let mut s = AppState::new();
+        s.config.models = issue_profiles();
+        s.config.default.set_big("chatgpt/gpt-6-luna".into());
+        s.api_base_url = "https://api.openai.com/v1/responses".into();
+        s.model_name = "gpt-6-luna".into();
+        let name = |model| subagent_request_profile(&s, model).map(|profile| profile.name);
+        assert_eq!(name(None).as_deref(), Some("chatgpt/gpt-6-luna"));
+        assert_eq!(
+            name(Some("chatgpt/gpt-5-6-sol-N2UEH7zP")).as_deref(),
+            Some("chatgpt/gpt-5-6-sol-N2UEH7zP")
+        );
+        // The request then selects that profile by name, where URL and model
+        // alone would match two credential-bearing profiles.
+        let profile = subagent_request_profile(&s, Some("chatgpt/gpt-5-6-sol")).unwrap();
+        assert!(
+            super::super::stream_request::select_request_profile(
+                &s.config.models,
+                s.config.default.big(),
+                &profile.url,
+                &profile.model,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            super::super::stream_request::select_request_profile(
+                &s.config.models,
+                &profile.name,
+                &profile.url,
+                &profile.model,
+            )
+            .unwrap()
+            .map(|profile| profile.name)
+            .as_deref(),
+            Some("chatgpt/gpt-5-6-sol")
+        );
+    }
+
+    #[test]
+    fn read_only_child_gate_runs_web_and_skills_but_not_writes() {
+        let call = |name: &str| crate::tools::ToolCall {
+            name: name.to_owned(),
+            arguments: serde_json::json!({}),
+            call_id: None,
+        };
+        for name in [
+            "search_web",
+            "read_url",
+            "use_skill",
+            "list_skills",
+            "view_file",
+        ] {
+            assert!(is_read_only_subagent_call(&call(name)), "{name}");
+        }
+        for name in [
+            "write_to_file",
+            "delete_file",
+            "git_commit",
+            "remember",
+            "manage_task",
+        ] {
+            assert!(!is_read_only_subagent_call(&call(name)), "{name}");
+        }
+    }
 
     #[test]
     fn wait_targets_come_from_ids_or_id_without_duplicates() {

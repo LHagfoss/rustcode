@@ -1753,8 +1753,67 @@ fn request_schema_policy_isolates_subagents_from_parent_delegation() {
     assert!(root_names.contains(&"wait_agent"));
     assert!(child_names.contains(&"run_command"));
     assert!(!child_names.iter().any(|name| is_agent_tool(name)));
-    assert!(!ToolSchemaPolicy::subagent().include_mcp_tools);
+    assert!(ToolSchemaPolicy::subagent().include_mcp_tools);
     assert!(ToolSchemaPolicy::root(true).include_mcp_tools);
+}
+
+#[test]
+fn subagents_get_the_parents_tools_cut_only_by_write_access() {
+    let names = |policy| {
+        native_tools_schema_for_context(policy, &[])
+            .0
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    let root = names(ToolSchemaPolicy::root(true));
+    let reader = names(ToolSchemaPolicy::for_subagent(false));
+    let writer = names(ToolSchemaPolicy::for_subagent(true));
+    for policy in [
+        ToolSchemaPolicy::for_subagent(false),
+        ToolSchemaPolicy::for_subagent(true),
+    ] {
+        assert!(policy.include_mcp_tools);
+    }
+    // #2334: an explorer had no web tools and fell back to a refused `curl`.
+    for name in [
+        "search_web",
+        "read_url",
+        "list_skills",
+        "use_skill",
+        "list_mcp_tools",
+        "recall_memory",
+        "git_diff",
+        "view_file",
+        "run_command",
+    ] {
+        assert!(root.iter().any(|n| n == name), "{name}");
+        assert!(reader.iter().any(|n| n == name), "reader lacks {name}");
+        assert!(writer.iter().any(|n| n == name), "writer lacks {name}");
+    }
+    for name in [
+        "write_to_file",
+        "replace_file_content",
+        "delete_file",
+        "git_commit",
+        "manage_task",
+    ] {
+        assert!(!reader.iter().any(|n| n == name), "reader has {name}");
+        assert!(writer.iter().any(|n| n == name), "writer lacks {name}");
+    }
+    // Session-level tools stay with the root agent.
+    for name in [
+        "complete_task",
+        "ask_question",
+        "set_session_title",
+        "set_goal",
+        "todo_write",
+    ] {
+        assert!(!reader.iter().any(|n| n == name), "reader has {name}");
+        assert!(!writer.iter().any(|n| n == name), "writer has {name}");
+    }
+    assert!(reader.iter().any(|n| n == "spawn_agent"));
+    assert!(!writer.iter().any(|n| is_agent_tool(n)));
 }
 
 #[test]

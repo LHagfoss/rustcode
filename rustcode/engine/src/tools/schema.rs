@@ -111,7 +111,7 @@ fn maybe_pause_native_schema_test_gate(messages: &[Value]) {
 pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     (
         "spawn_agent",
-        "Start an asynchronous read-only subagent and return JSON with its agent_id. Delegate a self-contained task whose result you need but whose intermediate steps you do not: a broad search, an independent investigation, or one of several tasks that can run in parallel. Do the work yourself when it is a few tool calls, and never delegate the step you are blocked on and then wait for it. Give each child a complete brief: it sees none of this conversation unless context_inheritance says otherwise. Children that write must have disjoint allowed_paths. Keep working after spawning; a finished child reports back on its own, and wait_agent is for when you have nothing else to do. Write access, allowed paths, and verification must be explicit. agent_type picks a role: explorer is read-only investigation, worker presets write_access and still needs allowed_paths, default is read-only unless write_access is passed.",
+        "Start an asynchronous subagent and return JSON with its agent_id. It runs on your model with your tools (web, MCP, skills), only without write access unless you grant it. Delegate a self-contained task whose result you need but whose intermediate steps you do not: a broad search, an independent investigation, or one of several tasks that can run in parallel. Do the work yourself when it is a few tool calls, and never delegate the step you are blocked on and then wait for it. Give each child a complete brief: it sees none of this conversation unless context_inheritance says otherwise. Children that write must have disjoint allowed_paths. Keep working after spawning; a finished child reports back on its own, and wait_agent is for when you have nothing else to do. Write access, allowed paths, and verification must be explicit. agent_type picks a role: explorer is read-only investigation, worker presets write_access and still needs allowed_paths, default is read-only unless write_access is passed. Omit model: the child then uses your model, provider and login; name a model profile only when the user asked for one.",
         r#"{"task": "task description", "agent_type": "explorer", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test", "workspace_mode": "shared", "base_sha": "origin/main"}"#,
     ),
     (
@@ -172,9 +172,14 @@ pub(crate) enum ToolSchemaProfile {
     #[default]
     Coding,
     ReadOnlyInspection,
-    /// Read-only child agents can run commands that the shell policy classifies
-    /// as inspection, while Plan mode remains limited to direct read tools.
+    /// A child agent without `write_access`: the parent's tools, MCP and
+    /// skills included, less the ones its read-only gate refuses (file
+    /// writes, mutating built-ins, MCP tools not marked read-only). Its
+    /// shell runs only commands the policy classifies as inspection.
     ReadOnlySubagent,
+    /// A child agent with `write_access`: the parent's tools, less the
+    /// root-only ones in [`ROOT_ONLY_TOOLS`].
+    Subagent,
 }
 
 /// Request phase used to keep the initial tool menu small for new projects.
@@ -218,10 +223,11 @@ impl ToolSchemaPolicy {
         }
     }
 
+    /// A read-only child agent without delegation tools.
     pub(crate) const fn subagent() -> Self {
         Self {
             include_agent_tools: false,
-            include_mcp_tools: false,
+            include_mcp_tools: true,
             include_session_title_tool: false,
             include_preview_tool: false,
             profile: ToolSchemaProfile::ReadOnlySubagent,
@@ -234,6 +240,35 @@ impl ToolSchemaPolicy {
             include_agent_tools: true,
             ..Self::subagent()
         }
+    }
+
+    /// The tools a child agent gets: the parent's, cut only by its explicit
+    /// `write_access`. A write-enabled child cannot delegate, so it is not
+    /// offered the agent tools.
+    pub(crate) const fn for_subagent(write_access: bool) -> Self {
+        if write_access {
+            Self {
+                include_agent_tools: false,
+                profile: ToolSchemaProfile::Subagent,
+                ..Self::subagent()
+            }
+        } else {
+            Self::subagent_with_delegation()
+        }
+    }
+
+    /// Whether this is a child agent's policy.
+    pub(crate) const fn is_subagent(self) -> bool {
+        matches!(
+            self.profile,
+            ToolSchemaProfile::ReadOnlySubagent | ToolSchemaProfile::Subagent
+        )
+    }
+
+    /// Whether an MCP tool may be offered: a read-only child only gets the
+    /// ones its gate would run.
+    fn offers_mcp_tool(self, name: &str) -> bool {
+        self.profile != ToolSchemaProfile::ReadOnlySubagent || mcp_tool_is_read_only(name)
     }
 
     pub(crate) const fn with_session_title_tool(mut self) -> Self {
@@ -700,6 +735,24 @@ const READ_ONLY_INSPECTION_TOOLS: &[&str] = &[
 
 const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
 
+/// Tools only the root agent uses: they act on the session itself (its
+/// title, goal and preview) or talk to the user directly. A child agent
+/// reports back to its parent instead.
+const ROOT_ONLY_TOOLS: &[&str] = &[
+    "set_session_title",
+    "complete_task",
+    "ask_question",
+    crate::preview::PREVIEW_TOOL_NAME,
+];
+
+/// Whether a read-only child agent's gate runs `tool`, so it is worth
+/// advertising: reads (search, files, web, memory recall), skills, and the
+/// shell, whose calls are checked one by one.
+pub(crate) fn read_only_subagent_runs(tool_name: &str) -> bool {
+    matches!(super::tool_safety(tool_name), super::ToolSafety::ReadOnly)
+        || matches!(tool_name, "run_command" | "use_skill")
+}
+
 /// Built-in tools a policy may advertise, before the measured byte budget.
 ///
 /// This is the single membership rule for both protocols. Membership used to be
@@ -711,8 +764,9 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         ToolSchemaProfile::Coding => true,
         ToolSchemaProfile::ReadOnlyInspection => READ_ONLY_INSPECTION_TOOLS.contains(&tool.name),
         ToolSchemaProfile::ReadOnlySubagent => {
-            READ_ONLY_INSPECTION_TOOLS.contains(&tool.name) || tool.name == "run_command"
+            !ROOT_ONLY_TOOLS.contains(&tool.name) && read_only_subagent_runs(tool.name)
         }
+        ToolSchemaProfile::Subagent => !ROOT_ONLY_TOOLS.contains(&tool.name),
     };
     !((tool.name == "set_session_title" && !policy.include_session_title_tool)
         || (tool.name == crate::preview::PREVIEW_TOOL_NAME && !policy.include_preview_tool)
@@ -748,8 +802,14 @@ pub(crate) fn textual_tool_surface(
             .iter()
             .filter(|tool| text_builtin_is_advertised(tool, policy, agent_mode))
             .count(),
-        mcp: usize::from(policy.include_mcp_tools && agent_mode != crate::config::AgentMode::Plan)
-            * collect_mcp_tools().len(),
+        mcp: if policy.include_mcp_tools && agent_mode != crate::config::AgentMode::Plan {
+            collect_mcp_tools()
+                .iter()
+                .filter(|(name, _, _)| policy.offers_mcp_tool(name))
+                .count()
+        } else {
+            0
+        },
         agent: agent_tool_count(policy, agent_mode),
         outside_table: outside_table_tool_count(policy, agent_mode),
     }
@@ -1860,7 +1920,8 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
     // a HashMap, so collection is sorted before scoring and emission to keep
     // both selection and the provider-facing payload deterministic.
     let stats = if policy.include_mcp_tools {
-        let collected = collect_mcp_tools_with_servers();
+        let mut collected = collect_mcp_tools_with_servers();
+        collected.retain(|(name, _, _, _, _)| policy.offers_mcp_tool(name));
         let mcp_tools = collected
             .iter()
             .map(|(name, _, _, description, schema)| {
@@ -2001,7 +2062,7 @@ pub(super) fn schema_for_agent_tool(name: &str) -> Value {
 fn agent_tool_schema(name: &str) -> Value {
     match name {
         "spawn_agent" => {
-            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"model":{"type":"string","description":"Model profile name for the child. Defaults to the parent's model."},"agent_type":{"type":"string","enum":crate::app::subagent_context::AgentRole::NAMES,"default":"default","description":"Role preset: explorer is read-only, worker presets write_access (allowed_paths still required), default follows write_access."},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"model":{"type":"string","description":"Omit unless the user asked for a specific model: the child then runs on your model, provider and login. Otherwise an exact model profile name."},"agent_type":{"type":"string","enum":crate::app::subagent_context::AgentRole::NAMES,"default":"default","description":"Role preset for the child's instructions and write_access: explorer is read-only, worker presets write_access (allowed_paths still required), default follows write_access. Every role has your tools; a read-only child just cannot write."},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
         }
         "send_agent" => {
             serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"},"interrupt":super::misc::interrupt_schema()},"required":["id","message"]})
@@ -2112,7 +2173,7 @@ pub(crate) fn append_visualization_hint(
     policy: ToolSchemaPolicy,
     visualization_level: u8,
 ) {
-    if policy.profile != ToolSchemaProfile::ReadOnlySubagent && !policy.compact_text_prompt {
+    if !policy.is_subagent() && !policy.compact_text_prompt {
         prompt.push_str(&visualization_prompt_hint(visualization_level));
     }
 }
@@ -2261,7 +2322,7 @@ Never guess MCP server names: see MCP Servers, then `list_mcp_tools` `select` fo
     }
     if policy.include_mcp_tools {
         for (name, desc, schema) in collect_mcp_tools() {
-            if agent_mode == crate::config::AgentMode::Plan {
+            if agent_mode == crate::config::AgentMode::Plan || !policy.offers_mcp_tool(&name) {
                 continue;
             }
             if policy.compact_text_prompt {

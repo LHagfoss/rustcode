@@ -857,6 +857,7 @@ pub async fn fetch_context_window(
 }
 
 /// Read-only tools whose results can be safely short-circuited by the repeat guard.
+#[cfg(test)]
 pub(crate) fn is_read_only_tool(name: &str) -> bool {
     matches!(
         crate::tools::tool_safety(name),
