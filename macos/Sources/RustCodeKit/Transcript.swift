@@ -43,6 +43,8 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
     /// A thought that is the provider's reasoning summary (OpenAI shows only
     /// that of its hidden reasoning), not the model's own reasoning text.
     public var isReasoningSummary = false
+    /// On a turn's last reply: how long the turn took and when it ended.
+    public var turn: TurnTiming?
 
     /// Everything a find in the chat can match.
     public var searchableText: String {
@@ -84,6 +86,10 @@ public struct Transcript: Equatable, Sendable {
     /// view showing another chat must key on this too: keyed on ids alone,
     /// the chat kept the last chat's row heights and drew nothing until scrolled.
     public private(set) var identity = UUID()
+    /// When the running turn began, for its live clock; nil between turns.
+    public private(set) var turnStartedAt: Date?
+    /// The first item the running turn may have added.
+    private var turnFirstId: Int?
 
     public init() {}
 
@@ -98,6 +104,16 @@ public struct Transcript: Equatable, Sendable {
         items.removeAll()
         usage = nil
         identity = UUID()
+        turnStartedAt = nil
+        turnFirstId = nil
+    }
+
+    /// A turn starts at `now`. A message handed to a running turn does not
+    /// restart its clock.
+    public mutating func beginTurn(at now: Date) {
+        guard turnStartedAt == nil else { return }
+        turnStartedAt = now
+        turnFirstId = nextId
     }
 
     /// A prompt the user sent. The engine echoes user messages only when it
@@ -144,7 +160,7 @@ public struct Transcript: Equatable, Sendable {
         switch update {
         case .userText(let text):
             append(.user(text), at: now)
-        case .agentText(let text):
+        case .agentText(let text, let turn):
             if case .command(let input, let output) = items.last?.content {
                 items[items.count - 1].content = .command(input: input, output: output + text)
             } else if case .assistant(let previous) = items.last?.content {
@@ -152,6 +168,7 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.assistant(text), at: now)
             }
+            if let turn, case .assistant = items.last?.content { stamp(turn, on: items.count - 1) }
         case .thoughtText(let text, let summary, let durationMs):
             if case .thinking(let previous) = items.last?.content, items[items.count - 1].isReasoningSummary == summary {
                 items[items.count - 1].content = .thinking(previous + text)
@@ -225,8 +242,21 @@ public struct Transcript: Equatable, Sendable {
     /// may keep spinning, even when its finishing update never arrived. A card
     /// with output completed; an empty one failed with `failure` when the turn
     /// was cancelled or failed, or completed when the turn did.
-    public mutating func finishTurn(at now: Date, failure: String? = nil) {
+    ///
+    /// A turn that completed, or that the user stopped (`cancelled`), puts
+    /// its timing on its last reply; one that failed never finished, so it
+    /// shows none.
+    public mutating func finishTurn(at now: Date, failure: String? = nil, cancelled: Bool = false) {
         finishThinking(at: now)
+        if let started = turnStartedAt, let first = turnFirstId, failure == nil || cancelled,
+           let last = items.lastIndex(where: { item in
+               if case .assistant = item.content { item.id >= first } else { false }
+           }) {
+            stamp(TurnTiming(finished: now, elapsed: max(now.timeIntervalSince(started), 0),
+                             outcome: cancelled ? .cancelled : .completed), on: last)
+        }
+        turnStartedAt = nil
+        turnFirstId = nil
         for index in items.indices {
             guard case .tool(var tool) = items[index].content, tool.status == .pending || tool.status == .inProgress else { continue }
             let hasOutput = !(tool.output ?? "").isEmpty || !tool.changes.isEmpty
@@ -238,6 +268,17 @@ public struct Transcript: Equatable, Sendable {
             }
             items[index].content = .tool(tool)
         }
+    }
+
+    /// Only a turn's last reply shows its timing: an earlier reply of the
+    /// same replayed turn gives it up.
+    private mutating func stamp(_ turn: TurnTiming, on index: Int) {
+        if let id = turn.id {
+            for earlier in items.indices where earlier < index && items[earlier].turn?.id == id {
+                items[earlier].turn = nil
+            }
+        }
+        items[index].turn = turn
     }
 
     private mutating func append(_ content: TranscriptItem.Content, at now: Date? = nil) {

@@ -326,7 +326,9 @@ public enum ToolStatus: String, Equatable, Sendable {
 /// One `session/update` payload, reduced to what the transcript renders.
 public enum SessionUpdate: Equatable, Sendable {
     case userText(String)
-    case agentText(String)
+    /// Reply text. `turn` is how long the turn took and when it ended, sent
+    /// on a replayed turn's reply.
+    case agentText(String, turn: TurnTiming? = nil)
     /// The `/context` reply: its Markdown text and the breakdown it carries.
     case contextReport(text: String, context: ContextBreakdown)
     /// Reasoning text. `summary` says it is the provider's summary of
@@ -365,7 +367,7 @@ public enum SessionUpdate: Equatable, Sendable {
             } else if meta?["kind"]?.stringValue == "notice" {
                 self = .notice(Self.text(update["content"]))
             } else {
-                self = .agentText(Self.text(update["content"]))
+                self = .agentText(Self.text(update["content"]), turn: TurnTiming(json: meta?["turn"]))
             }
         case "agent_thought_chunk":
             let meta = update["_meta"]?["rustcode"]

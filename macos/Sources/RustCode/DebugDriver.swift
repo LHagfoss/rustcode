@@ -149,6 +149,7 @@ enum DebugDriver {
             let session = model.selectedSession ?? "drive"
             if model.selectedSession == nil { model.selectedSession = session }
             model.draft = ""
+            model.transcript.beginTurn(at: Date())
             model.transcript.appendUser(parts.dropFirst().joined(separator: " "))
             model.debugTurn(true, in: session)
         case "end":

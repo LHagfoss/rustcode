@@ -86,6 +86,7 @@ struct InlineImage: View {
         .clipShape(.rect(cornerRadius: 12))
         .contentShape(.rect)
         .onTapGesture { openImage(url.isFileURL ? .file(url) : .web(url)) }
+        .pointingHandCursor()
         .help(alt.isEmpty ? url.lastPathComponent : alt)
         .accessibilityLabel(alt.isEmpty ? "Image" : alt)
         .accessibilityAddTraits(.isButton)

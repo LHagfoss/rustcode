@@ -86,6 +86,58 @@ extension View {
     }
 }
 
+extension View {
+    /// The pointing hand while the pointer is over this, so whatever opens or
+    /// toggles on a click says so before it is pressed.
+    func pointingHandCursor() -> some View {
+        modifier(PointingHandCursor())
+    }
+
+    /// A pressable row or chip in the chat: a quiet fill under the pointer
+    /// and the pointing hand, as the toolbar's `ChromeButton` answers it.
+    func hoverHighlight(cornerRadius: CGFloat = 8, padding: CGFloat = 0) -> some View {
+        modifier(HoverHighlight(cornerRadius: cornerRadius, padding: padding))
+    }
+}
+
+private struct PointingHandCursor: ViewModifier {
+    @State private var pushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                guard inside != pushed else { return }
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                pushed = inside
+            }
+            // A view that goes while under the pointer would leave the hand behind.
+            .onDisappear {
+                if pushed { NSCursor.pop() }
+                pushed = false
+            }
+    }
+}
+
+private struct HoverHighlight: ViewModifier {
+    let cornerRadius: CGFloat
+    /// How far the fill reaches past the content, without moving it.
+    let padding: CGFloat
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(.fill.tertiary)
+                    .padding(-padding)
+                    .opacity(isHovered ? 1 : 0)
+            }
+            .onHover { isHovered = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+            .pointingHandCursor()
+    }
+}
+
 enum Clipboard {
     @MainActor
     static func copy(_ text: String) {

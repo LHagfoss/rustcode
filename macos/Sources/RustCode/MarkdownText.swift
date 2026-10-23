@@ -145,8 +145,52 @@ struct MarkdownText: View {
     static func inline(_ text: String) -> AttributedString {
         inlineCache.value(for: text) {
             let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-            return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+            var styled = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+            ChatLinks.style(&styled)
+            return styled
         }
+    }
+}
+
+/// How links read in the chat: underlined in the brand colour, so they look
+/// pressable before they are pressed (#2300). Addresses written out bare
+/// become links too; code never does.
+enum ChatLinks {
+    /// A user's message, as sent, with its addresses linked.
+    static func linked(_ text: String) -> AttributedString {
+        var string = AttributedString(text)
+        for link in Linkify.links(in: text, skipCodeSpans: true) {
+            let range = characterRange(link.range, in: string)
+            string[range].link = link.url
+        }
+        underline(&string)
+        return string
+    }
+
+    /// Link the bare addresses outside code, then underline every link.
+    static func style(_ string: inout AttributedString) {
+        let plain = String(string.characters)
+        for link in Linkify.links(in: plain) {
+            let range = characterRange(link.range, in: string)
+            let isCodeOrLinked = string[range].runs.contains { run in
+                run.link != nil || run.inlinePresentationIntent?.contains(.code) == true
+            }
+            if !isCodeOrLinked { string[range].link = link.url }
+        }
+        underline(&string)
+    }
+
+    private static func underline(_ string: inout AttributedString) {
+        for run in string.runs where run.link != nil {
+            string[run.range].underlineStyle = Text.LineStyle(pattern: .solid)
+            string[run.range].foregroundColor = Color.brand
+        }
+    }
+
+    private static func characterRange(_ offsets: Range<Int>, in string: AttributedString) -> Range<AttributedString.Index> {
+        let lower = string.characters.index(string.startIndex, offsetBy: offsets.lowerBound)
+        let upper = string.characters.index(lower, offsetBy: offsets.count)
+        return lower..<upper
     }
 }
 
@@ -224,6 +268,7 @@ struct CopyButton: View {
         }
         .buttonStyle(QuietPressStyle())
         .onHover { isHovered = $0 }
+        .pointingHandCursor()
         .help(help)
         .accessibilityLabel(showsCopied ? "Copied" : help)
         // A second press restarts the moment rather than cutting it short.
