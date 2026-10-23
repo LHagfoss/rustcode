@@ -340,7 +340,7 @@ fn set_agent_mode(state: &mut AppState, mode: rustcode::controller::AgentMode) {
     rustcode::controller::save_config(&state.config);
 }
 
-/// Advance the permission posture shown on the composer's settings row:
+/// Advance the permission posture shown in the footer:
 /// `ask` -> `auto-approve` -> `plan` -> `ask`. Plan mode wins over
 /// auto-approval on screen, so entering plan turns auto-approval off and the
 /// next click lands on `ask` rather than on a hidden `auto-approve`.
