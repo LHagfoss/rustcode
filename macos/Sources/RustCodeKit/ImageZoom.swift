@@ -42,9 +42,27 @@ public struct ImageZoom: Equatable, Sendable {
 
     public mutating func fit() { scale = nil }
 
-    /// Double-click: actual size when fitted, fitted otherwise.
-    public mutating func toggleActualSize() {
-        scale = scale == nil ? 1 : nil
+    /// The share of the window's width a click zooms the image to.
+    public static let zoomedWidthShare = 0.5
+
+    /// The scale a click zooms to: the image half as wide as the window, its
+    /// aspect kept and the rest reached by scrolling. That is always larger
+    /// than the fitted scale; when the fitted image is already that wide, the
+    /// click goes to twice the fitted size or the image's actual pixels,
+    /// whichever is larger.
+    public static func zoomed(_ image: CGSize, in bounds: CGSize, window: CGSize) -> Double {
+        let fitted = fit(image, in: bounds)
+        guard image.width > 0, window.width > 0 else { return clamped(fitted * 2) }
+        let half = window.width * zoomedWidthShare / image.width
+        // A few percent larger reads as no zoom at all.
+        let target = half > fitted * 1.1 ? half : max(1, fitted * 2)
+        return clamped(target)
+    }
+
+    /// A click on the image: zoomed when fitted, fitted otherwise (also after
+    /// a pinch or ⌘+, so a click always comes back to the whole image).
+    public mutating func toggleZoom(fitting image: CGSize, in bounds: CGSize, window: CGSize) {
+        scale = scale == nil ? Self.zoomed(image, in: bounds, window: window) : nil
     }
 
     private static func clamped(_ value: Double) -> Double {
