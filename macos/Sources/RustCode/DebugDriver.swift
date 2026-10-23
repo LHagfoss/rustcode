@@ -437,6 +437,20 @@ enum DebugDriver {
             try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/state",
                                                      atomically: true, encoding: .utf8)
         case "scope": model.showsAllProjects = parts[1] == "all"
+        case "keyequiv":
+            // `keyequiv <code> <character>`: a ⌘-shortcut handed straight to
+            // the window, which `key` cannot reach while the app is in the
+            // background and its window not key.
+            guard parts.count > 2, let code = UInt16(parts[1]),
+                  let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: ProcessInfo.processInfo.systemUptime,
+                                               windowNumber: window.windowNumber, context: nil, characters: parts[2],
+                                               charactersIgnoringModifiers: parts[2], isARepeat: false, keyCode: code) else { break }
+            report("keyequiv \(parts[2]) handled \(window.performKeyEquivalent(with: event))")
+        case "appearance":
+            // `appearance light|dark|system`: for this run only, never saved.
+            let names = ["light": NSAppearance.Name.aqua, "dark": .darkAqua]
+            NSApp.appearance = parts.count > 1 ? names[parts[1]].flatMap(NSAppearance.init(named:)) : nil
         case "settings":
             if parts.count > 1, let section = SettingsSection(rawValue: parts.dropFirst().joined(separator: " ")) {
                 model.settingsSection = section
