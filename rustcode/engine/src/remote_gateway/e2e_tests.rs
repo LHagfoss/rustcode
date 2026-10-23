@@ -806,6 +806,60 @@ async fn a_paired_device_drives_a_shared_session_end_to_end() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pairing_again_from_the_same_install_replaces_its_device_record() {
+    let host = Host::start().await;
+    let pair = |install_id: Option<&'static str>| {
+        let host = &host;
+        async move {
+            let offer = bounded(host.lifecycle.pair()).await.unwrap();
+            let mut hello = json!({
+                "type": "pair",
+                "protocol_version": 1,
+                "method": "code",
+                "secret": offer.code.expose(),
+                "device_name": "iPhone",
+            });
+            if let Some(install_id) = install_id {
+                hello["install_id"] = json!(install_id);
+            }
+            let (phone, paired) = Phone::connect(host.addr(), hello).await;
+            assert_eq!(paired["type"], "paired", "{paired}");
+            (phone, paired)
+        }
+    };
+    let install = "6F9619FF-8B86-D011-B42D-00C04FC964FF";
+    let (_first_phone, first) = pair(Some(install)).await;
+    // The first pairing's connection is still open when the install pairs again.
+    let (mut still_connected, _) = Phone::authenticate(&host, &first).await;
+    let (_second_phone, second) = pair(Some(install)).await;
+    assert_ne!(first["device_id"], second["device_id"]);
+
+    let devices = host.lifecycle.devices().unwrap();
+    assert_eq!(devices.len(), 1, "{devices:?}");
+    assert_eq!(devices[0].id, second["device_id"].as_str().unwrap());
+    assert!(devices[0].last_seen_at.is_some());
+
+    // The old token is refused, and a connection made with it is closed.
+    let revoked = still_connected
+        .frame(|frame| frame["type"] == "error")
+        .await;
+    assert_eq!(revoked["code"], "revoked");
+    let (_, refused) = Phone::connect(
+        host.addr(),
+        json!({"type": "authenticate", "protocol_version": 1, "device_id": first["device_id"], "token": first["token"]}),
+    )
+    .await;
+    assert_eq!(refused["code"], "unauthorized");
+    Phone::authenticate(&host, &second).await;
+
+    // Another install, or an app that sends none, still adds its own record.
+    pair(Some("0F9619FF-8B86-D011-B42D-00C04FC964FF")).await;
+    pair(None).await;
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 3);
+    drop(host.dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_gateway_restart_keeps_the_registration_and_its_receipts() {
     let mut host = Host::start().await;
     let connector = host.connector();

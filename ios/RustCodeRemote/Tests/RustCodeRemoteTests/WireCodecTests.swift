@@ -26,6 +26,13 @@ import Testing
         #expect(try Contract.json(Data(credential.utf8)) == Contract.json(Data(
             #"{"type":"pair","protocol_version":1,"method":"credential","secret":"cred","device_name":"phone"}"#.utf8
         )))
+        let install = try codec.encode(
+            .pair(credential: .oneTime("cred"), deviceName: "phone", installID: "6F9619FF-8B86-D011-B42D-00C04FC964FF"),
+            requestID: RequestID()
+        )
+        #expect(try Contract.json(Data(install.utf8)) == Contract.json(Data(
+            #"{"type":"pair","protocol_version":1,"method":"credential","secret":"cred","device_name":"phone","install_id":"6F9619FF-8B86-D011-B42D-00C04FC964FF"}"#.utf8
+        )))
         let authenticate = try codec.encode(
             .authenticate(device: DeviceIdentity(id: "0011223344556677", name: "phone"), deviceToken: "tok"),
             requestID: RequestID()
@@ -508,7 +515,7 @@ import Testing
 
     @Test func aScannedCodePairsWithItsCredentialAndYieldsAStorableCredential() async throws {
         let transport = gateway(handshake: paired)
-        let client = LiveRemoteClient(codec: WireCodec()) { transport }
+        let client = LiveRemoteClient(codec: WireCodec(), transport: { transport }, installID: { "install-0123456789abcdef" })
         let qr = #"{"protocol_version":1,"address":"192.168.1.20:17879","gateway_id":"gw-1","credential":"one-time-credential"}"#
         let credential = try await client.pair(.scanned(qr), deviceName: "Phone")
 
@@ -519,6 +526,7 @@ import Testing
         #expect(sent["method"] as? String == "credential")
         #expect(sent["secret"] as? String == "one-time-credential")
         #expect(sent["device_name"] as? String == "Phone")
+        #expect(sent["install_id"] as? String == "install-0123456789abcdef")
 
         #expect(credential.deviceToken == "device-token")
         #expect(credential.host.gatewayID == "gw-1")

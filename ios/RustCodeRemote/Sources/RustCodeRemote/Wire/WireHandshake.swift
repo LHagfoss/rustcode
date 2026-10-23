@@ -14,12 +14,16 @@ public enum WireHandshakeRequest: Codable, Equatable, Sendable {
         public var method: WireOpen<WirePairingMethod>
         public var secret: String
         public var deviceName: String
+        /// Kept by the app across pairings, so the host replaces this install's earlier
+        /// device record instead of adding one. Left out when unknown.
+        public var installID: String?
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
             case method
             case secret
             case deviceName = "device_name"
+            case installID = "install_id"
         }
     }
 

@@ -6,7 +6,7 @@ import UIKit
 struct RustCodeApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var store = RemoteStore(
-        client: LiveRemoteClient(codec: WireCodec()),
+        client: LiveRemoteClient(codec: WireCodec(), installID: { KeychainInstallIdentity().value() }),
         demoClient: {
             DemoRemoteClient(
                 includeQuestionChain: LaunchOptions.current.demoSessionID == DemoRemoteClient.questionsSessionID,

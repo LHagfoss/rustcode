@@ -13,6 +13,8 @@ public actor LiveRemoteClient: RemoteClient {
 
     private let codec: any RemoteCodec
     private let makeTransport: TransportFactory
+    /// This install's identifier, sent when pairing; `nil` when there is none to send.
+    private let installID: @Sendable () -> String?
     private let requestTimeout: Duration
     /// For starting a session owner on the host, which the gateway allows 60 s.
     private let sessionStartTimeout: Duration
@@ -41,8 +43,10 @@ public actor LiveRemoteClient: RemoteClient {
         codec: any RemoteCodec,
         requestTimeout: Duration = .seconds(20),
         sessionStartTimeout: Duration = .seconds(75),
-        transport: @escaping TransportFactory = { URLSessionWebSocketTransport() }
+        transport: @escaping TransportFactory = { URLSessionWebSocketTransport() },
+        installID: @escaping @Sendable () -> String? = { nil }
     ) {
+        self.installID = installID
         self.codec = codec
         self.requestTimeout = requestTimeout
         self.sessionStartTimeout = sessionStartTimeout
@@ -56,7 +60,7 @@ public actor LiveRemoteClient: RemoteClient {
         try await open(target.address)
         do {
             let reply = try await self.request(
-                .pair(credential: target.credential, deviceName: deviceName),
+                .pair(credential: target.credential, deviceName: deviceName, installID: installID()),
                 id: Self.handshakeID
             )
             // Pairing leaves the connection authenticated, but the app connects afresh with

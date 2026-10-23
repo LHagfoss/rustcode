@@ -71,7 +71,7 @@ the gateway's pings, stays connected.
 Client → host, the first frame:
 
 ```json
-{"type": "pair", "protocol_version": 1, "method": "credential", "secret": "<credential from the QR code>", "device_name": "Lars's iPhone"}
+{"type": "pair", "protocol_version": 1, "method": "credential", "secret": "<credential from the QR code>", "device_name": "Lars's iPhone", "install_id": "6F9619FF-8B86-D011-B42D-00C04FC964FF"}
 {"type": "pair", "protocol_version": 1, "method": "code", "secret": "4821-9034", "device_name": "Lars's iPhone"}
 {"type": "authenticate", "protocol_version": 1, "device_id": "0011223344556677", "token": "<device token>"}
 ```
@@ -99,6 +99,14 @@ Host → client:
   label, not an identity.
 - `device_name` in the answer is the name as the host stored it (trimmed and
   bounded), which may differ from what was sent.
+- `install_id` in `pair` is optional: a random identifier the app generates
+  once per install and keeps across pairings (16 to 128 printable ASCII
+  characters, for example a UUID; anything else is ignored). It is not tied to
+  the user. When a device record was paired with the same `install_id`, the
+  host replaces it: the earlier `device_id` and its token stop working, any
+  connection still open with them is closed with `revoked`, and the answer
+  carries a new `device_id`. Without it, every pairing adds a record. The host
+  stores only its SHA-256 digest.
 
 The pairing QR code encodes this JSON, as one line:
 

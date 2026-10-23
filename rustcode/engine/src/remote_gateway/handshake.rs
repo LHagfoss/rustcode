@@ -65,6 +65,13 @@ pub enum HandshakeRequest {
         secret: Secret,
         /// A label chosen by the device. Never an identity.
         device_name: String,
+        /// A random identifier the app generates once per install and keeps.
+        /// Pairing again with the same one replaces that install's earlier
+        /// device record and revokes its token, instead of adding a record.
+        /// Not tied to the user; ignored unless it is 16 to 128 printable
+        /// ASCII characters. Older apps leave it out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        install_id: Option<String>,
     },
     /// Present a device token obtained from an earlier `paired` frame.
     Authenticate {
@@ -204,6 +211,7 @@ mod tests {
             method: PairingMethod::Code,
             secret: Secret::new("1234-5678"),
             device_name: "phone".into(),
+            install_id: None,
         };
         assert_eq!(
             serde_json::to_string(&pair).unwrap(),
@@ -331,6 +339,7 @@ mod tests {
             method: PairingMethod::Credential,
             secret: Secret::new(needle),
             device_name: "phone".into(),
+            install_id: None,
         };
         let paired = HandshakeResponse::Paired {
             protocol_version: 1,
