@@ -1,3 +1,19 @@
+## [v0.92.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.92.0) - 2026-10-23
+
+### Features
+- macOS: the terminal opens in the folder of the chat on screen, ⌘O chooses the folder for this chat, and ⇧⌘O chooses the default project without moving open chats. (#2313)
+- Fix `/compact` renaming the chat (or hiding it from the session list), most visibly in the macOS app. (#2314)
+- Changing the model or reasoning effort in the TUI (or in one chat) no longer changes the default model new macOS chats start with. (#2315)
+- Restore the compact three-row composer and put the model, mode and approval back in the footer, with cleaner narrow-width degradation. (#2316)
+- macOS: click an image in the viewer to zoom it to half the window's width and click again to fit; the zoom buttons are gone (⌘+, ⌘−, ⌘0 and pinch still work) and Copy and Close are round buttons with hover and press feedback. (#2317)
+- Thinking blocks label OpenAI reasoning summaries as "Reasoning summary" (live and in reopened chats), keep "Thought for Ns" for real reasoning, and never show empty or relabelled-prose thinking blocks. (#2318)
+- iOS: copy a session's ID from the session list's long-press menu, the chat's More actions, or a VoiceOver action. (#2319)
+- The iPhone no longer opens a chat a second time while it is open in the Mac app or a terminal, and it explains why. A chat that fails to load shows the reason with Try Again instead of a blank screen. (#2320)
+- The Mac app shows how long each turn took and when it finished, counts up while working, adds a Copy button under replies, opens message menus on right-click over text, and underlines links. (#2321)
+- The chat no longer jumps back to earlier turns when you scroll up while a reply or tool calls are coming in. (#2322)
+- macOS: long chat messages fold to 12 lines behind Show more / Show less. (#2326)
+- macOS: a timeline beside the chat marks each of your messages, highlights the one you're reading, and jumps to a turn when you click its dot. (#2328)
+- Subagents now appear in the chat where they were started, with live status, and a click opens one. While agents work, a small pill over the composer shows how many; the agents strip above the composer is gone. (#2329)
 ## [v0.91.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.91.0) - 2026-10-22
 
 ### Features
