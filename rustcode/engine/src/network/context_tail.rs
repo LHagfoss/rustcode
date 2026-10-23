@@ -15,8 +15,8 @@ impl Default for ContextCheckpoint {
     fn default() -> Self {
         Self {
             objective: None,
-            edit_status: "no edits made yet",
-            next_action: "inspect the relevant files, then make the smallest scoped change",
+            edit_status: "no edits this turn",
+            next_action: "do what the request asks; change files only if it needs a change",
         }
     }
 }

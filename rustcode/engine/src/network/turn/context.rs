@@ -597,9 +597,11 @@ impl TurnContext {
                 "re-read the target and resolve the failed mutation",
             )
         } else {
+            // Per turn: earlier turns' edits are in history, and a request
+            // such as "stop the server" needs no edit at all.
             (
-                "no edits made yet",
-                "inspect the relevant files, then make the smallest scoped change",
+                "no edits this turn",
+                "do what the request asks; change files only if it needs a change",
             )
         };
 
