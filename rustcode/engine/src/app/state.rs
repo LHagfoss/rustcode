@@ -1444,7 +1444,8 @@ impl AppState {
         self.model_name = profile.model.clone();
         self.api_base_url = profile.url.clone();
         let name = profile.name.clone();
-        self.config.default.set_big(name);
+        self.config.mark_session_effort(&name);
+        self.config.use_profile_for_session(name);
         true
     }
 
@@ -1876,13 +1877,16 @@ impl AppState {
             .and_then(|profile| profile.reasoning_effort.clone())
     }
 
-    /// Set the active profile's reasoning effort, persist it to the config
-    /// and to this session, and report whether a profile was updated.
+    /// Set the active profile's reasoning effort for this session and record
+    /// it there, and report whether a profile was updated. The config file
+    /// keeps the effort new sessions start with.
     pub fn set_active_reasoning_effort(&mut self, effort: Option<String>) -> bool {
         let Some(profile) = self.active_model_profile_mut() else {
             return false;
         };
         profile.reasoning_effort = effort;
+        let name = profile.name.clone();
+        self.config.mark_session_effort(&name);
         crate::config::save_entire_config(&self.config);
         self.record_session_model();
         true

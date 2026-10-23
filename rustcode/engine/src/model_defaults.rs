@@ -1,7 +1,8 @@
 //! The model profile and reasoning effort new sessions start with: the
-//! config's default profile and that profile's effort. The TUI's `/model` and
-//! `/effort` set them as they switch; `rustcode defaults` reads and sets them
-//! for frontends such as the macOS app.
+//! config's default profile and that profile's effort. `rustcode defaults`
+//! reads and sets them for frontends such as the macOS app. Switching model or
+//! effort inside a session (the TUI's `/model` and `/effort`, ACP, remote
+//! controls) changes only that session; see `SessionModelScope`.
 
 use crate::config::AppConfig;
 use serde::Serialize;
@@ -58,6 +59,7 @@ pub fn apply(
             return Err(format!("unknown model profile: {model}"));
         }
         config.default.set_big(model.to_owned());
+        config.session_model.profile = false;
     }
     if let Some(effort) = effort {
         let name = config.default.big().to_owned();
@@ -73,6 +75,7 @@ pub fn apply(
             return Err(format!("{name} does not support reasoning effort {effort}"));
         }
         profile.reasoning_effort = (effort != "default").then(|| effort.to_owned());
+        config.session_model.efforts.remove(&name);
     }
     Ok(())
 }

@@ -270,7 +270,7 @@ private struct GeneralSettings: View {
 
             if let defaults = model.modelDefaults {
                 SettingsGroup(title: "New Chats",
-                              footer: "New chats start with this model and effort; each chat keeps its own once changed. The terminal UI uses the same defaults.") {
+                              footer: "New chats and new terminal UI sessions start with this model and effort. Changing the model inside a chat or a terminal session applies to that session only.") {
                     SettingsRow(title: "Model") {
                         Picker("Model", selection: Binding(get: { defaults.model },
                                                            set: { value in Task { await model.setModelDefaults(model: value) } })) {
