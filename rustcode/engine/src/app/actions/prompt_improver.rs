@@ -27,9 +27,7 @@ pub(crate) fn should_improve(prompt: &str) -> bool {
 /// actually different, not a runaway answer, and still carrying every image
 /// attachment of the original.
 pub(crate) fn accept_rewrite(original: &str, response: &str) -> Option<String> {
-    let rewrite = rustcode_tool_protocol::text::strip_think_blocks(
-        &rustcode_tool_protocol::text::promote_bare_thought_markers(response),
-    );
+    let rewrite = rustcode_tool_protocol::text::strip_think_blocks(response);
     let rewrite = rewrite.trim().trim_matches('"').trim();
     if rewrite.is_empty() || rewrite == original.trim() {
         return None;
@@ -117,7 +115,10 @@ pub(crate) async fn improve_prompt(
     if result.is_err() || cancel.is_cancelled() {
         return None;
     }
-    let response = buffer.lock().await.content.clone();
+    let mut response = buffer.lock().await.content.clone();
+    if rustcode_tool_protocol::text::model_writes_bare_thought_markers(&model) {
+        response = rustcode_tool_protocol::text::promote_bare_thought_markers(&response);
+    }
     accept_rewrite(prompt, &response)
 }
 

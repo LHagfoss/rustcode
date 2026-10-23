@@ -110,7 +110,7 @@ pub(crate) struct TranscriptState {
     /// Where the footer's task counter was painted, if it was.
     pub(crate) tasks_chip: Option<ratatui::layout::Rect>,
     pub(crate) tasks_chip_hovered: bool,
-    /// The permission posture token on the framed composer's settings row.
+    /// The permission posture token in the footer.
     pub(crate) posture_chip: Option<ratatui::layout::Rect>,
     pub(crate) posture_chip_hovered: bool,
     /// Clickable cells of the panel painted last frame: its `esc` hint and
@@ -434,7 +434,7 @@ impl TranscriptState {
             .is_some_and(|area| area.contains(ratatui::layout::Position::new(column, row)))
     }
 
-    /// Whether this cell is on the composer's permission posture token.
+    /// Whether this cell is on the footer's permission posture token.
     pub(crate) fn posture_chip_at(&self, column: u16, row: u16) -> bool {
         self.posture_chip
             .is_some_and(|area| area.contains(ratatui::layout::Position::new(column, row)))
@@ -1151,6 +1151,17 @@ impl TranscriptState {
         }
     }
 
+    /// Label the live message's reasoning as a provider summary or not.
+    pub(crate) fn set_assistant_reasoning_summary(&mut self, reasoning_summary: bool) {
+        if let Some(cell) = self.assistant.as_mut()
+            && cell.reasoning_summary != reasoning_summary
+        {
+            cell.reasoning_summary = reasoning_summary;
+            cell.cached_display.replace(None);
+            self.revision = self.revision.saturating_add(1);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn set_tools(&mut self, calls: &[LiveToolCall]) {
         let changed = self.tools.as_ref().is_none_or(|cell| cell.calls != calls);
@@ -1211,6 +1222,8 @@ pub(super) struct AssistantMarkdownCell {
     pub(super) response_time_ms: Option<u64>,
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,
+    /// Its `<think>` spans are the provider's reasoning summary.
+    reasoning_summary: bool,
     generating: bool,
     pub(super) continuation: bool,
     cached_display: RefCell<Option<(u16, String, Vec<Line<'static>>)>>,
@@ -1258,6 +1271,7 @@ impl AssistantMarkdownCell {
             response_time_ms,
             thought_time_ms,
             thought_tokens,
+            reasoning_summary: false,
             generating: false,
             continuation: false,
             cached_display: RefCell::new(None),
@@ -1278,6 +1292,7 @@ impl AssistantMarkdownCell {
             response_time_ms,
             thought_time_ms,
             thought_tokens,
+            reasoning_summary: false,
             generating: true,
             continuation,
             cached_display: RefCell::new(None),
@@ -1287,6 +1302,11 @@ impl AssistantMarkdownCell {
 }
 
 impl AssistantMarkdownCell {
+    pub(super) fn with_reasoning_summary(mut self, reasoning_summary: bool) -> Self {
+        self.reasoning_summary = reasoning_summary;
+        self
+    }
+
     /// Rows of a finalized message drawn under its widgets' view state, and
     /// the clickable spans of those widgets. Not cached here: the committed
     /// block cache keys on the view state instead.
@@ -1321,6 +1341,7 @@ impl AssistantMarkdownCell {
                 response_time_ms: self.response_time_ms,
                 thought_time_ms: self.thought_time_ms,
                 thought_tokens: self.thought_tokens,
+                reasoning_summary: self.reasoning_summary,
                 is_generating: self.generating,
                 viewport_width: width,
                 show_picker: false,

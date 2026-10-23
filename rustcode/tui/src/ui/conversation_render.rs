@@ -213,6 +213,7 @@ fn render_live_tail_mode(
             live_thought_time_ms,
             live_thought_tokens,
         );
+        transcript.set_assistant_reasoning_summary(state.live_reasoning_summary());
     }
 
     if has_visible_active_cell {
@@ -955,6 +956,7 @@ pub(crate) fn render_committed_history_block_interactive(
         message.thought_time_ms,
         message.thought_tokens,
     )
+    .with_reasoning_summary(message.reasoning_summary)
     .interactive_display_lines(width, views);
     let completion = render_turn_completion(message, width);
     if !completion.is_empty() {
@@ -1053,6 +1055,7 @@ pub(crate) fn render_committed_history_block_snapshot(
                 message.thought_time_ms,
                 message.thought_tokens,
             )
+            .with_reasoning_summary(message.reasoning_summary)
             .display_lines(width);
             let completion = render_turn_completion(message, width);
             if !completion.is_empty() {
@@ -1393,6 +1396,7 @@ pub(super) fn render_committed_assistant_text_with_metrics(
             response_time_ms,
             thought_time_ms,
             thought_tokens,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: width,
             show_picker: false,

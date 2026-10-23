@@ -752,8 +752,7 @@ pub(super) async fn handle_response_recovery(
 
     if ctx.recovery.force_final {
         dbg_log!("Loop wrap-up: recording forced text answer and finishing");
-        let promoted = text::promote_bare_thought_markers(&ctx.response.final_content);
-        let prose = strip_tool_call_syntax(&text::strip_think_blocks(&promoted));
+        let prose = strip_tool_call_syntax(&text::strip_think_blocks(&ctx.response.final_content));
         let clean_prose = prose
             .lines()
             .filter(|line| {

@@ -2209,3 +2209,24 @@ fn a_project_file_cannot_disable_skills() {
     apply_project_toml_config(&mut config, file);
     assert!(config.disabled_skills.is_empty());
 }
+
+#[test]
+fn session_model_choice_falls_back_when_the_file_default_is_gone() {
+    let profile = |name: &str| ModelProfile {
+        name: name.to_owned(),
+        model: name.to_owned(),
+        ..Default::default()
+    };
+    let mut file = AppConfig::default();
+    file.models = vec![profile("old")];
+    file.default.set_big("old".into());
+    // The session renamed "old" and switched to "new".
+    let mut written = AppConfig::default();
+    written.models = vec![profile("new")];
+    written.use_profile_for_session("new".into());
+
+    written.keep_file_model_defaults(&file);
+
+    assert_eq!(written.default.big(), "new");
+    assert_eq!(written.session_model, SessionModelScope::default());
+}

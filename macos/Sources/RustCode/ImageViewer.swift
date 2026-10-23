@@ -50,8 +50,9 @@ extension EnvironmentValues {
     }
 }
 
-/// The image viewer over the window: the image fitted to it, zoomed with a
-/// pinch, ⌘+ and ⌘− or a double-click, and scrolled when larger than the
+/// The image viewer over the window: the image fitted to it, a click on it
+/// toggling between that and a zoomed size (`ImageZoom.zoomed`), a pinch or
+/// ⌘+, ⌘− and ⌘0 for any other scale, and scrolled when larger than the
 /// window. Esc, the close button or a click beside the image closes it.
 struct ImageViewer: View {
     let image: ViewedImage
@@ -61,6 +62,7 @@ struct ImageViewer: View {
     @State private var zoom = ImageZoom()
     @State private var pinchStart: Double?
     @State private var bounds = CGSize(width: 1, height: 1)
+    @State private var window = CGSize(width: 1, height: 1)
 
     var body: some View {
         ZStack {
@@ -70,8 +72,8 @@ struct ImageViewer: View {
                 .onTapGesture(perform: close)
             GeometryReader { geometry in
                 content(in: geometry.size)
-                    .onAppear { bounds = viewport(geometry.size) }
-                    .onChange(of: geometry.size) { _, size in bounds = viewport(size) }
+                    .onAppear { resize(geometry.size) }
+                    .onChange(of: geometry.size) { _, size in resize(size) }
             }
             .padding(.top, 52)
         }
@@ -81,6 +83,11 @@ struct ImageViewer: View {
             failed = loaded == nil
         }
         .accessibilityAddTraits(.isModal)
+    }
+
+    private func resize(_ size: CGSize) {
+        bounds = viewport(size)
+        window = size
     }
 
     /// Where the fitted image goes: the window less a margin.
@@ -101,8 +108,13 @@ struct ImageViewer: View {
                         .interpolation(scale > 2 ? .none : .high)
                         .frame(width: loaded.size.width * scale, height: loaded.size.height * scale)
                         .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
-                        .onTapGesture(count: 2) { withAnimation(.snappy(duration: 0.2)) { zoom.toggleActualSize() } }
+                        .contentShape(.rect)
+                        .onTapGesture { animate { zoom.toggleZoom(fitting: loaded.size, in: bounds, window: window) } }
+                        .help(zoom.isFitted ? "Click to zoom" : "Click to fit")
                         .accessibilityLabel(image.name)
+                        .accessibilityValue(zoom.isFitted ? "Fitted" : "Zoomed")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHint(zoom.isFitted ? "Zooms in" : "Fits to the window")
                 }
                 .frame(minWidth: size.width, minHeight: size.height)
             }
@@ -135,38 +147,84 @@ struct ImageViewer: View {
                 .padding(.leading, 6)
             Spacer(minLength: 12)
             if let loaded {
+                // The zoom cue: a quiet percentage while fitted, a lit one
+                // while zoomed.
                 Text("\(Int((zoom.current(fitting: loaded.size, in: bounds) * 100).rounded()))%")
                     .font(.callout.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.7))
-                    .frame(minWidth: 48)
-                barButton("minus.magnifyingglass", help: "Zoom Out (⌘−)", key: "-") { zoom.zoomOut(fitting: loaded.size, in: bounds) }
-                barButton("arrow.up.left.and.down.right.magnifyingglass", help: "Fit to Window (⌘0)", key: "0") { zoom.fit() }
-                barButton("plus.magnifyingglass", help: "Zoom In (⌘+)", key: "=") { zoom.zoomIn(fitting: loaded.size, in: bounds) }
+                    .foregroundStyle(.white.opacity(zoom.isFitted ? 0.6 : 0.95))
+                    .padding(.horizontal, 8)
+                    .frame(minWidth: 52, minHeight: 24)
+                    .background(.white.opacity(zoom.isFitted ? 0 : 0.14), in: .capsule)
+                    .accessibilityLabel(zoom.isFitted ? "Fitted" : "Zoomed")
+                    .accessibilityValue("\(Int((zoom.current(fitting: loaded.size, in: bounds) * 100).rounded())) percent")
+                    .background { zoomKeys(loaded.size) }
                 barButton("doc.on.doc", help: "Copy Image") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.writeObjects([loaded])
                 }
             }
-            Button(action: close) { Image(systemName: "xmark").frame(width: 28, height: 28).contentShape(.rect) }
-                .buttonStyle(.plain)
+            barButton("xmark", help: "Close (Esc)", action: close)
                 .keyboardShortcut(.cancelAction)
-                .help("Close (Esc)")
+                .accessibilityLabel("Close")
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 12)
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
         .frame(height: 40)
         .background(.black.opacity(0.35), in: .capsule)
         .padding(.horizontal, 80)
         .padding(.top, 8)
     }
 
-    @ViewBuilder
-    private func barButton(_ systemImage: String, help: String, key: KeyEquivalent? = nil, action: @escaping () -> Void) -> some View {
-        let button = Button { withAnimation(.snappy(duration: 0.2)) { action() } } label: {
-            Image(systemName: systemImage).frame(width: 28, height: 28).contentShape(.rect)
+    /// ⌘+, ⌘− and ⌘0, kept without buttons of their own: a click on the
+    /// image does what the buttons did.
+    private func zoomKeys(_ size: CGSize) -> some View {
+        ZStack {
+            Button("Zoom In") { animate { zoom.zoomIn(fitting: size, in: bounds) } }
+                .keyboardShortcut("=", modifiers: .command)
+            Button("Zoom Out") { animate { zoom.zoomOut(fitting: size, in: bounds) } }
+                .keyboardShortcut("-", modifiers: .command)
+            Button("Fit to Window") { animate { zoom.fit() } }
+                .keyboardShortcut("0", modifiers: .command)
         }
         .buttonStyle(.plain)
-        .help(help)
-        if let key { button.keyboardShortcut(key, modifiers: .command) } else { button }
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func animate(_ change: () -> Void) {
+        withAnimation(.snappy(duration: 0.2), change)
+    }
+
+    private func barButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: systemImage) }
+            .buttonStyle(RoundOverlayButtonStyle())
+            .help(help)
+    }
+}
+
+/// A round icon button on the viewer's dark bar: a faint disc on hover that
+/// deepens and shrinks a little when pressed.
+private struct RoundOverlayButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        RoundOverlayButton(configuration: configuration)
+    }
+}
+
+private struct RoundOverlayButton: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var hovered = false
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .frame(width: 30, height: 30)
+            .background(.white.opacity(configuration.isPressed ? 0.28 : hovered ? 0.16 : 0), in: .circle)
+            .contentShape(.circle)
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(.snappy(duration: 0.15), value: hovered)
+            .animation(.snappy(duration: 0.1), value: configuration.isPressed)
+            .onHover { hovered = $0 }
     }
 }

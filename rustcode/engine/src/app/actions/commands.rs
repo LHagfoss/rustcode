@@ -515,7 +515,7 @@ pub fn build_help_text() -> String {
         (
             "Model & Configuration:",
             &[
-                ("/model", "Open model picker or switch profile"),
+                ("/model", "Switch this session's model profile"),
                 ("/quota", "Show provider quota and remaining limits"),
                 (
                     "/login",
@@ -689,10 +689,12 @@ pub fn select_picker_model(s: &mut AppState) {
     if let Some(profile) = selected_model_picker_profile(s).cloned() {
         s.api_base_url = profile.url.clone();
         s.model_name = profile.model.clone();
-        s.config.default.set_big(profile.name.clone());
-        crate::config::save_entire_config(&s.config);
+        s.config.use_profile_for_session(profile.name.clone());
         s.record_session_model();
-        s.set_transient_notice(format!("Switched to model profile '{}'", profile.name));
+        s.set_transient_notice(format!(
+            "Switched this session to model profile '{}'",
+            profile.name
+        ));
     }
 }
 

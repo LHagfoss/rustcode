@@ -272,11 +272,13 @@ fn replay_history_updates(
                 )))
             }
             "assistant" => {
-                if !message.content.is_empty() {
-                    updates.push(SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                        ContentBlock::Text(TextContent::new(message.content.clone())),
-                    )));
-                }
+                // Reasoning goes out as thought chunks, as it did live, so
+                // the client labels a replayed thought as it did then.
+                updates.extend(streaming::AcpEventStream::replay_assistant_text(
+                    &message.content,
+                    message.reasoning_summary,
+                    message.thought_time_ms.filter(|ms| *ms > 0),
+                ));
                 for call in &message.tool_calls {
                     let raw_input = serde_json::from_str(&call.arguments)
                         .unwrap_or_else(|_| serde_json::json!({"raw": call.arguments}));
@@ -2423,6 +2425,111 @@ mod tests {
             SessionUpdate::AgentMessageChunk(chunk)
                 if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "Unstreamed answer")
         ));
+    }
+
+    fn thought_chunks(updates: &[SessionUpdate]) -> Vec<(String, serde_json::Value)> {
+        updates
+            .iter()
+            .filter_map(|update| match update {
+                SessionUpdate::AgentThoughtChunk(chunk) => {
+                    match &chunk.content {
+                        ContentBlock::Text(text) => {
+                            Some(
+                                (
+                                    text.text.clone(),
+                                    serde_json::Value::Object(
+                                        chunk.meta.clone().unwrap_or_default(),
+                                    )["rustcode"]
+                                        .clone(),
+                                ),
+                            )
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    // #2299: a thought says whether it is the provider's summary or the
+    // model's reasoning text, and whitespace alone never opens one.
+    #[test]
+    fn acp_event_stream_labels_thoughts_by_source_and_skips_empty_ones() {
+        let mut stream = AcpEventStream::new();
+        let raw = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "<think>\nLet me check.</think>Answer".to_string(),
+        });
+        assert_eq!(
+            thought_chunks(&raw),
+            vec![(
+                "Let me check.".to_string(),
+                serde_json::json!({"thoughtSource": "raw"})
+            )]
+        );
+
+        assert!(
+            stream
+                .updates(crate::network::AgentUiEvent::ReasoningSource { summary: true })
+                .is_empty()
+        );
+        let empty = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "<think>\n\n".to_string(),
+        });
+        assert!(thought_chunks(&empty).is_empty(), "{empty:?}");
+        let summary = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "**Searching online**</think>".to_string(),
+        });
+        assert_eq!(
+            thought_chunks(&summary),
+            vec![(
+                "**Searching online**".to_string(),
+                serde_json::json!({"thoughtSource": "summary"})
+            )]
+        );
+    }
+
+    // #2299: a replayed turn sends its reasoning as thought chunks with the
+    // label and duration it had live, not as `<think>` inside message text.
+    #[test]
+    fn replayed_reasoning_is_sent_as_labelled_thoughts() {
+        let mut summarized = crate::app::ChatMessage::new(
+            "assistant",
+            "<think>\n**Inspecting site**\n</think>\n\nDone.",
+        );
+        summarized.reasoning_summary = true;
+        summarized.thought_time_ms = Some(4000);
+        let mut reasoned =
+            crate::app::ChatMessage::new("assistant", "<think>Let me check.</think>Fine.");
+        reasoned.thought_time_ms = Some(0);
+
+        let updates = replay_history_updates(&[summarized, reasoned], None);
+
+        assert_eq!(
+            thought_chunks(&updates),
+            vec![
+                (
+                    "**Inspecting site**\n".to_string(),
+                    serde_json::json!({"thoughtSource": "summary", "thoughtMs": 4000})
+                ),
+                (
+                    "Let me check.".to_string(),
+                    serde_json::json!({"thoughtSource": "raw"})
+                ),
+            ]
+        );
+        let prose = updates
+            .iter()
+            .filter_map(|update| match update {
+                SessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
+                    ContentBlock::Text(text) => Some(text.text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(prose, "\n\nDone.Fine.");
+        assert!(!prose.contains("<think>"));
     }
 
     #[test]

@@ -7,6 +7,13 @@ pub(crate) struct AcpEventStream {
     streamed_prose: String,
     pending: String,
     in_thought: bool,
+    /// The open thought has shown text; whitespace before that is dropped,
+    /// so a client never gets a thought with nothing in it.
+    thought_has_text: bool,
+    /// Thoughts are the provider's reasoning summary, not reasoning text.
+    reasoning_summary: bool,
+    /// How long the reasoning took, sent with replayed thoughts.
+    thought_ms: Option<u64>,
     /// The session directory, for edit paths a receipt does not resolve.
     cwd: Option<std::path::PathBuf>,
 }
@@ -17,6 +24,9 @@ impl AcpEventStream {
             streamed_prose: String::new(),
             pending: String::new(),
             in_thought: false,
+            thought_has_text: false,
+            reasoning_summary: false,
+            thought_ms: None,
             cwd: None,
         }
     }
@@ -32,10 +42,51 @@ impl AcpEventStream {
         ))))
     }
 
-    fn thought_update(text: String) -> SessionUpdate {
-        SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
-            text,
-        ))))
+    /// A piece of reasoning. `_meta.rustcode.thoughtSource` says what it is:
+    /// `summary`, the provider's summary of reasoning it keeps hidden, or
+    /// `raw`, reasoning text the model streamed. Replayed thoughts also carry
+    /// `thoughtMs`, how long the reasoning took.
+    fn thought_update(&mut self, text: String) -> Option<SessionUpdate> {
+        let text = if self.thought_has_text {
+            text
+        } else {
+            text.trim_start().to_owned()
+        };
+        if text.is_empty() {
+            return None;
+        }
+        self.thought_has_text = true;
+        let mut meta = serde_json::Map::new();
+        let source = if self.reasoning_summary {
+            "summary"
+        } else {
+            "raw"
+        };
+        meta.insert("thoughtSource".into(), source.into());
+        if let Some(ms) = self.thought_ms {
+            meta.insert("thoughtMs".into(), ms.into());
+        }
+        Some(SessionUpdate::AgentThoughtChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
+                .meta(rustcode_meta(serde_json::Value::Object(meta))),
+        ))
+    }
+
+    /// A stored assistant message as the live stream sent it: prose as
+    /// message chunks, each `<think>` span as thought chunks labelled with
+    /// the message's reasoning source, so a replayed turn reads like the
+    /// live one.
+    pub(crate) fn replay_assistant_text(
+        content: &str,
+        reasoning_summary: bool,
+        thought_ms: Option<u64>,
+    ) -> Vec<SessionUpdate> {
+        let mut stream = Self::new();
+        stream.reasoning_summary = reasoning_summary;
+        stream.thought_ms = thought_ms;
+        let mut updates = stream.process_text_delta(content.to_owned());
+        updates.extend(stream.flush());
+        updates
     }
 
     fn flush(&mut self) -> Vec<SessionUpdate> {
@@ -43,7 +94,7 @@ impl AcpEventStream {
         if !self.pending.is_empty() {
             let pending = std::mem::take(&mut self.pending);
             if self.in_thought {
-                updates.push(Self::thought_update(pending));
+                updates.extend(self.thought_update(pending));
             } else {
                 self.streamed_prose.push_str(&pending);
                 updates.push(Self::text_update(pending));
@@ -65,9 +116,7 @@ impl AcpEventStream {
             if self.in_thought {
                 if let Some(idx) = self.pending.find(CLOSE_TAG) {
                     let thought = self.pending[..idx].to_string();
-                    if !thought.is_empty() {
-                        updates.push(Self::thought_update(thought));
-                    }
+                    updates.extend(self.thought_update(thought));
                     self.pending.drain(..idx + CLOSE_TAG.len());
                     self.in_thought = false;
                 } else {
@@ -80,7 +129,7 @@ impl AcpEventStream {
                     let emit_len = self.pending.len() - matched_prefix_len;
                     if emit_len > 0 {
                         let thought: String = self.pending.drain(..emit_len).collect();
-                        updates.push(Self::thought_update(thought));
+                        updates.extend(self.thought_update(thought));
                     }
                     break;
                 }
@@ -92,6 +141,7 @@ impl AcpEventStream {
                 }
                 self.pending.drain(..idx + OPEN_TAG.len());
                 self.in_thought = true;
+                self.thought_has_text = false;
             } else {
                 let matched_prefix_len = OPEN_PREFIXES
                     .iter()
@@ -115,6 +165,10 @@ impl AcpEventStream {
     pub(crate) fn updates(&mut self, event: crate::network::AgentUiEvent) -> Vec<SessionUpdate> {
         match event {
             crate::network::AgentUiEvent::TextDelta { text } => self.process_text_delta(text),
+            crate::network::AgentUiEvent::ReasoningSource { summary } => {
+                self.reasoning_summary = summary;
+                Vec::new()
+            }
             crate::network::AgentUiEvent::ToolStarted {
                 name,
                 id,
@@ -186,7 +240,7 @@ impl AcpEventStream {
             #[cfg(test)]
             crate::network::AgentUiEvent::TurnRecovered { message } => {
                 let mut updates = self.flush();
-                updates.push(Self::thought_update(message));
+                updates.extend(self.thought_update(message));
                 updates
             }
             crate::network::AgentUiEvent::TurnFinished { content, .. } => {
@@ -203,8 +257,9 @@ impl AcpEventStream {
                     }
                     return updates;
                 }
-                let promoted = rustcode_tool_protocol::text::promote_bare_thought_markers(&content);
-                let prose = rustcode_tool_protocol::text::strip_think_blocks(&promoted);
+                // The turn already put reasoning a model wrote behind bare
+                // `thought` markers into `<think>` spans (`turn::run_round`).
+                let prose = rustcode_tool_protocol::text::strip_think_blocks(&content);
                 let trimmed_prose = prose.trim();
                 if !trimmed_prose.is_empty()
                     && !self.streamed_prose.ends_with(&prose)

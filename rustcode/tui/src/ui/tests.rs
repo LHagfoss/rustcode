@@ -6020,6 +6020,7 @@ fn code_blocks_render_as_lightweight_transcript_rows() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: width,
             show_picker: false,
@@ -6062,6 +6063,7 @@ fn streamed_markdown_fences_keep_adversarial_content_in_the_code_cell() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: true,
             viewport_width: 80,
             show_picker: false,
@@ -6093,6 +6095,7 @@ fn streamed_markdown_fences_keep_adversarial_content_in_the_code_cell() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -6126,6 +6129,7 @@ fn diff_code_blocks_preserve_patch_context_like_codex() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -6165,6 +6169,7 @@ fn thinking_with_tool_calls_hides_serialized_tool_blocks() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -6208,15 +6213,70 @@ fn thought_parser_handles_missing_open_tag() {
     assert_eq!(preview.as_deref(), Some("Reasoning about user request."));
 }
 
+// #2299: prose before a `<think>` span is the answer however it begins; only
+// delimited text is reasoning, so a reply that sounds like a plan is never
+// relabelled as thinking.
 #[test]
-fn thought_parser_captures_preamble_before_think_tag() {
-    let raw = "Okay, the user is asking hello how are you, which I should respond to politely.\n\nFirst, I must check skills.\n\n<think>\nI will provide a standard friendly response.\n</think>\n\nHello! I am doing well, thank you for asking.";
+fn thought_parser_keeps_plan_like_prose_as_the_answer() {
+    let raw = "Okay, the user is asking hello how are you.\n\nFirst, I must check skills.\n\n<think>\nI will provide a standard friendly response.\n</think>\n\nHello! I am doing well.";
     let (answer, preview) = split_thought_blocks(raw);
-    assert_eq!(answer, "Hello! I am doing well, thank you for asking.");
+    assert!(answer.starts_with("Okay, the user is asking"), "{answer}");
+    assert!(answer.contains("First, I must check skills."), "{answer}");
+    assert!(answer.ends_with("Hello! I am doing well."), "{answer}");
     assert_eq!(
         preview.as_deref(),
-        Some("Okay, the user is asking hello how are you, which I should respond to politely.")
+        Some("I will provide a standard friendly response.")
     );
+
+    // Without any span there is no thought at all.
+    let (answer, preview) = split_thought_blocks("Let's look at the parser first.");
+    assert_eq!(answer, "Let's look at the parser first.");
+    assert_eq!(preview, None);
+}
+
+// #2299: a provider's reasoning summary is labelled as one, raw reasoning keeps
+// "Thought for", and an empty span shows no header at all.
+#[test]
+fn reasoning_summary_header_is_labelled_as_a_summary() {
+    use super::{AssistantRenderOptions, render_assistant_message};
+    let render = |content: &str, reasoning_summary: bool| {
+        let mut lines = Vec::new();
+        let mut copies = Vec::new();
+        render_assistant_message(
+            content,
+            &mut lines,
+            &mut copies,
+            AssistantRenderOptions {
+                token_usage: None,
+                response_time_ms: None,
+                thought_time_ms: Some(4000),
+                thought_tokens: None,
+                reasoning_summary,
+                is_generating: false,
+                viewport_width: 80,
+                show_picker: false,
+                last_copy_text: None,
+            },
+        );
+        lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let content = "<think>\n**Inspecting site and GitHub**\n</think>\n\nDone.";
+
+    let summary = render(content, true);
+    assert!(summary.contains("Reasoning summary · 4s"), "{summary}");
+    assert!(!summary.contains("Thought"), "{summary}");
+    assert!(summary.contains("Inspecting site and GitHub"), "{summary}");
+
+    let raw = render(content, false);
+    assert!(raw.contains("Thought for 4s"), "{raw}");
+
+    let empty = render("<think>\n\n</think>\n\nDone.", true);
+    assert!(!empty.contains("Reasoning summary"), "{empty}");
+    assert!(!empty.contains("Thought"), "{empty}");
 }
 
 fn thought_preview_text(text: &str, max_width: usize) -> String {
@@ -6304,6 +6364,7 @@ fn test_thinking_renders_metadata_and_summary() {
             response_time_ms: Some(3000),
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -6351,6 +6412,7 @@ fn thinking_metadata_uses_thought_stats_not_full_response_stats() {
             response_time_ms: Some(9000),
             thought_time_ms: Some(1250),
             thought_tokens: Some(42),
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -7330,8 +7392,8 @@ fn footer_counts_tasks_and_reports_where_the_counter_is() {
                     None,
                     false,
                     false,
-                    false,
-                );
+                )
+                .tasks_chip;
             })
             .unwrap();
         let row = (0..80)
@@ -8410,6 +8472,7 @@ fn assistant_messages_use_a_gutter_after_soft_reflow() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 20,
             show_picker: false,
@@ -8453,6 +8516,7 @@ fn assistant_message_uses_one_gutter_across_paragraphs() {
             response_time_ms: None,
             thought_time_ms: None,
             thought_tokens: None,
+            reasoning_summary: false,
             is_generating: false,
             viewport_width: 80,
             show_picker: false,
@@ -8765,6 +8829,7 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
         response_time_ms: None,
         thought_time_ms: Some(1500),
         thought_tokens: Some(100),
+        reasoning_summary: false,
         is_generating: false,
         viewport_width: 80,
         show_picker: false,
@@ -8783,6 +8848,7 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
         response_time_ms: None,
         thought_time_ms: Some(2000),
         thought_tokens: Some(150),
+        reasoning_summary: false,
         is_generating: false,
         viewport_width: 80,
         show_picker: false,
@@ -8854,7 +8920,7 @@ fn streaming_layout_keeps_composer_and_footer_visible_with_gaps() {
 }
 
 #[test]
-fn empty_composer_is_framed_with_settings_inside_and_location_footer() {
+fn empty_composer_is_a_compact_band_with_settings_in_the_footer() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
     use crate::inline_terminal::InlineTerminal as Terminal;
@@ -8887,60 +8953,43 @@ fn empty_composer_is_framed_with_settings_inside_and_location_footer() {
         Some(prompt_row - 1),
         "shutdown should know where the transient composer begins"
     );
-    // A blank band row above the input, the prompt, a gap row, the settings
-    // row, a blank band row under it, then the footer. No outline (#2246).
+    // The v0.87.0 band: a blank row above and below the prompt, which sits in
+    // the first column, then the footer. No outline, no settings row (#2301).
+    assert_eq!(input_area.height, 3);
     let band_top = row_text(prompt_row - 1);
     assert!(band_top.trim().is_empty(), "band top: {band_top:?}");
     assert!(
-        row_text(prompt_row).starts_with("  › Ask RustCode"),
+        row_text(prompt_row).starts_with("› Ask RustCode"),
         "{:?}",
         row_text(prompt_row)
     );
     assert!(!row_text(prompt_row).contains('│'), "no outline (#2246)");
-    let gap = row_text(prompt_row + 1);
-    assert!(gap.trim().is_empty(), "gap row: {gap:?}");
-    let settings = row_text(prompt_row + 2);
-    assert!(
-        settings.starts_with(&format!("    Build · ask · {}", state.model_name)),
-        "settings row: {settings:?}"
-    );
-    let band_bottom = row_text(prompt_row + 3);
+    let band_bottom = row_text(prompt_row + 1);
     assert!(
         band_bottom.trim().is_empty(),
         "band bottom: {band_bottom:?}"
     );
-    assert_eq!(footer_row, prompt_row + 4);
+    assert_eq!(footer_row, prompt_row + 2);
 
     let footer = row_text(footer_row);
     assert!(
-        footer.starts_with("  main · ~/code/project"),
+        footer.starts_with(&format!(
+            "  Build · ask · {} · main · ~/code/project",
+            state.model_name
+        )),
         "composer footer: {footer:?}"
     );
-    for moved in [
-        state.model_name.as_str(),
-        "Build",
-        "ask",
-        "auto-approve",
-        "Plan",
-    ] {
-        assert!(
-            !footer.contains(moved),
-            "{moved} moved into the composer: {footer:?}"
-        );
-    }
     // The whole band is the composer panel colour, above and below the input,
     // and the footer keeps the transcript background.
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(2, prompt_row)].bg, COLOR_PANEL());
     assert_eq!(buffer[(2, prompt_row + 1)].bg, COLOR_PANEL());
-    assert_eq!(buffer[(2, prompt_row + 2)].bg, COLOR_PANEL());
-    assert_eq!(buffer[(2, prompt_row + 3)].bg, COLOR_PANEL());
     assert_eq!(buffer[(98, prompt_row)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
 }
 
 /// Render one frame and return its rows, the composer rect and the cursor.
-fn draw_framed_composer(
+fn draw_composer(
     state: &mut RenderState,
     transcript: &mut TranscriptState,
     width: u16,
@@ -8970,7 +9019,7 @@ fn draw_framed_composer(
 }
 
 #[test]
-fn settings_row_names_the_mode_and_shows_the_approval_posture() {
+fn footer_names_the_mode_and_shows_the_approval_posture() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     use rustcode::controller::AgentMode;
 
@@ -8988,98 +9037,105 @@ fn settings_row_names_the_mode_and_shows_the_approval_posture() {
         assert_eq!(super::mode_token(&snapshot), expected_mode);
         assert_eq!(super::approval_token(&snapshot), expected_approval);
 
-        let mut transcript = TranscriptState::default();
-        let (rows, area, _) = draw_framed_composer(&mut state, &mut transcript, 100, 12);
-        let settings = &rows[usize::from(area.bottom() - 2)];
-        assert!(
-            settings.starts_with(&format!(
-                "    {expected_mode} · {expected_approval} · {}",
-                state.model_name
-            )),
-            "{mode:?}/{auto_confirm}: {settings:?}"
-        );
-        // Plan mode is read-only, so auto-approve never shows beside it. The
-        // default `Build · ask` never leaks into the footer once the composer
-        // carries it; only a plan/auto-approve badge appears without a frame.
-        assert!(!settings.contains('│'), "no outline (#2246)");
-        if mode == AgentMode::Plan {
-            assert!(!settings.contains("auto-approve"), "{settings:?}");
-        }
-        let footer = &rows[11];
-        for token in ["read-only", "auto-approve", "Plan"] {
-            assert!(!footer.contains(token), "{token} leaked into {footer:?}");
-        }
-
-        // The posture label (mode and approval) is a click target over exactly
-        // its cells, never the model beside it.
-        let chip = transcript.posture_chip.expect("posture is clickable");
-        assert_eq!(chip.y, area.bottom() - 2);
-        let painted = (chip.x..chip.right())
-            .map(|x| settings.chars().nth(usize::from(x)).unwrap())
-            .collect::<String>();
-        assert_eq!(painted, format!("{expected_mode} · {expected_approval}"));
-
-        // Below the fallback width there is no band and no outline.
-        let narrow = render_state_to_text(&mut state, super::COMPOSER_FRAME_MIN_WIDTH - 1, 12);
-        assert!(!narrow.contains('╭'), "{narrow}");
-        assert!(!narrow.contains("Build · ask"), "{narrow}");
-
-        // The unframed footer carries the model plus only a non-default
-        // posture. Plan mode always shows there, since it changes what Enter
-        // lets the model do; the default `Build · ask` stays out of it.
-        let badges = super::footer_session_badges(&snapshot);
-        assert_eq!(badges[0], state.model_name);
-        match (mode, auto_confirm) {
-            (AgentMode::Plan, _) => {
-                assert_eq!(badges[1], "Plan · read-only", "{badges:?}");
-                assert!(!badges.iter().any(|b| b.contains("auto-approve")));
+        for width in [100, 60, 40] {
+            let mut transcript = TranscriptState::default();
+            let (rows, area, _) = draw_composer(&mut state, &mut transcript, width, 12);
+            // The composer holds only the input.
+            assert!(
+                rows[usize::from(area.y)..usize::from(area.bottom())]
+                    .iter()
+                    .all(|row| !row.contains(expected_approval)),
+                "{mode:?}/{auto_confirm} at {width}: posture left in the composer"
+            );
+            let footer = &rows[11];
+            assert!(
+                footer.starts_with(&format!("  {expected_mode} · {expected_approval}")),
+                "{mode:?}/{auto_confirm} at {width}: {footer:?}"
+            );
+            // At 40 columns `Build · auto-approve` keeps its columns and the
+            // context figure shortens to `100% left`.
+            assert!(footer.contains("% "), "{width}: {footer:?}");
+            if width >= 60 {
+                assert!(footer.contains("context left"), "{width}: {footer:?}");
             }
-            (AgentMode::Build, true) => assert_eq!(badges[1], "auto-approve", "{badges:?}"),
-            (AgentMode::Build, false) => assert_eq!(badges.len(), 1, "{badges:?}"),
+            // Plan mode is read-only, so auto-approve never shows beside it.
+            if mode == AgentMode::Plan {
+                assert!(!footer.contains("auto-approve"), "{footer:?}");
+            }
+
+            // The posture label (mode and approval) is a click target over
+            // exactly its cells, never the model beside it.
+            let chip = transcript.posture_chip.expect("posture is clickable");
+            assert_eq!(chip.y, 11);
+            let painted = footer
+                .chars()
+                .skip(usize::from(chip.x))
+                .take(usize::from(chip.width))
+                .collect::<String>();
+            assert_eq!(painted, format!("{expected_mode} · {expected_approval}"));
         }
     }
 }
 
 #[test]
-fn settings_row_drops_the_posture_before_the_model() {
+fn footer_metadata_yields_from_the_end_instead_of_cutting_mid_item() {
     let mut state = RenderState::new();
     state.model_name = "gemini-3.6-flash".to_owned();
+    state.cwd_and_branch = "~/code/project:main".to_owned();
     let snapshot = render_snapshot(&state);
-    let model = Some("gemini-3.6-flash".to_owned());
-    // Two columns of indent and the free cursor column come off the width.
-    // `Build · ask` (11) and the separators cost 14 columns before the model.
+    let metadata = |available| super::footer_metadata(&snapshot, available).0;
+    let full = "  Build · ask · gemini-3.6-flash · main · ~/code/project";
+    assert_eq!(metadata(full.width()), full);
+    // A long path is clipped while a few of its columns still show ...
     assert_eq!(
-        super::composer_settings(&snapshot, 33),
-        super::ComposerSettings {
-            mode: Some("Build"),
-            approval: Some("ask"),
-            model: model.clone()
-        }
+        metadata(full.width() - 4),
+        "  Build · ask · gemini-3.6-flash · main · ~/code/pr…"
     );
-    assert_eq!(
-        super::composer_settings(&snapshot, 32),
-        super::ComposerSettings {
-            mode: None,
-            approval: None,
-            model: model.clone()
+    // ... then dropped, then the branch, then the model; the posture stays.
+    assert_eq!(metadata(45), "  Build · ask · gemini-3.6-flash · main");
+    assert_eq!(metadata(38), "  Build · ask · gemini-3.6-flash");
+    assert_eq!(metadata(31), "  Build · ask");
+    assert_eq!(metadata(13), "  Build · ask");
+    assert_eq!(metadata(8), "  Build…");
+    assert_eq!(super::footer_metadata(&snapshot, 8).1, 2);
+}
+
+#[test]
+fn narrow_footer_keeps_the_posture_and_never_runs_into_the_context_figure() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    for width in 10..=120u16 {
+        let mut state = RenderState::new();
+        state.cwd_and_branch = "~/code/some/longer/project:feature/branch".to_owned();
+        state.auto_confirm = true;
+        let mut transcript = TranscriptState::default();
+        let (rows, _, _) = draw_composer(&mut state, &mut transcript, width, 12);
+        let footer = rows[11].trim_end();
+        let posture = "  Build · auto-approve";
+        // The context figure always stays: it shortens to `100% left`, then
+        // `100%`, and only below that is the posture clipped and no longer a
+        // target.
+        let percent = footer.rfind('%').expect("context figure");
+        if usize::from(width) < posture.width() + "  100%  ".width() {
+            assert_eq!(transcript.posture_chip, None, "width {width}");
+            continue;
         }
-    );
-    assert_eq!(
-        super::composer_settings(&snapshot, 19),
-        super::ComposerSettings {
-            mode: None,
-            approval: None,
-            model
+        assert!(footer.starts_with(posture), "width {width}: {footer:?}");
+        assert!(
+            transcript.posture_chip.is_some(),
+            "width {width}: posture not clickable"
+        );
+        // The figure is always separated by at least two blank columns from
+        // the metadata, so neither reads into the other.
+        let figure = footer[..percent]
+            .rfind(|c: char| !c.is_ascii_digit())
+            .map_or(0, |index| index + 1);
+        // The absolute budget, `~1/128k · `, rides along in front of it.
+        let mut before = &footer[..figure];
+        if let Some(stripped) = before.strip_suffix(" · ") {
+            before = stripped.trim_end_matches(|c: char| c != ' ');
         }
-    );
-    assert_eq!(
-        super::composer_settings(&snapshot, 18),
-        super::ComposerSettings {
-            mode: None,
-            approval: None,
-            model: None
-        }
-    );
+        assert!(before.ends_with("  "), "width {width}: {footer:?}");
+    }
 }
 
 #[test]
@@ -9097,6 +9153,7 @@ fn hovering_the_posture_token_highlights_it() {
         })
         .unwrap();
     let chip = transcript.posture_chip.expect("posture chip");
+    assert_eq!(chip.y, 11, "the posture sits in the footer");
     assert!(transcript.posture_chip_at(chip.x, chip.y));
     assert!(!transcript.posture_chip_at(chip.right(), chip.y));
     transcript.posture_chip_hovered = true;
@@ -9110,17 +9167,8 @@ fn hovering_the_posture_token_highlights_it() {
         COLOR_HOVER_BG()
     );
 
-    // No composer, no posture target: an approval pane replaces it.
-    state.status = AppStatus::AwaitingToolConfirmation;
-    state.pending_tool_confirmation = Some(vec![rustcode::controller::ToolConfirmation {
-        request_id: None,
-        tool_name: "run_command".to_owned(),
-        path: "cargo test".to_owned(),
-        content_preview: String::new(),
-        content_bytes: 0,
-        rememberable_prefix: None,
-        forbidden_prefix: None,
-    }]);
+    // A notice replaces the metadata, and the posture target goes with it.
+    state.transient_notice = Some("Copied selection to clipboard".to_owned());
     terminal
         .draw(|frame| {
             render_with_transcript(frame, &mut state, &mut transcript);
@@ -9130,7 +9178,7 @@ fn hovering_the_posture_token_highlights_it() {
 }
 
 #[test]
-fn resizing_keeps_the_cursor_inside_the_frame_and_the_footer_one_row() {
+fn resizing_keeps_the_cursor_inside_the_band_and_the_footer_one_row() {
     let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let height = 20;
     for width in 16..=200u16 {
@@ -9139,48 +9187,35 @@ fn resizing_keeps_the_cursor_inside_the_frame_and_the_footer_one_row() {
             "a draft that wraps across several rows of the composer at narrow widths".to_owned();
         state.cursor_position = state.input_buffer.len();
         let mut transcript = TranscriptState::default();
-        let (rows, area, cursor) = draw_framed_composer(&mut state, &mut transcript, width, height);
+        let (rows, area, cursor) = draw_composer(&mut state, &mut transcript, width, height);
         // The footer keeps exactly one row, directly under the composer.
         assert_eq!(area.bottom() + 1, height, "width {width}");
-        assert!(rows[usize::from(height - 1)].contains("context left") || width < 40);
+        assert!(
+            rows[usize::from(height - 1)].contains("% "),
+            "width {width}"
+        );
         let text = super::composer_text_rect(area);
         assert!(
             text.contains(cursor),
             "width {width}: cursor {cursor:?} outside {text:?}"
         );
-        if super::composer_framed(width) {
-            // Never on the border, and the last text column stays free.
-            assert!(cursor.x < text.right(), "width {width}");
-            // A borderless band: no outline glyphs anywhere in the composer,
-            // and the input row starts two pad columns in after its prompt.
-            assert!(
-                !rows[usize::from(area.y)].contains('╭'),
-                "width {width}: {:?}",
-                rows[usize::from(area.y)]
-            );
-            assert!(
-                rows[usize::from(area.y + 1)].starts_with("  "),
-                "width {width}: {:?}",
-                rows[usize::from(area.y + 1)]
-            );
-            assert!(
-                !rows[usize::from(area.bottom() - 1)].contains('╰'),
-                "width {width}: {:?}",
-                rows[usize::from(area.bottom() - 1)]
-            );
-        } else {
-            // Below the fallback width the layout is the unframed composer.
-            assert!(
-                !rows
-                    .iter()
-                    .any(|row| row.contains('╭') && row.contains('╮'))
-            );
-            assert!(
-                rows[usize::from(area.y + 1)].starts_with("› "),
-                "width {width}: {:?}",
-                rows[usize::from(area.y + 1)]
-            );
-        }
+        // One pad row above and below, the prompt in the first column.
+        assert!(rows[usize::from(area.y)].trim().is_empty(), "width {width}");
+        assert!(
+            rows[usize::from(area.y + 1)].starts_with("› "),
+            "width {width}: {:?}",
+            rows[usize::from(area.y + 1)]
+        );
+        assert!(
+            rows[usize::from(area.bottom() - 1)].trim().is_empty(),
+            "width {width}"
+        );
+        assert!(
+            rows[usize::from(area.y)..usize::from(area.bottom())]
+                .iter()
+                .all(|row| !row.contains('╭') && !row.contains('╰') && !row.contains('│')),
+            "width {width}: no outline (#2246)"
+        );
     }
 }
 
@@ -9190,7 +9225,7 @@ fn notices_and_hints_replace_the_footer_without_moving_the_composer() {
     let mut idle = RenderState::new();
     idle.cwd_and_branch = "~/code/project:main".to_owned();
     let mut transcript = TranscriptState::default();
-    let (idle_rows, idle_area, _) = draw_framed_composer(&mut idle, &mut transcript, 80, 14);
+    let (idle_rows, idle_area, _) = draw_composer(&mut idle, &mut transcript, 80, 14);
     assert!(idle_rows[13].contains("main · ~/code/project"));
 
     let variants: [(&str, fn(&mut RenderState)); 3] = [
@@ -9208,7 +9243,7 @@ fn notices_and_hints_replace_the_footer_without_moving_the_composer() {
         state.cwd_and_branch = "~/code/project:main".to_owned();
         apply(&mut state);
         let mut transcript = TranscriptState::default();
-        let (rows, area, _) = draw_framed_composer(&mut state, &mut transcript, 80, 14);
+        let (rows, area, _) = draw_composer(&mut state, &mut transcript, 80, 14);
         assert_eq!(area, idle_area, "{label} moved the composer");
         assert!(
             !rows[13].contains("~/code/project"),
@@ -9216,9 +9251,9 @@ fn notices_and_hints_replace_the_footer_without_moving_the_composer() {
             rows[13]
         );
         assert_eq!(
-            rows[usize::from(area.bottom() - 2)],
-            idle_rows[usize::from(area.bottom() - 2)],
-            "{label} changed the settings row"
+            rows[usize::from(area.bottom() - 1)],
+            idle_rows[usize::from(area.bottom() - 1)],
+            "{label} changed the composer band"
         );
     }
 }
@@ -9621,13 +9656,12 @@ fn active_subagent_context_is_named_in_the_composer_footer() {
     state.cwd_and_branch = "~/code/project:main".to_owned();
     let rendered = render_state_to_text(&mut state, 100, 30);
 
-    // The subagent leads the footer; the model now sits inside the composer.
+    // The subagent leads the footer, ahead of the posture and the model.
     assert!(
-        rendered.contains("agent-1 · main · ~/code/project"),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains(&format!("ask · {}", state.model_name)),
+        rendered.contains(&format!(
+            "  agent-1 · Build · ask · {} · main · ~/code/project",
+            state.model_name
+        )),
         "{rendered}"
     );
 }
@@ -11049,15 +11083,7 @@ fn footer_shows_the_model_without_a_running_indicator() {
                 .unwrap();
         terminal
             .draw(|frame| {
-                super::render_composer_footer(
-                    frame,
-                    frame.area(),
-                    &snapshot,
-                    None,
-                    false,
-                    false,
-                    false,
-                );
+                super::render_composer_footer(frame, frame.area(), &snapshot, None, false, false);
             })
             .unwrap();
         let row = (0..160)

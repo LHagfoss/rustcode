@@ -81,13 +81,12 @@ public enum AssistantBlock: Sendable, Equatable {
             index = text.index(after: index)
         }
         flush()
-        // An empty reasoning block has nothing to show. Keep only the one still being
-        // streamed, so the row can say it is thinking until its text arrives.
-        return blocks.enumerated().filter { index, block in
-            guard case .thinking(let text, let isComplete) = block,
-                  text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
-            return isStreaming && !isComplete && index == blocks.count - 1
-        }.map(\.element)
+        // An empty reasoning block has nothing to show, even while it streams:
+        // a row that only says "Thinking" claims reasoning nobody can see.
+        return blocks.filter { block in
+            guard case .thinking(let text, _) = block else { return true }
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     private static func hasClosingBackticks(after opening: Substring, in text: Substring) -> Bool {

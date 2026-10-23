@@ -49,6 +49,51 @@ final class TranscriptTests: XCTestCase {
         XCTAssertEqual(TranscriptItem.thoughtLabel(duration: 95), "Thought for 1m 35s")
     }
 
+    // #2299: a provider's reasoning summary is labelled as one, live and
+    // replayed; raw reasoning keeps "Thought for Ns", replayed from the
+    // engine's recorded duration.
+    func testThoughtSourceAndDurationComeFromTheEngine() {
+        let summary = SessionUpdate(notificationParams: ["update": [
+            "sessionUpdate": "agent_thought_chunk",
+            "content": ["type": "text", "text": "**Inspecting site**"],
+            "_meta": ["rustcode": ["thoughtSource": "summary", "thoughtMs": 4000]],
+        ]])
+        XCTAssertEqual(summary, .thoughtText("**Inspecting site**", summary: true, durationMs: 4000))
+        let raw = SessionUpdate(notificationParams: ["update": [
+            "sessionUpdate": "agent_thought_chunk",
+            "content": ["type": "text", "text": "Let me check."],
+            "_meta": ["rustcode": ["thoughtSource": "raw", "thoughtMs": 12000]],
+        ]])
+
+        var transcript = Transcript()
+        transcript.apply(summary)
+        transcript.apply(.agentText("Done."))
+        transcript.apply(raw)
+        XCTAssertTrue(transcript.items[0].isReasoningSummary)
+        XCTAssertFalse(transcript.items[2].isReasoningSummary)
+        XCTAssertEqual(transcript.items[2].duration, 12)
+
+        let item0 = transcript.items[0], item2 = transcript.items[2]
+        XCTAssertEqual(TranscriptItem.thoughtTitle(isLive: false, isSummary: item0.isReasoningSummary, duration: item0.duration),
+                       "Reasoning summary")
+        XCTAssertEqual(TranscriptItem.thoughtTitle(isLive: false, isSummary: item2.isReasoningSummary, duration: item2.duration),
+                       "Thought for 12s")
+        XCTAssertEqual(TranscriptItem.thoughtTitle(isLive: false, isSummary: false, duration: nil), "Thinking")
+        XCTAssertEqual(TranscriptItem.thoughtTitle(isLive: true, isSummary: true, duration: nil), "Thinking…")
+    }
+
+    // #2299: whitespace alone never opens a thought row, live or replayed.
+    func testWhitespaceAloneOpensNoThought() {
+        var transcript = Transcript()
+        transcript.apply(.thoughtText("\n\n"), at: Date())
+        XCTAssertTrue(transcript.isEmpty)
+        transcript.apply(.thoughtText("Plan", summary: true))
+        transcript.apply(.thoughtText("\n\nMore", summary: true))
+        XCTAssertEqual(transcript.items.map(\.content), [.thinking("Plan\n\nMore")])
+        XCTAssertEqual(AssistantBlock.parse("<think>\n", isStreaming: true), [])
+        XCTAssertEqual(AssistantBlock.parse("<think> </think>Answer"), [.markdown("Answer")])
+    }
+
     func testToolUpdatesChangeTheirCardInPlace() {
         var transcript = Transcript()
         transcript.apply(.toolCall(id: "t1", title: "run_command", kind: "execute", status: .inProgress, input: ["cmd": "ls"]))

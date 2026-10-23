@@ -195,9 +195,18 @@ fn ends_with_stated_intent(content: &str) -> bool {
     INTENT_PHRASES.iter().any(|p| lower_tail.contains(p))
 }
 
+/// Whether `model` is one that writes its reasoning into the content channel
+/// behind bare `thought` markers: Gemini and Gemma models (#268). Only their
+/// replies go through [`promote_bare_thought_markers`], so no other model's
+/// prose can be turned into a thought.
+pub fn model_writes_bare_thought_markers(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.contains("gemini") || model.contains("gemma")
+}
+
 /// Wrap bare `thought` markers in `<think>` spans.
 ///
-/// Some providers return their reasoning in the ordinary content channel with a
+/// Gemini-family models (see [`model_writes_bare_thought_markers`]) return their reasoning in the ordinary content channel with a
 /// literal `thought` marker in front of it instead of in a `reasoning` delta.
 /// Nothing downstream recognises that, so the reasoning was stored and shown as
 /// the model's answer — transcripts read `thoughtThe grep command confirms...`
@@ -497,6 +506,22 @@ mod tests {
         // The trailing span is closed at the end of the text.
         assert!(promoted.trim_end().ends_with("</think>"), "got: {promoted}");
         assert!(!strip_think_blocks(&promoted).contains("grep confirms"));
+    }
+
+    // #2299: only Gemini-family models write bare markers, so only their
+    // replies are promoted; another model's prose is never made a thought.
+    #[test]
+    fn only_gemini_family_models_write_bare_thought_markers() {
+        for model in [
+            "gemini-3.6-flash",
+            "google/Gemini-2.5-pro",
+            "gemma4:e2b-it-qat",
+        ] {
+            assert!(model_writes_bare_thought_markers(model), "{model}");
+        }
+        for model in ["gpt-5.5", "claude-opus-4", "qwen3-coder", "deepseek-r1"] {
+            assert!(!model_writes_bare_thought_markers(model), "{model}");
+        }
     }
 
     #[test]

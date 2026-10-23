@@ -40,6 +40,9 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
     /// arrived or the turn ended. Replayed history has neither.
     public var startedAt: Date?
     public var duration: TimeInterval?
+    /// A thought that is the provider's reasoning summary (OpenAI shows only
+    /// that of its hidden reasoning), not the model's own reasoning text.
+    public var isReasoningSummary = false
 
     /// Everything a find in the chat can match.
     public var searchableText: String {
@@ -48,6 +51,16 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
         case .tool(let tool): [tool.title, tool.input, tool.output].compactMap { $0 }.joined(separator: "\n")
         case .command(let input, let output): input + "\n" + output
         }
+    }
+
+    /// The header of a thought. A provider's summary says so, live or
+    /// replayed, rather than claiming to be the model's thinking; reasoning
+    /// text says how long it took when that is known.
+    public static func thoughtTitle(isLive: Bool, isSummary: Bool, duration: TimeInterval?) -> String {
+        if isLive { return "Thinking…" }
+        if isSummary { return "Reasoning summary" }
+        if let duration { return thoughtLabel(duration: duration) }
+        return "Thinking"
     }
 
     /// "Thought for 12s", the header of a finished thought.
@@ -139,12 +152,16 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.assistant(text), at: now)
             }
-        case .thoughtText(let text):
-            if case .thinking(let previous) = items.last?.content {
+        case .thoughtText(let text, let summary, let durationMs):
+            if case .thinking(let previous) = items.last?.content, items[items.count - 1].isReasoningSummary == summary {
                 items[items.count - 1].content = .thinking(previous + text)
             } else {
+                // Whitespace alone starts no thought: its row would only say "Thinking".
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                 append(.thinking(text), at: now)
+                items[items.count - 1].isReasoningSummary = summary
             }
+            if let durationMs { items[items.count - 1].duration = Double(durationMs) / 1000 }
         case .toolCall(let id, let title, let kind, let status, let input, let engineDetail, let engineSummary):
             let rendered = input.map { $0.prettyPrinted() }
             let detail = ToolPresentation.detail(input: input, output: nil) ?? engineDetail
