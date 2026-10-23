@@ -831,6 +831,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         updated_at: Some("2026-07-14T09:40:12Z".to_owned()),
                         message_count: 42,
                         state: SavedSessionState::Saved,
+                        open_in: None,
                     },
                     RemoteSavedSession {
                         session_id: SESSION.0.to_owned(),
@@ -839,6 +840,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         updated_at: Some("2026-07-14T08:02:55Z".to_owned()),
                         message_count: 118,
                         state: SavedSessionState::Shared,
+                        open_in: None,
                     },
                     RemoteSavedSession {
                         session_id: "20260713-171233-9b0e44".to_owned(),
@@ -847,6 +849,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         updated_at: None,
                         message_count: 3,
                         state: SavedSessionState::Open,
+                        open_in: Some(SavedSessionHolder::App),
                     },
                 ],
                 next_cursor: Some("20260713-171233-9b0e44".to_owned()),

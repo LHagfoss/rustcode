@@ -568,8 +568,9 @@ private struct SavedSessionRow: View {
                 Text(detail)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    // A workspace path keeps both ends; where it is open is a sentence that wraps.
+                    .lineLimit(session.state == .open ? 2 : 1)
+                    .truncationMode(session.state == .open ? .tail : .middle)
                 HStack(spacing: 8) {
                     Text("\(session.messageCount) \(session.messageCount == 1 ? "message" : "messages")")
                     Spacer(minLength: 8)
@@ -587,7 +588,8 @@ private struct SavedSessionRow: View {
             if isOpening {
                 ProgressView().controlSize(.small)
             } else if session.state == .open {
-                Image(systemName: "terminal").foregroundStyle(.secondary)
+                Image(systemName: session.openIn == .terminal ? "terminal" : "desktopcomputer")
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 4)
@@ -599,7 +601,7 @@ private struct SavedSessionRow: View {
 
     private var detail: String {
         switch session.state {
-        case .open: "Open in a terminal on your Mac"
+        case .open: session.openElsewhereDetail
         case .saved, .shared, .unknown:
             if let workspace = session.workspace, !workspace.isEmpty {
                 workspace
@@ -612,7 +614,7 @@ private struct SavedSessionRow: View {
     private var status: String {
         if isOpening { return "opening" }
         switch session.state {
-        case .open: return "open in a terminal"
+        case .open: return session.openElsewhereDetail.prefix(1).lowercased() + session.openElsewhereDetail.dropFirst()
         case .saved where session.canOpen: return "saved"
         default: return "cannot be opened from here"
         }

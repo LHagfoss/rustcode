@@ -705,6 +705,11 @@ pub struct RemoteSavedSession {
     pub updated_at: Option<String>,
     pub message_count: u64,
     pub state: SavedSessionState,
+    /// What has an `open` session open, when the host knows. Absent from
+    /// older hosts and when the holder did not say; clients then name no
+    /// place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_in: Option<SavedSessionHolder>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -714,9 +719,21 @@ pub enum SavedSessionState {
     Saved,
     /// Shared and in the live list: attach to it.
     Shared,
-    /// A terminal or session owner holds it without sharing it. It cannot
-    /// be resumed; a terminal can be asked with `request_share`.
+    /// A terminal, the app or a session owner holds it without sharing it.
+    /// It cannot be resumed; a terminal can be asked with `request_share`.
     Open,
+}
+
+/// The kind of process that has a saved session open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedSessionHolder {
+    /// The RustCode app on the Mac.
+    App,
+    /// A RustCode terminal.
+    Terminal,
+    /// A session owner the gateway started for a device.
+    Remote,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

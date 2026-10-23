@@ -506,13 +506,20 @@ public struct WireCodec: RemoteCodec {
         case .open: .open
         case nil: .unknown
         }
+        let openIn: SavedSessionHolder? = switch wire.openIn?.known {
+        case .app: .app
+        case .terminal: .terminal
+        case .remote: .remote
+        case nil: nil
+        }
         return SavedSession(
             id: wire.sessionID,
             title: wire.title,
             workspace: wire.workspace,
             updatedAt: wire.updatedAt.flatMap(TimingPresentation.date),
             messageCount: Int(clamping: wire.messageCount),
-            state: state
+            state: state,
+            openIn: openIn
         )
     }
 

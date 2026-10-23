@@ -23,7 +23,36 @@ import Testing
         #expect(!page.sessions[1].canOpen)
         #expect(!page.sessions[2].canOpen)
         #expect(page.sessions[2].workspace == nil)
+        #expect(page.sessions.map(\.openIn) == [nil, nil, .app])
         #expect(page.nextCursor == page.sessions.last?.id)
+    }
+
+    @Test func whereASavedSessionIsOpenIsOptionalAndOpenEnded() throws {
+        func holder(_ field: String) throws -> SavedSessionHolder? {
+            let text = #"{"kind":"response","protocol_version":1,"request_id":"r","result":{"type":"saved_sessions","sessions":[{"session_id":"s","title":"T","message_count":1,"state":"open"\#(field)}]}}"#
+            guard case .reply(_, .savedSessions(let page)) = try WireCodec().decode(text) else {
+                Issue.record("expected a saved-session page")
+                return nil
+            }
+            #expect(page.sessions.first?.state == .open)
+            return page.sessions.first?.openIn
+        }
+        #expect(try holder(#","open_in":"app""#) == .app)
+        #expect(try holder(#","open_in":"terminal""#) == .terminal)
+        #expect(try holder(#","open_in":"remote""#) == .remote)
+        // An older host says nothing, a newer one may name a holder this app does not know.
+        #expect(try holder("") == nil)
+        #expect(try holder(#","open_in":"tablet""#) == nil)
+    }
+
+    @Test func anOpenSessionSaysWhereItIsOpen() {
+        func detail(_ holder: SavedSessionHolder?) -> String {
+            SavedSession(id: "s", title: "T", state: .open, openIn: holder).openElsewhereDetail
+        }
+        #expect(detail(.app) == "Open in the RustCode app on your Mac")
+        #expect(detail(.terminal) == "Open in a terminal on your Mac")
+        #expect(detail(.remote) == "Open on your Mac")
+        #expect(detail(nil) == "Open on your Mac")
     }
 
     @Test func resumedSessionsNeedAnAppliedReceipt() throws {
@@ -135,6 +164,8 @@ import Testing
         await store.loadSavedSessions()
         let held = store.recentSessions.first { $0.id == "demo-saved-terminal" }
         #expect(held?.state == .open)
+        #expect(held?.openIn == .terminal)
+        #expect(store.recentSessions.first { $0.id == "demo-saved-app" }?.openIn == .app)
         #expect(held?.canOpen == false)
         #expect(await store.openSavedSession("demo-saved-terminal") == false)
         #expect(store.selectedSessionID == nil)

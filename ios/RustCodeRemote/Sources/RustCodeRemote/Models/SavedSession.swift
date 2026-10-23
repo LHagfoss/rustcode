@@ -12,10 +12,20 @@ public enum SavedSessionState: Sendable, Equatable {
     case saved
     /// Already shared; it is in the live list.
     case shared
-    /// A terminal or session owner on the host holds it without sharing it.
+    /// A terminal, the app or a session owner on the host holds it without sharing it.
     case open
     /// A state from a newer host. Treated as not openable.
     case unknown
+}
+
+/// What has a saved session open on the host.
+public enum SavedSessionHolder: Sendable, Equatable, Hashable {
+    /// The RustCode app on the Mac.
+    case app
+    /// A RustCode terminal.
+    case terminal
+    /// A session owner the host started for a device.
+    case remote
 }
 
 /// One session saved on the host, shared or not.
@@ -28,6 +38,8 @@ public struct SavedSession: Identifiable, Hashable, Sendable {
     public var updatedAt: Date?
     public var messageCount: Int
     public var state: SavedSessionState
+    /// What has an `.open` session open, when the host says; `nil` from older hosts.
+    public var openIn: SavedSessionHolder?
 
     public init(
         id: String,
@@ -35,7 +47,8 @@ public struct SavedSession: Identifiable, Hashable, Sendable {
         workspace: String? = nil,
         updatedAt: Date? = nil,
         messageCount: Int = 0,
-        state: SavedSessionState = .saved
+        state: SavedSessionState = .saved,
+        openIn: SavedSessionHolder? = nil
     ) {
         self.id = id
         self.title = title
@@ -43,10 +56,20 @@ public struct SavedSession: Identifiable, Hashable, Sendable {
         self.updatedAt = updatedAt
         self.messageCount = messageCount
         self.state = state
+        self.openIn = openIn
     }
 
     public var displayTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Session \(id.prefix(8))" : title
+    }
+
+    /// Where an `.open` session is open, ready to show under its title.
+    public var openElsewhereDetail: String {
+        switch openIn {
+        case .app: "Open in the RustCode app on your Mac"
+        case .terminal: "Open in a terminal on your Mac"
+        case .remote, nil: "Open on your Mac"
+        }
     }
 
     /// Only a session nothing holds, with a recorded workspace, can be reopened from here.

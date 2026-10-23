@@ -605,6 +605,8 @@ public struct WireSavedSession: Codable, Equatable, Sendable {
     public var updatedAt: String?
     public var messageCount: UInt64
     public var state: WireOpen<WireSavedSessionState>
+    /// What has an `open` session open; absent from older hosts.
+    public var openIn: WireOpen<WireSavedSessionHolder>?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -613,6 +615,7 @@ public struct WireSavedSession: Codable, Equatable, Sendable {
         case updatedAt = "updated_at"
         case messageCount = "message_count"
         case state
+        case openIn = "open_in"
     }
 }
 
@@ -620,6 +623,12 @@ public enum WireSavedSessionState: String, Sendable, Equatable, CaseIterable {
     case saved
     case shared
     case open
+}
+
+public enum WireSavedSessionHolder: String, Sendable, Equatable, CaseIterable {
+    case app
+    case terminal
+    case remote
 }
 
 public enum WireSessionActivity: String, Sendable, Equatable, CaseIterable {

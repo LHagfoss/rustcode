@@ -25,7 +25,8 @@
         "session_id": "20260713-171233-9b0e44",
         "title": "Untitled",
         "message_count": 3,
-        "state": "open"
+        "state": "open",
+        "open_in": "app"
       }
     ],
     "next_cursor": "20260713-171233-9b0e44"
