@@ -200,6 +200,41 @@ enum DebugDriver {
                 walk(doc)
                 report("vis \(parts.count > 1 ? parts[1] : "-") \(count) views, clip y \(Int(visible.minY)) doc \(Int(doc.frame.height)) items \(model.transcript.items.count)")
             }
+        case "rail":
+            // `rail [tag]`: the session timeline's markers (#2309): how many
+            // turns and markers, the current turn, and how far each marker
+            // in view is from its message's first line.
+            guard let state = ChatScrollState.current else { break }
+            let layout = state.rail.layout
+            var worst = 0.0, inView = 0
+            for marker in layout.markers where marker.isInView {
+                guard let frame = state.debugFrame(marker.id) else { continue }
+                let y = Double(frame.minY) + TimelineLayout.firstLine
+                // Clamped clear of the stacks at the ends.
+                guard y > TimelineLayout.margin + Double(TimelineLayout.stackLimit) * TimelineLayout.stackStep,
+                      y < state.visible - TimelineLayout.margin - Double(TimelineLayout.stackLimit) * TimelineLayout.stackStep else { continue }
+                inView += 1
+                worst = max(worst, abs(marker.y - y))
+            }
+            let current = layout.markers.first(where: \.isCurrent).map { "turn \($0.number) row \($0.id)" } ?? "-"
+            report("rail \(parts.count > 1 ? parts[1] : "-") turns \(state.rail.turnCount) markers \(layout.markers.count) current \(current) in view \(inView) worst misalign \(Int(worst.rounded()))")
+        case "railjump":
+            // `railjump <turn>`: go to turn `turn` (from 1) as its marker
+            // does, then where its message is in the view over the next
+            // second.
+            guard let state = ChatScrollState.current else { break }
+            let turns = TimelineTurn.turns(in: model.transcript.items)
+            let number = min(max(Int(parts.count > 1 ? parts[1] : "1") ?? 1, 1), turns.count)
+            guard number > 0 else { break }
+            let id = turns[number - 1].id
+            state.debugJumpToTurn(id)
+            var seen: [String] = []
+            for _ in 0..<8 {
+                try? await Task.sleep(for: .milliseconds(125))
+                seen.append(state.debugScreenTop(id).map { String(Int($0)) } ?? "-")
+            }
+            let current = state.rail.layout.markers.first(where: \.isCurrent).map { String($0.number) } ?? "-"
+            report("railjump \(number) row \(id) top over 1 s: \(seen.joined(separator: " ")) current \(current)")
         case "jumpvis":
             // `jumpvis <points>`: one jump, as a scroller drag far up does,
             // then how many rows of output are drawn in view right away and

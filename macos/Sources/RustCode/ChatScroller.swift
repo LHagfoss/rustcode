@@ -44,6 +44,38 @@ final class ChatScrollState: ObservableObject {
         setNeedsUpdate()
     }
 
+    // MARK: The session timeline (`TimelineRail`, #2309)
+
+    /// The timeline's markers; only the rail observes it.
+    let rail = TimelineRailState()
+    private var turns: [TimelineTurn] = []
+    /// The turns' tops in the content, for the map's revision they are of.
+    private var turnTops: (revision: Int, tops: [Double?])?
+
+    /// The messages the user sent, oldest first, for the timeline.
+    func setTurns(_ turns: [TimelineTurn]) {
+        guard turns != self.turns else { return }
+        self.turns = turns
+        turnTops = nil
+        if rail.turnCount != turns.count { rail.turnCount = turns.count }
+        setNeedsUpdate()
+    }
+
+    /// Places the timeline's markers for the view at `offset`. The turns'
+    /// tops are worked out again only when the map changed.
+    private func updateRail(offset: Double) {
+        guard turns.count >= 2 else {
+            if rail.layout != .empty { rail.layout = .empty }
+            return
+        }
+        if turnTops?.revision != map.revision {
+            turnTops = (map.revision, map.tops(of: turns.map(\.id)))
+        }
+        let layout = TimelineLayout(turns: turns, tops: turnTops?.tops ?? [], offset: offset,
+                                    visible: visible, follows: !anchoredToTop)
+        if layout.differs(from: rail.layout) { rail.layout = layout }
+    }
+
     func rowFrame(_ row: Int, _ frame: CGRect) {
         let before = map.laidOutHeight(of: row)
         frames[row] = frame
@@ -60,7 +92,10 @@ final class ChatScrollState: ObservableObject {
     let drawn = DrawnRowsState()
     private var drawnRows = DrawnRows()
     /// The chat is let go of its end and anchored to its top. Set by the chat.
-    var anchoredToTop = false
+    var anchoredToTop = false {
+        // The timeline's current turn follows the end while held.
+        didSet { if anchoredToTop != oldValue { setNeedsUpdate() } }
+    }
     /// The content offset less the scroll view's own, to tell where the
     /// view is when no row drawn in full is in it.
     private var clipShift: Double?
@@ -152,6 +187,8 @@ final class ChatScrollState: ObservableObject {
     var debugFollows: () -> Bool = { false }
     /// Opens or folds a long message, as its Show more control does.
     var debugToggleMessage: (Int) -> Void = { _ in }
+    /// Goes to a turn, as its timeline marker does.
+    var debugJumpToTurn: (Int) -> Void = { _ in }
     /// Where `row` is in the view, as it last reported.
     func debugFrame(_ row: Int) -> CGRect? { frames[row] }
     /// The row at the top of the view, where it is, and the rows mapped.
@@ -377,6 +414,7 @@ final class ChatScrollState: ObservableObject {
         // from the visible area; wait for one that spans its top.
         guard let (row, frame) = reference, distance(frame) <= visible, let top = map.top(of: row) else { return }
         let offset = top - frame.minY
+        updateRail(offset: offset)
         if offset < visible * Self.nearTopScreens, !isAnchoring { nearTop() }
         let content = map.contentHeight()
         guard let target = ChatScrollerKnob(offset: offset, contentHeight: content, visible: visible, track: track) else {
