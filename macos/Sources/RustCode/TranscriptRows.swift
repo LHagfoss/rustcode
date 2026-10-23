@@ -238,7 +238,7 @@ private struct AssistantMessage: View {
     var body: some View {
         let parsed = parsed
         VStack(alignment: .leading, spacing: 10) {
-            FoldingMessage(id: id, text: text, folds: MessageCollapse.folds(.assistant(text), isStreaming: isStreaming),
+            FoldingMessage(id: id, text: text, folds: false,
                            isExpanded: isExpanded) {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in

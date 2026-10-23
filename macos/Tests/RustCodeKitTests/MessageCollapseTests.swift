@@ -37,13 +37,11 @@ final class MessageCollapseTests: XCTestCase {
         XCTAssertTrue(MessageCollapse.isLong(height: 100 * line, lineHeight: line))
     }
 
-    func testRepliesNeverFoldWhileWritten() {
-        XCTAssertTrue(MessageCollapse.folds(.user("hi"), isStreaming: false))
-        XCTAssertTrue(MessageCollapse.folds(.user("hi"), isStreaming: true))
-        XCTAssertTrue(MessageCollapse.folds(.assistant("hi"), isStreaming: false))
-        XCTAssertFalse(MessageCollapse.folds(.assistant("hi"), isStreaming: true))
-        XCTAssertFalse(MessageCollapse.folds(.thinking("hi"), isStreaming: false))
-        XCTAssertFalse(MessageCollapse.folds(.command(input: "/x", output: lines(40)), isStreaming: false))
+    func testOnlyUserMessagesFold() {
+        XCTAssertTrue(MessageCollapse.folds(.user("hi")))
+        XCTAssertFalse(MessageCollapse.folds(.assistant(lines(40))))
+        XCTAssertFalse(MessageCollapse.folds(.thinking("hi")))
+        XCTAssertFalse(MessageCollapse.folds(.command(input: "/x", output: lines(40))))
     }
 
     func testReplayedMessagesStartFoldedAndOpenPerChat() {
