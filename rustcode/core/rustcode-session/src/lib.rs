@@ -62,6 +62,25 @@ pub fn unwrap_title_paste_markers(raw: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(text)
 }
 
+/// Prefix of the system message compaction leaves in place of the first user
+/// prompt once that prompt falls inside the summarized range. The text after
+/// it is the original prompt verbatim, so it still names the session.
+pub const ORIGINAL_TASK_MARKER: &str = "[Original task — do not lose sight of this]";
+
+/// The user prompt a message carries, if any: a real (non-command) user
+/// message, or the original task compaction pinned as a system message.
+fn prompt_text<'a>(role: &str, content: &'a str) -> Option<&'a str> {
+    match role {
+        "user" => Some(content),
+        "system" => content
+            .strip_prefix(ORIGINAL_TASK_MARKER)
+            .map(|task| task.trim_start_matches('\n'))
+            .filter(|task| !task.trim().is_empty()),
+        _ => None,
+    }
+    .filter(|prompt| !prompt.starts_with('/'))
+}
+
 fn title_from_prompt(content: &str) -> String {
     let text = unwrap_title_paste_markers(content);
     let title = text
@@ -719,7 +738,7 @@ impl SessionStore {
     pub fn session_has_content(history: &[ChatMessage]) -> bool {
         history
             .iter()
-            .any(|message| message.role == "user" && !message.content.starts_with('/'))
+            .any(|message| prompt_text(&message.role, &message.content).is_some())
     }
 
     pub fn session_is_resumable(history: &[ChatMessage]) -> bool {
@@ -730,8 +749,8 @@ impl SessionStore {
     pub fn session_title(history: &[ChatMessage]) -> String {
         history
             .iter()
-            .find(|message| message.role == "user" && !message.content.starts_with('/'))
-            .map(|message| title_from_prompt(&message.content))
+            .find_map(|message| prompt_text(&message.role, &message.content))
+            .map(title_from_prompt)
             .unwrap_or_else(|| "(no prompt)".to_string())
     }
 
@@ -822,7 +841,7 @@ impl SessionStore {
     ) -> Option<SessionMeta> {
         let has_user = messages
             .iter()
-            .any(|message| message.role == "user" && !message.content.starts_with('/'));
+            .any(|message| prompt_text(&message.role, &message.content).is_some());
         let has_assistant = messages.iter().any(|message| message.role == "assistant");
         if !has_user || !has_assistant {
             return None;
@@ -835,8 +854,8 @@ impl SessionStore {
             .unwrap_or_else(|| {
                 let title = messages
                     .iter()
-                    .find(|message| message.role == "user" && !message.content.starts_with('/'))
-                    .map(|message| title_from_prompt(&message.content))
+                    .find_map(|message| prompt_text(&message.role, &message.content))
+                    .map(title_from_prompt)
                     .unwrap_or_else(|| "(no prompt)".to_string());
                 if title.is_empty() {
                     "(no prompt)".to_string()
@@ -867,7 +886,7 @@ impl SessionStore {
         };
         messages
             .iter()
-            .any(|message| message.role == "user" && !message.content.starts_with('/'))
+            .any(|message| prompt_text(&message.role, &message.content).is_some())
     }
 
     pub fn save_history<H: HistorySnapshot + ?Sized>(
@@ -2022,6 +2041,58 @@ mod tests {
             store.load_session_meta(&path).unwrap().title,
             "Custom title"
         );
+    }
+
+    #[test]
+    fn compacted_history_keeps_the_original_prompt_as_its_title() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        // What compaction leaves when the first prompt fell inside the
+        // summarized range: a summary, the pinned task, and a later turn.
+        let compacted = vec![
+            message("system", "[Session History Summary]\nearlier work"),
+            message(
+                "system",
+                &format!("{ORIGINAL_TASK_MARKER}\nFix the login redirect\nwith details"),
+            ),
+            message("user", "now also add a test"),
+            message("assistant", "done"),
+        ];
+        assert!(SessionStore::session_has_content(&compacted));
+        assert_eq!(
+            SessionStore::session_title(&compacted),
+            "Fix the login redirect"
+        );
+        store.save_session_history("compacted", &compacted);
+        flush_history();
+        assert!(store.session_id_has_content("compacted"));
+        let path = store.session_dir("compacted").join(HISTORY_FILE);
+        assert_eq!(
+            store.load_session_meta(&path).unwrap().title,
+            "Fix the login redirect"
+        );
+
+        // No user message left at all: the session still lists, under the
+        // original prompt.
+        let only_marker = vec![
+            message("system", "[Session History Summary]\nearlier work"),
+            message("system", &format!("{ORIGINAL_TASK_MARKER}\nShip it")),
+            message("assistant", "shipped"),
+        ];
+        assert!(SessionStore::session_is_resumable(&only_marker));
+        store.save_session_history("only-marker", &only_marker);
+        flush_history();
+        let path = store.session_dir("only-marker").join(HISTORY_FILE);
+        assert_eq!(store.load_session_meta(&path).unwrap().title, "Ship it");
+
+        // A title the user saved stays put whatever the history holds.
+        store.save_session_title("only-marker", "My name");
+        store.save_session_title_if_absent("only-marker", &only_marker);
+        assert_eq!(store.load_session_meta(&path).unwrap().title, "My name");
+
+        // An empty pinned task names nothing.
+        let empty = vec![message("system", ORIGINAL_TASK_MARKER)];
+        assert!(!SessionStore::session_has_content(&empty));
     }
 
     #[test]

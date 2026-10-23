@@ -595,7 +595,7 @@ fn compaction_boundary(
 /// Prefix that marks a compaction summary message, used to detect and preserve
 /// prior summaries during incremental compaction.
 pub const SUMMARY_MARKER: &str = "[Session History Summary]";
-pub(super) const ORIGINAL_TASK_MARKER: &str = "[Original task — do not lose sight of this]";
+pub(super) use rustcode_session::ORIGINAL_TASK_MARKER;
 pub(super) const PRESERVED_USER_REQUEST_MARKER: &str = "[Preserved user request]";
 
 /// Find a suffix start that keeps the recent token allowance while respecting
