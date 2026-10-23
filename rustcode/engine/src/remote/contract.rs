@@ -1071,6 +1071,11 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             "the terminal did not answer; check the transcript before sending again",
         ),
         error(
+            RemoteErrorCode::OpenElsewhere,
+            rejected,
+            "This chat is open in the RustCode app on the Mac. Turn on Remote access for it there to continue on this device.",
+        ),
+        error(
             RemoteErrorCode::InvalidRequest,
             None,
             "`cancel_turn` requires session_id and registration_epoch",

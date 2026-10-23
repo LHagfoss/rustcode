@@ -162,8 +162,18 @@ pub fn flush_history_async() {
 /// Point the process-wide debug log at `session_id`. History is never saved
 /// through a process-wide pointer: every writer names its own session, since
 /// one process (an ACP server) can hold several sessions at once.
+///
+/// It also marks the session open in this process (see `session_open`): an
+/// ACP session for its server, any other as this frontend's one session.
 pub fn set_active_session_id(session_id: &str) {
     crate::logger::set_active_session_id(Some(session_id).filter(|id| !id.is_empty()));
+    if let Some(config_dir) = get_config_dir() {
+        if crate::acp::is_acp_session(session_id) {
+            hold_session_open(&config_dir, session_id, SessionHolder::App);
+        } else {
+            hold_primary_session(&config_dir, session_id);
+        }
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

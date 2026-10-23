@@ -20,8 +20,8 @@ use std::{
 
 /// How long a new owner may take to register before it is stopped.
 const OWNER_START_TIMEOUT: Duration = Duration::from_secs(60);
-/// Every session start is answered within this long of its arrival. The app
-/// gives up on a request after 20 s; an answer after that is never seen.
+/// Every session start is answered within this long of its arrival. Older
+/// apps give up on a request after 20 s; an answer after that is never seen.
 const ANSWER_DEADLINE: Duration = Duration::from_secs(15);
 const OWNER_LEASE: &str = "remote session";
 
@@ -66,6 +66,23 @@ pub(crate) fn owner_alive(owners: &Path, session_id: &str) -> bool {
     match lock_private_file(owners, &format!("{session_id}.lock"), OWNER_LEASE) {
         Ok(_free) => false,
         Err(error) => is_lock_busy(&error),
+    }
+}
+
+/// What the device is told when another live process has a saved session
+/// open: where it is open, and how to continue on the device.
+fn open_elsewhere_message(holder: Option<crate::config::SessionHolder>) -> &'static str {
+    use crate::config::SessionHolder;
+    match holder {
+        Some(SessionHolder::App) => {
+            "This chat is open in the RustCode app on the Mac. Turn on Remote access for it there to continue on this device."
+        }
+        Some(SessionHolder::Terminal) => {
+            "This chat is open in a RustCode terminal on the Mac. Run /remote there to continue on this device."
+        }
+        Some(SessionHolder::Remote) | None => {
+            "This chat is open in another RustCode process on the Mac. Close it there, or share it with /remote, to continue on this device."
+        }
     }
 }
 
@@ -539,7 +556,8 @@ impl WorkspaceRouter {
     /// Open a saved session from a device: start a session owner on it in
     /// its recorded workspace, exactly as `create` does for a new one, and
     /// answer once it has registered. A session that is already shared is
-    /// answered at once; one that a terminal holds is refused.
+    /// answered at once; one that a terminal, the app or another owner has
+    /// open is refused: a second process on it would fork its history.
     #[allow(clippy::too_many_arguments)]
     async fn resume(
         hub: &Arc<SessionHub>,
@@ -589,6 +607,12 @@ impl WorkspaceRouter {
                 return Err(refused(
                     RemoteErrorCode::Busy,
                     "a session owner already holds this session without sharing it; check `rustcode remote status`",
+                ));
+            }
+            if let Some(holder) = crate::config::session_open_by(config, session_id) {
+                return Err(refused(
+                    RemoteErrorCode::OpenElsewhere,
+                    open_elsewhere_message(holder),
                 ));
             }
             ensure!(
@@ -942,6 +966,7 @@ impl FrameRouter for WorkspaceRouter {
                                     SavedSessionState::Shared
                                 } else if hub.is_announced(session_id)
                                     || owner_alive(&owners, session_id)
+                                    || crate::config::session_open_by(&config, session_id).is_some()
                                 {
                                     SavedSessionState::Open
                                 } else {
@@ -1960,6 +1985,116 @@ mod tests {
         }
     }
 
+    /// `session_id` open in another process, as far as the lock can tell: a
+    /// separate open file description holding it.
+    fn open_in(config: &Path, session_id: &str, holder: &str) -> std::fs::File {
+        use std::io::Write;
+        let path = rustcode_session::SessionStore::new(config)
+            .session_dir(session_id)
+            .join("open.lock");
+        let mut file = std::fs::File::create(path).unwrap();
+        write!(file, r#"{{"pid":1,"holder":"{holder}"}}"#).unwrap();
+        file.try_lock().unwrap();
+        file
+    }
+
+    #[tokio::test]
+    async fn a_session_open_in_the_app_is_refused_with_where_it_is_open() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let ids = saved_sessions(
+            config.path(),
+            &[
+                ("app", Some(project.path())),
+                ("terminal", Some(project.path())),
+            ],
+        );
+        let _app = open_in(config.path(), &ids[0], "app");
+        let _terminal = open_in(config.path(), &ids[1], "terminal");
+        let hub = SessionHub::start(Default::default());
+        for (id, place) in ids.iter().zip(["RustCode app", "RustCode terminal"]) {
+            let error = WorkspaceRouter::resume(
+                &hub,
+                config.path(),
+                Path::new("/never/launch"),
+                &tokio::sync::Mutex::new(()),
+                "phone",
+                &resume_request(&format!("resume-{id}"), id),
+                id,
+                timing(Duration::from_millis(200)),
+            )
+            .await
+            .unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains(place), "{message}");
+            assert_eq!(refusal(error), RemoteErrorCode::OpenElsewhere);
+            // Nothing was started or recorded: asking again later is a fresh start.
+            assert!(
+                !WorkspaceRouter::receipt_path(config.path(), "phone", &format!("resume-{id}"))
+                    .exists()
+            );
+        }
+        let saved = list_saved_sessions(
+            config.path(),
+            |id| {
+                if crate::config::session_open_by(config.path(), id).is_some() {
+                    SavedSessionState::Open
+                } else {
+                    SavedSessionState::Saved
+                }
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let (sessions, _) = saved_page(saved);
+        assert!(
+            sessions
+                .iter()
+                .all(|session| session.state == SavedSessionState::Open)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lock_left_by_a_process_that_ended_does_not_block_resuming() {
+        let config = tempfile::tempdir().unwrap();
+        let project = stand_in_owner("exit 4\n");
+        let ids = saved_sessions(config.path(), &[("saved", Some(project.path()))]);
+        // The app had it open and quit (or crashed): the file stays, the lock does not.
+        drop(open_in(config.path(), &ids[0], "app"));
+        let hub = SessionHub::start(Default::default());
+        let error = WorkspaceRouter::resume(
+            &hub,
+            config.path(),
+            Path::new("/bin/sh"),
+            &tokio::sync::Mutex::new(()),
+            "phone",
+            &resume_request("resume-1", &ids[0]),
+            &ids[0],
+            timing(Duration::from_secs(30)),
+        )
+        .await
+        .unwrap_err();
+        // It got as far as starting an owner, which the stand-in fails.
+        assert!(
+            error.downcast_ref::<OwnerStartFailed>().is_some(),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn an_owner_steps_back_from_a_session_another_process_opened() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let ids = saved_sessions(config.path(), &[("saved", Some(project.path()))]);
+        let _app = open_in(config.path(), &ids[0], "app");
+        let Err(error) = owner_state(config.path(), &ids[0]) else {
+            panic!("an owner started on a session the app has open");
+        };
+        assert!(error.to_string().contains("RustCode app"), "{error:#}");
+    }
+
     #[test]
     fn probing_a_session_without_an_owner_leaves_no_lease_file() {
         let config = tempfile::tempdir().unwrap();
@@ -2038,6 +2173,14 @@ pub fn owner_state(
         }
     };
     note_owner_pid(&lease);
+    // The gateway checked before it started this process; a terminal or the
+    // app may have opened the session since. Two processes running one
+    // session both write its history, so this one steps back.
+    if !crate::config::hold_session_open(config, session_id, crate::config::SessionHolder::Remote)
+        && let Some(holder) = crate::config::session_open_by(config, session_id)
+    {
+        anyhow::bail!("{}", open_elsewhere_message(holder));
+    }
     let workspace = std::env::current_dir()?;
     // A saved session resumed from a device runs in its recorded workspace:
     // keep what was recorded with it (extra directories, its task worktree)

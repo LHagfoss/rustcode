@@ -336,6 +336,7 @@ public enum WireErrorCode: String, Sendable, Equatable, CaseIterable {
     case requestConflict = "request_conflict"
     case ownerUnavailable = "owner_unavailable"
     case receiptCapacity = "receipt_capacity"
+    case openElsewhere = "open_elsewhere"
     case frameTooLarge = "frame_too_large"
     case rateLimited = "rate_limited"
     case `internal`

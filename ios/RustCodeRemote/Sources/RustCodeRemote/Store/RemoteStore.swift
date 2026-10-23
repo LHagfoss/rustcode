@@ -42,6 +42,11 @@ public final class RemoteStore {
     public private(set) var selectedSessionID: String?
     /// Snapshot of the selected session, kept current by applying its updates.
     public private(set) var attached: SessionSnapshot?
+    /// Why the selected session could not be opened. It keeps the selection (and so the
+    /// draft); `retryAttachment` tries again.
+    public private(set) var attachFailure: SessionLoadFailure?
+    /// Attempts to open the selected session since it was selected, for diagnostics.
+    @ObservationIgnored private var attachAttempt = 0
     public private(set) var chatFeedback: ChatFeedback?
     public private(set) var isLoadingHistory = false
     public private(set) var isCreatingSession = false
@@ -410,6 +415,12 @@ public final class RemoteStore {
                     savedSessions[index].state = .open
                 }
                 notice = "That session is open in a terminal on \(self.host?.name ?? "your Mac"). Continue it there, or share it with /remote."
+            } else if case .openElsewhere = rejection {
+                // Opening it here too would run it twice and lose one side's history.
+                if let index = savedSessions.firstIndex(where: { $0.id == sessionID }) {
+                    savedSessions[index].state = .open
+                }
+                notice = RemoteError.rejected(rejection).localizedDescription
             } else {
                 notice = RemoteError.rejected(rejection).localizedDescription
             }
@@ -456,12 +467,26 @@ public final class RemoteStore {
             Task { await client.detach(previous) }
         }
         attached = nil
+        attachFailure = nil
+        attachAttempt = 0
         commandResult = nil
         selectedSessionID = sessionID
         if let sessionID {
             badges.markSeen(sessionID)
             startAttachment(sessionID)
         }
+    }
+
+    /// Opens the selected session again after it failed to load. Reconnects first when the
+    /// connection is down; the session is attached once it is back.
+    public func retryAttachment() {
+        guard let selectedSessionID else { return }
+        attachFailure = nil
+        guard connection == .connected else {
+            retryNow()
+            return
+        }
+        startAttachment(selectedSessionID, freshSnapshot: true)
     }
 
     public func loadEarlierHistory() async {
@@ -775,6 +800,7 @@ public final class RemoteStore {
         sessions = []
         selectedSessionID = nil
         attached = nil
+        attachFailure = nil
         commandResult = nil
         snapshotInstanceID = nil
         currentInstanceID = nil
@@ -942,7 +968,10 @@ public final class RemoteStore {
     }
 
     private func resyncAfterConnect() {
-        if let selectedSessionID {
+        // Data the app could not read would only fail the same way again: wait for Try Again.
+        let waitsForRetry = attachFailure?.category == .invalidData && attachFailure?.sessionID == selectedSessionID
+        if let selectedSessionID, !waitsForRetry {
+            attachFailure = nil
             // The protocol marks the beginning of replay, but not its end. A fresh
             // bounded snapshot gives feedback a live baseline after reconnecting.
             startAttachment(selectedSessionID, freshSnapshot: true)
@@ -962,6 +991,20 @@ public final class RemoteStore {
     private func runAttachment(_ sessionID: String, freshSnapshot: Bool) async {
         var wantsSnapshot = freshSnapshot
         var resyncs = 0
+        attachAttempt += 1
+        let attempt = attachAttempt
+        let started = ContinuousClock.now
+        func fail(_ failure: SessionLoadFailure) {
+            attachFailure = failure
+            SessionDiagnostics.record(operation: "attach", sessionID: sessionID, category: failure.category,
+                                      attempt: attempt, elapsed: ContinuousClock.now - started)
+        }
+        defer {
+            if resyncs >= 5, !Task.isCancelled, selectedSessionID == sessionID {
+                fail(SessionLoadFailure(sessionID: sessionID, category: .stale,
+                    message: "The session kept changing while it loaded."))
+            }
+        }
         while !Task.isCancelled, connection == .connected, selectedSessionID == sessionID, resyncs < 5,
               let ref = sessions.first(where: { $0.id == sessionID })?.ref {
             // A replay is only worth asking for from the gateway instance that issued the
@@ -974,8 +1017,11 @@ public final class RemoteStore {
                 switch attachment.start {
                 case .snapshot(let snapshot):
                     attached = snapshot.keepingToolDetail(from: attached)
+                    attachFailure = nil
                     retireObservedMutations()
                     snapshotInstanceID = currentInstanceID
+                    SessionDiagnostics.record(operation: "attach", sessionID: sessionID, category: nil,
+                                              attempt: attempt, elapsed: ContinuousClock.now - started)
                 case .resumed:
                     guard attached?.session == ref else {
                         wantsSnapshot = true
@@ -1011,6 +1057,14 @@ public final class RemoteStore {
                 notice = reason
                 return
             } catch {
+                // An unreadable frame also drops the connection, and the connection loop may
+                // cancel this task first; record it all the same so reconnecting does not
+                // load the same data into the same failure again.
+                guard selectedSessionID == sessionID,
+                      let failure = SessionLoadFailure(sessionID: sessionID, error: (error as? RemoteError) ?? .transport(error.localizedDescription))
+                else { return }
+                guard failure.category == .invalidData || !Task.isCancelled else { return }
+                fail(failure)
                 return
             }
             wantsSnapshot = true

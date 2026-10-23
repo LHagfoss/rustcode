@@ -276,6 +276,9 @@ import Testing
         #expect(try reply("response_error_stale_session") == .failure(.rejected(.staleSession)))
         #expect(try reply("response_error_invalid_answer") == .failure(.rejected(.invalidAnswer)))
         #expect(try reply("response_error_unsupported_operation") == .failure(.rejected(.unsupportedOperation)))
+        // Where the session is open is the host's to say; the app shows it as given.
+        #expect(try reply("response_error_open_elsewhere") == .failure(.rejected(.openElsewhere(
+            "This chat is open in the RustCode app on the Mac. Turn on Remote access for it there to continue on this device."))))
         #expect(try reply("response_error_incompatible_version") == .failure(.incompatibleProtocol))
         // The owner could not be asked: that is uncertainty, never a rejection.
         #expect(try reply("response_error_owner_unavailable") == .failure(.outcomeUnknown(detail: "the terminal did not answer; check the transcript before sending again")))

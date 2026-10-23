@@ -535,6 +535,10 @@ pub enum RemoteErrorCode {
     OwnerUnavailable,
     /// The owner cannot record another receipt; nothing was applied.
     ReceiptCapacity,
+    /// `resume_session` for a saved session that another process on the
+    /// host (the app, a terminal) has open without sharing it. The message
+    /// says where it is open. Nothing was started.
+    OpenElsewhere,
     FrameTooLarge,
     RateLimited,
     Internal,
