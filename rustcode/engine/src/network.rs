@@ -1405,6 +1405,12 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             // rewrite makes every remote client resync its whole transcript.
             let history_changed = working_history.as_slice() != captured_history.as_slice();
             if history_changed {
+                // Freeze the title before the first prompt can be summarized
+                // away, as `/compact` does.
+                crate::config::save_session_title_if_absent(
+                    &live_session_id,
+                    captured_history.as_slice(),
+                );
                 if s.history.len() > pre_len {
                     working_history.extend(s.history[pre_len..].iter().cloned());
                 }

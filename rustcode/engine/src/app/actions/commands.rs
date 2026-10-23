@@ -981,6 +981,9 @@ pub(crate) async fn compact_history(
                 );
                 return "History compaction discarded as stale: the active session or history changed while compaction was running.".to_owned();
             }
+            // Compaction can fold the first prompt into a summary; name the
+            // session after it first so its title does not move.
+            crate::config::save_session_title_if_absent(&live_session_id, &original_history);
             let previous_count = s
                 .last_compaction
                 .as_ref()

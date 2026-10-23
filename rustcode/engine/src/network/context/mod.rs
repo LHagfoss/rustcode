@@ -580,6 +580,41 @@ mod tests {
         );
     }
 
+    /// The title comes from the first prompt. Compaction moves that prompt
+    /// into the pinned-task marker, and the session must keep its name and its
+    /// place in the session list (#2302).
+    #[tokio::test]
+    async fn compaction_keeps_the_session_title_and_content() {
+        let url = one_shot_json_server(serde_json::json!({
+            "choices": [{"message": {"content": "Goal: fix the redirect"}}]
+        }))
+        .await;
+        let mut history = vec![ChatMessage::new(
+            "user",
+            "Fix the login redirect\nwith the details",
+        )];
+        for turn in 0..(KEEP_RECENT_TURNS + 3) {
+            history.push(ChatMessage::new("assistant", format!("answer {turn}")));
+            history.push(ChatMessage::new("user", format!("follow-up {turn}")));
+        }
+        history.push(ChatMessage::new("assistant", "last answer"));
+        let title = crate::config::session_title(&history);
+        assert_eq!(title, "Fix the login redirect");
+
+        force_compact(&reqwest::Client::new(), &url, "model", &mut history, None)
+            .await
+            .expect("compaction should succeed");
+
+        assert!(
+            !history
+                .iter()
+                .any(|message| message.role == "user" && message.content.starts_with("Fix")),
+            "the first prompt should have been summarized away"
+        );
+        assert_eq!(crate::config::session_title(&history), title);
+        assert!(crate::config::session_has_content(&history));
+    }
+
     #[tokio::test]
     async fn incremental_compaction_keeps_the_original_task_marker() {
         let url = one_shot_json_server(serde_json::json!({

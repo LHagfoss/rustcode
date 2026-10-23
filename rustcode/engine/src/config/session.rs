@@ -449,6 +449,9 @@ pub fn save_session_title(session_id: &str, title: &str) {
 }
 
 pub(crate) fn save_session_title_if_absent(session_id: &str, history: &[ChatMessage]) {
+    if session_id.is_empty() {
+        return;
+    }
     if let Some(session_store) = store() {
         session_store.save_session_title_if_absent(session_id, history);
     }

@@ -67,6 +67,16 @@ impl SessionTitleTracker {
     }
 }
 
+/// Push the prompt onto history and, like the terminal does, name a session
+/// with no saved title after its first prompt. The saved title is what keeps
+/// the name stable once compaction moves that prompt out of history.
+fn record_prompt(state: &mut crate::app::AppState, session_id: &str, text: &str) {
+    state
+        .history
+        .push(crate::app::ChatMessage::new("user", text.to_owned()));
+    crate::config::save_session_title_if_absent(session_id, &state.history);
+}
+
 impl BackgroundTurnTasks {
     fn new(
         manager: &TaskManager,
@@ -373,11 +383,7 @@ pub(crate) async fn run_prompt(
                 });
             }
         };
-        state
-            .lock()
-            .await
-            .history
-            .push(crate::app::ChatMessage::new("user", text.clone()));
+        record_prompt(&mut *state.lock().await, &session_id, &text);
 
         let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
         let policy = Arc::new(AcpPolicy {
@@ -849,6 +855,24 @@ mod tests {
             prompt_input_with(&[malformed], save)
                 .unwrap_err()
                 .contains("base64")
+        );
+    }
+
+    #[test]
+    fn the_first_prompt_names_the_session_and_a_saved_title_stays() {
+        let session_id = format!("acp-title-{}", std::process::id());
+        let mut state = crate::app::AppState::new();
+        super::record_prompt(&mut state, &session_id, "Fix the login redirect");
+        assert_eq!(
+            crate::config::load_session_title(&session_id).as_deref(),
+            Some("Fix the login redirect")
+        );
+
+        crate::config::save_session_title(&session_id, "Named by hand");
+        super::record_prompt(&mut state, &session_id, "a later prompt");
+        assert_eq!(
+            crate::config::load_session_title(&session_id).as_deref(),
+            Some("Named by hand")
         );
     }
 
