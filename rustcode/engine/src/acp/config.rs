@@ -111,7 +111,7 @@ pub(crate) fn handle_set_config_option(
 
     state.api_base_url = profile.url;
     state.model_name = profile.model;
-    state.config.default.set_big(profile.name);
+    state.config.use_profile_for_session(profile.name);
     state.record_session_model();
 
     Ok(build_session_config_options(state))

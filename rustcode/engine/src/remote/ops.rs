@@ -295,7 +295,8 @@ pub(crate) fn set_settings(
     let (model_name, url) = (profile.model.to_owned(), profile.url.clone());
     state.model_name = model_name;
     state.api_base_url = url;
-    state.config.default.set_big(model.to_owned());
+    state.config.mark_session_effort(model);
+    state.config.use_profile_for_session(model.to_owned());
     state.request_redraw();
     state.record_session_model();
     crate::config::record_session_settings_for_profile(

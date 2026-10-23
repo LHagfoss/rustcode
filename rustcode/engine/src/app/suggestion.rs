@@ -75,7 +75,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/model",
-        desc: "Open model picker, switch profile, or override model",
+        desc: "Switch this session's model: open the picker, pick a profile, or override the model",
     },
     CommandInfo {
         name: "/login",
@@ -263,7 +263,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/effort",
-        desc: "Show or set model reasoning effort (low|medium|high|off)",
+        desc: "Show or set this session's reasoning effort (low|medium|high|off)",
     },
     CommandInfo {
         name: "/pi",

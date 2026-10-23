@@ -2629,3 +2629,69 @@ async fn effort_command_updates_the_active_profile_when_profiles_share_a_url() {
     assert_eq!(s.settings_picker, Some(crate::app::SettingsPicker::Effort));
     assert_eq!(s.modal_picker_index, 2, "picker opens on the active effort");
 }
+
+#[tokio::test]
+async fn session_model_and_effort_leave_the_default_for_new_sessions_alone() {
+    use crate::app::state::AppState;
+    use crate::config::{CONFIG_TOML_FILE, ModelProfile, get_config_dir, load_config_from};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let profile = |name: &str| ModelProfile {
+        name: name.to_owned(),
+        model: format!("{name}-1"),
+        url: format!("http://{name}.invalid/v1"),
+        supports_reasoning_effort: Some(true),
+        reasoning_efforts: Some(vec!["low".into(), "high".into()]),
+        ..Default::default()
+    };
+    let mut app = AppState::new();
+    app.config.models = vec![profile("fast"), profile("deep")];
+    app.config.default.set_big("fast".into());
+    app.model_name = "fast-1".into();
+    app.api_base_url = "http://fast.invalid/v1".into();
+    crate::config::save_entire_config(&app.config);
+    let dir = get_config_dir().expect("isolated test config directory");
+    assert!(dir.join(CONFIG_TOML_FILE).exists());
+
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = tokio_util::sync::CancellationToken::new();
+    for command in ["/model deep", "/effort high"] {
+        state.lock().await.input_buffer = command.to_owned();
+        assert!(!super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await);
+        let s = state.lock().await;
+        let feedback = s
+            .command_panel
+            .as_ref()
+            .map(|panel| panel.content.clone())
+            .or_else(|| s.active_transient_notice().map(str::to_owned))
+            .unwrap_or_default();
+        assert!(feedback.contains("this session"), "{command}: {feedback}");
+    }
+    {
+        let mut s = state.lock().await;
+        assert_eq!(s.config.default.big(), "deep");
+        assert_eq!(s.active_reasoning_effort().as_deref(), Some("high"));
+        // An unrelated setting saves the whole config.
+        s.config.theme = "light".into();
+        crate::config::save_entire_config(&s.config);
+    }
+
+    let (_, _, saved) = load_config_from(&dir);
+    assert_eq!(saved.default.big(), "fast");
+    let deep = saved.models.iter().find(|p| p.name == "deep").unwrap();
+    assert_eq!(deep.reasoning_effort, None);
+    assert_eq!(saved.theme, "light");
+
+    // `rustcode defaults` (the macOS app's settings) changes the default
+    // while this session runs; the session's next save must keep it.
+    let mut defaults = saved;
+    crate::model_defaults::save(&mut defaults, Some("deep"), Some("low")).unwrap();
+    crate::config::save_entire_config(&state.lock().await.config);
+    let (_, _, saved) = load_config_from(&dir);
+    assert_eq!(saved.default.big(), "deep");
+    let deep = saved.models.iter().find(|p| p.name == "deep").unwrap();
+    assert_eq!(deep.reasoning_effort.as_deref(), Some("low"));
+    let _ = std::fs::remove_file(dir.join(CONFIG_TOML_FILE));
+}

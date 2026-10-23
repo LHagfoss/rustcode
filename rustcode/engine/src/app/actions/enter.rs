@@ -522,8 +522,8 @@ async fn handle_enter_inner(
                 if let Some(value) = value {
                     s.set_active_reasoning_effort(value.clone());
                     let label = match value {
-                        Some(ref e) => format!("Reasoning effort set to '{e}'."),
-                        None => "Reasoning effort cleared (default).".to_string(),
+                        Some(ref e) => format!("Reasoning effort set to '{e}' for this session."),
+                        None => "Reasoning effort cleared (default) for this session.".to_string(),
                     };
                     s.set_transient_notice(label);
                 }
@@ -864,12 +864,14 @@ async fn handle_enter_inner(
                         let model = profile.model.clone();
                         s.api_base_url = url;
                         s.model_name = model;
-                        s.config.default.set_big(name.clone());
-                        crate::config::save_entire_config(&s.config);
+                        s.config.use_profile_for_session(name.clone());
                         s.record_session_model();
                         s.show_command_panel(
                             "Model",
-                            format!("Switched to model profile '{}'", name),
+                            format!(
+                                "Switched this session to model profile '{name}'. New sessions \
+                                 keep the default model."
+                            ),
                         );
                     } else {
                         s.model_name = name.clone();
@@ -925,6 +927,7 @@ async fn handle_enter_inner(
                         });
                     }
                     s.config.default.set_big(name.clone());
+                    s.config.session_model.profile = false;
                     crate::config::save_entire_config(&s.config);
                     s.show_command_panel(
                         "Provider",

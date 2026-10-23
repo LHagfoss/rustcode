@@ -351,7 +351,7 @@ async fn controller_worker(
                 {
                     state.model_name = model_name;
                     state.api_base_url = api_base_url;
-                    state.config.default.set_big(profile_name.clone());
+                    state.config.use_profile_for_session(profile_name.clone());
                     state.record_session_model();
                     crate::config::record_session_settings_for_profile(
                         &state.active_session_id,
@@ -694,7 +694,7 @@ async fn run_native_slash(
             {
                 state.model_name = model_name;
                 state.api_base_url = api_base_url;
-                state.config.default.set_big(profile_name.clone());
+                state.config.use_profile_for_session(profile_name.clone());
                 crate::config::record_session_settings_for_profile(
                     &state.active_session_id,
                     &state.config,
@@ -834,7 +834,7 @@ fn restore_session_profile(state: &mut AppState, profile_name: &str) {
     {
         state.model_name = profile.model.clone();
         state.api_base_url = profile.url.clone();
-        state.config.default.set_big(profile.name.clone());
+        state.config.use_profile_for_session(profile.name.clone());
     }
 }
 

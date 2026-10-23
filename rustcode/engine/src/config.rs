@@ -1377,6 +1377,59 @@ pub struct AppConfig {
     pub start_time: Option<std::time::SystemTime>,
     #[serde(skip, default = "default_true")]
     pub is_valid: bool,
+    /// Model choices the running session made for itself. Never read from or
+    /// written to the config file.
+    #[serde(skip)]
+    pub session_model: SessionModelScope,
+}
+
+/// Which parts of the in-memory model setup belong to the running session
+/// rather than to the config file. The file's `[default] big` and each
+/// profile's `reasoning_effort` are what new sessions start with in every
+/// frontend (`rustcode defaults` sets them for the macOS app), so a session
+/// switching model or effort must not rewrite them: saves keep the file's
+/// values for the parts marked here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionModelScope {
+    /// `default.big` holds the session's profile, not the file's default.
+    pub profile: bool,
+    /// Profiles whose `reasoning_effort` holds the session's effort.
+    pub efforts: std::collections::BTreeSet<String>,
+}
+
+impl AppConfig {
+    /// Run the session on `name` without making it the default for new
+    /// sessions.
+    pub fn use_profile_for_session(&mut self, name: String) {
+        self.default.set_big(name);
+        self.session_model.profile = true;
+    }
+
+    /// Mark `profile`'s reasoning effort as this session's choice, so saves
+    /// keep the effort the config file holds for it.
+    pub fn mark_session_effort(&mut self, profile: &str) {
+        self.session_model.efforts.insert(profile.to_owned());
+    }
+
+    /// Put the file's default profile and efforts back over the session's
+    /// choices in `self`, which is about to be written.
+    fn keep_file_model_defaults(&mut self, file: &AppConfig) {
+        let scope = std::mem::take(&mut self.session_model);
+        if scope.profile {
+            let file_big = file.default.big();
+            if self.models.iter().any(|profile| profile.name == file_big) {
+                self.default.set_big(file_big.to_owned());
+            }
+        }
+        for name in &scope.efforts {
+            let Some(saved) = file.models.iter().find(|profile| &profile.name == name) else {
+                continue;
+            };
+            if let Some(profile) = self.models.iter_mut().find(|profile| &profile.name == name) {
+                profile.reasoning_effort = saved.reasoning_effort.clone();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -1705,6 +1758,7 @@ impl Default for AppConfig {
             disabled_skills: Vec::new(),
             start_time: None,
             is_valid: true,
+            session_model: SessionModelScope::default(),
         }
     }
 }
@@ -2008,7 +2062,18 @@ fn save_entire_config_for_workspace_result(
             }
         }
     }
-    save_config_to_result(&dir, &persisted)?;
+    if persisted.session_model != SessionModelScope::default() {
+        let mut written = persisted.clone();
+        if dir.join(CONFIG_TOML_FILE).exists() {
+            let (_, _, file) = load_config_from(&dir);
+            if file.is_valid {
+                written.keep_file_model_defaults(&file);
+            }
+        }
+        save_config_to_result(&dir, &written)?;
+    } else {
+        save_config_to_result(&dir, &persisted)?;
+    }
     if let Some(session_id) = persisted.last_active_session_id.as_deref() {
         session::record_session_settings(session_id, &persisted);
     }
