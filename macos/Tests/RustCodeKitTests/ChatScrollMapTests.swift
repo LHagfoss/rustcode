@@ -104,3 +104,55 @@ final class ChatScrollMapTests: XCTestCase {
         XCTAssertEqual(knob.following(atEnd, moved: 30, offset: 2500, contentHeight: 3000, visible: 500, track: 400), atEnd)
     }
 }
+
+/// Older rows away from the view stand in at a height that changes only
+/// when their row is measured (#2310).
+final class DrawnRowsTests: XCTestCase {
+    private func map(rows: Int, height: Double = 100) -> ChatScrollMap {
+        var map = ChatScrollMap(spacing: 0, topPadding: 0, bottomPadding: 0)
+        map.setRows(Array(0..<rows))
+        for row in 0..<rows { map.measured(row, height: height) }
+        return map
+    }
+
+    func testAStandInKeepsItsGuessUntilItsRowIsMeasured() {
+        var map = ChatScrollMap(spacing: 0, topPadding: 0, bottomPadding: 0)
+        map.setRows([0, 1, 2])
+        map.measured(0, height: 100)
+        XCTAssertEqual(map.standInHeight(of: 2), 100)
+        // Another row measured moves the average, not the stand-in.
+        map.measured(1, height: 400)
+        XCTAssertEqual(map.standInHeight(of: 2), 100)
+        XCTAssertEqual(map.top(of: 2), 500)
+        XCTAssertEqual(map.laidOutHeight(of: 2), 100)
+        map.measured(2, height: 30)
+        XCTAssertEqual(map.standInHeight(of: 2), 30)
+    }
+
+    func testRowsWithinARange() {
+        var map = map(rows: 10)
+        XCTAssertEqual(map.rows(within: 250...420), [2, 3, 4])
+        XCTAssertEqual(map.rows(within: -50...20), [0])
+    }
+
+    func testDrawsTheViewAndTwoScreensEitherSide() {
+        var map = map(rows: 100)
+        var drawn = DrawnRows()
+        XCTAssertTrue(drawn.update(map: &map, offset: 5000, visible: 300))
+        // 5000 - 600 ... 5300 + 600
+        XCTAssertEqual(drawn.ids, Set(44...59))
+    }
+
+    /// Scrolling within the slack draws the same rows; nearer the edge it
+    /// draws afresh around the view.
+    func testRedrawsOnlyNearTheEdgeOfWhatIsDrawn() {
+        var map = map(rows: 100)
+        var drawn = DrawnRows()
+        _ = drawn.update(map: &map, offset: 5000, visible: 300)
+        XCTAssertFalse(drawn.update(map: &map, offset: 4800, visible: 300))
+        XCTAssertTrue(drawn.update(map: &map, offset: 4500, visible: 300))
+        XCTAssertTrue(drawn.ids.contains(39))
+        drawn.invalidate()
+        XCTAssertFalse(drawn.update(map: &map, offset: 4500, visible: 300), "same rows")
+    }
+}

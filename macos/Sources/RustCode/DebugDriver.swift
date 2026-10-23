@@ -194,6 +194,22 @@ enum DebugDriver {
                 walk(doc)
                 report("vis \(parts.count > 1 ? parts[1] : "-") \(count) views, clip y \(Int(visible.minY)) doc \(Int(doc.frame.height)) items \(model.transcript.items.count)")
             }
+        case "jumpvis":
+            // `jumpvis <points>`: one jump, as a scroller drag far up does,
+            // then how many rows of output are drawn in view right away and
+            // over the next frames.
+            guard let state = ChatScrollState.current else { break }
+            ChatScrollInput.shared.debugObserve(deltaY: 1)
+            state.debugLetGo()
+            state.scroll(by: Double(parts.count > 1 ? parts[1] : "-20000") ?? -20000, animated: false)
+            var seen: [String] = []
+            for _ in 0..<6 {
+                let window = NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+                window?.contentView?.layoutSubtreeIfNeeded()
+                seen.append(String(state.debugVisible.split(separator: "[").last?.split(separator: ",").count ?? 0))
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            report("jumpvis rows in view per frame: \(seen.joined(separator: " "))")
         case "watch":
             // `watch <seconds> <tag>`: log the chat's visible rows every 50 ms, in the background.
             let seconds = Double(parts.count > 1 ? parts[1] : "3") ?? 3
@@ -242,24 +258,87 @@ enum DebugDriver {
                 ChatScrollState.current?.scroll(by: -Double(delta), animated: false)
             }
             let startY = scroll.contentView.bounds.minY
+            // A row of output at the top, measured where it is drawn: the
+            // scroll offset also moves when rows above take their height.
+            let state = ChatScrollState.current
+            let row = state?.topRow().map(\.row).flatMap { $0 == Int.max ? nil : $0 }
+            let rowStart = row.flatMap { state?.debugScreenTop($0) }
             worstGap = 0
             for _ in 0..<steps {
                 if !parts.contains("nowheel") { wheel(points) }
                 try? await Task.sleep(for: .milliseconds(16))
             }
             let wheeledY = scroll.contentView.bounds.minY
+            let rowWheeled = row.flatMap { state?.debugScreenTop($0) }
             let wheelGap = worstGap
             try? await Task.sleep(for: .milliseconds(1500))
             let restY = scroll.contentView.bounds.minY
+            let rowRest = row.flatMap { state?.debugScreenTop($0) }
+            var rowMoved = ""
+            if let rowStart, let rowWheeled {
+                rowMoved = "row moved \(Int(rowWheeled - rowStart)), at rest \(Int((rowRest ?? rowWheeled) - rowWheeled)); "
+            }
             streaming.cancel()
             ticker.invalidate()
-            report("wheelstream \(steps)x\(points): moved \(Int(startY - wheeledY)) of \(Int(steps) * Int(points)), drift at rest \(Int(restY - wheeledY)), worst stall wheeling \(Int(wheelGap)) ms, overall \(Int(worstGap)) ms")
+            report("wheelstream \(steps)x\(points): \(rowMoved)moved \(Int(startY - wheeledY)) of \(Int(steps) * Int(points)), drift at rest \(Int(restY - wheeledY)), worst stall wheeling \(Int(wheelGap)) ms, overall \(Int(worstGap)) ms")
+        case "toolstream":
+            // `toolstream <steps> [ms] [text] [wheel] [noitems]`: a turn keeps
+            // working while the reader is away from the end (#2310). Each step
+            // adds a tool call that runs and finishes, with `text` a line of
+            // reply after it, `ms` apart; with `wheel` the reader also scrolls
+            // up 40 points a step, and with `noitems` only scrolls. Reports how far the row that was at the top
+            // of the view strayed from where the reader's own scrolling put it.
+            let steps = Int(parts.count > 1 ? parts[1] : "30") ?? 30
+            let pause = Int(parts.count > 2 ? parts[2] : "150") ?? 150
+            // The working row moves with every item; measure a row of output.
+            try? await Task.sleep(for: .milliseconds(50))
+            guard let state = ChatScrollState.current, let row = state.topRow()?.row, row != Int.max,
+                  let start = state.debugScreenTop(row) else {
+                report("toolstream: no row at the top")
+                break
+            }
+            var worst = 0.0, lost = 0, last = start, scrolled = 0.0
+            func check() {
+                guard let now = state.debugScreenTop(row) else { lost += 1; return }
+                last = now
+                worst = max(worst, abs(now - start - scrolled))
+                if parts.contains("trace") {
+                    report("  stray \(Int(now - start - scrolled)) top \(state.topRow().map { "\($0.row)@\(Int($0.minY))" } ?? "-") \(state.debugVisible.prefix(60))")
+                }
+            }
+            for index in 0..<steps {
+                if parts.contains("wheel") {
+                    ChatScrollInput.shared.debugObserve(deltaY: 40)
+                    state.scroll(by: -40, animated: false)
+                    scrolled += 40
+                }
+                guard !parts.contains("noitems") else {
+                    try? await Task.sleep(for: .milliseconds(pause))
+                    check()
+                    continue
+                }
+                let id = "toolstream-\(index)-\(model.transcript.items.count)"
+                model.transcript.apply(.toolCall(id: id, title: "run_command", kind: "execute", status: .inProgress,
+                                                 input: nil, detail: "cargo test --package step-\(index)",
+                                                 summary: "Testing step \(index)"))
+                try? await Task.sleep(for: .milliseconds(pause / 2))
+                check()
+                model.transcript.apply(.toolCallUpdate(id: id, title: nil, status: .completed,
+                                                       output: (0..<8).map { "ok line \($0)" }.joined(separator: "\n"), diffs: []))
+                if parts.contains("text") { model.transcript.apply(.agentText("Step \(index) passed; moving on.")) }
+                try? await Task.sleep(for: .milliseconds(pause / 2))
+                check()
+            }
+            report("toolstream \(steps): row \(row) from \(Int(start)) scrolled \(Int(scrolled)), now \(Int(last)), worst stray \(Int(worst)), lost \(lost) of \(steps * 2) checks")
         case "scrollby":
             // `scrollby <points> [steps]`: move the chat, negative up, a step a frame.
             let steps = Int(parts.count > 2 ? parts[2] : "1") ?? 1
+            let delta = Double(parts[1]) ?? -800
             for _ in 0..<steps {
+                // As a wheel event over the chat tells the input monitor.
+                ChatScrollInput.shared.debugObserve(deltaY: -delta)
                 ChatScrollState.current?.debugLetGo()
-                ChatScrollState.current?.scroll(by: Double(parts[1]) ?? -800, animated: false)
+                ChatScrollState.current?.scroll(by: delta, animated: false)
                 try? await Task.sleep(for: .milliseconds(16))
             }
         case "big":

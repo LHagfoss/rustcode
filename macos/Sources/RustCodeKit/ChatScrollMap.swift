@@ -23,6 +23,8 @@ public struct ChatScrollMap: Equatable, Sendable {
     /// Bumped whenever a row or height changes the layout.
     public private(set) var revision = 0
     private var heights: [Int: Double] = [:]
+    /// The fixed heights rows drawn as stand-ins take until measured.
+    private var standIns: [Int: Double] = [:]
     /// The top of each row, and the content height last; nil when stale.
     private var tops: [Double]?
 
@@ -54,6 +56,24 @@ public struct ChatScrollMap: Equatable, Sendable {
 
     public func height(of row: Int) -> Double? { heights[row] }
 
+    /// The height `row` takes when drawn as a stand-in rather than in full
+    /// (#2310): its measured height, else a guess fixed the first time it is
+    /// asked for, so a stand-in never changes height until its row is
+    /// measured, and the map lays it out as the chat does.
+    public mutating func standInHeight(of row: Int) -> Double {
+        if let height = heights[row] { return height }
+        if let height = standIns[row] { return height }
+        let height = estimate
+        standIns[row] = height
+        tops = nil
+        revision += 1
+        return height
+    }
+
+    /// The height the chat last laid `row` out at: measured, its stand-in's,
+    /// or nil when neither.
+    public func laidOutHeight(of row: Int) -> Double? { heights[row] ?? standIns[row] }
+
     /// The guess for a row not yet laid out: the average measured row.
     public var estimate: Double {
         let known = rows.compactMap { heights[$0] }
@@ -84,6 +104,19 @@ public struct ChatScrollMap: Equatable, Sendable {
         return (rows[low], y - tops[low])
     }
 
+    /// The rows that reach into `range`, from the top of the content.
+    public mutating func rows(within range: ClosedRange<Double>) -> [Int] {
+        guard let first = row(at: range.lowerBound)?.row, let start = rows.firstIndex(of: first) else { return [] }
+        let tops = layout()
+        var result: [Int] = []
+        var index = start
+        while index < rows.count, tops[index] <= range.upperBound {
+            result.append(rows[index])
+            index += 1
+        }
+        return result
+    }
+
     private mutating func layout() -> [Double] {
         if let tops { return tops }
         let guess = estimate
@@ -92,7 +125,7 @@ public struct ChatScrollMap: Equatable, Sendable {
         var y = topPadding
         for (index, row) in rows.enumerated() {
             result.append(y)
-            y += heights[row] ?? guess
+            y += heights[row] ?? standIns[row] ?? guess
             if index < rows.count - 1 { y += spacing }
         }
         result.append(y + bottomPadding)
@@ -157,5 +190,49 @@ public struct ChatScrollerKnob: Equatable, Sendable {
     public init(top: Double, height: Double) {
         self.top = top
         self.height = height
+    }
+}
+
+/// Which of the chat's older rows are drawn in full; the rest are drawn as
+/// stand-ins of the height the chat measured for them (#2310).
+///
+/// The older rows were in a lazy stack, which sizes itself from the rows it
+/// has laid out just now and forgets a row's height once it scrolls away.
+/// As the reader scrolled toward it, it laid out a few more rows and its
+/// height jumped, by thousands of points from a handful of rows. The newest
+/// rows below it are not its own, so it moved them by every jump: a reader
+/// scrolling up through the current turn was thrown back to earlier turns.
+/// Stand-ins change height only when their row is first measured, by
+/// exactly the difference, which the chat scrolls back when the row is
+/// above the reader.
+public struct DrawnRows: Equatable, Sendable {
+    /// How far beyond the view, in screens, rows are drawn in full.
+    public static let aheadScreens: Double = 2
+    /// How near the edge of what is drawn, in screens, the view may come
+    /// before more is drawn: until then the rows drawn stay as they are.
+    public static let slackScreens: Double = 1
+
+    public private(set) var ids: Set<Int> = []
+    /// The part of the content drawn in full, from the top of the content.
+    private var span: ClosedRange<Double>?
+
+    public init() {}
+
+    /// The view shows `visible` points from `offset` down the content of
+    /// `map`. Returns whether the rows drawn in full changed.
+    public mutating func update(map: inout ChatScrollMap, offset: Double, visible: Double) -> Bool {
+        let wanted = (offset - Self.slackScreens * visible)...(offset + visible + Self.slackScreens * visible)
+        if let span, span.contains(wanted.lowerBound), span.contains(wanted.upperBound) { return false }
+        let drawn = (offset - Self.aheadScreens * visible)...(offset + visible + Self.aheadScreens * visible)
+        let ids = Set(map.rows(within: drawn))
+        span = drawn
+        guard ids != self.ids else { return false }
+        self.ids = ids
+        return true
+    }
+
+    /// The rows changed, or their heights: work out what to draw afresh.
+    public mutating func invalidate() {
+        span = nil
     }
 }
