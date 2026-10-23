@@ -113,8 +113,10 @@ public struct TimelineLayout: Equatable, Sendable {
             markers.append(TimelineMarker(
                 id: turns[index].id, number: index + 1, title: turns[index].title,
                 y: top + Double(index - first) * Self.step,
-                scale: index == currentIndex ? 1 : max(0.35, 0.6 - 0.08 * distance),
-                opacity: index == currentIndex ? 1 : max(0.3, 0.75 - 0.1 * distance),
+                // Far ticks stay legible: at least 8 points wide and a
+                // third as strong as the current one.
+                scale: index == currentIndex ? 1 : max(0.45, 0.65 - 0.05 * distance),
+                opacity: index == currentIndex ? 1 : max(0.55, 0.9 - 0.08 * distance),
                 isCurrent: index == currentIndex, isInView: y >= 0 && y <= visible))
         }
         self.init(markers: markers, current: turns[currentIndex].id)
