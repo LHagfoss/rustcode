@@ -729,6 +729,8 @@ private struct ChatView: View {
     @State private var window = TranscriptWindow()
     /// The row in view when older rows were asked for, and where it was.
     @State private var pendingTop: (row: Int, minY: Double)?
+    /// Opens or folds a long message where it is (#2303).
+    @State private var messageToggle = MessageToggle()
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
@@ -774,6 +776,7 @@ private struct ChatView: View {
         // scrolling near the end.
         let split = ChatLayout.split(count: transcript.items.count, firstShown: first)
         let rows = shownRows(transcript, first: first, split: split)
+        let expanded = model.expandedInChat
         ScrollViewReader { proxy in
             ScrollView {
                 // The newest rows and the end of the chat sit below the lazy
@@ -791,13 +794,14 @@ private struct ChatView: View {
                     Color.clear.frame(height: 0).id(topAnchor)
                     if first > 0 || split > first {
                         OlderRows(items: rows.older, earlier: first, earlierRow: Self.earlierRow,
-                                  folding: rows.folding, currentMatch: currentMatch, scroll: scroll, drawn: scroll.drawn)
+                                  folding: rows.folding, expanded: expanded, currentMatch: currentMatch,
+                                  scroll: scroll, drawn: scroll.drawn)
                     }
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(rows.newer) { item in
                             TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
                                           isStreaming: isReplyStreaming && item.id == lastId,
-                                          fold: rows.folding.fold(for: item.id))
+                                          fold: rows.folding.fold(for: item.id), isExpanded: expanded.contains(item.id))
                                 .equatable()
                                 .reportsChatRow(item.id, to: scroll)
                                 .id(item.id)
@@ -875,7 +879,14 @@ private struct ChatView: View {
                 #if DEBUG
                 scroll.debugLetGo = { follow.letGo() }
                 scroll.debugFollows = { follow.follows }
+                scroll.debugToggleMessage = { [messageToggle] in messageToggle.action($0) }
                 #endif
+                messageToggle.action = { [model, scroll] id in
+                    // The message keeps its place rather than the chat its end.
+                    follow.letGo()
+                    scroll.holdToggled(id, folding: model.expandedInChat.contains(id))
+                    model.toggleMessage(id)
+                }
                 TranscriptKeyInput.shared.start()
                 TranscriptKeyInput.shared.isCovered = { [model] in model.coversChat }
                 TranscriptKeyInput.shared.perform = { action in perform(action, proxy) }
@@ -899,6 +910,11 @@ private struct ChatView: View {
             .onChange(of: following.follows, initial: true) { _, follows in scroll.anchoredToTop = !follows }
             .onChange(of: chat.transcript) { old, new in
                 find.transcriptChanged(new)
+                // A reply watched while it was written stays whole once done,
+                // rather than folding under the reader.
+                if isReplyStreaming, let last = new.items.last, case .assistant = last.content {
+                    model.keepMessageOpen(last.id)
+                }
                 // Sending a message always brings the chat back to its end.
                 if new.items.count > old.items.count, case .user = new.items.last?.content { follow.jumpToLatest() }
                 if follow.transcriptChanged(readerScrolling: ChatScrollInput.shared.isActive), !model.showsFind {
@@ -915,6 +931,8 @@ private struct ChatView: View {
             }
             .onChange(of: currentMatch) { _, match in
                 guard let match else { return }
+                // A match in a folded message opens it, and it stays open.
+                model.keepMessageOpen(match)
                 follow.letGo()
                 scroll.willJump()
                 // A match older than the window joins it first, then is
@@ -932,6 +950,7 @@ private struct ChatView: View {
         .environment(\.projectRoot, model.chatProject.path)
         .environment(\.editsOpenByDefault, verbosity.editsOpen)
         .environment(\.toggleToolRun, { [model] run in model.toggleToolRun(run) })
+        .environment(\.toggleMessage, messageToggle)
         .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
@@ -1188,6 +1207,8 @@ private struct OlderRows: View {
     let earlier: Int
     let earlierRow: Int
     let folding: ToolFolding
+    /// The long messages opened.
+    let expanded: Set<Int>
     let currentMatch: Int?
     let scroll: ChatScrollState
     @ObservedObject var drawn: DrawnRowsState
@@ -1209,7 +1230,7 @@ private struct OlderRows: View {
         ForEach(items) { item in
             if all || drawn.ids.contains(item.id) || item.id == currentMatch {
                 TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                              fold: folding.fold(for: item.id))
+                              fold: folding.fold(for: item.id), isExpanded: expanded.contains(item.id))
                     .equatable()
                     .reportsChatRow(item.id, to: scroll)
                     .id(item.id)

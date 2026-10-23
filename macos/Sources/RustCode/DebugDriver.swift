@@ -55,11 +55,17 @@ enum DebugDriver {
             let drawn = Date()
             report("open items \(model.transcript.items.count) load \(ms(start, loaded)) ms first frame \(ms(loaded, drawn)) ms")
         case "synth":
-            // `synth <items>`: a long chat of mixed messages, shown at once.
+            // `synth <items> [long]`: a long chat of mixed messages, shown at
+            // once; with `long`, questions and every other answer run long.
             let count = Int(parts[1]) ?? 3000
+            let long = parts.contains("long")
             var transcript = Transcript()
             for index in 0..<count {
                 switch index % 4 {
+                case 0 where long:
+                    transcript.apply(.userText((0..<20).map { "Question \(index) line \($0): how does the parser handle nested blocks?" }.joined(separator: "\n")))
+                case 2 where long:
+                    transcript.apply(.agentText((0..<30).map { "Answer \(index) paragraph \($0), with `code` and **bold** text." }.joined(separator: "\n\n")))
                 case 0: transcript.apply(.userText("Question \(index): how does the parser handle nested blocks?"))
                 case 1: transcript.apply(.toolCall(id: "t\(index)", title: "Read src/file\(index).rs", kind: "read", status: .completed,
                                                    input: nil, detail: "src/file\(index).rs"))
@@ -330,6 +336,51 @@ enum DebugDriver {
                 check()
             }
             report("toolstream \(steps): row \(row) from \(Int(start)) scrolled \(Int(scrolled)), now \(Int(last)), worst stray \(Int(worst)), lost \(lost) of \(steps * 2) checks")
+        case "fold":
+            // `fold [user|reply] [up]`: opens or folds the first long message
+            // of that kind in view, as its Show more control does (#2303);
+            // with `up`, the chat is first scrolled so the message's top is
+            // above the view. Reports where its top and end are in the view
+            // before and over the next frames: opening and folding keep its
+            // top, folding one whose top is above keeps its end.
+            guard let state = ChatScrollState.current else { break }
+            let wantsUser = parts.count < 2 || parts[1] != "reply"
+            let window = NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+            func frame(_ id: Int) -> (top: Int, end: Int)? {
+                guard let top = state.debugScreenTop(id), let height = state.debugFrame(id)?.height else { return nil }
+                return (Int(top), Int(top + height))
+            }
+            let candidates = model.transcript.items.filter { item in
+                switch item.content {
+                case .user(let text): wantsUser && MessageCollapse.mayBeLong(text)
+                case .assistant(let text): !wantsUser && MessageCollapse.mayBeLong(text)
+                default: false
+                }
+            }
+            guard let item = candidates.first(where: { item in
+                guard let place = frame(item.id) else { return false }
+                return place.top < Int(state.visible) && place.end > 0
+            }) else {
+                report("fold: no long message in view")
+                break
+            }
+            if parts.contains("up"), let place = frame(item.id) {
+                ChatScrollInput.shared.debugObserve(deltaY: -1)
+                state.debugLetGo()
+                state.scroll(by: Double(place.top) + 60, animated: false)
+                // Past the input monitor's window: the click is not a scroll.
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+            let before = frame(item.id)
+            let reported = state.debugFrame(item.id).map { "\(Int($0.minY))+\(Int($0.height))" } ?? "-"
+            state.debugToggleMessage(item.id)
+            var after: [String] = []
+            for _ in 0..<8 {
+                window?.contentView?.layoutSubtreeIfNeeded()
+                try? await Task.sleep(for: .milliseconds(16))
+                after.append((frame(item.id).map { "\($0.top)..\($0.end)" } ?? "-") + (parts.contains("clip") ? "@\(Int(state.scrollView?.contentView.bounds.minY ?? -1))" : ""))
+            }
+            report("fold \(item.id) \(model.expandedInChat.contains(item.id) ? "opened" : "folded"): reported \(reported) before \(before.map { "\($0.top)..\($0.end)" } ?? "-") after \(after.joined(separator: " "))")
         case "scrollby":
             // `scrollby <points> [steps]`: move the chat, negative up, a step a frame.
             let steps = Int(parts.count > 2 ? parts[2] : "1") ?? 1

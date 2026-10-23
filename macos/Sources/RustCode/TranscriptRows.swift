@@ -1,3 +1,4 @@
+import AppKit
 import RustCodeKit
 import SwiftUI
 
@@ -8,6 +9,8 @@ struct TranscriptRow: View, Equatable {
     var isStreaming = false
     /// The folded run of tool calls this row starts, if any.
     var fold: ToolRunFold? = nil
+    /// A long message the reader opened, drawn whole (#2303).
+    var isExpanded = false
 
     var body: some View {
         content
@@ -25,8 +28,10 @@ struct TranscriptRow: View, Equatable {
     @ViewBuilder
     private var content: some View {
         switch item.content {
-        case .user(let text): UserMessage(id: item.id, text: text)
-        case .assistant(let text): AssistantMessage(text: text, isStreaming: isStreaming, turn: item.turn)
+        case .user(let text): UserMessage(id: item.id, text: text, isExpanded: isExpanded || isCurrentMatch)
+        case .assistant(let text):
+            AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
+                             isExpanded: isExpanded || isCurrentMatch)
         case .thinking(let text):
             ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
         case .tool(let tool):
@@ -122,6 +127,7 @@ private struct SummaryCard: View {
 private struct UserMessage: View {
     let id: Int
     let text: String
+    var isExpanded = false
     @Environment(\.messageActions) private var messageActions
 
     var body: some View {
@@ -143,7 +149,7 @@ private struct UserMessage: View {
                 .padding(.leading, 80)
             }
             if !message.text.isEmpty || message.images.isEmpty {
-                UserBubble(id: id, text: message.text, original: text)
+                UserBubble(id: id, text: message.text, original: text, isExpanded: isExpanded)
             }
         }
     }
@@ -154,22 +160,23 @@ private struct UserBubble: View {
     let text: String
     /// The message as sent, image markers included, for edit and resend.
     let original: String
+    var isExpanded = false
     @Environment(\.messageActions) private var messageActions
     @Environment(\.findQuery) private var findQuery
 
     var body: some View {
-        Group {
-            if text.hasPrefix("/"), findQuery.isEmpty {
-                slashCommandText(text)
-            } else {
-                Text(FindHighlight.apply(ChatLinks.linked(text), query: findQuery))
+        FoldingMessage(id: id, text: text, folds: true, isExpanded: isExpanded,
+                       alignment: .trailing, chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
+            Group {
+                if text.hasPrefix("/"), findQuery.isEmpty {
+                    slashCommandText(text)
+                } else {
+                    Text(FindHighlight.apply(ChatLinks.linked(text), query: findQuery))
+                }
             }
-        }
             .textSelection(.enabled)
             .lineSpacing(2)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(.fill.tertiary, in: .rect(cornerRadius: 18))
+        }
             .messageMenu { [text, original, id, messageActions] in
                 var items = [MessageMenuItem(title: "Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }]
                 if let actions = messageActions {
@@ -184,12 +191,27 @@ private struct UserBubble: View {
     }
 }
 
+/// A user message's bubble around its text.
+private struct BubbleChrome: ViewModifier {
+    /// How much taller the bubble is than its text.
+    static let height: Double = 18
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 14)
+            .padding(.vertical, Self.height / 2)
+            .background(.fill.tertiary, in: .rect(cornerRadius: 18))
+    }
+}
+
 /// Agent text, with `<think>` sections the engine leaves inline folded away.
 private struct AssistantMessage: View {
+    let id: Int
     let text: String
     var isStreaming = false
     /// On a turn's last reply: how long the turn took and when it ended.
     var turn: TurnTiming?
+    var isExpanded = false
     @Environment(\.messageActions) private var messageActions
     @State private var isHovered = false
 
@@ -212,16 +234,21 @@ private struct AssistantMessage: View {
     var body: some View {
         let parsed = parsed
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
-                let isLast = index == parsed.blocks.count - 1
-                switch block {
-                case .markdown(let text):
-                    MarkdownText(text: text, visualizations: true, isStreaming: isStreaming && isLast)
-                case .thinking(let text, let isComplete):
-                    ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
+            FoldingMessage(id: id, text: text, folds: MessageCollapse.folds(.assistant(text), isStreaming: isStreaming),
+                           isExpanded: isExpanded) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
+                        let isLast = index == parsed.blocks.count - 1
+                        switch block {
+                        case .markdown(let text):
+                            MarkdownText(text: text, visualizations: true, isStreaming: isStreaming && isLast)
+                        case .thinking(let text, let isComplete):
+                            ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
+                        }
+                    }
+                    if let summary = parsed.summary { SummaryCard(summary: summary) }
                 }
             }
-            if let summary = parsed.summary { SummaryCard(summary: summary) }
             // Never while the reply is written, so the footer cannot claim it is done.
             if !isStreaming, let turn { footer(turn) }
         }
@@ -813,6 +840,122 @@ extension EnvironmentValues {
     @Entry var editsOpenByDefault = true
     /// Opens or folds the run of tool calls a summary row stands for.
     @Entry var toggleToolRun: @MainActor (Int) -> Void = { _ in }
+    /// Opens or folds a long message; without it, long messages stay whole.
+    @Entry var toggleMessage: MessageToggle? = nil
+}
+
+/// Opens or folds a long message of the chat (#2303). One object for the
+/// chat's life: a new closure on every redraw would change the environment
+/// of every message and redraw them all.
+@MainActor
+final class MessageToggle {
+    var action: (Int) -> Void = { _ in }
+}
+
+/// A long message folded to its first `MessageCollapse.maxLines` lines
+/// under a fade, with Show more; opened, it ends with Show less (#2303).
+/// Short messages, and every message where folding is off, are drawn as
+/// they are. Folding is drawing only: the text, its selection, copy, the
+/// message menu and VoiceOver keep the whole message.
+///
+/// Whether a message folds is decided as it is laid out, from its height at
+/// the chat's width, not afterwards: a row that took its full height first
+/// and folded the next pass would change height under the reader each time
+/// it is drawn again, as rows are while the chat scrolls.
+struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
+    let id: Int
+    let text: String
+    /// This kind of message folds when long.
+    let folds: Bool
+    let isExpanded: Bool
+    var alignment: HorizontalAlignment = .leading
+    /// What goes around the text, such as a bubble, and how much taller it is.
+    let chrome: Chrome
+    var chromeHeight: Double = 0
+    @ViewBuilder let content: () -> Content
+    @Environment(\.toggleMessage) private var toggle
+
+    var body: some View {
+        if folds, let toggle, MessageCollapse.mayBeLong(text) {
+            let lineHeight = chatLineHeight
+            // The message whole when that is no taller than folded with its
+            // control, else folded or opened with the control under it.
+            ProposedHeight(height: MessageCollapse.foldHeight(lineHeight: lineHeight) + chromeHeight) {
+                ViewThatFits(in: .vertical) {
+                    whole
+                    VStack(alignment: alignment, spacing: 0) {
+                        if isExpanded { whole } else { folded(lineHeight) }
+                        control(toggle)
+                    }
+                }
+            }
+        } else {
+            content().modifier(chrome)
+        }
+    }
+
+    private var whole: some View {
+        content().fixedSize(horizontal: false, vertical: true).modifier(chrome)
+    }
+
+    private func folded(_ lineHeight: Double) -> some View {
+        content()
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(height: MessageCollapse.foldedHeight(lineHeight: lineHeight), alignment: .top)
+            .clipped()
+            .mask {
+                VStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: lineHeight * 2)
+                }
+            }
+            .modifier(chrome)
+    }
+
+    private func control(_ toggle: MessageToggle) -> some View {
+        Button { toggle.action(id) } label: {
+            HStack(spacing: 4) {
+                Text(isExpanded ? "Show less" : "Show more")
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down").imageScale(.small)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .frame(height: MessageCollapse.controlHeight)
+            .contentShape(.rect(cornerRadius: 7))
+        }
+        .buttonStyle(QuietPressStyle())
+        .hoverHighlight(cornerRadius: 7)
+        .padding(alignment == .leading ? .leading : .trailing, alignment == .leading ? -8 : 0)
+        .help(isExpanded ? "Fold this message" : "Show the whole message")
+        .accessibilityHint(isExpanded ? "Folds the message to its first lines" : "Shows the whole message")
+    }
+}
+
+extension FoldingMessage where Chrome == EmptyModifier {
+    init(id: Int, text: String, folds: Bool, isExpanded: Bool, @ViewBuilder content: @escaping () -> Content) {
+        self.init(id: id, text: text, folds: folds, isExpanded: isExpanded, chrome: EmptyModifier(), content: content)
+    }
+}
+
+/// A line of the chat's text: the body font and the rows' line spacing.
+private let chatLineHeight =
+    Double(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))) + 2
+
+/// Proposes `height` to its content, which takes whatever height it wants:
+/// a `ViewThatFits` inside then picks by that height, where the chat's
+/// scroll view proposes none.
+private struct ProposedHeight: Layout {
+    let height: Double
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: height)) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: height))
+    }
 }
 
 extension ToolVerbosity {
