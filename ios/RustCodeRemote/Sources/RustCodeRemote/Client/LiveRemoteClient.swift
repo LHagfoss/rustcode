@@ -14,6 +14,8 @@ public actor LiveRemoteClient: RemoteClient {
     private let codec: any RemoteCodec
     private let makeTransport: TransportFactory
     private let requestTimeout: Duration
+    /// For starting a session owner on the host, which the gateway allows 60 s.
+    private let sessionStartTimeout: Duration
 
     private var transport: (any RemoteTransport)?
     private var receiveTask: Task<Void, Never>?
@@ -38,10 +40,12 @@ public actor LiveRemoteClient: RemoteClient {
     public init(
         codec: any RemoteCodec,
         requestTimeout: Duration = .seconds(20),
+        sessionStartTimeout: Duration = .seconds(75),
         transport: @escaping TransportFactory = { URLSessionWebSocketTransport() }
     ) {
         self.codec = codec
         self.requestTimeout = requestTimeout
+        self.sessionStartTimeout = sessionStartTimeout
         self.makeTransport = transport
     }
 
@@ -145,7 +149,7 @@ public actor LiveRemoteClient: RemoteClient {
     public func createSession(directory: String?, requestID: RequestID) async throws -> SessionSummary {
         mutations.insert(requestID)
         defer { mutations.remove(requestID) }
-        let reply = try await request(.createSession(path: directory), id: requestID)
+        let reply = try await request(.createSession(path: directory), id: requestID, timeout: sessionStartTimeout)
         guard case .sessionCreated(let session) = reply else { throw Self.unexpected(reply) }
         return session
     }
@@ -161,7 +165,7 @@ public actor LiveRemoteClient: RemoteClient {
     public func resumeSession(_ sessionID: String, requestID: RequestID) async throws -> SessionSummary {
         mutations.insert(requestID)
         defer { mutations.remove(requestID) }
-        let reply = try await request(.resumeSession(sessionID: sessionID), id: requestID)
+        let reply = try await request(.resumeSession(sessionID: sessionID), id: requestID, timeout: sessionStartTimeout)
         guard case .sessionResumed(let session) = reply else { throw Self.unexpected(reply) }
         return session
     }
@@ -301,15 +305,15 @@ public actor LiveRemoteClient: RemoteClient {
     }
 
     /// Sends one command and waits for its reply. A `.failure` reply is thrown.
-    private func request(_ command: RemoteCommand, id: RequestID = RequestID()) async throws -> RemoteReply {
+    private func request(_ command: RemoteCommand, id: RequestID = RequestID(), timeout: Duration? = nil) async throws -> RemoteReply {
         guard let transport else { throw RemoteError.notConnected }
         let frame = try codec.encode(command, requestID: id)
 
         // The waiter is registered before the frame leaves, so a fast reply cannot be missed.
         let (replies, waiter) = AsyncStream.makeStream(of: Result<RemoteReply, RemoteError>.self)
         waiters[id] = waiter
-        let timer = Task { [weak self, requestTimeout] in
-            try? await Task.sleep(for: requestTimeout)
+        let timer = Task { [weak self, timeout = timeout ?? requestTimeout] in
+            try? await Task.sleep(for: timeout)
             guard !Task.isCancelled else { return }
             await self?.timeOut(id)
         }

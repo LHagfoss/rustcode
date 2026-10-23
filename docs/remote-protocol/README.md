@@ -214,7 +214,7 @@ comes from authentication and is never part of a frame.
 | `resolve_approval` | terminal | `approval_resolved` | `stale_approval` |
 | `get_request_status` | terminal that holds the receipt | `request_status` | |
 | `list_saved_sessions` | gateway (`saved_sessions`) | `saved_sessions` | `invalid_request` |
-| `resume_session` | gateway (`saved_sessions`) | `session_resumed` | `not_found`, `busy`, `invalid_request`, `internal` |
+| `resume_session` | gateway (`saved_sessions`) | `session_resumed` | `not_found`, `busy`, `open_elsewhere`, `invalid_request`, `internal` |
 
 Any request can also be rejected with:
 
@@ -230,6 +230,7 @@ Any request can also be rejected with:
 | `owner_unavailable` | The terminal did not answer within 30 seconds or went away. For a mutation the receipt is `unknown`. |
 | `request_conflict` | This `request_id` was already used by this device with different content. |
 | `receipt_capacity` | The terminal cannot record another receipt. Nothing was applied. |
+| `open_elsewhere` | `resume_session` only: another process on the host (the app, a terminal) has the saved session open without sharing it. `message` says where and is ready to show. Nothing was started. Clients that do not know the code show `message`. |
 | `internal` | The answer did not fit in a frame, or the host failed. |
 
 A prompt whose first character is `/` is refused with `unsupported_operation`.
@@ -615,7 +616,8 @@ lease, so concurrent launch/reconnect attempts cannot create duplicate owners.
 
 The gateway answers every `create_session` and `resume_session` within 15
 seconds of receiving it, waiting for other starts included, so clients with a
-20-second request timeout always see the answer. A start that cannot even
+20-second request timeout always see the answer. The iOS app waits up to 75
+seconds for these two, longer than the 60 s an owner may take to register. A start that cannot even
 begin in that time is refused with `busy` and nothing recorded. When the owner
 exits before registering, the gateway withdraws the receipt and answers with
 error `internal` and receipt `rejected`: the session was not created, and the
@@ -659,7 +661,7 @@ workspace or ID contains it, ignoring case. Each entry has `session_id`,
 | --- | --- | --- |
 | `saved` | No process holds it. | `resume_session` |
 | `shared` | It is in the live list. | attach to it |
-| `open` | A terminal or session owner holds it without sharing it. | nothing, or `request_share` for a terminal |
+| `open` | A terminal, the app or a session owner holds it without sharing it. | nothing, or `request_share` for a terminal |
 
 Only sessions the host's session store lists, whose files lie inside the
 store, are reported: the same rule as ACP's `session/list`.
@@ -671,8 +673,13 @@ and answers `session_resumed { session }` once it is shared; attach to it as
 usual. The owner loads the saved transcript, its recorded settings and its task
 worktree, if any. It is a host-wide mutation with the same durable receipt,
 retry and `get_request_status` rules as `create_session`. A session that is
-already shared is answered at once. One that a terminal or another owner holds
-is refused with `busy`, a session without a recorded workspace, or whose
+already shared is answered at once. One that a shared terminal or another
+owner holds is refused with `busy`; one that another process has open without
+sharing it (the RustCode app on the Mac, a terminal) with `open_elsewhere`. Every
+process that runs a session holds an advisory lock on `open.lock` in the
+session's directory while it has the session loaded; the kernel releases it
+when the process ends, so a lock left by a dead process does not count. A
+session without a recorded workspace, or whose
 workspace no longer exists, with `invalid_request`, an unknown ID with
 `not_found`; nothing is started for any of them.
 

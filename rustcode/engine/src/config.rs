@@ -2544,9 +2544,13 @@ pub(crate) use mcp_servers::{
 
 mod session;
 mod session_export;
+mod session_open;
 pub use session::session_title;
 pub use session::*;
 pub use session_export::{downloads_dir, export_session};
+pub use session_open::{
+    SessionHolder, hold_primary_session, hold_session_open, release_session_open, session_open_by,
+};
 
 #[cfg(test)]
 use session::{next_session_id_value, queue_history_write, write_history_file};

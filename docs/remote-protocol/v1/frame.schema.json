@@ -343,6 +343,11 @@
           "const": "receipt_capacity",
           "description": "The owner cannot record another receipt; nothing was applied.",
           "type": "string"
+        },
+        {
+          "const": "open_elsewhere",
+          "description": "`resume_session` for a saved session that another process on the\nhost (the app, a terminal) has open without sharing it. The message\nsays where it is open. Nothing was started.",
+          "type": "string"
         }
       ]
     },

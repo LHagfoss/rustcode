@@ -381,6 +381,7 @@ public struct WireCodec: RemoteCodec {
         case .staleApproval: return .rejected(.staleApproval)
         case .staleSession: return .rejected(.staleSession)
         case .unsupportedOperation: return .rejected(.unsupportedOperation)
+        case .openElsewhere: return .rejected(.openElsewhere(error.message))
         case .invalidRequest, .notFound, .staleCursor, .requestConflict, .receiptCapacity, .frameTooLarge, .internal:
             return other()
         case nil:

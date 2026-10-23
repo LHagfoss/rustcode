@@ -87,7 +87,18 @@ struct TranscriptView: View {
 
     private var navigationContent: some View {
         Group {
-            if let snapshot = store.attached {
+            if let failure = store.attachFailure, failure.sessionID == store.selectedSessionID {
+                // The selection stays, so the draft does too; Back only shows the sessions.
+                ContentUnavailableView {
+                    Label(failure.title, systemImage: failure.systemImage)
+                } description: {
+                    Text(failure.message)
+                } actions: {
+                    Button("Try Again") { store.retryAttachment() }
+                        .buttonStyle(.borderedProminent)
+                    Button("Back") { openSessions() }
+                }
+            } else if let snapshot = store.attached {
                 transcript(snapshot)
             } else if store.connection == .connected {
                 ProgressView("Loading session…")

@@ -545,9 +545,19 @@ fn mark_acp_session(session_id: &str) {
         .lock()
         .expect("ACP session registry mutex poisoned")
         .insert(session_id.to_owned());
+    // Other processes, the remote gateway first, see the session as open in
+    // the app for as long as it is loaded here.
+    if let Some(config_dir) = crate::config::get_config_dir() {
+        crate::config::hold_session_open(
+            &config_dir,
+            session_id,
+            crate::config::SessionHolder::App,
+        );
+    }
 }
 
 fn unmark_acp_session(session_id: &str) {
+    crate::config::release_session_open(session_id, crate::config::SessionHolder::App);
     if let Some(sessions) = ACTIVE_ACP_SESSIONS.get() {
         sessions
             .lock()

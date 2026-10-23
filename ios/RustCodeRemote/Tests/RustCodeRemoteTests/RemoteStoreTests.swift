@@ -154,8 +154,26 @@ private actor StubClient: RemoteClient {
         listContinuation?.yield(sessions)
     }
 
+    /// Errors the next attaches throw, in order, before any succeeds.
+    var attachErrors: [RemoteError] = []
+    func set(attachErrors: [RemoteError]) { self.attachErrors = attachErrors }
+    var capabilities: Set<String> = []
+    func set(capabilities: Set<String>) { self.capabilities = capabilities }
+    func hostCapabilities() async -> Set<String> { capabilities }
+    var resumeResult: Result<SessionSummary, RemoteError> = .failure(.rejected(.unsupportedOperation))
+    func set(resumeResult: Result<SessionSummary, RemoteError>) { self.resumeResult = resumeResult }
+    func resumeSession(_ sessionID: String, requestID: RequestID) async throws -> SessionSummary {
+        try resumeResult.get()
+    }
+
     func attach(_ session: SessionRef, resumeAfter: UInt64?) async throws -> SessionAttachment {
         attachCalls.append(resumeAfter)
+        if !attachErrors.isEmpty {
+            let error = attachErrors.removeFirst()
+            // An unreadable frame drops the whole connection, as the live client does.
+            if case .invalidFrame = error { dropConnection(error) }
+            throw error
+        }
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: SessionUpdate.self)
         let script = attachScripts.isEmpty ? [] : attachScripts.removeFirst()
         for sequence in script {
@@ -700,6 +718,132 @@ private final class DelayLog: Sendable {
         #expect(await waitUntil { store.selectedSessionID == nil })
         #expect(store.attached == nil)
         #expect(store.notice == "Sharing was turned off for this session.")
+    }
+
+    @Test(arguments: [
+        (RemoteError.rejected(.other(code: "not_found", message: "no shared session")), SessionLoadFailure.Category.notFound),
+        (.rejected(.staleSession), .stale),
+        (.outcomeUnknown(detail: "the terminal did not answer"), .ownerUnavailable),
+        (.timeout, .timeout),
+        (.rejected(.other(code: "internal", message: "the session snapshot does not fit in one frame")), .refused),
+    ])
+    func aSessionThatFailsToOpenSaysWhyAndKeepsItsSelection(error: RemoteError, category: SessionLoadFailure.Category) async {
+        let client = StubClient()
+        await client.set(attachErrors: [error])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+
+        #expect(await waitUntil { store.attachFailure != nil })
+        #expect(store.attachFailure?.category == category)
+        #expect(store.attachFailure?.sessionID == "s1")
+        #expect(store.attachFailure?.message.isEmpty == false)
+        // The selection, and with it the draft, stays for Try Again.
+        #expect(store.selectedSessionID == "s1")
+        #expect(store.attached == nil)
+        await store.unpair()
+    }
+
+    @Test func tryAgainOpensASessionThatFailedToLoad() async {
+        let client = StubClient()
+        await client.set(attachErrors: [.timeout])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attachFailure?.category == .timeout })
+
+        store.retryAttachment()
+        #expect(store.attachFailure == nil)
+        #expect(await waitUntil { store.attached != nil })
+        #expect(await client.attachCalls.count == 2)
+        #expect(store.attachFailure == nil)
+    }
+
+    @Test func selectingAnotherSessionClearsTheFailure() async {
+        let client = StubClient()
+        await client.set(attachErrors: [.timeout])
+        await client.publish([makeSession("s1"), makeSession("s2")])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+        #expect(await waitUntil { store.attachFailure != nil })
+
+        store.select("s2")
+        #expect(store.attachFailure == nil)
+        #expect(await waitUntil { store.attached?.session.sessionID == "s2" })
+    }
+
+    @Test func unreadableSessionDataIsNotReloadedUntilTryAgain() async {
+        let client = StubClient()
+        await client.set(attachErrors: [.invalidFrame("bad frame")])
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+
+        #expect(await waitUntil { store.attachFailure?.category == .invalidData })
+        // The connection comes back on its own, but the same data would fail the same way.
+        #expect(await waitUntil { await client.connectCalls == 2 && store.connection == .connected })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await client.attachCalls.count == 1)
+        #expect(store.attachFailure?.category == .invalidData)
+        #expect(store.selectedSessionID == "s1")
+
+        store.retryAttachment()
+        #expect(await waitUntil { store.attached != nil })
+        #expect(await client.attachCalls.count == 2)
+    }
+
+    @Test func aSessionThatKeepsResyncingStopsWithAReason() async {
+        let client = StubClient()
+        await client.set(attachErrors: Array(repeating: .resyncRequired, count: 5))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected })
+        store.select("s1")
+
+        #expect(await waitUntil { store.attachFailure?.category == .stale })
+        #expect(await client.attachCalls.count == 5)
+        store.retryAttachment()
+        #expect(await waitUntil { store.attached != nil })
+    }
+
+    @Test func aSavedSessionOpenInTheMacAppIsNotOpenedHereToo() async {
+        let client = StubClient()
+        await client.set(capabilities: [HostCapability.savedSessions])
+        let message = "This chat is open in the RustCode app on the Mac. Turn on Remote access for it there to continue on this device."
+        await client.set(resumeResult: .failure(.rejected(.openElsewhere(message))))
+        let store = makeStore(client)
+        store.bootstrap()
+        #expect(await waitUntil { store.connection == .connected && store.supportsSavedSessions })
+
+        #expect(await store.openSavedSession("saved-1") == false)
+        #expect(store.notice == message)
+        #expect(store.selectedSessionID == nil)
+        #expect(SessionLoadFailure(sessionID: "saved-1", error: .rejected(.openElsewhere(message)))?.category == .openElsewhere)
+    }
+
+    @Test func sessionDiagnosticsCarryNoContent() {
+        let failure = SessionLoadFailure(sessionID: "01a167ddbcd7-7002-a96a-ab10-ab104d44f85e",
+            error: .rejected(.other(code: "internal", message: "failed in /Users/someone/secret-project: Why did you stop")))
+        let line = SessionDiagnostics.line(operation: "attach", sessionID: failure!.sessionID, category: failure?.category,
+                                           attempt: 2, elapsed: .milliseconds(1500))
+        #expect(line == "op=attach session=01a167dd result=refused attempt=2 elapsed_ms=1500")
+        #expect(!line.contains("secret"))
+        #expect(!line.contains("Why"))
+        #expect(!line.contains("ab104d44f85e"))
+        // The message itself, which the user sees, keeps the host's words.
+        #expect(failure?.message.contains("secret-project") == true)
+    }
+
+    /// Connection failures belong to the connection state, which reconnects and reattaches.
+    @Test func connectionFailuresAreNotSessionFailures() {
+        for error in [RemoteError.connectionClosed, .notConnected, .transport("reset"), .unauthorized, .sessionClosed("gone")] {
+            #expect(SessionLoadFailure(sessionID: "s1", error: error) == nil)
+        }
     }
 
     @Test func refreshingAsksForTheListAgainWithoutReconnecting() async {

@@ -30,6 +30,9 @@ public enum RemoteRejection: Sendable, Equatable {
     case staleSession
     /// For example a slash command sent from the phone, or steering a session that cannot be steered.
     case unsupportedOperation
+    /// `resume_session` for a saved session that another process on the Mac (the app, a
+    /// terminal) has open. The host's message says where and how to continue.
+    case openElsewhere(String)
     case other(code: String, message: String?)
 }
 

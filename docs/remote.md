@@ -300,7 +300,7 @@ restarts, and ends when it is killed or the machine restarts.
   registration and the reason whenever it gives up. The request's receipt is
   `remote/created/<hash>.json`.
 - The device always gets an answer within 15 seconds of asking, well inside
-  the app's own 20-second limit, including any time spent waiting for another
+  the app's own limit for starting a session (75 seconds; older apps 20), including any time spent waiting for another
   session to start.
 - An owner that exits before registering is reported at once: the device gets
   an `internal` error with receipt `rejected` that names the session, the
@@ -338,8 +338,10 @@ picks up the transcript, the session's settings and its task worktree. The
 same receipt, retry, 20-second start limit and owner log rules apply.
 
 Only sessions in the host's session store can be reopened, by their full ID.
-A session that a terminal or another owner holds without sharing it is
-refused instead of being opened twice, and so is one with no recorded
+A session that a terminal, the RustCode app or another owner has open without
+sharing it is refused instead of being opened twice (the app shows where it is
+open: turn on Remote access for it in the Mac app, or run `/remote` in the
+terminal), and so is one with no recorded
 workspace or whose workspace directory no longer exists: reopen those in a
 terminal with `rustcode --resume`. The gateway advertises this with the
 `saved_sessions` capability; an older gateway lists only shared sessions.
