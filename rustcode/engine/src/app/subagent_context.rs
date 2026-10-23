@@ -84,7 +84,7 @@ impl AgentRole {
         match self {
             Self::Default => "",
             Self::Explorer => {
-                " Role: explorer. Investigate and report findings with file paths and evidence; do not change anything."
+                " Role: explorer. Investigate with the code, web and MCP tools you have and report findings with their sources (file paths, URLs); do not change anything."
             }
             Self::Worker => {
                 " Role: worker. Implement the task inside allowed_paths, verify it, and report what changed."

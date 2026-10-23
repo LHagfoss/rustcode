@@ -645,13 +645,13 @@ fn apply_responses_sampling_options(
     }
 }
 
-fn is_chatgpt_credential(profile: Option<&crate::config::ModelProfile>) -> bool {
+pub(crate) fn is_chatgpt_credential(profile: Option<&crate::config::ModelProfile>) -> bool {
     profile
         .and_then(|profile| profile.credential.as_ref())
         .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
 }
 
-fn chatgpt_endpoint_is_supported(profile: &crate::config::ModelProfile) -> bool {
+pub(crate) fn chatgpt_endpoint_is_supported(profile: &crate::config::ModelProfile) -> bool {
     profile.resolved_api_protocol() == crate::config::ApiProtocol::Responses
         && profile.endpoint_url() == "https://api.openai.com/v1/responses"
 }
@@ -2326,6 +2326,7 @@ mod tests {
                 None,
                 Duration::from_millis(100),
                 Duration::from_millis(100),
+                None,
             )
             .await
         });
@@ -4747,6 +4748,49 @@ pub async fn stream_request(
         tool_output_limit_override,
         retry::FIRST_EVENT_TIMEOUT,
         retry::STREAM_IDLE_TIMEOUT,
+        None,
+    )
+    .await
+}
+
+/// [`stream_request`] on the named profile rather than the session's own.
+/// A subagent runs on a profile it resolved by name at spawn; picking the
+/// profile again from `url` and `model` would be ambiguous when several
+/// profiles serve one model at one URL (#2334).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn stream_request_for_profile(
+    client: &reqwest::Client,
+    state: Arc<Mutex<AppState>>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    profile_name: Option<&str>,
+    url: &str,
+    model: &str,
+    messages: Vec<serde_json::Value>,
+    buffer: Arc<Mutex<StreamBuffer>>,
+    quiet: bool,
+    allow_tools: bool,
+    thinking_mode: ThinkingMode,
+    schema_policy: crate::tools::ToolSchemaPolicy,
+    expected_session_id: Option<&str>,
+    tool_output_limit_override: Option<u32>,
+) -> Result<Option<String>, StreamFailure> {
+    stream_request_with_timeouts(
+        client,
+        state,
+        cancel_token,
+        url,
+        model,
+        messages,
+        buffer,
+        quiet,
+        allow_tools,
+        thinking_mode,
+        schema_policy,
+        expected_session_id,
+        tool_output_limit_override,
+        retry::FIRST_EVENT_TIMEOUT,
+        retry::STREAM_IDLE_TIMEOUT,
+        profile_name,
     )
     .await
 }
@@ -4792,11 +4836,12 @@ async fn stream_request_with_timeouts(
     tool_output_limit_override: Option<u32>,
     first_event_timeout: std::time::Duration,
     stream_idle_timeout: std::time::Duration,
+    selected_profile: Option<&str>,
 ) -> Result<Option<String>, StreamFailure> {
     let request_started = std::time::Instant::now();
     let (profile, profile_error, active_session_id) = {
         let app = state.lock().await;
-        let selected_name = app.config.default.big();
+        let selected_name = selected_profile.unwrap_or(app.config.default.big());
         let (profile, error) =
             match select_request_profile(&app.config.models, selected_name, url, model) {
                 Ok(profile) => (profile, None),
