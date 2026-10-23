@@ -1,3 +1,12 @@
+## [v0.92.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.92.2) - 2026-10-23
+
+### Fixes
+- The agent can now open the live preview in the Mac app; before, it was told about the tool but never given it. (#2341)
+- Chats with screenshots send much smaller requests. (#2342)
+- The agent no longer runs a failing TypeScript check before a project's dependencies are installed. (#2343)
+- The session timeline is now a compact stack of ticks, with the turn being read drawn widest. (#2338, #2340)
+- The copy button grows to fit "Copied" instead of always reserving that width. (#2337)
+- Long replies are no longer folded behind Show more; only your own long messages are. (#2339)
 ## [v0.92.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.92.1) - 2026-10-23
 
 ### Fixes
