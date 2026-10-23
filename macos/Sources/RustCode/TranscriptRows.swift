@@ -11,6 +11,8 @@ struct TranscriptRow: View, Equatable {
     var fold: ToolRunFold? = nil
     /// A long message the reader opened, drawn whole (#2303).
     var isExpanded = false
+    /// The agents this row's spawn and the ones right after it started.
+    var agents: [AgentSpawn]? = nil
 
     var body: some View {
         content
@@ -35,7 +37,9 @@ struct TranscriptRow: View, Equatable {
         case .thinking(let text):
             ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
         case .tool(let tool):
-            if let fold {
+            if let agents {
+                AgentSpawnGroup(spawns: agents)
+            } else if let fold {
                 VStack(alignment: .leading, spacing: 18) {
                     ToolRunSummary(fold: fold)
                     if fold.isOpen, !tool.isBlank { ToolRow(tool: tool) }
@@ -842,6 +846,8 @@ extension EnvironmentValues {
     @Entry var toggleToolRun: @MainActor (Int) -> Void = { _ in }
     /// Opens or folds a long message; without it, long messages stay whole.
     @Entry var toggleMessage: MessageToggle? = nil
+    /// Opens a subagent's panel by its id; without it, agent rows only show.
+    @Entry var openAgent: (@MainActor (Int) -> Void)? = nil
 }
 
 /// Opens or folds a long message of the chat (#2303). One object for the

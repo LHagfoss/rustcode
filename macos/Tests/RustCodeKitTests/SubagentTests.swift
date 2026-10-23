@@ -44,4 +44,52 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(ACPRequests.agentCancel(sessionId: "s", id: 3)["action"], "cancel")
         XCTAssertEqual(ACPRequests.agentHistory(sessionId: "s", id: 3)["action"], "history")
     }
+
+    func testASpawnNamesItsChild() {
+        XCTAssertEqual(SubagentInfo.spawnedId(in: #"{"agent_id":3,"nickname":"agent-3","status":"queued"}"#), 3)
+        XCTAssertEqual(SubagentInfo.spawnedId(in: "{\"agent_id\": 12}\n\n__BUILD_UNVERIFIED__: note"), 12)
+        XCTAssertEqual(SubagentInfo.spawnedId(in: "subagent 6 started; use wait_agent to receive its terminal result"), 6)
+        XCTAssertNil(SubagentInfo.spawnedId(in: "error: unknown model 'x'"))
+        XCTAssertNil(SubagentInfo.spawnedId(in: nil))
+    }
+
+    func testThePillCountsOnlyWorkingAgents() {
+        let agents = SubagentInfo.list(from: ["agents": [
+            ["id": 1, "name": "a", "status": "running"],
+            ["id": 2, "name": "b", "status": "queued"],
+            ["id": 3, "name": "c", "status": "completed"],
+            ["id": 4, "name": "d", "status": "completed", "activeTurn": true],
+        ]])
+        XCTAssertEqual(SubagentInfo.workingLabel(agents), "3 agents working")
+        XCTAssertEqual(SubagentInfo.workingLabel(Array(agents.prefix(1))), "1 agent working")
+        XCTAssertNil(SubagentInfo.workingLabel(Array(agents[2...2])), "no pill once all are done")
+        XCTAssertNil(SubagentInfo.workingLabel([]))
+    }
+
+    /// A replayed or live spawn card becomes the row of the child it started.
+    func testSpawnRowsFollowTheirAgents() {
+        var transcript = Transcript()
+        transcript.apply(.toolCall(id: "c1", title: "spawn_agent", kind: nil, status: .pending,
+                                   input: ["task": "Check the latest PRs\nand report"]))
+        transcript.apply(.toolCall(id: "c2", title: "spawn_agent", kind: nil, status: .inProgress, input: nil,
+                                   detail: "Read the docs"))
+        transcript.apply(.toolCall(id: "c3", title: "spawn_agent", kind: nil, status: .pending, input: ["task": "x"]))
+        transcript.apply(.toolCallUpdate(id: "c1", title: nil, status: .completed,
+                                         output: #"{"agent_id":1,"nickname":"agent-1","status":"queued"}"#))
+        transcript.apply(.toolCallUpdate(id: "c3", title: nil, status: .failed, output: "error: unknown model 'x'"))
+        let agents = SubagentInfo.list(from: ["agents": [
+            ["id": 1, "name": "agent-1", "task": "Check the latest PRs\nand report", "agentType": "explorer",
+             "status": "running", "startedAtMs": 1_000],
+        ]])
+        let rows = AgentSpawn.rows(transcript.items.map(\.id), in: transcript.items, agents: agents)
+        XCTAssertEqual(rows.map(\.agentId), [1, nil, nil])
+        XCTAssertEqual(rows.map(\.name), ["agent-1", "Starting agent…", "Agent did not start"])
+        XCTAssertEqual(rows.map(\.task), ["Check the latest PRs", "Read the docs", "x"])
+        XCTAssertEqual(rows[0].info?.status, .running)
+        XCTAssertEqual(rows[2].failure, "error: unknown model 'x'")
+        XCTAssertEqual(rows[0].accessibilityLabel(now: Date(timeIntervalSince1970: 13)),
+                       "agent-1, explorer, working, 12s, Check the latest PRs")
+        // Before the agents list has it, the row names the child by its id.
+        XCTAssertEqual(AgentSpawn.rows([transcript.items[0].id], in: transcript.items, agents: [])[0].name, "agent-1")
+    }
 }

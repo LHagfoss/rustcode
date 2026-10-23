@@ -82,6 +82,102 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
     }
 }
 
+extension SubagentInfo {
+    /// The child a `spawn_agent` result names: its JSON receipt
+    /// (`{"agent_id":3,…}`, notes may follow it), or the `subagent 3 started`
+    /// line older sessions recorded.
+    public static func spawnedId(in output: String?) -> Int? {
+        guard let output else { return nil }
+        for pattern in [#"^\s*\{[^}]*"agent_id"\s*:\s*(\d+)"#, #"^\s*subagent (\d+) started"#] {
+            if let match = output.firstMatch(of: try! Regex(pattern)),
+               let range = match.output[1].range {
+                return Int(output[range])
+            }
+        }
+        return nil
+    }
+
+    /// What the pill over the composer says while agents work, as
+    /// `2 agents working`; nil once none is, so the pill goes (#2327).
+    public static func workingLabel(_ agents: [SubagentInfo]) -> String? {
+        let working = agents.filter(\.isActive).count
+        switch working {
+        case 0: return nil
+        case 1: return "1 agent working"
+        default: return "\(working) agents working"
+        }
+    }
+
+    /// The first line of the task, for a one-line row.
+    public var taskLine: String {
+        task.split(whereSeparator: \.isNewline).first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+    }
+}
+
+extension ToolItem {
+    /// A `spawn_agent` call: the chat draws it as the agent it started.
+    public var isAgentSpawn: Bool { title == "spawn_agent" }
+}
+
+/// A subagent a turn started, as its row in the chat draws it: the
+/// `spawn_agent` call and, once the agents list has it, the child itself.
+public struct AgentSpawn: Identifiable, Equatable, Sendable {
+    public var callId: String
+    /// The spawn call's own state: running until the child exists.
+    public var status: ToolStatus?
+    /// What the call asked for, until the child says it itself.
+    public var request: String?
+    /// What the call answered when it failed.
+    public var failure: String?
+    public var agentId: Int?
+    public var info: SubagentInfo?
+
+    public var id: String { callId }
+
+    public init(tool: ToolItem, agents: [SubagentInfo]) {
+        callId = tool.callId
+        status = tool.status
+        request = tool.summary ?? tool.inputDetail
+        agentId = tool.status == .failed ? nil : SubagentInfo.spawnedId(in: tool.output)
+        failure = tool.status == .failed ? tool.output?.split(whereSeparator: \.isNewline).first.map(String.init) : nil
+        info = agentId.flatMap { id in agents.first { $0.id == id } }
+    }
+
+    /// The rows of the spawns `ids` names, in order.
+    public static func rows(_ ids: [Int], in items: [TranscriptItem], agents: [SubagentInfo]) -> [AgentSpawn] {
+        let wanted = Set(ids)
+        return items.compactMap { item in
+            guard wanted.contains(item.id), case .tool(let tool) = item.content else { return nil }
+            return AgentSpawn(tool: tool, agents: agents)
+        }
+    }
+
+    /// The name the row shows.
+    public var name: String {
+        if let info { return info.name }
+        if let agentId { return "agent-\(agentId)" }
+        return status == .failed ? "Agent did not start" : "Starting agent…"
+    }
+
+    /// The task the row shows after the name.
+    public var task: String? {
+        let text = info?.taskLine ?? request
+        return text?.isEmpty == false ? text : failure
+    }
+
+    /// Read aloud by VoiceOver: name, role, state and time.
+    public func accessibilityLabel(now: Date = Date()) -> String {
+        var parts = [name]
+        if let info {
+            if info.agentType != "default" { parts.append(info.agentType) }
+            parts.append(info.isActive ? "working" : info.status.label)
+            if let elapsed = info.elapsed(now: now) { parts.append(elapsed) }
+        }
+        if let task { parts.append(task) }
+        return parts.joined(separator: ", ")
+    }
+}
+
 extension ACPRequests {
     public static func agents(sessionId: String) -> JSONValue {
         ["sessionId": .string(sessionId), "action": "list"]

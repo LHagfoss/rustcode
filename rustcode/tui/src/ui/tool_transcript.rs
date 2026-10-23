@@ -227,9 +227,57 @@ pub(super) fn format_pi_tool_action(
 /// the spawn left it in. `result` is the tool's JSON receipt; without one
 /// (the call is still running, or failed) the row is built from the call.
 pub(super) fn spawn_agent_target(args: &serde_json::Value, result: Option<&str>) -> String {
-    let receipt = result
-        .and_then(|result| serde_json::from_str::<serde_json::Value>(result.trim()).ok())
-        .filter(|receipt| receipt.get("agent_id").is_some());
+    spawn_agent_row_target(args, result, None)
+}
+
+/// A `spawn_agent` JSON receipt, read up to its end: the harness may append
+/// notes after it.
+fn spawn_receipt(result: &str) -> Option<serde_json::Value> {
+    serde_json::Deserializer::from_str(result.trim())
+        .into_iter::<serde_json::Value>()
+        .next()?
+        .ok()
+        .filter(|receipt| receipt.get("agent_id").is_some())
+}
+
+/// The child id a `spawn_agent` result names: its JSON receipt, or the
+/// `subagent N started` line older sessions recorded.
+pub(super) fn spawn_receipt_agent_id(result: &str) -> Option<u32> {
+    if let Some(receipt) = spawn_receipt(result) {
+        return receipt
+            .get("agent_id")?
+            .as_u64()
+            .and_then(|id| u32::try_from(id).ok());
+    }
+    let rest = result.trim_start().strip_prefix("subagent ")?;
+    let (id, rest) = rest.split_once(' ')?;
+    rest.starts_with("started").then(|| id.parse().ok())?
+}
+
+/// How a spawned child stands now, as its transcript row says it: a mark,
+/// its state, and once it ended how long it ran (#2327). A running child
+/// shows no clock, so its row changes only when its state does.
+pub(super) fn subagent_live_status(agent: &super::render_snapshot::SubAgentSnapshot) -> String {
+    use rustcode::controller::SubAgentStatus;
+    let took = || rustcode_core::status::format_elapsed_compact(agent.elapsed_ms / 1000);
+    match agent.status {
+        SubAgentStatus::Queued => "◌ queued".to_owned(),
+        SubAgentStatus::Running => "● running".to_owned(),
+        SubAgentStatus::Completed => format!("✓ done {}", took()),
+        SubAgentStatus::Failed => format!("✗ failed {}", took()),
+        SubAgentStatus::Cancelled => format!("■ cancelled {}", took()),
+        SubAgentStatus::Interrupted => "■ interrupted".to_owned(),
+    }
+}
+
+/// [`spawn_agent_target`] with the child as it stands now: its name and live
+/// state replace what the receipt recorded at spawn.
+pub(super) fn spawn_agent_row_target(
+    args: &serde_json::Value,
+    result: Option<&str>,
+    live: Option<&super::render_snapshot::SubAgentSnapshot>,
+) -> String {
+    let receipt = result.and_then(spawn_receipt);
     let text = |value: Option<&serde_json::Value>| {
         value
             .and_then(|value| value.as_str())
@@ -245,14 +293,28 @@ pub(super) fn spawn_agent_target(args: &serde_json::Value, result: Option<&str>)
         .and_then(|task| task.lines().find(|line| !line.trim().is_empty()))
         .map(|line| rustcode_core::activity::sanitize_tool_parameter(line.trim(), 48))
         .filter(|task| !task.is_empty());
-    let parts = [
-        field("nickname"),
-        field("agent_type").filter(|role| role != "default"),
-        task,
-        field("model"),
-        receipt
+    let name = live
+        .map(|agent| rustcode_core::activity::sanitize_tool_parameter(&agent.name, 40))
+        .or_else(|| field("nickname"));
+    let status = match live {
+        Some(agent) => Some(subagent_live_status(agent)),
+        None => receipt
             .as_ref()
             .and_then(|receipt| text(receipt.get("status"))),
+    };
+    // A live state leads, after the name, so a narrow row keeps it.
+    let (early, late) = if live.is_some() {
+        (status, None)
+    } else {
+        (None, status)
+    };
+    let parts = [
+        name,
+        early,
+        field("agent_type").filter(|role| role != "default"),
+        task,
+        field("model").or_else(|| live.and_then(|agent| agent.model.clone())),
+        late,
     ];
     let target = parts.into_iter().flatten().collect::<Vec<_>>().join(" · ");
     if target.is_empty() {
@@ -546,7 +608,10 @@ pub(super) fn tool_result_action(
             .get(message_index)
             .and_then(|message| message.content.split_once(": "))
             .map(|(_, result)| result);
-        return (action, spawn_agent_target(&args, result));
+        let live = result
+            .and_then(spawn_receipt_agent_id)
+            .and_then(|id| state.subagents().iter().find(|agent| agent.id == id));
+        return (action, spawn_agent_row_target(&args, result, live));
     }
     (action, target)
 }
@@ -2143,7 +2208,11 @@ fn tool_row_segments(
     let mut segments: Vec<std::ops::Range<usize>> = Vec::new();
     for (index, entry) in visible.iter().enumerate() {
         match segments.last_mut() {
-            Some(last) if !stands_alone(entry) && !stands_alone(visible[last.start]) => {
+            Some(last)
+                if !stands_alone(entry)
+                    && !stands_alone(visible[last.start])
+                    && is_agent_spawn(entry) == is_agent_spawn(visible[last.start]) =>
+            {
                 last.end = index + 1;
             }
             _ => segments.push(index..index + 1),
@@ -2152,15 +2221,23 @@ fn tool_row_segments(
     segments
 }
 
-/// Whether a run folds: a lone file change at edits verbosity stays open.
+/// A `spawn_agent` row: the agents a turn started stay in view, grouped
+/// together, at every verbosity (#2327).
+fn is_agent_spawn(entry: &ToolTranscriptEntry) -> bool {
+    entry.tool_name == "spawn_agent"
+}
+
+/// Whether a run folds: a lone file change at edits verbosity stays open,
+/// and the agents a turn started never fold.
 fn run_is_foldable(
     run: &[&ToolTranscriptEntry],
     verbosity: &rustcode::controller::Verbosity,
 ) -> bool {
-    !(verbosity.edits_open()
-        && run
-            .iter()
-            .all(|entry| entry.kind == ToolTranscriptKind::Edit))
+    !(run.iter().all(|entry| is_agent_spawn(entry))
+        || verbosity.edits_open()
+            && run
+                .iter()
+                .all(|entry| entry.kind == ToolTranscriptKind::Edit))
 }
 
 /// The row a folded run of calls shows: how many there were and how many

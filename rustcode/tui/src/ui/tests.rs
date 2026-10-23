@@ -3233,6 +3233,142 @@ fn spawn_agent_row_names_the_child_its_task_model_and_status() {
     assert_eq!((entry.success, entry.status.as_str()), (false, "failed"));
 }
 
+fn spawned_agent(
+    id: u32,
+    status: rustcode::controller::SubAgentStatus,
+    elapsed_ms: u64,
+) -> rustcode::controller::SubAgentView {
+    rustcode::controller::SubAgentView {
+        id,
+        name: format!("agent-{id}"),
+        task: "Check the latest PRs".to_owned(),
+        history: std::sync::Arc::new(Vec::new()),
+        status,
+        active_turn: false,
+        parent_id: None,
+        model: None,
+        elapsed_ms,
+    }
+}
+
+#[test]
+fn spawn_agent_rows_follow_their_agent_live_and_never_fold() {
+    use rustcode::controller::{
+        ChatMessage, SubAgentStatus, ToolCallRef, ToolResultRecord, Verbosity,
+    };
+
+    let mut state = RenderState::new();
+    state.verbosity = Verbosity::Low;
+    state.history.push(ChatMessage::new("user", "look into it"));
+    state.history.push(ChatMessage::new("assistant", "").with_tool_calls(
+        ["call-1", "call-2"]
+            .into_iter()
+            .map(|id| ToolCallRef {
+                id: id.to_owned(),
+                name: "spawn_agent".to_owned(),
+                arguments: serde_json::json!({"task": "Check the latest PRs", "agent_type": "explorer"})
+                    .to_string(),
+            })
+            .collect(),
+    ));
+    // The receipt as the engine records it, with a harness note after it,
+    // and the plain line older sessions kept.
+    for (id, content) in [
+        (
+            "call-1",
+            "spawn_agent: {\"agent_id\":1,\"nickname\":\"agent-1\",\"status\":\"queued\"}\n\n__BUILD_UNVERIFIED__: note",
+        ),
+        (
+            "call-2",
+            "spawn_agent: subagent 2 started; use wait_agent to receive its terminal result",
+        ),
+    ] {
+        state.history.push(
+            ChatMessage::new("tool", content)
+                .answering(Some(id.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: "spawn_agent".to_owned(),
+                    success: true,
+                    ..Default::default()
+                }),
+        );
+    }
+    state.subagents = vec![
+        spawned_agent(1, SubAgentStatus::Running, 3_000),
+        spawned_agent(2, SubAgentStatus::Completed, 42_000),
+    ];
+    let mut transcript = super::history_cell::TranscriptState::default();
+    let rows = |transcript: &mut super::history_cell::TranscriptState, state: &RenderState| {
+        transcript
+            .committed_tool_group(&render_snapshot(state), 2, 4, 100)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let text = rows(&mut transcript, &state);
+    // At low verbosity the agents stay rows of their own, never `2 tool calls`.
+    assert!(!text.contains("tool calls"), "{text}");
+    assert!(text.contains("agent-1 · ● running · explorer"), "{text}");
+    assert!(text.contains("agent-2 · ✓ done 42s · explorer"), "{text}");
+
+    // The row follows its agent: once it ends, the same transcript redraws it.
+    state.subagents[0] = spawned_agent(1, SubAgentStatus::Failed, 65_000);
+    let text = rows(&mut transcript, &state);
+    assert!(text.contains("agent-1 · ✗ failed 1m 05s"), "{text}");
+
+    // A running agent's clock is not part of the row, so it is not redrawn
+    // every second.
+    state.subagents[0] = spawned_agent(1, SubAgentStatus::Running, 3_000);
+    let first = transcript.committed_tool_group(&render_snapshot(&state), 2, 4, 100);
+    state.subagents[0].elapsed_ms = 9_000;
+    let again = transcript.committed_tool_group(&render_snapshot(&state), 2, 4, 100);
+    assert!(std::sync::Arc::ptr_eq(&first, &again));
+}
+
+#[test]
+fn footer_says_agents_are_working_only_while_they_are() {
+    use rustcode::controller::SubAgentStatus;
+
+    let mut state = RenderState::new();
+    state.model_name = "gemini-3.6-flash".to_owned();
+    state.cwd_and_branch = "~/code/project:main".to_owned();
+    state.subagents = vec![
+        spawned_agent(1, SubAgentStatus::Running, 0),
+        spawned_agent(2, SubAgentStatus::Queued, 0),
+        spawned_agent(3, SubAgentStatus::Completed, 0),
+    ];
+    let snapshot = render_snapshot(&state);
+    let (metadata, posture) = super::footer_metadata(&snapshot, usize::MAX);
+    assert!(
+        metadata.starts_with("  ● 2 agents · Build · ask"),
+        "{metadata}"
+    );
+    // The posture's click target is counted in columns, the mark among them.
+    assert_eq!(
+        metadata.chars().skip(posture).take(5).collect::<String>(),
+        "Build"
+    );
+
+    state.subagents[0].status = SubAgentStatus::Completed;
+    state.subagents[1].status = SubAgentStatus::Cancelled;
+    let snapshot = render_snapshot(&state);
+    assert_eq!(
+        super::composer_render::agents_working_label(&snapshot),
+        None
+    );
+    assert!(
+        super::footer_metadata(&snapshot, usize::MAX)
+            .0
+            .starts_with("  Build")
+    );
+}
+
 #[test]
 fn ask_question_renders_prompt_and_answer_in_committed_history() {
     use rustcode::controller::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
@@ -9656,10 +9792,11 @@ fn active_subagent_context_is_named_in_the_composer_footer() {
     state.cwd_and_branch = "~/code/project:main".to_owned();
     let rendered = render_state_to_text(&mut state, 100, 30);
 
-    // The subagent leads the footer, ahead of the posture and the model.
+    // The subagent leads the footer, ahead of how many agents work, the
+    // posture and the model.
     assert!(
         rendered.contains(&format!(
-            "  agent-1 · Build · ask · {} · main · ~/code/project",
+            "  agent-1 · ● 1 agent · Build · ask · {} · main · ~/code/project",
             state.model_name
         )),
         "{rendered}"

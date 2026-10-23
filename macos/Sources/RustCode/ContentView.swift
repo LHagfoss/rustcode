@@ -750,6 +750,8 @@ private struct ChatView: View {
         var older: [TranscriptItem]
         var newer: [TranscriptItem]
         var scroll: [Int]
+        /// The agents each group's first spawn row draws (#2327).
+        var agents: [Int: [AgentSpawn]]
     }
 
     private func shownRows(_ transcript: Transcript, first: Int, split: Int) -> ShownRows {
@@ -761,7 +763,17 @@ private struct ChatView: View {
         var scroll: [Int] = first > 0 ? [Self.earlierRow] : []
         scroll += (older + newer).map(\.id)
         if isReplyStreaming { scroll.append(Self.workingRow) }
-        return ShownRows(folding: folding, older: older, newer: newer, scroll: scroll)
+        var agents: [Int: [AgentSpawn]] = [:]
+        if !folding.agentGroups.isEmpty {
+            var spawns: [Int: ToolItem] = [:]
+            for item in transcript.items {
+                if case .tool(let tool) = item.content, tool.isAgentSpawn { spawns[item.id] = tool }
+            }
+            agents = folding.agentGroups.mapValues { ids in
+                ids.compactMap { spawns[$0] }.map { AgentSpawn(tool: $0, agents: model.subagents) }
+            }
+        }
+        return ShownRows(folding: folding, older: older, newer: newer, scroll: scroll, agents: agents)
     }
 
     var body: some View {
@@ -795,14 +807,16 @@ private struct ChatView: View {
                     Color.clear.frame(height: 0).id(topAnchor)
                     if first > 0 || split > first {
                         OlderRows(items: rows.older, earlier: first, earlierRow: Self.earlierRow,
-                                  folding: rows.folding, expanded: expanded, currentMatch: currentMatch,
+                                  folding: rows.folding, agents: rows.agents, expanded: expanded,
+                                  currentMatch: currentMatch,
                                   scroll: scroll, drawn: scroll.drawn)
                     }
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(rows.newer) { item in
                             TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
                                           isStreaming: isReplyStreaming && item.id == lastId,
-                                          fold: rows.folding.fold(for: item.id), isExpanded: expanded.contains(item.id))
+                                          fold: rows.folding.fold(for: item.id), isExpanded: expanded.contains(item.id),
+                                          agents: rows.agents[item.id])
                                 .equatable()
                                 .reportsChatRow(item.id, to: scroll)
                                 .id(item.id)
@@ -958,6 +972,7 @@ private struct ChatView: View {
         .environment(\.projectRoot, model.chatProject.path)
         .environment(\.editsOpenByDefault, verbosity.editsOpen)
         .environment(\.toggleToolRun, { [model] run in model.toggleToolRun(run) })
+        .environment(\.openAgent, { [model] id in model.openAgent(id: id) })
         .environment(\.toggleMessage, messageToggle)
         .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -1237,6 +1252,7 @@ private struct OlderRows: View {
     let earlier: Int
     let earlierRow: Int
     let folding: ToolFolding
+    let agents: [Int: [AgentSpawn]]
     /// The long messages opened.
     let expanded: Set<Int>
     let currentMatch: Int?
@@ -1260,7 +1276,8 @@ private struct OlderRows: View {
         ForEach(items) { item in
             if all || drawn.ids.contains(item.id) || item.id == currentMatch {
                 TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                              fold: folding.fold(for: item.id), isExpanded: expanded.contains(item.id))
+                              fold: folding.fold(for: item.id), isExpanded: expanded.contains(item.id),
+                              agents: agents[item.id])
                     .equatable()
                     .reportsChatRow(item.id, to: scroll)
                     .id(item.id)
@@ -1726,7 +1743,6 @@ private struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !model.subagents.isEmpty { AgentStrip(model: model) }
             if !model.selectedQueue.isEmpty { QueuedPromptList(model: model) }
             if !model.images.isEmpty { imageChips }
             if !model.attachments.isEmpty { attachmentChips }
@@ -1821,6 +1837,14 @@ private struct Composer: View {
                 RoundedRectangle(cornerRadius: 22).strokeBorder(Color.brand, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             }
         }
+        // Over the top edge, so working agents take no room in the composer
+        // (#2327); leading, clear of the Latest button on the right.
+        .overlay(alignment: .topLeading) {
+            AgentPill(model: model)
+                .alignmentGuide(.top) { $0[VerticalAlignment.center] }
+                .padding(.leading, 18)
+        }
+        .animation(.snappy(duration: 0.2), value: SubagentInfo.workingLabel(model.subagents))
         .dropDestination(for: URL.self) { urls, _ in
             let files = urls.filter(\.isFileURL)
             model.attach(files)

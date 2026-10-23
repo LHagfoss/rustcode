@@ -77,13 +77,22 @@ public struct ToolFolding: Equatable, Sendable {
     public private(set) var hidden: Set<Int> = []
     /// The summary each run's first row draws.
     public private(set) var folds: [Int: ToolRunFold] = [:]
+    /// Agents started together, by the id of their first spawn: that row
+    /// draws them all, at every verbosity, and the others are hidden (#2327).
+    public private(set) var agentGroups: [Int: [Int]] = [:]
 
     public init() {}
 
     /// `open` holds the runs the reader opened. While `running`, the run at
     /// the end of the chat folds everything but its current call.
     public init(items: [TranscriptItem], verbosity: ToolVerbosity, open: Set<Int>, running: Bool) {
-        guard verbosity.folds else { return }
+        var spawns: [Int] = []
+        func closeAgents() {
+            defer { spawns = [] }
+            guard let first = spawns.first else { return }
+            agentGroups[first] = spawns
+            hidden.formUnion(spawns.dropFirst())
+        }
         var run: [ToolItem] = []
         var ids: [Int] = []
         func close(atEnd: Bool) {
@@ -101,8 +110,17 @@ public struct ToolFolding: Equatable, Sendable {
         for item in items {
             guard case .tool(let tool) = item.content else {
                 close(atEnd: false)
+                closeAgents()
                 continue
             }
+            // A spawn ends the run before it; spawns in a row are one group.
+            if tool.isAgentSpawn {
+                close(atEnd: false)
+                spawns.append(item.id)
+                continue
+            }
+            closeAgents()
+            guard verbosity.folds else { continue }
             if verbosity.editsOpen && !tool.changes.isEmpty {
                 close(atEnd: false)
                 continue
@@ -111,8 +129,12 @@ public struct ToolFolding: Equatable, Sendable {
             ids.append(item.id)
         }
         close(atEnd: true)
+        closeAgents()
     }
 
     /// The summary on `item`'s row, if it starts a folded run.
     public func fold(for item: Int) -> ToolRunFold? { folds[item] }
+
+    /// The spawns `item`'s row draws, if it starts a group of agents.
+    public func agents(for item: Int) -> [Int]? { agentGroups[item] }
 }

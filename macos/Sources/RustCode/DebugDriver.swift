@@ -482,13 +482,34 @@ enum DebugDriver {
                 model.toggleToolRun(first.id)
             }
         case "agents":
-            // `agents [open]`: two subagents above the composer; `open` shows
-            // the first one's panel.
+            // `agents [chat] [done] [open]`: two subagents, the first still
+            // working; `chat` adds the turn that spawned them, `done` lets
+            // the first finish too, `open` shows the first one's panel.
+            let flags = Set(parts.dropFirst())
             let now = Date().timeIntervalSince1970 * 1000
+            if flags.contains("chat") {
+                model.transcript.appendUser("Find where delegation is armed and run the Swift tests.")
+                model.transcript.apply(.agentText("I'll split this between two agents."))
+                for (id, task, type) in [(1, "Find where the ACP prompt arms delegation", "explorer"),
+                                         (2, "Run the Swift tests", "worker")] {
+                    model.transcript.apply(.toolCall(id: "spawn-\(id)", title: "spawn_agent", kind: nil, status: .pending,
+                                                     input: ["task": .string(task), "agent_type": .string(type)]))
+                    model.transcript.apply(.toolCallUpdate(
+                        id: "spawn-\(id)", title: nil, status: .completed,
+                        output: #"{"agent_id":\#(id),"nickname":"agent-\#(id)","agent_type":"\#(type)","status":"queued"}"#))
+                }
+                model.transcript.apply(.agentText("Both agents are on it; I'll report back when they finish."))
+            }
+            let first: JSONValue = flags.contains("done")
+                ? ["id": 1, "name": "agent-1", "task": "Find where the ACP prompt arms delegation", "model": "gpt-6-luna",
+                   "agentType": "explorer", "status": "completed", "messageCount": 3,
+                   "startedAtMs": .number(now - 42_000), "finishedAtMs": .number(now - 3_000),
+                   "completion": "`acp/prompt.rs` arms it."]
+                : ["id": 1, "name": "agent-1", "task": "Find where the ACP prompt arms delegation", "model": "gpt-6-luna",
+                   "agentType": "explorer", "status": "running", "activeTurn": true, "messageCount": 3,
+                   "startedAtMs": .number(now - 42_000)]
             let agents = SubagentInfo.list(from: ["agents": [
-                ["id": 1, "name": "agent-1", "task": "Find where the ACP prompt arms delegation", "model": "gpt-6-luna",
-                 "agentType": "explorer", "status": "running", "activeTurn": true, "messageCount": 3,
-                 "startedAtMs": .number(now - 42_000)],
+                first,
                 ["id": 2, "name": "agent-2", "task": "Run the Swift tests", "agentType": "worker", "status": "completed",
                  "writeAccess": true, "messageCount": 2, "startedAtMs": .number(now - 125_000),
                  "finishedAtMs": .number(now - 20_000), "completion": "All 214 tests pass."],
@@ -499,7 +520,7 @@ enum DebugDriver {
                 ["sessionUpdate": "tool_call", "toolCallId": "t1", "title": "search_files", "status": "completed",
                  "rawInput": ["pattern": "begin_task_delegation"]],
             ]])
-            model.debugAgents(agents, viewing: parts.count > 1 && parts[1] == "open" ? transcript : nil)
+            model.debugAgents(agents, viewing: flags.contains("open") ? transcript : nil)
         case "panel":
             // `panel model|effort|add|none`: open a composer panel as its chip does.
             model.composerPanel = ["model": .model, "effort": .effort, "add": .add][parts[1]]
