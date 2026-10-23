@@ -602,6 +602,23 @@ final class DesktopModel: ObservableObject {
         if openToolRuns.remove(run) == nil { openToolRuns.insert(run) }
     }
 
+    /// Long messages the reader opened, per chat (#2303).
+    @Published private(set) var expandedMessages = ExpandedMessages()
+
+    /// The open long messages of the shown chat.
+    var expandedInChat: Set<Int> { expandedMessages.ids(in: selectedSession) }
+
+    func toggleMessage(_ id: Int) {
+        expandedMessages.toggle(id, in: selectedSession)
+    }
+
+    /// Keeps `id` open: a reply watched while it was written does not fold
+    /// once it is done, and a find match shows where it is.
+    func keepMessageOpen(_ id: Int) {
+        guard !expandedMessages.contains(id, in: selectedSession) else { return }
+        expandedMessages.expand(id, in: selectedSession)
+    }
+
     // MARK: - Subagents
 
     /// A subagent's conversation, open in its panel.

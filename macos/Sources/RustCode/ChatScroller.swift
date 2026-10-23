@@ -49,6 +49,7 @@ final class ChatScrollState: ObservableObject {
         frames[row] = frame
         map.measured(row, height: frame.height)
         holdAnchor(row, frame)
+        keepToggled(row)
         keepPlace(above: row, frame, before: before)
         setNeedsUpdate()
     }
@@ -87,7 +88,7 @@ final class ChatScrollState: ObservableObject {
     /// first time or again: everything below it moved by the difference,
     /// which is scrolled back so the reader's place stays.
     private func keepPlace(above row: Int, _ frame: CGRect, before: Double?) {
-        guard anchoredToTop, anchor == nil, Date() >= jumpUntil, let before else { return }
+        guard anchoredToTop, anchor == nil, toggled == nil, Date() >= jumpUntil, let before else { return }
         let delta = frame.height - before
         guard abs(delta) > 0.5, frame.minY + before <= 0.5 else { return }
         shift(by: delta)
@@ -111,6 +112,10 @@ final class ChatScrollState: ObservableObject {
             forName: NSView.frameDidChangeNotification, object: document, queue: nil
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                // The document took the toggled message's new height: the
+                // scroll view kept its offset, so put the message back
+                // before the frame is drawn.
+                if let self, self.toggled != nil { self.scrollToggledBack() }
                 guard let self, let owed = self.pendingShift else { return }
                 self.pendingShift = nil
                 self.shift(by: owed)
@@ -145,6 +150,10 @@ final class ChatScrollState: ObservableObject {
     var debugLetGo: () -> Void = {}
     /// Whether the chat follows its end.
     var debugFollows: () -> Bool = { false }
+    /// Opens or folds a long message, as its Show more control does.
+    var debugToggleMessage: (Int) -> Void = { _ in }
+    /// Where `row` is in the view, as it last reported.
+    func debugFrame(_ row: Int) -> CGRect? { frames[row] }
     /// The row at the top of the view, where it is, and the rows mapped.
     var debugDescription: String {
         let top = reference.map { "top row \($0.key) at \(Int($0.value.minY))" } ?? "no rows"
@@ -219,6 +228,50 @@ final class ChatScrollState: ObservableObject {
             try? await Task.sleep(for: .seconds(Self.anchorDuration + 0.1))
             self?.setNeedsUpdate()
         }
+    }
+
+    /// A long message the reader opened or folded (#2303), the edge of it
+    /// kept in place, where in the view, and until when.
+    private var toggled: (row: Int, bottom: Bool, y: Double, until: Date)?
+    /// A scroll that keeps the toggled message in place is on its way.
+    private var togglePending = false
+
+    /// The reader opened or folded long message `row` (#2303): it keeps its
+    /// top where it is as it takes its new height. Folding one whose top is
+    /// above the view keeps its end instead, where Show less was, so the
+    /// reader is not left in the rows that came after it.
+    func holdToggled(_ row: Int, folding: Bool) {
+        guard let frame = frames[row] else { return }
+        let bottom = folding && frame.minY < 0
+        toggled = (row, bottom, Double(bottom ? frame.maxY : frame.minY), Date().addingTimeInterval(0.5))
+    }
+
+    /// The toggled message reported its place: scroll it back to where it
+    /// was, once the layout pass it reported in is over. Scrolled during
+    /// it, the scroll view puts back the offset it had before as the
+    /// document takes its new height.
+    private func keepToggled(_ row: Int) {
+        guard let toggled, toggled.row == row, !togglePending else { return }
+        guard Date() < toggled.until, !ChatScrollInput.shared.isActive else {
+            self.toggled = nil
+            return
+        }
+        togglePending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.togglePending = false
+            self.scrollToggledBack()
+        }
+    }
+
+    private func scrollToggledBack() {
+        guard let toggled, let frame = frames[toggled.row] else { return }
+        let moved = (toggled.bottom ? frame.maxY : frame.minY) - toggled.y
+        guard abs(moved) > 0.5 else { return }
+        let before = clipOffset ?? 0
+        scroll(by: moved, animated: false)
+        // Until it reports again, the row is where the scroll put it.
+        frames[toggled.row] = frame.offsetBy(dx: 0, dy: -((clipOffset ?? before) - before))
     }
 
     /// Rows are being added above the view, so nothing more is asked for.
