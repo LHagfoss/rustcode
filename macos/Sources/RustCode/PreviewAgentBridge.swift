@@ -164,9 +164,14 @@ extension PreviewController {
                 let height = min(view.bounds.height, panel * Self.desktopHeight / Self.desktopWidth)
                 configuration.rect = CGRect(x: 0, y: 0, width: panel, height: height)
             }
-            let snapshot = await Result { try await view.takeSnapshot(configuration: configuration) }
+            let image: NSImage
+            do {
+                image = try await view.takeSnapshot(configuration: configuration)
+            } catch {
+                if desktop { view.pageZoom = zoom }
+                throw error
+            }
             if desktop { view.pageZoom = zoom }
-            let image = try snapshot.get()
             try ensureCurrent(view)
             let (data, mime, width, height) = try Self.encodeForAgent(image)
             var page = pageInfo(view)
