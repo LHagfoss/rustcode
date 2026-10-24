@@ -2209,6 +2209,31 @@ mod tests {
                 .and_then(|meta| meta["rustcode"]["kind"].as_str()),
             Some("notice")
         );
+        let resumable = |chunk: &agent_client_protocol::schema::v1::ContentChunk| {
+            chunk
+                .meta
+                .as_ref()
+                .and_then(|meta| meta["rustcode"]["resumable"].as_bool())
+        };
+        assert_eq!(
+            resumable(chunk),
+            Some(false),
+            "a guard's stop is not resumed"
+        );
+
+        let dropped = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "[harness: turn stopped — provider_error]".to_string(),
+            completed: false,
+            timing: None,
+        });
+        let [SessionUpdate::AgentMessageChunk(chunk)] = dropped.as_slice() else {
+            panic!("expected one notice chunk, got {dropped:?}");
+        };
+        assert_eq!(
+            resumable(chunk),
+            Some(true),
+            "a provider's stop can continue"
+        );
     }
 
     #[test]

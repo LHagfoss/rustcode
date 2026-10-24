@@ -250,9 +250,17 @@ impl AcpEventStream {
                 // goes out as a notice the client can toast.
                 if let Some(notice) = crate::network::lifecycle::stop_marker_notice(&content) {
                     if !crate::network::lifecycle::is_turn_cancelled_marker(&content) {
+                        // A stop `continue` can pick up is flagged, so the
+                        // client can offer to continue instead of a toast.
+                        let resumable =
+                            crate::network::lifecycle::stop_marker_is_resumable(&content);
                         updates.push(SessionUpdate::AgentMessageChunk(
-                            ContentChunk::new(ContentBlock::Text(TextContent::new(notice)))
-                                .meta(rustcode_meta(serde_json::json!({"kind": "notice"}))),
+                            ContentChunk::new(ContentBlock::Text(TextContent::new(notice))).meta(
+                                rustcode_meta(serde_json::json!({
+                                    "kind": "notice",
+                                    "resumable": resumable,
+                                })),
+                            ),
                         ));
                     }
                     return updates;

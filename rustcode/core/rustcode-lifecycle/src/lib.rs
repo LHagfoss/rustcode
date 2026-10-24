@@ -281,6 +281,34 @@ pub fn stop_marker_notice(content: &str) -> Option<String> {
     })
 }
 
+/// Whether the turn a [`stop_marker`] ended was stopped by the provider or the
+/// connection rather than by the user or a guard, so sending `continue`
+/// picks it up where it stopped. A client offers that instead of a toast that
+/// disappears (session 01a16b37 stopped on a reset connection).
+pub fn stop_marker_is_resumable(content: &str) -> bool {
+    let Some(reason) = content
+        .trim()
+        .strip_prefix("[harness: turn stopped — ")
+        .and_then(|rest| rest.strip_suffix(']'))
+    else {
+        return false;
+    };
+    let kind = reason.split_once(':').map_or(reason, |(kind, _)| kind);
+    matches!(
+        kind,
+        "provider_error"
+            | "recovery_failed"
+            | "infrastructure_failure"
+            | "connect_timeout"
+            | "header_timeout"
+            | "first_event_timeout"
+            | "stream_idle_timeout"
+            | "premature_eof"
+            | "response_body_decode"
+            | "malformed_sse"
+    )
+}
+
 /// Where the output cap of the last request came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputCapSource {
@@ -488,6 +516,23 @@ mod transcript_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn provider_and_connection_stops_are_resumable() {
+        assert!(stop_marker_is_resumable(
+            "[harness: turn stopped — provider_error]"
+        ));
+        assert!(stop_marker_is_resumable(&stop_marker(
+            &StopReason::TransportFailure(StreamFailureKind::PrematureEof)
+        )));
+        assert!(!stop_marker_is_resumable(&stop_marker(
+            &StopReason::Cancelled
+        )));
+        assert!(!stop_marker_is_resumable(
+            "[harness: turn stopped — loop_escalation]"
+        ));
+        assert!(!stop_marker_is_resumable("provider_error"));
+    }
     use super::*;
 
     #[test]

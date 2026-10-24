@@ -134,6 +134,19 @@ final class ContextBreakdownTests: XCTestCase {
         XCTAssertTrue(transcript.isEmpty)
     }
 
+    /// A stop `continue` can pick up arrives flagged, so the chat can offer it.
+    func testAResumableStopIsNotAPassingNotice() {
+        let update = SessionUpdate(notificationParams: ["sessionId": "s1", "update": [
+            "sessionUpdate": "agent_message_chunk",
+            "content": ["type": "text", "text": "Stopped: provider error"],
+            "_meta": ["rustcode": ["kind": "notice", "resumable": true]],
+        ]])
+        XCTAssertEqual(update, .stopped("Stopped: provider error"))
+        var transcript = Transcript()
+        transcript.apply(update)
+        XCTAssertTrue(transcript.isEmpty)
+    }
+
     func testSegmentsSkipEmptyCategoriesAndNeverOverfill() {
         let context = ContextBreakdown(json: contextJSON)!
         XCTAssertEqual(context.segments.map(\.category.name), ["User messages", "Tool calls"])

@@ -7,6 +7,6 @@
 pub(crate) use rustcode_lifecycle::{
     OutputCapSource, StopReason, StreamFailure, StreamFailureKind, StreamTermination,
     TurnLifecycle, final_transcript_content, is_turn_cancelled_marker, is_unavailable_tool_error,
-    output_limit_detail, stop_marker_notice, stop_reason_for_stream_failure,
-    stream_failure_kind_from_message,
+    output_limit_detail, stop_marker_is_resumable, stop_marker_notice,
+    stop_reason_for_stream_failure, stream_failure_kind_from_message,
 };
