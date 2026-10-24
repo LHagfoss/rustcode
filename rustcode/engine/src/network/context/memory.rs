@@ -163,7 +163,7 @@ impl StructuredSessionMemory {
                 }
             }
 
-            if message.role == "user" && !message.content.starts_with("<tool_result>") {
+            if message.is_user_request() {
                 if memory.initial_goal.is_empty() {
                     memory.initial_goal = compact_context_line(&message.content, 700);
                 } else {
@@ -814,8 +814,13 @@ mod tests {
             failed_test,
             other_command,
             ChatMessage::new("user", "looks good"),
+            ChatMessage::new(
+                "user",
+                "[Attached by the localhost_preview tool, not typed by the user: the screenshot(s) it just took]\n![image](file:///tmp/a.png)",
+            ),
         ];
         let memory = StructuredSessionMemory::extract_from_history(&history);
+        // Neither an acknowledgement nor a tool's screenshot is the task.
         assert_eq!(memory.current_task.as_deref(), Some("add a sell button"));
         assert_eq!(
             memory.failures_and_errors,

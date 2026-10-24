@@ -768,8 +768,9 @@ pub(crate) fn screenshot_attachment_message(paths: &[PathBuf]) -> Option<String>
     if paths.is_empty() {
         return None;
     }
-    let mut text = String::from(
-        "[Attached by the localhost_preview tool, not typed by the user: the screenshot(s) it just took]",
+    let mut text = format!(
+        "{}localhost_preview tool, not typed by the user: the screenshot(s) it just took]",
+        rustcode_core::TOOL_ATTACHMENT_PREFIX
     );
     for path in paths {
         text.push_str(&format!("\n![image](file://{})", path.display()));
@@ -1122,6 +1123,10 @@ mod tests {
         let message = screenshot_attachment_message(&[PathBuf::from("/tmp/shot.png")]).unwrap();
         assert!(message.ends_with("![image](file:///tmp/shot.png)"));
         assert!(screenshot_attachment_message(&[]).is_none());
+        assert!(
+            rustcode_core::is_tool_attachment(&message),
+            "it is not the user's words"
+        );
     }
 
     /// A blank page's runtime error is in the answer, so the model reads the

@@ -1018,9 +1018,7 @@ fn is_later_thought(history: &[rustcode::controller::ChatMessage], message_index
     history[..message_index]
         .iter()
         .rev()
-        .take_while(|message| {
-            !(message.role == "user" && !message.content.starts_with("<tool_result>"))
-        })
+        .take_while(|message| !message.is_user_request())
         .any(|message| message.role == "assistant" && message.content.contains("<think>"))
 }
 

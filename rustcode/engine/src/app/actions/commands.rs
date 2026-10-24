@@ -165,11 +165,11 @@ fn normalize_recap_line(line: &str) -> String {
 /// model. Recaps are presentation state, so they should be cheap, bounded,
 /// and derived from user intent plus visible status rather than tool output.
 pub(crate) fn build_idle_recap(history: &[ChatMessage]) -> String {
-    let task_index = history.iter().enumerate().rev().find(|(_, message)| {
-        message.role == "user"
-            && !message.conversation_recap
-            && !message.content.starts_with("<tool_result>")
-    });
+    let task_index = history
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| message.is_user_request() && !message.conversation_recap);
     let task_position = task_index.map(|(index, _)| index);
     let task = task_index
         .as_ref()
