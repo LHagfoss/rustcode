@@ -343,6 +343,7 @@ final class ChatScrollState: ObservableObject {
         self.viewport = viewport
         self.insetTop = insetTop
         self.insetBottom = insetBottom
+        if rail.top != insetTop { rail.top = insetTop }
         setNeedsUpdate()
         if moved { flash() }
     }
