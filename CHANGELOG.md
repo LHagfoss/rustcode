@@ -1,3 +1,14 @@
+## [v0.93.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.93.0) - 2026-10-24
+
+### Features
+- A dropped provider stream during the model's text no longer stops the turn; it continues on its own. (#2351)
+- Edits whose line numbers are slightly off no longer fail when they add lines around existing code. (#2347)
+- The model can use the localhost preview again; calls no longer fail with "unknown argument `summary`". (#2349)
+- After compaction the model keeps the latest test and build results and no longer sees already-fixed errors as open. (#2353)
+- At Low and Edits tool verbosity the macOS app shows a turn's first thought only, so long turns are much shorter. (#2358)
+- The macOS session timeline sits centred beside the chat and its ticks are wider. (#2356)
+- The first request of each new turn reuses the provider's prompt cache instead of re-reading most of the conversation. (#2355)
+- At low and edits verbosity the terminal shows a turn's first thought only, so long turns are much shorter. (#2359)
 ## [v0.92.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.92.2) - 2026-10-23
 
 ### Fixes
