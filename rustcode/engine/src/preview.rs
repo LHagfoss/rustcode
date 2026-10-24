@@ -194,11 +194,13 @@ impl PreviewOperation {
         let Some(object) = args.as_object() else {
             return Err("arguments must be a JSON object".to_owned());
         };
+        // `summary` is the display-only note every tool schema advertises
+        // (tools::schema::CALL_SUMMARY_KEY); rejecting it failed every call.
         if let Some(unknown) = object.keys().find(|key| {
             !matches!(
                 key.as_str(),
                 "action" | "url" | "selector" | "value" | "dy" | "max_chars"
-            )
+            ) && key.as_str() != crate::tools::schema::CALL_SUMMARY_KEY
         }) {
             return Err(format!("unknown argument `{unknown}`"));
         }
@@ -841,6 +843,14 @@ mod tests {
                 "{args} was accepted"
             );
         }
+    }
+
+    // Session 01a16b37: the model sends the `summary` every tool schema
+    // offers, and the preview rejected it on every call.
+    #[test]
+    fn parse_accepts_the_call_summary_every_schema_offers() {
+        PreviewOperation::parse(&json!({"action": "inspect", "summary": "Check the board"}))
+            .expect("summary is display-only");
     }
 
     #[test]
