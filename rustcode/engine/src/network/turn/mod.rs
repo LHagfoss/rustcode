@@ -294,6 +294,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     let round = match round {
         Ok(round) => round,
         Err(request::RoundCollectionError::Stop) => return false,
+        Err(request::RoundCollectionError::Continue) => return true,
     };
     let request::RoundResponse {
         content,

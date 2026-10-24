@@ -56,6 +56,9 @@ fn prepare_request_steerability(state: &mut AppState, ctx: &TurnContext, turn_se
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RoundCollectionError {
     Stop,
+    /// The round was checkpointed into history and the turn should run
+    /// another round instead of stopping.
+    Continue,
 }
 
 pub(super) fn messages_for_response_continuation<'a>(
@@ -426,16 +429,33 @@ async fn checkpoint_stream_recovery(
     s.stream_tracker = Some(crate::app::StreamTracker::new());
 }
 
+/// A transport drop during plain text (no tool call started) ran nothing, so
+/// the turn can go on with the partial text saved instead of waiting for the
+/// user to type `continue` (session 01a16b37 ended a working turn this way).
+fn should_resume_after_text_interruption(error: &runner::ResponseError, attempts: u8) -> bool {
+    attempts < MAX_STREAM_RECOVERY_ATTEMPTS
+        && retryable_stream_failure(&error.to_string())
+        && stream_output_phase(error) == StreamOutputPhase::TextOutput
+}
+
 async fn checkpoint_text_stream_recovery(
     state: &Arc<Mutex<AppState>>,
     content: String,
     error: &runner::ResponseError,
+    resume: bool,
 ) {
     let content = bounded_stream_recovery_checkpoint(&content);
-    let notice = format!(
-        "[Recoverable provider interruption: the response stream failed during text output. The partial response was saved, no tool ran, and RustCode will not replay the emitted bytes. To continue from this checkpoint, send `continue` or run `rustcode --resume`. Provider detail: {}]",
-        bounded_error_detail(error)
-    );
+    let notice = if resume {
+        format!(
+            "[Provider interruption: the response stream failed during text output. The partial response above was saved and no tool ran. Continue the task from where it stopped; do not repeat the saved text. Provider detail: {}]",
+            bounded_error_detail(error)
+        )
+    } else {
+        format!(
+            "[Recoverable provider interruption: the response stream failed during text output. The partial response was saved, no tool ran, and RustCode will not replay the emitted bytes. To continue from this checkpoint, send `continue` or run `rustcode --resume`. Provider detail: {}]",
+            bounded_error_detail(error)
+        )
+    };
     let mut s = state.lock().await;
     s.replace_current_response(content.clone());
     s.history.push(ChatMessage::new("assistant", content));
@@ -949,6 +969,14 @@ pub(super) async fn collect_round(
             }
             if !cancel_token.is_cancelled() && !error.partial_content.is_empty() {
                 ctx.response.final_content_persisted = true;
+                let resume = should_resume_after_text_interruption(
+                    &error,
+                    ctx.recovery.stream_recovery_attempts,
+                );
+                if resume {
+                    ctx.recovery.stream_recovery_attempts =
+                        ctx.recovery.stream_recovery_attempts.saturating_add(1);
+                }
                 crate::logger::operational_event(
                     "turn.stream_checkpoint",
                     serde_json::json!({
@@ -956,11 +984,21 @@ pub(super) async fn collect_round(
                         "kind": stream_failure_kind.map(|kind| kind.to_string()),
                         "output_phase": stream_output_phase(&error).label(),
                         "partial_content_bytes": error.partial_content.len(),
-                        "outcome": "saved_text_checkpoint",
+                        "outcome": if resume { "saved_text_checkpoint_resumed" } else { "saved_text_checkpoint" },
                     }),
                 );
-                checkpoint_text_stream_recovery(state, error.partial_content.clone(), &error).await;
-                return Err(RoundCollectionError::Stop);
+                checkpoint_text_stream_recovery(
+                    state,
+                    error.partial_content.clone(),
+                    &error,
+                    resume,
+                )
+                .await;
+                return Err(if resume {
+                    RoundCollectionError::Continue
+                } else {
+                    RoundCollectionError::Stop
+                });
             }
             let mut s = state.lock().await;
             let notice = if error_message == "cancelled"
@@ -1261,6 +1299,29 @@ mod tests {
         );
         assert_eq!(stream_output_phase(&partial), StreamOutputPhase::TextOutput);
         assert!(!should_retry_stream_transport(&partial, 0));
+    }
+
+    #[test]
+    fn text_phase_transport_drop_resumes_the_turn_once() {
+        use super::should_resume_after_text_interruption;
+        let text = crate::network::runner::ResponseError::with_partial(
+            "stream_failure:response_body_decode status=none bytes_received=113367 events_received=17 partial_event_bytes=0 detail=SSE stream read failed: error decoding response body",
+            "I'm wiring the sell button now.".to_owned(),
+        );
+        assert!(should_resume_after_text_interruption(&text, 0));
+        assert!(!should_resume_after_text_interruption(&text, 1));
+
+        let malformed = crate::network::runner::ResponseError::with_partial(
+            "stream_failure:malformed_sse status=none bytes_received=32 events_received=1 partial_event_bytes=0",
+            "partial".to_owned(),
+        );
+        assert!(!should_resume_after_text_interruption(&malformed, 0));
+
+        let empty = crate::network::runner::ResponseError::with_partial(
+            "stream_failure:response_body_decode status=200 bytes_received=0 events_received=0 partial_event_bytes=0",
+            String::new(),
+        );
+        assert!(!should_resume_after_text_interruption(&empty, 0));
     }
 
     #[test]
