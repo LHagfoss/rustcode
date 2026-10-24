@@ -188,9 +188,9 @@ private struct GeneralSettings: View {
 
     private var verbositySubtitle: String {
         switch verbosity {
-        case .low: "A turn shows its first thought, one row for its tool calls and what was said between them, and its reply"
+        case .low: "A finished turn shows what the model said first, one row for all its tool calls, and its answer"
         case .high: "Every tool call is its own card and every thought shows"
-        case .edits: "Like Low, but file edits stay open on their diff"
+        case .edits: "Like Low, but edits show with their diffs while the turn runs and open on their diff inside the row"
         }
     }
 
