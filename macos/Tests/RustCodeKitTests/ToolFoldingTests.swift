@@ -76,25 +76,32 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertTrue(open.isNested(list[5].id), "opened, they are a step again")
     }
 
-    // In a turn's pipeline a run shows a line for each of its first calls.
-    func testARunListsItsFirstCalls() {
-        let list = items("usttttts")
-        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
-        let fold = folding.fold(for: list[2].id)
-        XCTAssertEqual(fold?.lines, ["Run · cmd 2", "Run · cmd 3", "Run · cmd 4"])
-        XCTAssertEqual(fold?.more, 2)
-        XCTAssertEqual(ToolFolding(items: items("ut"), verbosity: .low, open: [], running: false)
-            .fold(for: 1)?.lines, [], "a lone call's label already says it")
-    }
-
-    // A running turn is its pipeline: its work, its thoughts after the first,
-    // and what the model says now are steps on it.
-    func testARunningTurnIsAPipeline() {
+    // What the model says after a call opens the next round.
+    func testWhatIsSaidAfterACallStartsTheNextRound() {
         let list = items("usrtrsts")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
-        for index in 3...7 { XCTAssertTrue(folding.isNested(list[index].id), "\(index)") }
+        XCTAssertEqual(folding.turn(for: list[3].id)?.calls, 2)
+        XCTAssertTrue(folding.hidden.isSuperset(of: [4, 5, 6].map { list[$0].id }))
+        XCTAssertTrue(folding.isNested(list[7].id))
         XCTAssertFalse(folding.isNested(list[1].id), "the first words are the turn's own")
-        XCTAssertFalse(folding.hidden.contains(list[4].id), "a later thought is a step")
+    }
+
+    // The screenshots a preview took come back as a message the engine adds,
+    // which is part of the turn, not a new one.
+    func testAToolsScreenshotDoesNotStartATurn() {
+        var transcript = Transcript()
+        transcript.apply(.userText("make it red"))
+        transcript.apply(.agentText("Checking the page."))
+        for id in ["a", "b"] {
+            transcript.apply(.toolCall(id: id, title: "localhost_preview", kind: "fetch", status: .completed, input: nil))
+        }
+        transcript.apply(.userText("[Attached by the localhost_preview tool, not typed by the user: the screenshot(s) it just took]\n![image](file:///tmp/a.png)"))
+        transcript.apply(.agentText("It is red now."))
+        let list = transcript.items
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        XCTAssertEqual(folding.turns.count, 1)
+        XCTAssertTrue(folding.hidden.contains(list[4].id), "the screenshot is inside the turn's row")
+        XCTAssertFalse(folding.hidden.contains(list[5].id), "the answer shows")
     }
 
     // Opened, the row lists the steps: each thing said and its own folded run.
@@ -142,31 +149,38 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertEqual(ToolFolding(items: two, verbosity: .low, open: [], running: true).fold(for: two[0].id)?.count, 1)
     }
 
-    // A running turn shows its steps as they happen.
-    func testWhileRunningTheStepsShow() {
+    // A running turn shows only its current round; each finished round folds
+    // into the turn's row as the next one starts.
+    func testWhileRunningOnlyTheCurrentRoundShows() {
         let list = items("ststst")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
-        XCTAssertTrue(folding.turns.isEmpty)
-        XCTAssertTrue(folding.hidden.isEmpty)
-        XCTAssertEqual(folding.fold(for: list[1].id)?.count, 1)
-        XCTAssertEqual(folding.fold(for: list[3].id)?.count, 1)
-        XCTAssertNil(folding.fold(for: list[5].id), "the current call shows")
+        XCTAssertEqual(folding.turn(for: list[1].id)?.calls, 2)
+        XCTAssertTrue(folding.hidden.isSuperset(of: [list[2].id, list[3].id]))
+        XCTAssertFalse(folding.hidden.contains(list[4].id), "what it says now shows")
+        XCTAssertFalse(folding.hidden.contains(list[5].id), "the current call shows")
+        XCTAssertTrue(folding.isNested(list[4].id))
+        // Opened, the finished rounds show as steps beside the current one.
+        let open = ToolFolding(items: list, verbosity: .low, open: [TurnFold.key(for: list[1].id)], running: true)
+        XCTAssertTrue(open.hidden.isEmpty)
+        // A batch of calls is one round with what led to it.
+        let batch = items("ustrstt")
+        let live = ToolFolding(items: batch, verbosity: .low, open: [], running: true)
+        XCTAssertEqual(live.turn(for: batch[2].id)?.calls, 1)
+        for index in [3, 4, 5, 6] { XCTAssertFalse(live.hidden.contains(batch[index].id), "\(index)") }
     }
 
-    // At `edits` an edit is its own step with its diff, during the turn and
-    // inside its row once opened; at `low` it folds with the calls.
+    // At `edits` an edit is its own step with its diff, in the current round
+    // and inside the row once opened; at `low` it folds with the calls.
     func testEditsAreTheirOwnStepAtEdits() {
         let list = items("utetes")
-        let live = ToolFolding(items: list, verbosity: .edits, open: [], running: true)
-        XCTAssertTrue(live.hidden.isEmpty)
+        let live = ToolFolding(items: Array(list.prefix(5)), verbosity: .edits, open: [], running: true)
+        XCTAssertFalse(live.hidden.contains(list[4].id), "the current edit shows")
         let done = ToolFolding(items: list, verbosity: .edits, open: [], running: false)
         XCTAssertEqual(done.turn(for: list[1].id)?.calls, 4)
         XCTAssertEqual(done.turn(for: list[1].id)?.steps, 4)
         XCTAssertEqual(done.hidden, Set([2, 3, 4].map { list[$0].id }))
-        let opened = ToolFolding(items: list, verbosity: .edits, open: [key(list[1])], running: false)
+        let opened = ToolFolding(items: list, verbosity: .edits, open: [TurnFold.key(for: list[1].id)], running: false)
         XCTAssertTrue(opened.hidden.isEmpty, "the edits show with their diffs")
-        let low = ToolFolding(items: list, verbosity: .low, open: [], running: true)
-        XCTAssertEqual(low.hidden, Set([2, 3].map { list[$0].id }))
     }
 
     func testReadsTheTerminalsSetting() {
@@ -197,8 +211,8 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertFalse(low.hidden.contains(list[7].id), "the agents after the answer show")
         let live = ToolFolding(items: Array(list.prefix(3)), verbosity: .low, open: [], running: true)
         XCTAssertEqual(live.agents(for: list[2].id), [list[2].id])
-        XCTAssertFalse(live.hidden.contains(list[2].id))
-        XCTAssertEqual(live.fold(for: list[0].id)?.count, 1)
+        XCTAssertFalse(live.hidden.contains(list[2].id), "agents started now show")
+        XCTAssertEqual(live.turn(for: list[0].id)?.calls, 2)
     }
 
     func testLowShowsOnlyEachTurnsFirstThought() {
