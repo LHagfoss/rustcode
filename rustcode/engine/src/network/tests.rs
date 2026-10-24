@@ -3308,7 +3308,8 @@ fn test_inject_system_reminder_logic() {
     inject_system_reminder(&mut msgs);
     assert_eq!(msgs.len(), 3);
 
-    // 4 or more messages: reminder is appended to the last message
+    // 4 or more messages: the reminder goes in a request-local context tail,
+    // never into a conversation message the prefix cache could freeze.
     let mut msgs2: Vec<serde_json::Value> = vec![
         serde_json::json!({"role": "system", "content": "sys"}),
         serde_json::json!({"role": "user", "content": "hello"}),
@@ -3316,19 +3317,56 @@ fn test_inject_system_reminder_logic() {
         serde_json::json!({"role": "user", "content": "tell me a story"}),
     ];
     inject_system_reminder(&mut msgs2);
-    assert_eq!(msgs2.len(), 4);
+    assert_eq!(msgs2.len(), 5);
+    assert_eq!(msgs2[3]["content"], "tell me a story");
+    let tail = msgs2[4]["content"].as_str().unwrap();
+    assert!(tail.starts_with("<rustcode_context>"));
+    assert!(tail.contains("REMINDER: Follow the configured tool protocol"));
+
+    // An existing context tail takes the reminder instead.
+    let mut msgs3 = msgs2[..4].to_vec();
+    attach_request_context_tail(&mut msgs3, "# Environment");
+    inject_system_reminder(&mut msgs3);
+    assert_eq!(msgs3.len(), 5);
     assert!(
-        msgs2[3]["content"]
+        msgs3[4]["content"]
             .as_str()
             .unwrap()
             .contains("REMINDER: Follow the configured tool protocol")
     );
-    assert!(
-        msgs2[3]["content"]
-            .as_str()
-            .unwrap()
-            .contains("tell me a story")
-    );
+}
+
+// Session 01a16b37: the reminder was appended to the last message, the prefix
+// cache reused it for the rest of the turn, and the next turn rebuilt the
+// prefix without it, so its first request missed the provider cache from that
+// message on.
+#[test]
+fn reminder_never_enters_the_reused_request_prefix() {
+    let history = vec![
+        serde_json::json!({"role": "system", "content": "sys"}),
+        serde_json::json!({"role": "user", "content": "build it"}),
+        serde_json::json!({"role": "assistant", "content": "reading"}),
+        serde_json::json!({"role": "user", "content": "<tool_result>\nview_file: 1: x\n</tool_result>"}),
+    ];
+    let mut cache = RequestPrefixCache::default();
+    let mut first = cache.compose(&history, "# Environment");
+    inject_system_reminder(&mut first);
+    cache.record(history.clone(), &first, "# Environment");
+
+    let mut grown = history.clone();
+    grown.push(serde_json::json!({"role": "assistant", "content": "editing"}));
+    let mut second = cache.compose(&grown, "# Environment");
+    inject_system_reminder(&mut second);
+
+    // A cold rebuild (the next turn) renders the same prefix.
+    let mut cold = RequestPrefixCache::default().compose(&grown, "# Environment");
+    inject_system_reminder(&mut cold);
+    assert_eq!(second, cold);
+    let reminders = serde_json::to_string(&second)
+        .unwrap()
+        .matches("REMINDER: Follow the configured tool protocol")
+        .count();
+    assert_eq!(reminders, 1);
 }
 
 #[test]

@@ -1840,8 +1840,8 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         });
 
     // These are request-local instructions and must be included before the
-    // final projection is measured. The context tail is a separate synthetic
-    // message, so the helpers deliberately target the last non-context entry.
+    // final projection is measured. They go in the context tail, which the
+    // prefix cache leaves out of the reused prefix.
     inject_system_reminder(&mut msgs);
     let bootstrap_phase = native_schema_policy.is_some_and(|_| {
         crate::tools::tool_schema_phase(&msgs, task_working_directory.as_deref())
@@ -1958,7 +1958,9 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             dynamic_context = reduced_context;
             dynamic_context_omitted = replace_request_context_tail(&mut msgs, &dynamic_context);
             // Replacing the tail also discards anything appended to it after the
-            // context was built, so re-state which tools this request withheld. (#1589)
+            // context was built, so re-state the reminder and which tools this
+            // request withheld. (#1589)
+            inject_system_reminder(&mut msgs);
             if let Some(notice) = tools_notice.as_deref() {
                 messages::append_to_context_tail(&mut msgs, notice);
             }
