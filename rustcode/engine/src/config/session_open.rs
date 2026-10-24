@@ -241,7 +241,17 @@ mod tests {
         let other = hold_elsewhere(config.path(), &id, SessionHolder::Remote);
         assert!(!hold_session_open(config.path(), &id, SessionHolder::App));
         drop(other);
-        assert!(hold_session_open(config.path(), &id, SessionHolder::App));
+        // A child another test forks while `other` is open shares its flock
+        // until the child execs, so the lock can stay busy for a moment after
+        // the drop. A later hold retries, as the real callers do.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !hold_session_open(config.path(), &id, SessionHolder::App) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "lock still busy after release"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         release_session_open(&id, SessionHolder::App);
     }
 
