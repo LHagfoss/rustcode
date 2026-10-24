@@ -69,6 +69,22 @@ public struct ToolRunFold: Equatable, Sendable {
     /// What the run did, after its count: the tools it used, or what a lone
     /// call said it does.
     public var label: String? = nil
+    /// A line for each of the run's first calls, what it did, drawn under the
+    /// row in a turn's pipeline.
+    public var lines: [String] = []
+    /// Calls past `lines`.
+    public var more: Int = 0
+
+    /// The pipeline shows this many of a run's calls under its row.
+    public static let previewLines = 3
+
+    /// `Read · rules.js`, or what the call said it does when that already
+    /// names the tool (`Read rules.js`, not `Read · Read rules.js`).
+    static func line(for call: ToolItem) -> String {
+        guard let what = call.summary ?? call.detail else { return call.displayTitle }
+        if what.lowercased().hasPrefix(call.displayTitle.lowercased()) { return what }
+        return "\(call.displayTitle) · \(what)"
+    }
 
     /// `Web search ×3, Fetch`: each tool once, in the order first used.
     static func label(for calls: some Collection<ToolItem>) -> String? {
@@ -190,8 +206,19 @@ public struct ToolFolding: Equatable, Sendable {
         let calls = work.filter(Self.isCall).compactMap { item -> ToolItem? in
             if case .tool(let tool) = item.content { tool } else { nil }
         }
-        if live || calls.count == 1 {
-            _ = foldSteps(work, verbosity: verbosity, open: open, live: live, thoughts: thoughts)
+        // The turn's thoughts after its first: one quiet line each in its
+        // pipeline, and inside its row when it is folded.
+        let workThoughts = work.map(\.id).filter(thoughts.contains)
+        if live {
+            // A running turn is its pipeline as it happens, down to what the
+            // model is saying now.
+            _ = foldSteps(work, verbosity: verbosity, open: open, live: true, thoughts: thoughts)
+            nested.formUnion(turn[start...].map(\.id))
+            hidden.subtract(workThoughts)
+            return
+        }
+        if calls.count == 1 {
+            _ = foldSteps(work, verbosity: verbosity, open: open, live: false, thoughts: thoughts)
             return
         }
         let anchor = work[start].id
@@ -203,6 +230,8 @@ public struct ToolFolding: Equatable, Sendable {
         let inside = work.map(\.id).filter { $0 != anchor && !thoughts.contains($0) }
         if isOpen {
             nested.formUnion(inside)
+            nested.formUnion(workThoughts)
+            hidden.subtract(workThoughts)
         } else {
             hidden.formUnion(inside)
             // A turn that stopped before its answer, as when the connection
@@ -231,9 +260,11 @@ public struct ToolFolding: Equatable, Sendable {
             steps += 1
             let isOpen = open.contains(first)
             let calls = run.prefix(count)
+            let shown = count > 1 ? calls.prefix(ToolRunFold.previewLines).map(ToolRunFold.line(for:)) : []
             folds[first] = ToolRunFold(run: first, count: count,
                                        failed: calls.filter { $0.status == .failed }.count,
-                                       isOpen: isOpen, label: ToolRunFold.label(for: calls))
+                                       isOpen: isOpen, label: ToolRunFold.label(for: calls),
+                                       lines: shown, more: count > 1 ? count - shown.count : 0)
             if !isOpen { hidden.formUnion(ids.prefix(count).dropFirst()) }
         }
         for item in work where !thoughts.contains(item.id) {
