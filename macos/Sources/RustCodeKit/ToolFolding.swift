@@ -69,23 +69,6 @@ public struct ToolRunFold: Equatable, Sendable {
     /// What the run did, after its count: the tools it used, or what a lone
     /// call said it does.
     public var label: String? = nil
-    /// A line for each of the run's first calls, what it did, drawn under the
-    /// row in a turn's pipeline.
-    public var lines: [String] = []
-    /// Calls past `lines`.
-    public var more: Int = 0
-
-    /// The pipeline shows this many of a run's calls under its row.
-    public static let previewLines = 3
-
-    /// `Read · rules.js`, or what the call said it does when that already
-    /// names the tool (`Read rules.js`, not `Read · Read rules.js`).
-    static func line(for call: ToolItem) -> String {
-        guard let what = call.summary ?? call.detail else { return call.displayTitle }
-        if what.lowercased().hasPrefix(call.displayTitle.lowercased()) { return what }
-        return "\(call.displayTitle) · \(what)"
-    }
-
     /// `Web search ×3, Fetch`: each tool once, in the order first used.
     static func label(for calls: some Collection<ToolItem>) -> String? {
         if calls.count == 1, let call = calls.first {
@@ -102,6 +85,26 @@ public struct ToolRunFold: Equatable, Sendable {
         }
         let rest = order.count - shown.count
         return (shown + (rest > 0 ? ["\(rest) more"] : [])).joined(separator: ", ")
+    }
+}
+
+/// The message the engine adds after a tool batch to show the model the
+/// screenshots it took (`preview::screenshot_attachment_message`). It is the
+/// tool's, not the user's: it does not start a turn.
+public enum ToolAttachment {
+    public static func isAttachment(_ text: String) -> Bool {
+        text.hasPrefix("[Attached by the ") && text.contains("tool, not typed by the user")
+    }
+}
+
+extension TranscriptItem {
+    /// A message the user sent, which starts a turn.
+    var startsTurn: Bool {
+        switch content {
+        case .user(let text): !ToolAttachment.isAttachment(text)
+        case .command: true
+        default: false
+        }
     }
 }
 
@@ -132,7 +135,7 @@ public struct ToolFolding: Equatable, Sendable {
         for (index, item) in items.enumerated() {
             switch item.content {
             case .user, .command:
-                seenThought = false
+                if item.startsTurn { seenThought = false }
             case .thinking:
                 let isLive = running && index == items.count - 1
                 if seenThought && !isLive { hidden.insert(item.id) }
@@ -156,14 +159,9 @@ public struct ToolFolding: Equatable, Sendable {
         groupAgents(items, skipping: thoughts)
         guard verbosity.folds else { return }
         var start = 0
-        for (index, item) in items.enumerated() {
-            switch item.content {
-            case .user, .command:
-                foldTurn(items[start..<index], verbosity: verbosity, open: open, live: false, thoughts: thoughts)
-                start = index + 1
-            default:
-                break
-            }
+        for (index, item) in items.enumerated() where item.startsTurn {
+            foldTurn(items[start..<index], verbosity: verbosity, open: open, live: false, thoughts: thoughts)
+            start = index + 1
         }
         foldTurn(items[start...], verbosity: verbosity, open: open, live: running, thoughts: thoughts)
     }
@@ -191,10 +189,15 @@ public struct ToolFolding: Equatable, Sendable {
         if case .tool(let tool) = item.content { !tool.isAgentSpawn } else { false }
     }
 
+    /// A call, or the screenshots calls took: what a turn's row folds.
+    private static func isWork(_ item: TranscriptItem) -> Bool {
+        if case .user(let text) = item.content { ToolAttachment.isAttachment(text) } else { isCall(item) }
+    }
+
     private mutating func foldTurn(_ turn: ArraySlice<TranscriptItem>, verbosity: ToolVerbosity,
                                    open: Set<Int>, live: Bool, thoughts: Set<Int>) {
         guard let first = turn.firstIndex(where: Self.isCall),
-              let last = turn.lastIndex(where: Self.isCall) else { return }
+              let last = turn.lastIndex(where: Self.isWork) else { return }
         // The work starts at the call, or at what the model said after its
         // first words when that comes before the first call.
         let said = turn[..<first].filter {
@@ -210,11 +213,7 @@ public struct ToolFolding: Equatable, Sendable {
         // pipeline, and inside its row when it is folded.
         let workThoughts = work.map(\.id).filter(thoughts.contains)
         if live {
-            // A running turn is its pipeline as it happens, down to what the
-            // model is saying now.
-            _ = foldSteps(work, verbosity: verbosity, open: open, live: true, thoughts: thoughts)
-            nested.formUnion(turn[start...].map(\.id))
-            hidden.subtract(workThoughts)
+            foldLiveTurn(turn, start: start, verbosity: verbosity, open: open, thoughts: thoughts)
             return
         }
         if calls.count == 1 {
@@ -245,6 +244,54 @@ public struct ToolFolding: Equatable, Sendable {
         }
     }
 
+    /// A running turn shows only its current round: the thought, what the
+    /// model says, and the calls it makes now. Each finished round folds into
+    /// the turn's row as the next one starts, so the chat does not grow a
+    /// step at a time; the row opens to them like a finished turn's.
+    private mutating func foldLiveTurn(_ turn: ArraySlice<TranscriptItem>, start: Int, verbosity: ToolVerbosity,
+                                       open: Set<Int>, thoughts: Set<Int>) {
+        let callIndices = turn.indices.filter { Self.isCall(turn[$0]) }
+        guard let last = callIndices.last else { return }
+        // The round starts after the last call of the round before: what the
+        // model says after a call opens the next one, and a batch of calls
+        // with what led to it is the round still going.
+        let roundStart: Int
+        if last < turn.endIndex - 1 {
+            roundStart = last + 1
+        } else {
+            var batch = last
+            while batch > start, Self.isCall(turn[batch - 1]) { batch -= 1 }
+            roundStart = callIndices.last { $0 < batch }.map { $0 + 1 } ?? start
+        }
+        let round = turn[max(roundStart, start)...]
+        let roundThoughts = round.map(\.id).filter(thoughts.contains)
+        if let firstRoundCall = round.firstIndex(where: Self.isCall) {
+            _ = foldSteps(round[firstRoundCall...], verbosity: verbosity, open: open, live: true, thoughts: thoughts)
+        }
+        nested.formUnion(round.map(\.id))
+        hidden.subtract(roundThoughts)
+        guard roundStart > start else { return }
+        let done = turn[start..<roundStart]
+        let calls = done.filter(Self.isCall).compactMap { item -> ToolItem? in
+            if case .tool(let tool) = item.content { tool } else { nil }
+        }
+        guard !calls.isEmpty, let anchorIndex = done.firstIndex(where: { !thoughts.contains($0.id) }) else { return }
+        let anchor = done[anchorIndex].id
+        let isOpen = open.contains(TurnFold.key(for: anchor))
+        let steps = foldSteps(done, verbosity: verbosity, open: open, live: false, thoughts: thoughts)
+        turns[anchor] = TurnFold(anchor: anchor, steps: steps, calls: calls.count,
+                                 failed: calls.filter { $0.status == .failed }.count,
+                                 isOpen: isOpen, label: ToolRunFold.label(for: calls))
+        let inside = done.map(\.id).filter { $0 != anchor }
+        let doneThoughts = inside.filter(thoughts.contains)
+        if isOpen {
+            nested.formUnion(inside)
+            hidden.subtract(doneThoughts)
+        } else {
+            hidden.formUnion(inside)
+        }
+    }
+
     /// Fold `work` into steps: each run of calls between two things the model
     /// said is one row. While `live`, the last run's current call shows.
     /// Returns how many steps there are.
@@ -260,11 +307,9 @@ public struct ToolFolding: Equatable, Sendable {
             steps += 1
             let isOpen = open.contains(first)
             let calls = run.prefix(count)
-            let shown = count > 1 ? calls.prefix(ToolRunFold.previewLines).map(ToolRunFold.line(for:)) : []
             folds[first] = ToolRunFold(run: first, count: count,
                                        failed: calls.filter { $0.status == .failed }.count,
-                                       isOpen: isOpen, label: ToolRunFold.label(for: calls),
-                                       lines: shown, more: count > 1 ? count - shown.count : 0)
+                                       isOpen: isOpen, label: ToolRunFold.label(for: calls))
             if !isOpen { hidden.formUnion(ids.prefix(count).dropFirst()) }
         }
         for item in work where !thoughts.contains(item.id) {

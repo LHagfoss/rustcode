@@ -48,13 +48,20 @@ struct TranscriptRow: View, Equatable {
         case .assistant: .said
         case .thinking: .thought
         case .tool(let tool): tool.status == .failed ? .failed : .call
-        default: .call
+        default: .thought
         }
     }
 
     @ViewBuilder
     private var content: some View {
         switch item.content {
+        case .user(let text) where ToolAttachment.isAttachment(text):
+            // The screenshots a tool took, shown with the work, not as a message.
+            HStack(spacing: 6) {
+                ForEach(Array(ImageMarkers.split(text).images.enumerated()), id: \.offset) { _, url in
+                    InlineImage(url: url, maxSize: 160)
+                }
+            }
         case .user(let text):
             // Room between the question and the work that answers it.
             UserMessage(id: item.id, text: text, isExpanded: isExpanded || isCurrentMatch)
@@ -73,7 +80,7 @@ struct TranscriptRow: View, Equatable {
                 AgentSpawnGroup(spawns: agents)
             } else if let fold {
                 VStack(alignment: .leading, spacing: 18) {
-                    ToolRunSummary(fold: fold, showsLines: isNested || turnFold?.isOpen == true)
+                    ToolRunSummary(fold: fold)
                     if fold.isOpen, !tool.isBlank { ToolRow(tool: tool) }
                 }
             } else if !tool.isBlank {
@@ -1131,27 +1138,11 @@ private struct TurnSummary: View {
 /// what they were. A click opens the run to its cards, and folds it again.
 private struct ToolRunSummary: View {
     let fold: ToolRunFold
-    /// In a turn's pipeline, a line for each of the run's first calls.
-    var showsLines = false
     @Environment(\.toggleToolRun) private var toggle
 
     var body: some View {
         Button { toggle(fold.run) } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                header
-                if showsLines, !fold.isOpen, !fold.lines.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(fold.lines.enumerated()), id: \.offset) { _, line in
-                            Text(line).lineLimit(1).truncationMode(.tail)
-                        }
-                        if fold.more > 0 { Text("+\(fold.more) more") }
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 16)
-                }
-            }
-            .contentShape(.rect)
+            header.contentShape(.rect)
         }
         .buttonStyle(.plain)
         .hoverHighlight(cornerRadius: 6, padding: 4)
