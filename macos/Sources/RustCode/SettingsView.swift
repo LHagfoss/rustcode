@@ -188,8 +188,8 @@ private struct GeneralSettings: View {
 
     private var verbositySubtitle: String {
         switch verbosity {
-        case .low: "Runs of tool calls fold into one row; only the running call shows"
-        case .high: "Every tool call is its own card"
+        case .low: "Runs of tool calls fold into one row and a turn shows only its first thought"
+        case .high: "Every tool call is its own card and every thought shows"
         case .edits: "Like Low, but file edits stay open on their diff"
         }
     }

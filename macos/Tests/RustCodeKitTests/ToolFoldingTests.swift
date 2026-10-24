@@ -3,7 +3,7 @@ import XCTest
 
 final class ToolFoldingTests: XCTestCase {
     /// `t` a finished call, `x` a failed one, `e` an edit, `a` a spawned
-    /// agent, `s` some text.
+    /// agent, `s` some text, `r` a thought, `u` a message the user sent.
     private func items(_ shape: String) -> [TranscriptItem] {
         var transcript = Transcript()
         for (index, kind) in shape.enumerated() {
@@ -11,6 +11,10 @@ final class ToolFoldingTests: XCTestCase {
             switch kind {
             case "s":
                 transcript.apply(.agentText("step \(index)"))
+            case "r":
+                transcript.apply(.thoughtText("thought \(index)", summary: true))
+            case "u":
+                transcript.apply(.userText("ask \(index)"))
             default:
                 transcript.apply(.toolCall(id: id, title: kind == "a" ? "spawn_agent" : "run_command", kind: "execute",
                                            status: kind == "x" ? .failed : .completed, input: nil, detail: "cmd \(index)"))
@@ -108,5 +112,38 @@ final class ToolFoldingTests: XCTestCase {
         let live = ToolFolding(items: Array(list.prefix(3)), verbosity: .low, open: [], running: true)
         XCTAssertEqual(live.agents(for: list[2].id), [list[2].id])
         XCTAssertEqual(live.fold(for: list[0].id)?.count, 2)
+    }
+
+    // A turn read as reasoning box, sentence, call, reasoning box, sentence,
+    // call…; it now shows its first thought, then what was said and done.
+    func testLowShowsOnlyEachTurnsFirstThought() {
+        let list = items("urstrstrsurtrt")
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        let thoughts = list.filter { if case .thinking = $0.content { true } else { false } }
+        XCTAssertEqual(thoughts.count, 5)
+        // The first thought of each turn stays; the rest hide.
+        XCTAssertFalse(folding.hidden.contains(list[1].id))
+        XCTAssertTrue(folding.hidden.contains(list[4].id))
+        XCTAssertTrue(folding.hidden.contains(list[7].id))
+        XCTAssertFalse(folding.hidden.contains(list[10].id))
+        XCTAssertTrue(folding.hidden.contains(list[12].id))
+        // Every sentence and each run's first call still show.
+        for index in [2, 3, 5, 6, 8, 11] { XCTAssertFalse(folding.hidden.contains(list[index].id)) }
+    }
+
+    func testAHiddenThoughtDoesNotSplitARun() {
+        let list = items("urtrtrt")
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        XCTAssertEqual(folding.fold(for: list[2].id)?.count, 3)
+    }
+
+    func testTheLiveThoughtShowsAndHighShowsEveryThought() {
+        let list = items("urtsr")
+        let live = ToolFolding(items: list, verbosity: .low, open: [], running: true)
+        XCTAssertFalse(live.hidden.contains(list[4].id))
+        let done = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        XCTAssertTrue(done.hidden.contains(list[4].id))
+        let high = ToolFolding(items: list, verbosity: .high, open: [], running: false)
+        XCTAssertTrue(high.hidden.isEmpty)
     }
 }
