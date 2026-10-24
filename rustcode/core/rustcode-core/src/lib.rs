@@ -350,6 +350,16 @@ pub enum TurnOutcome {
     Failed,
 }
 
+/// How the message a tool adds to show the model its images begins: the
+/// screenshots `localhost_preview` took arrive as a `user` message, since
+/// tool results are text in every provider protocol, but nobody typed it.
+pub const TOOL_ATTACHMENT_PREFIX: &str = "[Attached by the ";
+
+/// Whether `content` is such a tool attachment rather than the user's words.
+pub fn is_tool_attachment(content: &str) -> bool {
+    content.starts_with(TOOL_ATTACHMENT_PREFIX) && content.contains("tool, not typed by the user")
+}
+
 /// A durable conversation message. The diff and file preview fields are
 /// intentionally ephemeral and retain their historical serde behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -402,6 +412,14 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
+    /// Something the user asked: a `user` message that is neither a tool
+    /// result nor a tool's attachment. It starts a turn and can be the task.
+    pub fn is_user_request(&self) -> bool {
+        self.role == "user"
+            && !self.content.starts_with("<tool_result>")
+            && !is_tool_attachment(&self.content)
+    }
+
     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: role.into(),

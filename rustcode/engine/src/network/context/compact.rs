@@ -632,7 +632,7 @@ pub(crate) fn valid_compaction_boundary(history: &[ChatMessage], boundary: usize
         return start;
     }
 
-    if history[start].role == "user" && !history[start].content.starts_with("<tool_result>") {
+    if history[start].is_user_request() {
         return start;
     }
 
@@ -653,9 +653,7 @@ pub(crate) fn valid_compaction_boundary(history: &[ChatMessage], boundary: usize
 
     history[..start]
         .iter()
-        .rposition(|message| {
-            message.role == "user" && !message.content.starts_with("<tool_result>")
-        })
+        .rposition(ChatMessage::is_user_request)
         .unwrap_or(start)
 }
 
@@ -671,7 +669,7 @@ fn collect_preserved_user_requests(
 
     let mut candidates = Vec::new();
     for message in summarized {
-        let content = if message.role == "user" && !message.content.starts_with("<tool_result>") {
+        let content = if message.is_user_request() {
             Some(message.content.as_str())
         } else if message.role == "system"
             && message.content.starts_with(PRESERVED_USER_REQUEST_MARKER)
