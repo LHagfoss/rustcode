@@ -860,7 +860,7 @@ private struct ChatView: View {
             // In the gutter left of the column; only it observes the
             // markers, so scrolling redraws the rail and not the chat.
             .overlay(alignment: .topLeading) {
-                TimelineRail(state: scroll.rail) { id in jumpToTurn(id, proxy) }
+                TimelineRail(state: scroll.rail, hugsEdge: !model.showsSidebar) { id in jumpToTurn(id, proxy) }
             }
             // Over the chat rather than a pinned footer inside it: a pinned
             // view re-lays out its whole section on every scrolled frame.
