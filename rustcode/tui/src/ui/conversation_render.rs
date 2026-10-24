@@ -949,8 +949,9 @@ pub(crate) fn render_committed_history_block_interactive(
             Vec::new(),
         );
     }
+    let content = shown_assistant_content(state, message_index);
     let (mut response, hits) = history_cell::AssistantMarkdownCell::committed(
-        &message.content,
+        &content,
         message.token_usage.clone(),
         message.response_time_ms,
         message.thought_time_ms,
@@ -964,6 +965,37 @@ pub(crate) fn render_committed_history_block_interactive(
         response.push(Line::from(""));
     }
     (response, hits)
+}
+
+/// An assistant message as the transcript shows it. At low and edits
+/// verbosity a turn shows only its first thought: a reasoning header before
+/// every step made a long turn mostly headers (session 01a16b37).
+fn shown_assistant_content(
+    state: &RenderSnapshot,
+    message_index: usize,
+) -> std::borrow::Cow<'_, str> {
+    let history = state.active_history();
+    let content = history[message_index].content.as_str();
+    if !state.verbosity().compact() || !content.contains("<think>") {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    if is_later_thought(history, message_index) {
+        std::borrow::Cow::Owned(rustcode_tool_protocol::text::strip_think_blocks(content))
+    } else {
+        std::borrow::Cow::Borrowed(content)
+    }
+}
+
+/// Whether an assistant message in this turn, before `message_index`, already
+/// showed a thought.
+fn is_later_thought(history: &[rustcode::controller::ChatMessage], message_index: usize) -> bool {
+    history[..message_index]
+        .iter()
+        .rev()
+        .take_while(|message| {
+            !(message.role == "user" && !message.content.starts_with("<tool_result>"))
+        })
+        .any(|message| message.role == "assistant" && message.content.contains("<think>"))
 }
 
 /// Render one finalized history entry for insertion into terminal scrollback.
@@ -1048,8 +1080,9 @@ pub(crate) fn render_committed_history_block_snapshot(
             if is_hidden_system_notice(&message.content) {
                 return Vec::new();
             }
+            let content = shown_assistant_content(state, message_index);
             let mut response = history_cell::AssistantMarkdownCell::committed(
-                &message.content,
+                &content,
                 message.token_usage.clone(),
                 message.response_time_ms,
                 message.thought_time_ms,
@@ -1411,6 +1444,44 @@ mod projection_tests {
     use super::*;
     use crate::ui::render_snapshot::set_current_response;
     use rustcode::controller::ChatMessage;
+
+    // Session 01a16b37: every step of a long turn opened with its own
+    // reasoning header. At low verbosity only the turn's first one shows.
+    #[test]
+    fn low_verbosity_shows_only_a_turns_first_thought() {
+        let mut state = RenderState::new();
+        state.history.push(ChatMessage::new("user", "add towers"));
+        state.history.push(ChatMessage::new(
+            "assistant",
+            "<think>Planning towers</think>\n\nReading the rules.",
+        ));
+        state.history.push(ChatMessage::new(
+            "assistant",
+            "<think>Checking projectiles</think>\n\nRunning the tests now.",
+        ));
+        state.history.push(ChatMessage::new("user", "next"));
+        state.history.push(ChatMessage::new(
+            "assistant",
+            "<think>New turn thought</think>\n\nDone.",
+        ));
+        let text = |state: &RenderState, index: usize| {
+            render_committed_history_block_snapshot(&render_snapshot(state), index, 80)
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        state.verbosity = rustcode::controller::Verbosity::Low;
+        assert!(text(&state, 1).contains("Thought"));
+        let later = text(&state, 2);
+        assert!(!later.contains("Thought"), "{later}");
+        assert!(later.contains("Running the tests now."), "{later}");
+        assert!(text(&state, 4).contains("Thought"));
+
+        state.verbosity = rustcode::controller::Verbosity::High;
+        assert!(text(&state, 2).contains("Thought"));
+    }
 
     fn streaming_state() -> RenderState {
         let mut state = RenderState::new();
