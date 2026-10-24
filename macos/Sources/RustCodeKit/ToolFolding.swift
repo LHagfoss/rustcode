@@ -4,7 +4,8 @@ import Foundation
 /// `verbosity` setting does.
 public enum ToolVerbosity: String, CaseIterable, Identifiable, Sendable {
     /// Calls fold into one `N tool calls` row, a lone call too; while tools
-    /// run, only the current call shows. A turn shows only its first thought.
+    /// run, only the current call shows. A turn shows only its first thought,
+    /// and what the model says between calls folds into the run.
     case low
     /// Every call is its own closed card.
     case high
@@ -50,6 +51,9 @@ public struct ToolRunFold: Equatable, Sendable {
     /// What the run did, after its count: the tools it used, or what a lone
     /// call said it does.
     public var label: String? = nil
+    /// The first sentence of the last thing the model said inside the run,
+    /// drawn under the row so a closed run still says what is going on.
+    public var note: String? = nil
 
     /// `Web search ×3, Fetch`: each tool once, in the order first used.
     static func label(for calls: some Collection<ToolItem>) -> String? {
@@ -68,6 +72,27 @@ public struct ToolRunFold: Equatable, Sendable {
         let rest = order.count - shown.count
         return (shown + (rest > 0 ? ["\(rest) more"] : [])).joined(separator: ", ")
     }
+
+    /// The first sentence of `text`, on one line and without the Markdown
+    /// marks a plain line would show.
+    static func firstSentence(of text: String) -> String? {
+        let line = text.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+        guard let line else { return nil }
+        var end = line.endIndex
+        var index = line.startIndex
+        while index < line.endIndex {
+            let next = line.index(after: index)
+            if ".!?".contains(line[index]), next == line.endIndex || line[next] == " " {
+                end = next
+                break
+            }
+            index = next
+        }
+        return String(line[..<end])
+    }
 }
 
 /// Which tool cards a chat shows at a verbosity: rows stay one per item, so
@@ -84,9 +109,9 @@ public struct ToolFolding: Equatable, Sendable {
     public init() {}
 
     /// Thoughts after the first of their turn. At the folding verbosities a
-    /// turn reads as its first thought, then what the model said and the
-    /// calls it made, instead of a reasoning box before every step. The
-    /// thought still streaming at the end stays, so the chat shows the work.
+    /// turn reads as its first thought, then its calls, then its reply,
+    /// instead of a reasoning box before every step. The thought still
+    /// streaming at the end stays, so the chat shows the work.
     static func laterThoughts(in items: [TranscriptItem], running: Bool) -> Set<Int> {
         var hidden: Set<Int> = []
         var seenThought = false
@@ -119,21 +144,39 @@ public struct ToolFolding: Equatable, Sendable {
         }
         var run: [ToolItem] = []
         var ids: [Int] = []
+        // What the model said inside the run, and what it said since the
+        // run's last call, which joins the run only if another call follows.
+        var said: [(id: Int, text: String)] = []
+        var pending: [(id: Int, text: String)] = []
         func close(atEnd: Bool) {
-            defer { run = []; ids = [] }
+            defer { run = []; ids = []; said = []; pending = [] }
             let live = atEnd && running
             let count = live ? run.count - 1 : run.count
+            // A live call running alone folds nothing, so what was said
+            // before it stays in the chat.
             guard count >= 1, let first = ids.first else { return }
             let isOpen = open.contains(first)
             let calls = run.prefix(count)
+            // The sentence right before the live call belongs to it, so it
+            // stays the run's note until that call is done.
             folds[first] = ToolRunFold(run: first, count: count,
                                        failed: calls.filter { $0.status == .failed }.count,
-                                       isOpen: isOpen, label: ToolRunFold.label(for: calls))
-            if !isOpen { hidden.formUnion(ids.prefix(count).dropFirst()) }
+                                       isOpen: isOpen, label: ToolRunFold.label(for: calls),
+                                       note: said.last.flatMap { ToolRunFold.firstSentence(of: $0.text) })
+            if !isOpen {
+                hidden.formUnion(ids.prefix(count).dropFirst())
+                hidden.formUnion(said.map(\.id))
+            }
         }
         for item in items {
             // A hidden thought does not split the calls around it into runs.
             if thoughts.contains(item.id) { continue }
+            // Nor does what the model says between them: it folds into the
+            // run, and only the reply after a turn's last call stays out.
+            if verbosity.folds, case .assistant(let text) = item.content {
+                pending.append((item.id, text))
+                continue
+            }
             guard case .tool(let tool) = item.content else {
                 close(atEnd: false)
                 closeAgents()
@@ -151,6 +194,8 @@ public struct ToolFolding: Equatable, Sendable {
                 close(atEnd: false)
                 continue
             }
+            said += pending
+            pending = []
             run.append(tool)
             ids.append(item.id)
         }

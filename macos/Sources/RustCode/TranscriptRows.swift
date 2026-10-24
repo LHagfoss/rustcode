@@ -982,24 +982,18 @@ private struct ToolRunSummary: View {
 
     var body: some View {
         Button { toggle(fold.run) } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
-                    .foregroundStyle(.secondary)
-                Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
-                Text("\(fold.count) tool call\(fold.count == 1 ? "" : "s")").font(.callout.weight(.medium))
-                if fold.failed > 0 {
-                    Text("· \(fold.failed) failed").font(.callout).foregroundStyle(.red)
-                }
-                if let label = fold.label {
-                    Text("· \(label)")
+            VStack(alignment: .leading, spacing: 4) {
+                header
+                // What the model last said in the run, when the run is closed
+                // over it: one line instead of a paragraph per call.
+                if !fold.isOpen, let note = fold.note {
+                    Text(note)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .padding(.leading, 46)
                 }
-                Spacer(minLength: 0)
             }
             .contentShape(.rect)
         }
@@ -1007,6 +1001,28 @@ private struct ToolRunSummary: View {
         .hoverHighlight(cornerRadius: 8, padding: 5)
         .help(fold.isOpen ? "Fold these tool calls" : "Show these tool calls")
         .animation(.snappy(duration: 0.15), value: fold.isOpen)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
+                .foregroundStyle(.secondary)
+            Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
+            Text("\(fold.count) tool call\(fold.count == 1 ? "" : "s")").font(.callout.weight(.medium))
+            if fold.failed > 0 {
+                Text("· \(fold.failed) failed").font(.callout).foregroundStyle(.red)
+            }
+            if let label = fold.label {
+                Text("· \(label)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 
