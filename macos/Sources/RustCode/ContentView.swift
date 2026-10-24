@@ -820,7 +820,8 @@ private struct ChatView: View {
                         ForEach(rows.newer) { item in
                             TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
                                           isStreaming: isReplyStreaming && item.id == lastId,
-                                          fold: rows.folding.fold(for: item.id), isExpanded: expanded.contains(item.id),
+                                          fold: rows.folding.fold(for: item.id), turnFold: rows.folding.turn(for: item.id),
+                                          isNested: rows.folding.isNested(item.id), isExpanded: expanded.contains(item.id),
                                           agents: rows.agents[item.id])
                                 .equatable()
                                 .reportsChatRow(item.id, to: scroll)
@@ -1286,7 +1287,8 @@ private struct OlderRows: View {
         ForEach(items) { item in
             if all || drawn.ids.contains(item.id) || item.id == currentMatch {
                 TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
-                              fold: folding.fold(for: item.id), isExpanded: expanded.contains(item.id),
+                              fold: folding.fold(for: item.id), turnFold: folding.turn(for: item.id),
+                              isNested: folding.isNested(item.id), isExpanded: expanded.contains(item.id),
                               agents: agents[item.id])
                     .equatable()
                     .reportsChatRow(item.id, to: scroll)
