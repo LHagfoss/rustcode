@@ -1060,6 +1060,33 @@ fn multi_replace_retried_insert_around_edit_is_not_applied_twice() {
     );
 }
 
+// Session 01a16b37: insert-around edits (replacement keeps the target and
+// adds lines) with start_line one or two lines off failed with "may already be
+// applied" although the replacement was nowhere in the file.
+#[test]
+fn multi_replace_relocates_an_unapplied_insert_around_edit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("game.js");
+    std::fs::write(&file, "x\n}\n\nexport function a() {\n  return 1;\n}\n").expect("write");
+    let args = serde_json::json!({
+        "path": file.to_string_lossy(),
+        "replacements": [
+            {
+                "start_line": 3,
+                "end_line": 5,
+                "target_content": "export function a() {\n  return 1;\n}",
+                "replacement_content": "export function a() {\n  return 1;\n}\n\nexport function b() {}",
+            },
+        ],
+    });
+    let result = multi_replace_file_content_tool(&args).expect("relocated insert-around edit");
+    assert!(result.contains("1 relocated"), "got: {result}");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "x\n}\n\nexport function a() {\n  return 1;\n}\n\nexport function b() {}\n"
+    );
+}
+
 #[test]
 fn multi_replace_relocates_when_the_file_shrank_below_the_range() {
     let dir = tempfile::tempdir().expect("tempdir");

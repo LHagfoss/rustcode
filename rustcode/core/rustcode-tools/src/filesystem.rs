@@ -936,7 +936,10 @@ fn apply_single_edit_to_content_inner(
     edit: &SingleEdit,
 ) -> Result<EditOutcome, String> {
     if edit.target == edit.replacement {
-        return Err("old_string and new_string are identical".to_string());
+        return Err(
+            "old_string and new_string are identical, so there is nothing to change. Leave lines you keep out of the edit instead of sending them unchanged."
+                .to_string(),
+        );
     }
 
     // An empty target matches at every byte offset, so it is never the anchor the
@@ -1502,16 +1505,18 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
                 continue;
             }
         }
-        // Never relocate a chunk whose replacement contains its own target: on
-        // a retried insert-around edit the only match is inside the text the
-        // first call wrote, and moving there would apply it twice.
+        // An insert-around edit (replacement contains its own target) is only
+        // relocated while its replacement is absent from the file: on a retry
+        // the only target match is inside the text the first call wrote, and
+        // moving there would apply it twice.
         let replacement_lines = chunk
             .replacement_content
             .lines()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        let relocatable =
-            unique_line_block_matches(&replacement_lines, &chunk.target_content).is_empty();
+        let relocatable = unique_line_block_matches(&replacement_lines, &chunk.target_content)
+            .is_empty()
+            || unique_line_block_matches(&file_lines, &chunk.replacement_content).is_empty();
         let matches = unique_line_block_matches(&file_lines, &chunk.target_content);
         if relocatable && let [start] = matches[..] {
             let len = chunk.target_content.trim_end().lines().count();
