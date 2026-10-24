@@ -806,6 +806,11 @@ final class DesktopModel: ObservableObject {
             capabilities = try AgentInfo(initializeResult: result)
             try await process.connection.notify("initialized", params: [:])
             await refreshSessions()
+            // The listed chat carries the folder the engine recorded for it;
+            // a load from any other folder is refused and the chat shows empty.
+            if let pending = pendingSelection {
+                await select(sessions.first { $0.id == pending.id } ?? pending)
+            }
             // Show the last known options at once, then read current ones: the
             // models and their effort levels change with config and engine.
             restoreLastConfig()
@@ -1589,9 +1594,20 @@ final class DesktopModel: ObservableObject {
         composer.commandSelection = 0
     }
 
+    /// A chat picked while the engine was still starting, opened once it is up.
+    private var pendingSelection: SessionSummary?
+
     func select(_ session: SessionSummary) async {
-        guard let connection = engine?.connection, capabilities?.loadSession == true,
-              session.id != selectedSession else { return }
+        // Picked before the engine answered: the click used to do nothing.
+        guard let connection = engine?.connection, capabilities != nil else {
+            pendingSelection = session
+            return
+        }
+        pendingSelection = nil
+        guard capabilities?.loadSession == true, session.id != selectedSession else { return }
+        // A summary without its folder, as a pinned chat restored before the
+        // list arrives, takes the listed one's.
+        let session = session.cwd.isEmpty ? (sessions.first { $0.id == session.id } ?? session) : session
         stashSelectedSession()
         parkDraft()
         restoreDraft(for: session.id)
