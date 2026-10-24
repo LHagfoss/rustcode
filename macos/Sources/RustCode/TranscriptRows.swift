@@ -1005,20 +1005,8 @@ private struct ToolRunSummary: View {
 
     var body: some View {
         Button { toggle(fold.run) } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                header
-                // What the model last said in the run, when the run is closed
-                // over it: one line instead of a paragraph per call.
-                if !fold.isOpen, let note = fold.note {
-                    Text(note)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .padding(.leading, 46)
-                }
-            }
-            .contentShape(.rect)
+            header
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .hoverHighlight(cornerRadius: 8, padding: 5)
