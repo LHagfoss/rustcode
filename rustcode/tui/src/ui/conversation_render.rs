@@ -969,21 +969,47 @@ pub(crate) fn render_committed_history_block_interactive(
 
 /// An assistant message as the transcript shows it. At low and edits
 /// verbosity a turn shows only its first thought: a reasoning header before
-/// every step made a long turn mostly headers (session 01a16b37).
+/// every step made a long turn mostly headers (session 01a16b37). What the
+/// model says before a tool call shows as its first sentence: a paragraph
+/// per step kept a long turn as tall as before; the reply stays whole.
 fn shown_assistant_content(
     state: &RenderSnapshot,
     message_index: usize,
 ) -> std::borrow::Cow<'_, str> {
     let history = state.active_history();
-    let content = history[message_index].content.as_str();
-    if !state.verbosity().compact() || !content.contains("<think>") {
+    let message = &history[message_index];
+    let content = message.content.as_str();
+    if !state.verbosity().compact() {
         return std::borrow::Cow::Borrowed(content);
     }
-    if is_later_thought(history, message_index) {
+    let content = if content.contains("<think>") && is_later_thought(history, message_index) {
         std::borrow::Cow::Owned(rustcode_tool_protocol::text::strip_think_blocks(content))
     } else {
         std::borrow::Cow::Borrowed(content)
+    };
+    if message.tool_calls.is_empty() {
+        return content;
     }
+    let split = content
+        .rfind("</think>")
+        .map_or(0, |end| end + "</think>".len());
+    let (thought, said) = content.split_at(split);
+    match first_sentence(said) {
+        Some(sentence) if sentence.len() < said.trim().len() => {
+            std::borrow::Cow::Owned(format!("{thought}\n\n{sentence}"))
+        }
+        _ => content,
+    }
+}
+
+/// The first sentence of the first non-empty line of `text`.
+fn first_sentence(text: &str) -> Option<&str> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let end = line
+        .char_indices()
+        .find(|&(index, ch)| matches!(ch, '.' | '!' | '?') && line[index + 1..].starts_with(' '))
+        .map_or(line.len(), |(index, _)| index + 1);
+    Some(&line[..end])
 }
 
 /// Whether an assistant message in this turn, before `message_index`, already
@@ -1481,6 +1507,54 @@ mod projection_tests {
 
         state.verbosity = rustcode::controller::Verbosity::High;
         assert!(text(&state, 2).contains("Thought"));
+    }
+
+    #[test]
+    fn low_verbosity_shows_the_first_sentence_before_a_tool_call() {
+        let mut state = RenderState::new();
+        state.history.push(ChatMessage::new("user", "add towers"));
+        let mut step = ChatMessage::new(
+            "assistant",
+            "<think>Planning towers</think>\n\nI've read the rules. Next I'll edit the picker\nand then the panel.",
+        );
+        step.tool_calls = vec![rustcode::app::ToolCallRef {
+            id: "call_1".to_string(),
+            name: "view_file".to_string(),
+            arguments: "{}".to_string(),
+        }];
+        state.history.push(step);
+        state.history.push(ChatMessage::new(
+            "assistant",
+            "Done. The picker now shows costs.\n\nRun the tests to check.",
+        ));
+        let text = |state: &RenderState, index: usize| {
+            render_committed_history_block_snapshot(&render_snapshot(state), index, 80)
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        state.verbosity = rustcode::controller::Verbosity::Low;
+        let step = text(&state, 1);
+        assert!(step.contains("Thought"), "{step}");
+        assert!(step.contains("read the rules."), "{step}");
+        assert!(!step.contains("Next I'll edit"), "{step}");
+        let reply = text(&state, 2);
+        assert!(reply.contains("Run the tests to check."), "{reply}");
+
+        state.verbosity = rustcode::controller::Verbosity::High;
+        assert!(text(&state, 1).contains("and then the panel."));
+    }
+
+    #[test]
+    fn first_sentence_stops_at_the_end_of_a_sentence() {
+        assert_eq!(
+            first_sentence("\n  Read v1.2 now. Then edit."),
+            Some("Read v1.2 now.")
+        );
+        assert_eq!(first_sentence("Checking it\nmore"), Some("Checking it"));
+        assert_eq!(first_sentence(" \n "), None);
     }
 
     fn streaming_state() -> RenderState {
