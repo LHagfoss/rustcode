@@ -110,6 +110,28 @@ mod tests {
         assert!(!is_retryable_status(404));
     }
 
+    /// A connection the server drops before answering, as a reset does, is
+    /// a transient failure worth sending again.
+    #[tokio::test]
+    async fn a_connection_dropped_before_the_response_is_retryable() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            use std::io::Read;
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 1024];
+            let _ = stream.read(&mut buffer);
+        });
+        let error = reqwest::Client::new()
+            .post(format!("http://{address}/v1/responses"))
+            .body("{}")
+            .send()
+            .await
+            .expect_err("the server closes without answering");
+        server.join().unwrap();
+        assert!(is_retryable_transport(&error), "{error:?}");
+    }
+
     #[test]
     fn rate_limit_uses_fibonacci() {
         // 429 attempt 0 ~= 1000ms (+ <=15% jitter)

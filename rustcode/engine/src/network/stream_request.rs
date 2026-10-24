@@ -5766,10 +5766,10 @@ async fn stream_request_with_timeouts(
                 });
             }
             Err(e) => {
-                if !chatgpt_plan
-                    && retry::is_retryable_transport(&e)
-                    && attempt < retry::MAX_RETRIES
-                {
+                // Also for ChatGPT plans: no response arrived, so nothing ran,
+                // and one reset connection ended the whole turn (session
+                // 01a16b37, "Connection reset by peer" after 16 rounds).
+                if retry::is_retryable_transport(&e) && attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, 0);
                     crate::dbg_log_for_session!(
                         request_session_id,
