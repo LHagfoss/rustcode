@@ -463,6 +463,57 @@ enum DebugDriver {
                 }
             }
             model.transcript.apply(.agentText("All steps ran."))
+        case "steps":
+            // `steps [live]`: a long finished turn as a real session reads,
+            // what the model said between runs of calls, an edit, and the
+            // answer; with `live`, the turn is still running at its end.
+            model.transcript.apply(.userText("Remove the tutorial banner and make unaffordable towers disabled."))
+            model.transcript.apply(.thoughtText("Planning the picker and upgrade changes", summary: true))
+            model.transcript.apply(.agentText("I'll remove the tutorial banner, make unaffordable tower cards clearly disabled, and adjust the startup defaults."))
+            let rounds: [(String, [(String, String)])] = [
+                ("I've loaded the interface guidance; I'll check its project context next.",
+                 [("skill", "Load frontend UX guidance")]),
+                ("The project context confirms this is a refinement of the existing game. I'll inspect the tower, upgrade, sound and hotkey code.",
+                 [("view_file", "Read rules.js"), ("view_file", "Read main.jsx"), ("view_file", "Read styles.css"),
+                  ("grep", "Find Tab handlers"), ("view_file", "Read audio.js")]),
+                ("I've mapped the changes, including the slime tower's slow-first behavior. Editing the rules now.",
+                 [("edit", "Make slime slow and add a corrosive tier")]),
+                ("The slime slow is in place; I'm now making sound default on and Tab speed-only.",
+                 [("view_file", "Inspect TowerCard"), ("run_command", "npm test -- rules"), ("run_command", "npm run build")]),
+            ]
+            var index = 0
+            for (said, calls) in rounds {
+                model.transcript.apply(.thoughtText("Thinking about the next step", summary: true))
+                model.transcript.apply(.agentText(said))
+                for (title, summary) in calls {
+                    let id = "drive-step-\(index)"
+                    index += 1
+                    model.transcript.apply(.toolCall(id: id, title: title == "edit" ? "replace_file_content" : title,
+                                                     kind: title == "edit" ? "edit" : "read",
+                                                     status: index == 7 ? .failed : .completed,
+                                                     input: .object(["summary": .string(summary)]),
+                                                     detail: "btd6/src/main.jsx"))
+                    if title == "edit" {
+                        model.transcript.apply(.toolCallUpdate(id: id, title: "Edit", status: .completed, output: nil,
+                                                               diffs: [FileDiff(path: "/tmp/btd6/src/rules.js",
+                                                                                oldText: "slow: 0\n", newText: "slow: 0.4\n")]))
+                    }
+                }
+            }
+            if parts.contains("live") {
+                let session = model.selectedSession ?? "drive"
+                if model.selectedSession == nil { model.selectedSession = session }
+                model.debugTurn(true, in: session)
+            }
+            if !parts.contains("live") {
+                model.transcript.apply(.agentText("Done. Unaffordable towers are disabled with the shortfall shown, the tutorial is gone, and sound and autoplay start on."))
+            }
+        case "openturn":
+            let folding = ToolFolding(items: model.transcript.items, verbosity: .low,
+                                      open: model.openToolRuns, running: false)
+            if let last = folding.turns.values.max(by: { $0.anchor < $1.anchor }) {
+                model.toggleToolRun(last.key)
+            }
         case "verbosity":
             // `verbosity low|high|edits`: the Settings picker's value.
             UserDefaults.standard.set(parts[1], forKey: ToolVerbosity.key)

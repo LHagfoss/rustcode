@@ -9,13 +9,28 @@ struct TranscriptRow: View, Equatable {
     var isStreaming = false
     /// The folded run of tool calls this row starts, if any.
     var fold: ToolRunFold? = nil
+    /// The finished turn whose work this row starts, if any.
+    var turnFold: TurnFold? = nil
+    /// Drawn inside an opened turn, under its row.
+    var isNested = false
     /// A long message the reader opened, drawn whole (#2303).
     var isExpanded = false
     /// The agents this row's spawn and the ones right after it started.
     var agents: [AgentSpawn]? = nil
 
     var body: some View {
-        content
+        Group {
+            if let turnFold {
+                VStack(alignment: .leading, spacing: 12) {
+                    TurnSummary(fold: turnFold)
+                    if turnFold.isOpen { content.nestedInTurn() }
+                }
+            } else if isNested {
+                content.nestedInTurn()
+            } else {
+                content
+            }
+        }
             .padding(isCurrentMatch ? 6 : 0)
             .background {
                 if isCurrentMatch {
@@ -997,6 +1012,61 @@ struct StoppedTurnRow: View {
     }
 }
 
+extension View {
+    /// A row inside an opened turn: indented beside a thin rule, so the
+    /// turn's steps read as part of its row.
+    func nestedInTurn() -> some View {
+        padding(.leading, 22)
+            // Quieter than the turn's own words, and closer together.
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, -5)
+            // Through the gap to the next row too, so the rule is unbroken.
+            .overlay(alignment: .leading) {
+                Rectangle().fill(Color.secondary.opacity(0.18)).frame(width: 1)
+                    .padding(.vertical, -9).padding(.leading, 7)
+            }
+    }
+}
+
+/// The row a finished turn's work folds into: how many calls in how many
+/// steps, how many failed, and the tools used. A click lists the steps.
+private struct TurnSummary: View {
+    let fold: TurnFold
+    @Environment(\.toggleToolRun) private var toggle
+
+    var body: some View {
+        Button { toggle(fold.key) } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 10)
+                Text("\(fold.calls) tool calls").font(.subheadline.weight(.medium))
+                Text("· \(fold.steps) step\(fold.steps == 1 ? "" : "s")")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                if fold.failed > 0 {
+                    Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
+                }
+                if let label = fold.label {
+                    Text("· \(label)")
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .hoverHighlight(cornerRadius: 6, padding: 4)
+        .help(fold.isOpen ? "Fold this turn's steps" : "Show this turn's steps")
+        .animation(.snappy(duration: 0.15), value: fold.isOpen)
+    }
+}
+
 /// The row a folded run of tool calls shows: how many, how many failed, and
 /// what they were. A click opens the run to its cards, and folds it again.
 private struct ToolRunSummary: View {
@@ -1009,26 +1079,26 @@ private struct ToolRunSummary: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .hoverHighlight(cornerRadius: 8, padding: 5)
+        .hoverHighlight(cornerRadius: 6, padding: 4)
         .help(fold.isOpen ? "Fold these tool calls" : "Show these tool calls")
         .animation(.snappy(duration: 0.15), value: fold.isOpen)
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
-                .foregroundStyle(.secondary)
-            Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
-            Text("\(fold.count) tool call\(fold.count == 1 ? "" : "s")").font(.callout.weight(.medium))
+                .foregroundStyle(.tertiary)
+                .frame(width: 10)
+            Text("\(fold.count) tool call\(fold.count == 1 ? "" : "s")").font(.subheadline.weight(.medium))
             if fold.failed > 0 {
-                Text("· \(fold.failed) failed").font(.callout).foregroundStyle(.red)
+                Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
             }
             if let label = fold.label {
                 Text("· \(label)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
