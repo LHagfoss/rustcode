@@ -192,8 +192,17 @@ final class PreviewAgentTests: XCTestCase {
         XCTAssertEqual(second, .busy)
         let outcome = await first.value
         XCTAssertEqual(outcome, .approvalTimedOut)
-        XCTAssertNil(gate.pending)
         XCTAssertTrue(gate.access.isEmpty)
+        // The prompt stays for the user to answer when they are back, and the
+        // chat's next calls are told at once that nobody is answering.
+        XCTAssertEqual(gate.pending?.timedOut, true)
+        let again = await gate.authorize(session: "s1", workspace: "/project", origin: origin)
+        XCTAssertEqual(again, .approvalTimedOut)
+        guard let prompt = gate.pending else { return XCTFail("the prompt went away") }
+        gate.answer(prompt.id, allow: true)
+        XCTAssertNil(gate.pending)
+        let allowed = await gate.authorize(session: "s1", workspace: "/project", origin: origin)
+        XCTAssertNil(allowed, "allowed late, the chat may use the preview")
     }
 
     // MARK: Timeouts

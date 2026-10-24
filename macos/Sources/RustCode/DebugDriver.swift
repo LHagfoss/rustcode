@@ -514,6 +514,27 @@ enum DebugDriver {
             if let last = folding.turns.values.max(by: { $0.anchor < $1.anchor }) {
                 model.toggleToolRun(last.key)
             }
+        case "previewshot":
+            // `previewshot <url> <file.png>`: the agent's navigate then
+            // screenshot in the preview panel, approved as the user would;
+            // reports the capture's size, layout width and page errors.
+            let session = model.selectedSession ?? "drive"
+            if !model.showsPreview { model.togglePreview() }
+            try? await Task.sleep(for: .milliseconds(500))
+            func run(_ operation: JSONValue) async -> JSONValue {
+                let task = Task { await model.preview.runAgentRequest(["sessionId": .string(session), "operation": operation]) }
+                for _ in 0..<100 {
+                    if model.preview.agent.pending != nil { model.preview.answerAgentApproval(allow: true); break }
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+                return await task.value
+            }
+            _ = await run(["action": "navigate", "url": .string(parts[1])])
+            let shot = await run(["action": "screenshot"])
+            if let data = shot["image"]?["data"]?.stringValue.flatMap({ Data(base64Encoded: $0) }), parts.count > 2 {
+                try? data.write(to: URL(fileURLWithPath: parts[2]))
+            }
+            report("previewshot ok \(shot["ok"] ?? .null) image \(shot["image"]?["width"] ?? .null)x\(shot["image"]?["height"] ?? .null) viewport \(shot["viewport"] ?? .null) errors \(shot["errors"] ?? .null) error \(shot["error"] ?? .null)")
         case "verbosity":
             // `verbosity low|high|edits`: the Settings picker's value.
             UserDefaults.standard.set(parts[1], forKey: ToolVerbosity.key)

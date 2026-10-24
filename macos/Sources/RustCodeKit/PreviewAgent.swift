@@ -256,6 +256,8 @@ public struct PreviewAgentApproval: Identifiable, Equatable, Sendable {
     public let sessionId: String
     public let origin: PreviewOrigin
     public let workspace: String
+    /// Nobody answered in time; the prompt is still shown.
+    public internal(set) var timedOut = false
 }
 
 /// Holds the grants and the one approval prompt the preview shows. The
@@ -281,6 +283,11 @@ public final class PreviewAgentGate {
         if let approved = access.origin(for: session) {
             return approved == origin ? nil : .outOfScope("\(origin) is outside the approved origin \(approved).")
         }
+        // The prompt is still up after nobody answered it: the user is away,
+        // so say so at once instead of waiting another two minutes a call
+        // (three calls waited in session 01a16b37). The prompt stays, so the
+        // user can still allow it when they are back.
+        if let pending, pending.timedOut, pending.sessionId == session { return .approvalTimedOut }
         guard pending == nil else { return .busy }
         let approval = PreviewAgentApproval(id: UUID(), sessionId: session, origin: origin, workspace: workspace)
         pending = approval
@@ -289,7 +296,7 @@ public final class PreviewAgentGate {
         let timer = Task { [weak self] in
             try? await Task.sleep(for: timeout)
             guard !Task.isCancelled else { return }
-            self?.finish(approval.id, with: .approvalTimedOut)
+            self?.timeOut(approval.id)
         }
         let outcome = await withCheckedContinuation { continuation in
             if pending?.id == approval.id { waiter = continuation } else { continuation.resume(returning: .revoked) }
@@ -318,6 +325,17 @@ public final class PreviewAgentGate {
     public func setWorkspace(_ path: String) {
         guard access.setWorkspace(path) else { return }
         if let pending { finish(pending.id, with: .revoked) } else { onChange?() }
+    }
+
+    /// Nobody answered in time: the request fails, and the prompt stays up
+    /// for the user to answer when they are back.
+    private func timeOut(_ id: UUID) {
+        guard pending?.id == id else { return }
+        pending?.timedOut = true
+        let waiter = waiter
+        self.waiter = nil
+        waiter?.resume(returning: .approvalTimedOut)
+        onChange?()
     }
 
     private func finish(_ id: UUID, with outcome: PreviewAgentError?) {

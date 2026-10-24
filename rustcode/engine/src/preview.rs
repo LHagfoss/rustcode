@@ -351,7 +351,7 @@ fn client_failure(error: &Value) -> ToolExecutionOutput {
             false,
         ),
         "approval_timeout" => (
-            "nobody answered the request for preview access. Nothing was inspected or changed",
+            "nobody answered the request for preview access; the user is likely away. Nothing was inspected or changed. Do not call localhost_preview again this turn: finish without it, and ask the user in your reply to check the page or allow preview access",
             ToolErrorKind::PermissionDenied,
             false,
         ),
@@ -566,6 +566,30 @@ pub(crate) fn interpret_response(
                 (Some(width), Some(height)) => format!(" ({width}×{height})"),
                 _ => String::new(),
             };
+            // A narrow panel is laid out at desktop width for the capture, so
+            // a phone-shaped page is not judged as the app's layout.
+            let viewport = response.get("viewport");
+            let laid_out = viewport
+                .and_then(|v| v.get("width"))
+                .and_then(Value::as_f64);
+            let panel = viewport
+                .and_then(|v| v.get("panelWidth"))
+                .and_then(Value::as_f64);
+            if let (Some(width), Some(panel)) = (laid_out, panel) {
+                if viewport
+                    .and_then(|v| v.get("desktop"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                {
+                    out.push_str(&format!(
+                        "\nLaid out {width:.0} px wide, as on a desktop; the user's panel is {panel:.0} px wide."
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "\nLaid out {width:.0} px wide, the width of the user's panel."
+                    ));
+                }
+            }
             out.push_str(&format!(
                 "\nScreenshot{size} saved to {}. It is attached as an image right after this tool result.",
                 path.display()
@@ -605,7 +629,38 @@ pub(crate) fn interpret_response(
     {
         out.push_str(&format!("\nNote: {note}"));
     }
+    out.push_str(&page_errors(response));
     (ToolExecutionOutput::success(out), saved)
+}
+
+/// What the page threw since it loaded. A blank page with no reason sent
+/// the agent through builds and tests for ten rounds before it found a
+/// runtime error (session 01a16b37); the browser already knew.
+fn page_errors(response: &Value) -> String {
+    const SHOWN: usize = 8;
+    let errors: Vec<String> = response
+        .get("errors")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Value::as_str)
+        .map(one_line)
+        .filter(|error| !error.is_empty())
+        .collect();
+    if errors.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\nPage errors (from the browser, newest last):");
+    let skipped = errors.len().saturating_sub(SHOWN);
+    if skipped > 0 {
+        out.push_str(&format!("\n- … {skipped} earlier"));
+    }
+    for error in &errors[skipped..] {
+        let (error, _) = clip(error, 300);
+        out.push_str(&format!("\n- {error}"));
+    }
+    out
 }
 
 /// Run one `localhost_preview` call against the session's client.
@@ -1067,5 +1122,50 @@ mod tests {
         let message = screenshot_attachment_message(&[PathBuf::from("/tmp/shot.png")]).unwrap();
         assert!(message.ends_with("![image](file:///tmp/shot.png)"));
         assert!(screenshot_attachment_message(&[]).is_none());
+    }
+
+    /// A blank page's runtime error is in the answer, so the model reads the
+    /// cause instead of hunting for it.
+    #[test]
+    fn page_errors_and_a_desktop_layout_are_reported() {
+        let png = {
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            STANDARD.encode(b"\x89PNG\r\n\x1a\nrest")
+        };
+        let response = json!({
+            "ok": true, "url": "http://localhost:5173/", "title": "Game",
+            "image": {"mimeType": "image/png", "data": png, "width": 1280, "height": 2800},
+            "viewport": {"width": 1280, "panelWidth": 381, "desktop": true},
+            "errors": ["ReferenceError: Can't find variable: tutorial (/src/main.jsx:212:9)"],
+        });
+        let (output, _) = interpret_response(&PreviewOperation::Screenshot, &response, |_, _| {
+            Ok(PathBuf::from("/tmp/shot.png"))
+        });
+        assert!(output.success, "{}", output.content);
+        assert!(
+            output.content.contains(
+                "Laid out 1280 px wide, as on a desktop; the user's panel is 381 px wide."
+            )
+        );
+        assert!(output.content.contains("Page errors (from the browser, newest last):\n- ReferenceError: Can't find variable: tutorial"));
+        let quiet = json!({"ok": true, "url": "http://localhost:5173/", "title": "Game", "text": "Hi", "errors": []});
+        let (output, _) = interpret_response(
+            &PreviewOperation::Inspect { max_chars: 100 },
+            &quiet,
+            |_, _| unreachable!(),
+        );
+        assert!(!output.content.contains("Page errors"));
+    }
+
+    #[test]
+    fn an_unanswered_access_request_says_to_stop_and_ask() {
+        let output =
+            client_failure(&json!({"code": "approval_timeout", "message": "Nobody answered."}));
+        assert!(!output.success);
+        assert!(
+            output
+                .content
+                .contains("Do not call localhost_preview again this turn")
+        );
     }
 }
