@@ -205,6 +205,14 @@ public struct ToolFolding: Equatable, Sendable {
             nested.formUnion(inside)
         } else {
             hidden.formUnion(inside)
+            // A turn that stopped before its answer, as when the connection
+            // dropped, ends on the last thing the model said under its row.
+            let answered = turn[(last + 1)...].contains { if case .assistant = $0.content { true } else { false } }
+            if !answered, let lastSaid = work.last(where: { item in
+                if case .assistant = item.content { item.id != anchor } else { false }
+            }) {
+                hidden.remove(lastSaid.id)
+            }
         }
     }
 
