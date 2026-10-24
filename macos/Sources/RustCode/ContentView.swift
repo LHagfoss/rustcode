@@ -754,6 +754,11 @@ private struct ChatView: View {
         var agents: [Int: [AgentSpawn]]
     }
 
+    /// Why the shown chat's last turn stopped, when it can be continued.
+    private var stoppedReason: String? {
+        model.selectedSession.flatMap { model.stoppedTurns[$0] }
+    }
+
     private func shownRows(_ transcript: Transcript, first: Int, split: Int) -> ShownRows {
         let folding = ToolFolding(items: transcript.items, verbosity: verbosity,
                                   open: model.openToolRuns, running: isReplyStreaming)
@@ -762,7 +767,7 @@ private struct ChatView: View {
         let newer = transcript.items[split...].filter(shown)
         var scroll: [Int] = first > 0 ? [Self.earlierRow] : []
         scroll += (older + newer).map(\.id)
-        if isReplyStreaming { scroll.append(Self.workingRow) }
+        if isReplyStreaming || stoppedReason != nil { scroll.append(Self.workingRow) }
         var agents: [Int: [AgentSpawn]] = [:]
         if !folding.agentGroups.isEmpty {
             var spawns: [Int: ToolItem] = [:]
@@ -826,6 +831,11 @@ private struct ChatView: View {
                         if isReplyStreaming {
                             WorkingIndicator(startedAt: chat.transcript.turnStartedAt)
                                 .reportsChatRow(Self.workingRow, to: scroll)
+                        } else if let stoppedReason {
+                            StoppedTurnRow(reason: stoppedReason) {
+                                Task { await model.continueStoppedTurn() }
+                            }
+                            .reportsChatRow(Self.workingRow, to: scroll)
                         }
                     }
                     .padding(.bottom, 2)

@@ -338,6 +338,9 @@ public enum SessionUpdate: Equatable, Sendable {
     /// A harness notice, such as why a turn stopped. It is shown as a
     /// toast, never as part of the conversation.
     case notice(String)
+    /// A turn the provider or the connection stopped, which `continue` picks
+    /// up: the chat offers to continue it instead of a passing toast.
+    case stopped(String)
     /// `detail` is the engine's one line on what the call acts on;
     /// `summary` is what the model said the call does.
     case toolCall(id: String, title: String, kind: String?, status: ToolStatus?, input: JSONValue?, detail: String? = nil,
@@ -365,7 +368,8 @@ public enum SessionUpdate: Equatable, Sendable {
                let context = ContextBreakdown(json: meta?["context"]) {
                 self = .contextReport(text: Self.text(update["content"]), context: context)
             } else if meta?["kind"]?.stringValue == "notice" {
-                self = .notice(Self.text(update["content"]))
+                self = meta?["resumable"]?.boolValue == true
+                    ? .stopped(Self.text(update["content"])) : .notice(Self.text(update["content"]))
             } else {
                 self = .agentText(Self.text(update["content"]), turn: TurnTiming(json: meta?["turn"]))
             }

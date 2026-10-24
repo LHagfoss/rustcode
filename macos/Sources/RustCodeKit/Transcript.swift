@@ -211,7 +211,7 @@ public struct Transcript: Equatable, Sendable {
             apply(.agentText(text), at: now)
         case .usage(let usage):
             self.usage = usage
-        case .notice, .title, .configOptions, .availableCommands, .unknown:
+        case .notice, .stopped, .title, .configOptions, .availableCommands, .unknown:
             break
         }
     }

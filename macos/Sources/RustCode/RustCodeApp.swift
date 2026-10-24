@@ -1783,11 +1783,22 @@ final class DesktopModel: ObservableObject {
         await run(QueuedPrompt(sessionId: id, typed: typed, text: text, images: sentImages))
     }
 
+    /// Why each chat's last turn stopped, when the provider or the connection
+    /// stopped it and `continue` picks it up.
+    @Published private(set) var stoppedTurns: [String: String] = [:]
+
+    /// Continue the shown chat's stopped turn where it stopped.
+    func continueStoppedTurn() async {
+        guard !busy, let id = selectedSession, stoppedTurns[id] != nil else { return }
+        await run(QueuedPrompt(sessionId: id, typed: "continue", text: "continue", images: []))
+    }
+
     /// Run one prompt as the chat's turn, then the chat's next queued message,
     /// unless the turn was stopped.
     private func run(_ prompt: QueuedPrompt) async {
         guard let connection = engine?.connection else { return }
         let id = prompt.sessionId
+        stoppedTurns[id] = nil
         let isCommand = prompt.text == prompt.typed && prompt.images.isEmpty
             && SlashCommand.invoked(by: prompt.typed, in: commands)?.action == .execute
         if isCommand {
@@ -2181,10 +2192,20 @@ final class DesktopModel: ObservableObject {
             // A chat being opened collects its replay off screen, shown or not.
             if replays[sessionId] != nil, !SessionUpdate.isReport(notificationParams: params) {
                 let update = SessionUpdate(notificationParams: params)
-                if case .notice = update {} else {
+                if case .notice = update {} else if case .stopped = update {} else {
                     replays[sessionId]?.apply(update)
                     return
                 }
+            }
+            if case .stopped(let text) = SessionUpdate(notificationParams: params) {
+                // Kept until the chat sends again, so a turn that stopped while
+                // the reader was away still says so when they come back.
+                stoppedTurns[sessionId] = text
+                if sessionId != selectedSession {
+                    showToast(Toast(style: .warning, systemImage: "exclamationmark.octagon.fill", title: text,
+                                    message: chatTitle(sessionId), session: sessionId))
+                }
+                return
             }
             if case .notice(let text) = SessionUpdate(notificationParams: params) {
                 showToast(Toast(style: .warning, systemImage: "exclamationmark.octagon.fill", title: text,

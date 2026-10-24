@@ -974,6 +974,29 @@ extension ToolVerbosity {
     }()
 }
 
+/// The end of a chat whose turn the provider or the connection stopped: why,
+/// and a button that sends `continue`, so a turn that stopped while the
+/// reader was away picks up from where it was.
+struct StoppedTurnRow: View {
+    let reason: String
+    let resume: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.orange)
+            Text(reason).font(.callout).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button("Continue", action: resume)
+                .buttonStyle(PillButtonStyle())
+                .help("Send \"continue\" so the turn picks up where it stopped")
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(0.3), lineWidth: 1))
+    }
+}
+
 /// The row a folded run of tool calls shows: how many, how many failed, and
 /// what they were. A click opens the run to its cards, and folds it again.
 private struct ToolRunSummary: View {
