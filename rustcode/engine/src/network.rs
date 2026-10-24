@@ -1252,14 +1252,27 @@ fn history_scope_for_preflight(
 /// happens before request assembly reaches the provider's target. The final
 /// preflight still accounts for the exact system prompt, schemas, and dynamic
 /// context; this is the early, history-only trigger used before those pieces
-/// are assembled.
-fn proactive_history_budget(budget: &crate::config::ContextBudget) -> u32 {
+/// are assembled. `request_overhead` is what the last request measured for
+/// them: the configured tool reserve undercounts a large schema set, and the
+/// gap let history pass this trigger only for the request to drop 65 old
+/// messages with no record of them (session 01a16b37).
+fn proactive_history_budget(budget: &crate::config::ContextBudget, request_overhead: u32) -> u32 {
     const SYSTEM_PROMPT_HEADROOM: u32 = 2_048;
-    budget
+    const ESTIMATE_MARGIN: u32 = 1_024;
+    let reserved = budget
         .soft_context_target
         .saturating_sub(budget.tool_reserve)
         .saturating_sub(budget.provider_overhead_margin)
-        .saturating_sub(SYSTEM_PROMPT_HEADROOM)
+        .saturating_sub(SYSTEM_PROMPT_HEADROOM);
+    // The allowance the request's final trim measures messages against.
+    let request_fit = budget
+        .hard_effective_limit
+        .saturating_sub(budget.completion_reserve)
+        .min(budget.soft_context_target)
+        .saturating_sub(request_overhead)
+        .saturating_sub(ESTIMATE_MARGIN);
+    reserved
+        .min(request_fit)
         .max(1)
         .min(budget.history_tokens.saturating_sub(1).max(1))
 }
@@ -1363,7 +1376,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
-                proactive_history_budget(&context_budget) as usize,
+                proactive_history_budget(&context_budget, s.last_request_overhead_tokens) as usize,
                 local_model,
                 deterministic_compaction,
                 s.active_session_id.clone(),
@@ -1986,6 +1999,14 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         "context.preflight_budget",
         serde_json::to_value(&preflight).unwrap_or_default(),
     );
+    {
+        let overhead = preflight.system_tokens
+            + preflight.tool_schema_tokens
+            + preflight.dynamic_tail_tokens
+            + preflight.continuation_overhead_tokens;
+        state.lock().await.last_request_overhead_tokens =
+            u32::try_from(overhead).unwrap_or(u32::MAX);
+    }
     if dropped > 0 {
         dbg_log!(
             "context budget {} tokens exceeded: dropped {} oldest message(s)",

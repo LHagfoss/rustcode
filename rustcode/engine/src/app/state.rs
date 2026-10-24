@@ -73,6 +73,10 @@ pub struct AppState {
     /// Revision of the most recent clear or replacement, if any.
     pub(crate) current_response_last_rewrite_revision: u64,
     pub current_token_usage: Option<TokenUsage>,
+    /// What the last request spent outside the stored history (system
+    /// prompt, tool schemas, context tail), so compaction can start before
+    /// the next request has to drop messages. In memory only.
+    pub(crate) last_request_overhead_tokens: u32,
     /// The last compaction applied to the active history, for the context
     /// modal and `/context` in every frontend. In memory only.
     pub last_compaction: Option<crate::app::CompactionStats>,
@@ -1497,6 +1501,7 @@ impl AppState {
             current_response_revision: 0,
             current_response_last_rewrite_revision: 0,
             current_token_usage: None,
+            last_request_overhead_tokens: 0,
             last_compaction: None,
             provider_turn_state: None,
             current_turn_token_usage: None,

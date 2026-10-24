@@ -4822,7 +4822,7 @@ fn proactive_history_budget_leaves_soft_target_headroom() {
         ..Default::default()
     };
     let budget = profile.context_budget();
-    let proactive = super::proactive_history_budget(&budget);
+    let proactive = super::proactive_history_budget(&budget, 0);
 
     assert!(proactive < budget.history_tokens);
     assert_eq!(
@@ -4830,6 +4830,33 @@ fn proactive_history_budget_leaves_soft_target_headroom() {
         (24_000 - budget.tool_reserve - 1_024 - 2_048)
             .min(budget.history_tokens.saturating_sub(1).max(1))
     );
+}
+
+/// gpt-6-luna on a ChatGPT plan: history at 198k passed the 200k trigger,
+/// then the request, with 13k of schemas, prompt and tail, could fit only
+/// 196k of messages and dropped 65 of them (session 01a16b37).
+#[test]
+fn proactive_history_budget_fits_the_last_requests_overhead() {
+    let budget = crate::config::ContextBudget {
+        context_window: 272_000,
+        soft_context_target: 239_232,
+        hard_effective_limit: 239_232,
+        completion_reserve: 32_768,
+        tool_reserve: 4_096,
+        provider_overhead_margin: 32_768,
+        history_tokens: 239_232,
+        max_output_tokens: 32_768,
+        thinking_reserve: 0,
+        thinking_budget: 16_384,
+        minimum_answer_tokens: 0,
+        safety_reserve: 0,
+    };
+    assert_eq!(super::proactive_history_budget(&budget, 0), 200_320);
+    let overhead = 2_235 + 10_060 + 786;
+    let proactive = super::proactive_history_budget(&budget, overhead);
+    let message_budget = 239_232 - 32_768 - 10_060;
+    assert!(proactive + 2_235 + 786 < message_budget, "{proactive}");
+    assert!(proactive < 198_423, "history at 198k now compacts");
 }
 
 #[test]
