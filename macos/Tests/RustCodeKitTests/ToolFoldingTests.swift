@@ -76,6 +76,27 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertTrue(open.isNested(list[5].id), "opened, they are a step again")
     }
 
+    // In a turn's pipeline a run shows a line for each of its first calls.
+    func testARunListsItsFirstCalls() {
+        let list = items("usttttts")
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        let fold = folding.fold(for: list[2].id)
+        XCTAssertEqual(fold?.lines, ["Run · cmd 2", "Run · cmd 3", "Run · cmd 4"])
+        XCTAssertEqual(fold?.more, 2)
+        XCTAssertEqual(ToolFolding(items: items("ut"), verbosity: .low, open: [], running: false)
+            .fold(for: 1)?.lines, [], "a lone call's label already says it")
+    }
+
+    // A running turn is its pipeline: its work, its thoughts after the first,
+    // and what the model says now are steps on it.
+    func testARunningTurnIsAPipeline() {
+        let list = items("usrtrsts")
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
+        for index in 3...7 { XCTAssertTrue(folding.isNested(list[index].id), "\(index)") }
+        XCTAssertFalse(folding.isNested(list[1].id), "the first words are the turn's own")
+        XCTAssertFalse(folding.hidden.contains(list[4].id), "a later thought is a step")
+    }
+
     // Opened, the row lists the steps: each thing said and its own folded run.
     func testAnOpenedTurnListsItsSteps() {
         let list = items("usttststs")

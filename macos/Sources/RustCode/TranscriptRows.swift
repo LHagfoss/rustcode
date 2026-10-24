@@ -23,10 +23,10 @@ struct TranscriptRow: View, Equatable {
             if let turnFold {
                 VStack(alignment: .leading, spacing: 12) {
                     TurnSummary(fold: turnFold)
-                    if turnFold.isOpen { content.nestedInTurn() }
+                    if turnFold.isOpen { content.pipelineStep(node) }
                 }
             } else if isNested {
-                content.nestedInTurn()
+                content.pipelineStep(node)
             } else {
                 content
             }
@@ -42,21 +42,38 @@ struct TranscriptRow: View, Equatable {
             .animation(.snappy(duration: 0.2), value: isCurrentMatch)
     }
 
+    /// This row's mark on a turn's pipeline.
+    private var node: PipelineNode {
+        switch item.content {
+        case .assistant: .said
+        case .thinking: .thought
+        case .tool(let tool): tool.status == .failed ? .failed : .call
+        default: .call
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         switch item.content {
-        case .user(let text): UserMessage(id: item.id, text: text, isExpanded: isExpanded || isCurrentMatch)
+        case .user(let text):
+            // Room between the question and the work that answers it.
+            UserMessage(id: item.id, text: text, isExpanded: isExpanded || isCurrentMatch)
+                .padding(.bottom, 10)
         case .assistant(let text):
             AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
                              isExpanded: isExpanded || isCurrentMatch)
         case .thinking(let text):
-            ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
+            if isNested && !isStreaming {
+                ThoughtLine(text: text)
+            } else {
+                ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
+            }
         case .tool(let tool):
             if let agents {
                 AgentSpawnGroup(spawns: agents)
             } else if let fold {
                 VStack(alignment: .leading, spacing: 18) {
-                    ToolRunSummary(fold: fold)
+                    ToolRunSummary(fold: fold, showsLines: isNested || turnFold?.isOpen == true)
                     if fold.isOpen, !tool.isBlank { ToolRow(tool: tool) }
                 }
             } else if !tool.isBlank {
@@ -1012,20 +1029,63 @@ struct StoppedTurnRow: View {
     }
 }
 
+/// What a row is on a turn's pipeline, which its node shows.
+enum PipelineNode {
+    case said, call, failed, thought
+}
+
 extension View {
-    /// A row inside an opened turn: indented beside a thin rule, so the
-    /// turn's steps read as part of its row.
-    func nestedInTurn() -> some View {
-        padding(.leading, 22)
-            // Quieter than the turn's own words, and closer together.
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(.vertical, -5)
-            // Through the gap to the next row too, so the rule is unbroken.
-            .overlay(alignment: .leading) {
-                Rectangle().fill(Color.secondary.opacity(0.18)).frame(width: 1)
-                    .padding(.vertical, -9).padding(.leading, 7)
+    /// A row on a turn's pipeline: a rail down the left through every step,
+    /// with a node where each one starts.
+    func pipelineStep(_ node: PipelineNode) -> some View {
+        padding(.leading, 30)
+            .background(alignment: .topLeading) {
+                // Through the gap to the next row too, so the rail is unbroken.
+                Rectangle().fill(Color.secondary.opacity(0.22)).frame(width: 1.5)
+                    .padding(.bottom, -18)
+                    .padding(.leading, 8.25)
             }
+            .overlay(alignment: .topLeading) { PipelineDot(node: node).padding(.top, 5) }
+    }
+}
+
+private struct PipelineDot: View {
+    let node: PipelineNode
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color(nsColor: .windowBackgroundColor)).frame(width: 13, height: 13)
+            switch node {
+            case .said: Circle().fill(Color.primary.opacity(0.75)).frame(width: 7, height: 7)
+            case .call: Circle().strokeBorder(Color.secondary, lineWidth: 1.5).frame(width: 9, height: 9)
+            case .failed: Circle().strokeBorder(Color.red.opacity(0.85), lineWidth: 1.5).frame(width: 9, height: 9)
+            case .thought: Circle().fill(Color.secondary.opacity(0.45)).frame(width: 5, height: 5)
+            }
+        }
+        .frame(width: 18, height: 13)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A thought in a turn's pipeline: its first lines, quiet, where a reasoning
+/// box would have stood.
+private struct ThoughtLine: View {
+    let text: String
+
+    var body: some View {
+        // A summary is a run of `**Heading**` lines: one line of them reads
+        // as what the model thought about, without the blank lines between.
+        Text(text.replacingOccurrences(of: "**", with: "")
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · "))
+            .font(.callout)
+            .italic()
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .textSelection(.enabled)
     }
 }
 
@@ -1071,12 +1131,27 @@ private struct TurnSummary: View {
 /// what they were. A click opens the run to its cards, and folds it again.
 private struct ToolRunSummary: View {
     let fold: ToolRunFold
+    /// In a turn's pipeline, a line for each of the run's first calls.
+    var showsLines = false
     @Environment(\.toggleToolRun) private var toggle
 
     var body: some View {
         Button { toggle(fold.run) } label: {
-            header
-                .contentShape(.rect)
+            VStack(alignment: .leading, spacing: 3) {
+                header
+                if showsLines, !fold.isOpen, !fold.lines.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(fold.lines.enumerated()), id: \.offset) { _, line in
+                            Text(line).lineLimit(1).truncationMode(.tail)
+                        }
+                        if fold.more > 0 { Text("+\(fold.more) more") }
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 16)
+                }
+            }
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .hoverHighlight(cornerRadius: 6, padding: 4)
