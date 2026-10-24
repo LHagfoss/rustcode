@@ -1517,7 +1517,7 @@ mod projection_tests {
             "assistant",
             "<think>Planning towers</think>\n\nI've read the rules. Next I'll edit the picker\nand then the panel.",
         );
-        step.tool_calls = vec![rustcode::app::ToolCallRef {
+        step.tool_calls = vec![rustcode::controller::ToolCallRef {
             id: "call_1".to_string(),
             name: "view_file".to_string(),
             arguments: "{}".to_string(),
