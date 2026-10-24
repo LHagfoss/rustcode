@@ -249,7 +249,7 @@ fn localhost_preview_schema() -> Value {
 /// fails: this handler is the fallback, never the real bridge.
 pub const LOCALHOST_PREVIEW: Tool = Tool {
     name: crate::preview::PREVIEW_TOOL_NAME,
-    description: "The user's live preview panel in the RustCode macOS app (localhost only, user-approved). `navigate` to a local URL such as http://localhost:5173 opens the panel and shows that page, even when nothing is open yet; then inspect, screenshot, click, fill, select or scroll it. When the user asks to open or show a page in the (live) preview, this is the tool.",
+    description: "The user's live preview panel in the RustCode macOS app (localhost only, user-approved). `navigate` to a local URL such as http://localhost:5173 opens the panel and shows that page, even when nothing is open yet; then inspect, screenshot, click, fill, select or scroll it. When the user asks to open or show a page in the (live) preview, this is the tool. Use it to check a change once, not to explore: results list errors the page threw, so read them before guessing. When the page is blank or wrong and they do not explain why, ask the user what they see rather than probing again.",
     arguments: r##"{"action": "inspect"} | {"action": "screenshot"} | {"action": "navigate", "url": "/settings"} | {"action": "click", "selector": "#save"} | {"action": "fill", "selector": "input[name=email]", "value": "a@b.c"} | {"action": "select", "selector": "#plan", "value": "pro"} | {"action": "scroll", "dy": 600}"##,
     handler: localhost_preview_unavailable,
     requires_confirmation: false,

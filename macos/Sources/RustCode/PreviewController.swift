@@ -89,6 +89,13 @@ final class PreviewController: NSObject, ObservableObject {
         // The app's own persistent store, so a dev app's sign-in survives a
         // restart; it is shared with no browser.
         configuration.websiteDataStore = .default()
+        // What the page threw, for the agent: a blank page with no error in
+        // the result sent it hunting through builds and tests for ten rounds
+        // (session 01a16b37). Collected in the isolated client world, where
+        // the page cannot see or reset it.
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: Self.pageErrorCollector, injectionTime: .atDocumentStart,
+            forMainFrameOnly: true, in: .defaultClient))
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = self
         view.uiDelegate = self

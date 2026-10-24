@@ -12,6 +12,33 @@ import WebKit
 extension PreviewController {
     static let actionTimeout: Duration = .seconds(20)
     static let maxScreenshotWidth = 1280
+    /// A panel narrower than this lays the page out like a phone; the
+    /// agent's screenshot is taken at `desktopWidth` instead.
+    static let narrowPanel: Double = 1024
+    static let desktopWidth: Double = 1280
+    static let desktopHeight: Double = 900
+
+    /// Collects the page's uncaught errors, failed resource loads and
+    /// unhandled rejections, newest last, in the isolated client world.
+    static let pageErrorCollector = #"""
+    (() => {
+      const errors = window.__rustcodePageErrors = [];
+      const push = (line) => { errors.push(String(line).slice(0, 400)); if (errors.length > 20) errors.shift(); };
+      addEventListener('error', (e) => {
+        if (e instanceof ErrorEvent) {
+          const where = e.filename ? ` (${e.filename.replace(location.origin, '')}:${e.lineno}:${e.colno})` : '';
+          push((e.message || String(e.error)) + where);
+        } else if (e.target && e.target !== window) {
+          const t = e.target;
+          push(`Failed to load <${t.localName}> ${t.src || t.href || ''}`.trim());
+        }
+      }, true);
+      addEventListener('unhandledrejection', (e) => {
+        const r = e.reason;
+        push('Unhandled promise rejection: ' + (r instanceof Error ? `${r.name}: ${r.message}` : String(r)));
+      });
+    })();
+    """#
 
     /// Answer one `_rustcode/preview` request. Never throws: every failure
     /// is an `{"ok": false}` answer the engine reports as an error.
@@ -70,14 +97,26 @@ extension PreviewController {
             var result = try await withPreviewTimeout(Self.actionTimeout, action: operation.action) { @MainActor [self] in
                 try await self.perform(operation, session: request.sessionId)
             }
-            if !agentNotes.isEmpty, case .object(var object) = result {
-                object["note"] = .string(agentNotes.joined(separator: " "))
+            if case .object(var object) = result {
+                if !agentNotes.isEmpty { object["note"] = .string(agentNotes.joined(separator: " ")) }
+                if let errors = await pageErrors(), !errors.isEmpty { object["errors"] = .array(errors) }
                 result = .object(object)
             }
             return result
         } catch {
             return Self.agentError(error).result
         }
+    }
+
+    /// What the shown page threw since it loaded, for every answer: nil when
+    /// they cannot be read.
+    private func pageErrors() async -> [JSONValue]? {
+        guard let view = createdWebView else { return nil }
+        let raw = try? await view.callAsyncJavaScript(
+            "return JSON.stringify(window.__rustcodePageErrors || [])", arguments: [:], in: nil, contentWorld: .defaultClient)
+        guard let text = raw as? String, let data = text.data(using: .utf8),
+              case .array(let errors) = try? JSONDecoder().decode(JSONValue.self, from: data) else { return nil }
+        return errors
     }
 
     /// The page the agent would act on, when it is a loaded local page.
@@ -107,12 +146,39 @@ extension PreviewController {
             guard view.window != nil, view.bounds.width >= 1, view.bounds.height >= 1 else {
                 throw PreviewAgentError.failed("The preview panel is hidden, so there is nothing to capture. Ask the user to show it (⇧⌘P).")
             }
-            let image = try await view.takeSnapshot(configuration: nil)
+            // A narrow panel lays the page out like a phone, and the agent
+            // judged a desktop app by it (762×1672 in session 01a16b37). Lay
+            // it out at desktop width for the capture, zoomed to fit the
+            // panel, and put the reader's zoom back after.
+            let panel = view.bounds.width
+            let zoom = view.pageZoom
+            let desktop = panel < Self.narrowPanel
+            if desktop {
+                view.pageZoom = panel / Self.desktopWidth
+                try await Task.sleep(for: .milliseconds(400))
+            }
+            let configuration = WKSnapshotConfiguration()
+            if desktop {
+                configuration.snapshotWidth = NSNumber(value: Self.desktopWidth)
+                // A desktop window's share of the page, not the panel's tall one.
+                let height = min(view.bounds.height, panel * Self.desktopHeight / Self.desktopWidth)
+                configuration.rect = CGRect(x: 0, y: 0, width: panel, height: height)
+            }
+            let image: NSImage
+            do {
+                image = try await view.takeSnapshot(configuration: configuration)
+            } catch {
+                if desktop { view.pageZoom = zoom }
+                throw error
+            }
+            if desktop { view.pageZoom = zoom }
             try ensureCurrent(view)
             let (data, mime, width, height) = try Self.encodeForAgent(image)
             var page = pageInfo(view)
             page["image"] = ["mimeType": .string(mime), "data": .string(data.base64EncodedString()),
                              "width": .number(Double(width)), "height": .number(Double(height))]
+            page["viewport"] = ["width": .number(desktop ? Self.desktopWidth : panel),
+                                "panelWidth": .number(panel), "desktop": .bool(desktop)]
             return .object(page)
         case .navigate(let target):
             let approved = agent.access.origin(for: session)

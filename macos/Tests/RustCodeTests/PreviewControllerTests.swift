@@ -167,6 +167,34 @@ final class PreviewControllerTests: XCTestCase {
         return await task.value
     }
 
+    /// A blank page's runtime error comes back with the answer (session
+    /// 01a16b37 spent ten rounds finding one the browser already knew).
+    func testThePagesErrorsComeBackWithTheAnswer() async throws {
+        let broken = try TestPageServer(html: """
+        <!doctype html><html><head><title>Broken</title></head><body>
+        <div id="root"></div>
+        <script>Promise.reject(new TypeError('no data')); tutorial.show();</script>
+        <button id="boom" onclick="missingHandler()">Boom</button>
+        </body></html>
+        """)
+        try await broken.start()
+        defer { broken.stop() }
+        let controller = makeController()
+        controller.setWorkspace("/project")
+        controller.load(broken.url)
+        let loaded = await waitUntil { controller.state.phase == .loaded }
+        XCTAssertTrue(loaded)
+
+        let page = await grantAndRun(controller, ["action": "inspect"])
+        XCTAssertEqual(page["ok"], true, "\(page)")
+        let errors = page["errors"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        XCTAssertTrue(errors.contains { $0.contains("tutorial") }, "\(errors)")
+        XCTAssertTrue(errors.contains { $0.contains("Unhandled promise rejection: TypeError: no data") }, "\(errors)")
+        let clicked = await controller.runAgentRequest(request(["action": "click", "selector": "#boom"]))
+        let after = clicked["errors"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        XCTAssertTrue(after.contains { $0.contains("missingHandler") }, "\(after)")
+    }
+
     func testAgentActionsRunInThePageAfterApproval() async {
         let controller = makeController()
         controller.setWorkspace("/project")
