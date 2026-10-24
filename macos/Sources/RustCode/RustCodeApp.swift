@@ -203,6 +203,7 @@ final class DesktopModel: ObservableObject {
             if oldValue != selectedSession {
                 showAgents(of: selectedSession)
                 openToolRuns = []
+                turnsOpenedWhileRunning = []
                 syncTerminalProject()
             }
         }
@@ -380,7 +381,10 @@ final class DesktopModel: ObservableObject {
     #if DEBUG
     /// The debug driver's stand-in for a turn, without an engine.
     func debugTurn(_ running: Bool, in session: String) {
-        if running { _ = turnActivity.begin(session) } else { endAllTurns(failure: nil) }
+        if running { _ = turnActivity.begin(session) } else {
+            endAllTurns(failure: nil)
+            foldTurnsOpenedWhileRunning(in: session)
+        }
     }
 
     /// The debug driver's stand-in for the agents list and an open agent.
@@ -599,7 +603,21 @@ final class DesktopModel: ObservableObject {
     @Published private(set) var openToolRuns: Set<Int> = []
 
     func toggleToolRun(_ run: Int) {
-        if openToolRuns.remove(run) == nil { openToolRuns.insert(run) }
+        if openToolRuns.remove(run) == nil {
+            openToolRuns.insert(run)
+            if isTurnRunning, run < 0 { turnsOpenedWhileRunning.insert(run) }
+        }
+    }
+
+    /// Turn rows opened while their turn ran. When the turn ends, finished or
+    /// stopped, they fold back to their first words, row and answer: a stopped
+    /// turn opened to watch it stayed a pipeline.
+    private var turnsOpenedWhileRunning: Set<Int> = []
+
+    private func foldTurnsOpenedWhileRunning(in session: String) {
+        guard session == selectedSession, !turnsOpenedWhileRunning.isEmpty else { return }
+        openToolRuns.subtract(turnsOpenedWhileRunning)
+        turnsOpenedWhileRunning = []
     }
 
     /// Long messages the reader opened, per chat (#2303).
@@ -1861,6 +1879,7 @@ final class DesktopModel: ObservableObject {
         permissionQueue.removeAll { $0.sessionId == id }
         // A thought the turn ended on stops its clock, and no card keeps spinning.
         appendToTranscript(of: id) { $0.finishTurn(at: Date(), failure: failure, cancelled: cancelled) }
+        foldTurnsOpenedWhileRunning(in: id)
         if isCommand {
             finishCommand(in: id)
         } else if !stopped {
