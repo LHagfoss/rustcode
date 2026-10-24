@@ -20,6 +20,7 @@ pub mod daemon;
 use crate::app::{AppState, ChatMessage};
 pub mod discord_rpc;
 pub mod doctor;
+mod keep_awake;
 pub mod mcp;
 mod memory;
 pub mod model_defaults;
