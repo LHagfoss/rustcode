@@ -570,37 +570,36 @@ mod request_prefix_tests {
 /// system reminder right before the latest user message or tool result. This
 /// prevents the model from forgetting the core guidelines and tool formats
 /// due to attention dilution in long contexts.
-pub(crate) fn inject_system_reminder(msgs: &mut [serde_json::Value]) {
+pub(crate) fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
     if msgs.len() >= 4 {
         let reminder_text = "REMINDER: Follow the configured tool protocol exactly. Use tools only when needed, inspect results before choosing the next action, and report relevant verification when finished.";
+        append_request_local_notice(msgs, reminder_text);
+    }
+}
 
-        if let Some(last_msg) = msgs.iter_mut().rev().find(|message| {
-            !message
-                .get("content")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|content| content.starts_with("<rustcode_context>"))
-        }) && let Some(content) = last_msg.get_mut("content")
-        {
-            match content {
-                serde_json::Value::String(s) => {
-                    *s = format!("{}\n\n{}", s, reminder_text);
-                }
-                serde_json::Value::Array(arr) => {
-                    arr.push(serde_json::json!({
-                        "type": "text",
-                        "text": format!("\n\n{}", reminder_text)
-                    }));
-                }
-                _ => {}
-            }
-        }
+/// Add a per-request instruction where the prefix cache cannot freeze it: the
+/// runtime context tail, or a new tail when the request has none. Appended to
+/// an ordinary message, it stayed in the reused prefix for the rest of the
+/// turn and was gone from the next turn's rebuilt prefix, so that turn's first
+/// request missed the provider cache from that message on (session 01a16b37).
+fn append_request_local_notice(msgs: &mut Vec<serde_json::Value>, text: &str) {
+    let has_tail = msgs.iter().any(|message| {
+        message
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|content| content.starts_with("<rustcode_context>"))
+    });
+    if has_tail {
+        append_to_context_tail(msgs, text);
+    } else {
+        attach_request_context_tail(msgs, text);
     }
 }
 
 /// Keep a local model from spending multiple bootstrap turns restating a plan
 /// without touching an empty workspace. This is request-local: it does not
 /// mutate the transcript or disable configured reasoning.
-pub(crate) fn inject_bootstrap_action_nudge(msgs: &mut [serde_json::Value], bootstrap: bool) {
+pub(crate) fn inject_bootstrap_action_nudge(msgs: &mut Vec<serde_json::Value>, bootstrap: bool) {
     if !bootstrap {
         return;
     }
@@ -625,22 +624,7 @@ pub(crate) fn inject_bootstrap_action_nudge(msgs: &mut [serde_json::Value], boot
         return;
     }
     let nudge = "BOOTSTRAP ACTION: execute the smallest concrete setup step now (for example, create the project manifest or first source file). Keep reasoning concise and do not restate the architecture plan.";
-    if let Some(last_msg) = msgs.iter_mut().rev().find(|message| {
-        !message
-            .get("content")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|content| content.starts_with("<rustcode_context>"))
-    }) && let Some(content) = last_msg.get_mut("content")
-    {
-        match content {
-            serde_json::Value::String(s) => *s = format!("{s}\n\n{nudge}"),
-            serde_json::Value::Array(arr) => arr.push(serde_json::json!({
-                "type": "text",
-                "text": format!("\n\n{nudge}")
-            })),
-            _ => {}
-        }
-    }
+    append_request_local_notice(msgs, nudge);
 }
 
 #[cfg(test)]
@@ -695,7 +679,7 @@ mod tests {
         ];
         inject_bootstrap_action_nudge(&mut msgs, true);
         assert!(
-            msgs[2]["content"]
+            msgs.last().unwrap()["content"]
                 .as_str()
                 .unwrap()
                 .contains("BOOTSTRAP ACTION")
