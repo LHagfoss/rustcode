@@ -2252,3 +2252,74 @@ mod render_state_tests {
         );
     }
 }
+
+// Session 01a16b37: the stream dropped while the model was writing text, and
+// the turn stopped until the user typed `continue`. No tool had run, so the
+// turn now goes on by itself.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stream_dropped_during_text_resumes_the_turn() {
+    use tokio::io::AsyncWriteExt;
+
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    std::fs::create_dir(workspace.path().join(".rustcode")).expect("project config directory");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock provider");
+    let provider = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    std::fs::write(
+        workspace.path().join(".rustcode/config.toml"),
+        format!(
+            "default = \"controller-mock\"\n[[models]]\nname = \"controller-mock\"\nurl = \"{provider}\"\nmodel = \"controller-mock\"\ntool_protocol = \"native\"\n"
+        ),
+    )
+    .expect("project config");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("first request");
+        read_provider_request(&mut socket).await;
+        // Text, then the connection closes before any finish event.
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"partial text\"}}]}\n\n")
+            .await
+            .expect("send partial");
+        drop(socket);
+        let (mut socket, _) = listener.accept().await.expect("resumed request");
+        read_provider_request(&mut socket).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"resumed answer\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            .await
+            .expect("send resumed answer");
+    });
+
+    let (handle, mut updates) = InteractiveController::spawn(
+        &tokio::runtime::Handle::current(),
+        workspace.path().to_path_buf(),
+    );
+    let _initial = updates.recv().await.expect("initial snapshot");
+    handle
+        .send(Command::StartNew(workspace.path().to_path_buf()))
+        .expect("start session");
+    handle
+        .send(Command::Submit("do the task".to_owned()))
+        .expect("submit");
+    let resumed = tokio::time::timeout(Duration::from_secs(20), async {
+        while let Some(event) = updates.recv().await {
+            if let ControllerUpdate::Snapshot(snapshot) = event.update
+                && !snapshot.turn_active
+                && snapshot
+                    .transcript
+                    .iter()
+                    .any(|item| item.role == "assistant" && item.content.contains("resumed answer"))
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for the resumed turn"));
+    assert!(resumed, "controller worker stopped before the turn resumed");
+    server.await.expect("mock provider");
+}
