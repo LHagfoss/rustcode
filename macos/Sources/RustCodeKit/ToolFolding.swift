@@ -4,7 +4,7 @@ import Foundation
 /// `verbosity` setting does.
 public enum ToolVerbosity: String, CaseIterable, Identifiable, Sendable {
     /// Calls fold into one `N tool calls` row, a lone call too; while tools
-    /// run, only the current call shows.
+    /// run, only the current call shows. A turn shows only its first thought.
     case low
     /// Every call is its own closed card.
     case high
@@ -83,9 +83,33 @@ public struct ToolFolding: Equatable, Sendable {
 
     public init() {}
 
+    /// Thoughts after the first of their turn. At the folding verbosities a
+    /// turn reads as its first thought, then what the model said and the
+    /// calls it made, instead of a reasoning box before every step. The
+    /// thought still streaming at the end stays, so the chat shows the work.
+    static func laterThoughts(in items: [TranscriptItem], running: Bool) -> Set<Int> {
+        var hidden: Set<Int> = []
+        var seenThought = false
+        for (index, item) in items.enumerated() {
+            switch item.content {
+            case .user, .command:
+                seenThought = false
+            case .thinking:
+                let isLive = running && index == items.count - 1
+                if seenThought && !isLive { hidden.insert(item.id) }
+                seenThought = true
+            case .assistant, .tool:
+                break
+            }
+        }
+        return hidden
+    }
+
     /// `open` holds the runs the reader opened. While `running`, the run at
     /// the end of the chat folds everything but its current call.
     public init(items: [TranscriptItem], verbosity: ToolVerbosity, open: Set<Int>, running: Bool) {
+        let thoughts = verbosity.folds ? Self.laterThoughts(in: items, running: running) : []
+        hidden = thoughts
         var spawns: [Int] = []
         func closeAgents() {
             defer { spawns = [] }
@@ -108,6 +132,8 @@ public struct ToolFolding: Equatable, Sendable {
             if !isOpen { hidden.formUnion(ids.prefix(count).dropFirst()) }
         }
         for item in items {
+            // A hidden thought does not split the calls around it into runs.
+            if thoughts.contains(item.id) { continue }
             guard case .tool(let tool) = item.content else {
                 close(atEnd: false)
                 closeAgents()
