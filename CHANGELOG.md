@@ -1,3 +1,17 @@
+## [v0.94.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.94.0) - 2026-10-25
+
+### Features
+- macOS: at Low/Edits verbosity a finished turn shows its first message, one `N tool calls · M steps` row, and its answer. The row opens to the turn's steps as a pipeline: what the model said, its thoughts and each run of calls on one rail. A running turn shows only its current round, and a turn you opened while it ran folds back when it ends. (#2363, #2377, #2379, #2381, #2385, #2387, #2394)
+- macOS: a preview's screenshots stay inside the turn instead of appearing as your message. (#2387)
+- macOS: a turn stopped by a provider or connection error ends with a Continue button. (#2375)
+- macOS: a chat picked right after launch opens instead of showing empty. (#2383)
+- macOS: with the sidebar hidden, the session timeline sits at the window's left edge. (#2371)
+- Preview: the agent sees the page's runtime errors and a desktop-width screenshot, and stops waiting when nobody answers its access request. (#2392)
+- TUI: at Low verbosity, what the model says before each tool call shows as one sentence; the reply stays whole. (#2365)
+- Turns on a ChatGPT login no longer stop when the connection to OpenAI drops before a reply starts; the request is retried. (#2367)
+- The Mac no longer idle-sleeps while RustCode is working on a turn. (#2373)
+- Long sessions compact their history instead of silently dropping old messages when the context fills. (#2369)
+- A tool's screenshot is never taken for your request when history is compacted. (#2396)
 ## [v0.93.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.93.0) - 2026-10-24
 
 ### Features
