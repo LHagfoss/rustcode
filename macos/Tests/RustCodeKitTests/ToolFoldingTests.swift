@@ -63,6 +63,19 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertTrue(folding.nested.isEmpty)
     }
 
+    // A turn that stopped before its answer ends on its last words, under
+    // the row rather than with the row as its end.
+    func testATurnWithoutAnAnswerEndsOnItsLastWords() {
+        let list = items("ustststt")
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        XCTAssertNotNil(folding.turn(for: list[2].id))
+        XCTAssertFalse(folding.hidden.contains(list[5].id), "the last words show")
+        XCTAssertTrue(folding.hidden.contains(list[3].id))
+        XCTAssertTrue(folding.hidden.isSuperset(of: [list[6].id, list[7].id]))
+        let open = ToolFolding(items: list, verbosity: .low, open: [TurnFold.key(for: list[2].id)], running: false)
+        XCTAssertTrue(open.isNested(list[5].id), "opened, they are a step again")
+    }
+
     // Opened, the row lists the steps: each thing said and its own folded run.
     func testAnOpenedTurnListsItsSteps() {
         let list = items("usttststs")
