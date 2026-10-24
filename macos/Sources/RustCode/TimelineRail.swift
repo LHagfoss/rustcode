@@ -9,6 +9,9 @@ final class TimelineRailState: ObservableObject {
     @Published var layout = TimelineLayout.empty
     /// The turns there are; the rail hides with fewer than two.
     @Published var turnCount = 0
+    /// The chat's inset under the title bar. The rail spans the whole scroll
+    /// view, while marker positions are from the top of its visible area.
+    @Published var top: Double = 0
 }
 
 /// A thin timeline in the gutter left of the chat's column (#2309): a short
@@ -21,7 +24,7 @@ struct TimelineRail: View {
     @ObservedObject var state: TimelineRailState
     let jump: (Int) -> Void
 
-    static let width: Double = 22
+    static let width: Double = 28
     /// The chat's column and the padding either side of it (`ChatView`).
     static let column: Double = 760
     static let padding: Double = 28
@@ -46,8 +49,8 @@ struct TimelineRail: View {
         ZStack(alignment: .top) {
             ForEach(state.layout.markers) { marker in
                 TimelineTick(marker: marker, reduceMotion: reduceMotion) { jump(marker.id) }
-                    // Centred on its place.
-                    .offset(y: marker.y - TimelineTick.hit / 2)
+                    // Centred on its place, below the title bar's inset.
+                    .offset(y: state.top + marker.y - TimelineTick.hit / 2)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: state.layout.current)
@@ -66,7 +69,7 @@ private struct TimelineTick: View {
     /// `TimelineLayout.step` apart, so neighbours do not overlap.
     static let hit: Double = TimelineLayout.step
     /// The current turn's tick.
-    static let longest: Double = 18
+    static let longest: Double = 22
     @State private var isHovered = false
 
     var body: some View {
