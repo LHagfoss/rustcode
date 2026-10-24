@@ -34,16 +34,55 @@ final class ToolFoldingTests: XCTestCase {
     }
 
     func testLowFoldsEveryRunALoneCallToo() {
-        let list = items("txtsts tt".replacingOccurrences(of: " ", with: ""))
+        let list = items("utxtsutsut")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
-        let first = list[0].id
+        let first = list[1].id
         XCTAssertEqual(folding.fold(for: first),
                        ToolRunFold(run: first, count: 3, failed: 1, isOpen: false, label: "Run ×3"))
-        XCTAssertEqual(folding.hidden, [list[1].id, list[2].id, list[7].id])
-        // A lone call between texts is still `1 tool call`.
-        XCTAssertEqual(folding.fold(for: list[4].id)?.count, 1)
-        XCTAssertEqual(folding.fold(for: list[4].id)?.label, "Run · cmd 4")
-        XCTAssertNotNil(folding.fold(for: list[6].id))
+        XCTAssertEqual(folding.hidden, [list[2].id, list[3].id])
+        // A lone call between messages is still `1 tool call`.
+        XCTAssertEqual(folding.fold(for: list[6].id)?.count, 1)
+        XCTAssertEqual(folding.fold(for: list[6].id)?.label, "Run · cmd 6")
+        XCTAssertNotNil(folding.fold(for: list[9].id))
+    }
+
+    // A turn read as sentence, call, sentence, call…, a paragraph per call;
+    // what the model says between calls now folds into the run, which shows
+    // the last of it on one line, and the reply after the last call stays.
+    func testWhatIsSaidBetweenCallsFoldsIntoTheRun() {
+        let list = items("usttststs")
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        let fold = folding.fold(for: list[2].id)
+        XCTAssertEqual(fold?.count, 4)
+        XCTAssertEqual(fold?.note, "step 6")
+        XCTAssertEqual(folding.hidden, Set([1, 3, 4, 5, 6, 7].map { list[$0].id }))
+        XCTAssertFalse(folding.hidden.contains(list[8].id), "the reply shows")
+        // Opened, the run shows what was said with its calls.
+        let open = ToolFolding(items: list, verbosity: .low, open: [list[2].id], running: false)
+        XCTAssertTrue(open.hidden.isEmpty)
+        // High shows every sentence.
+        XCTAssertTrue(ToolFolding(items: list, verbosity: .high, open: [], running: false).hidden.isEmpty)
+    }
+
+    func testWhileRunningWhatWasSaidFoldsBehindTheCurrentCall() {
+        let list = items("ststst")
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
+        XCTAssertEqual(folding.fold(for: list[1].id)?.count, 2)
+        XCTAssertEqual(folding.fold(for: list[1].id)?.note, "step 4")
+        XCTAssertEqual(folding.hidden, Set([0, 2, 3, 4].map { list[$0].id }))
+        // The first call running alone folds nothing, so its sentence shows.
+        let alone = Array(list.prefix(2))
+        XCTAssertTrue(ToolFolding(items: alone, verbosity: .low, open: [], running: true).hidden.isEmpty)
+        // A sentence still streaming at the end shows.
+        let speaking = Array(list.prefix(5))
+        XCTAssertFalse(ToolFolding(items: speaking, verbosity: .low, open: [], running: true)
+            .hidden.contains(list[4].id))
+    }
+
+    func testTheNoteIsTheFirstSentenceOnOneLine() {
+        XCTAssertEqual(ToolRunFold.firstSentence(of: "I read **it**. Next I edit `a.rs`.\nMore"), "I read it.")
+        XCTAssertEqual(ToolRunFold.firstSentence(of: "\n  Checking v1.2 now\nthen"), "Checking v1.2 now")
+        XCTAssertNil(ToolRunFold.firstSentence(of: " \n "))
     }
 
     func testTheLabelNamesEachToolOnceAndALoneCallsSummary() {
@@ -70,7 +109,7 @@ final class ToolFoldingTests: XCTestCase {
         let list = items("sttt")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
         XCTAssertEqual(folding.fold(for: list[1].id)?.count, 2)
-        XCTAssertEqual(folding.hidden, [list[2].id])
+        XCTAssertEqual(folding.hidden, [list[0].id, list[2].id])
         XCTAssertFalse(folding.hidden.contains(list[3].id), "the current call shows")
         // The first call of a live run folds even alone.
         let two = items("tt")
@@ -127,8 +166,8 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertTrue(folding.hidden.contains(list[7].id))
         XCTAssertFalse(folding.hidden.contains(list[10].id))
         XCTAssertTrue(folding.hidden.contains(list[12].id))
-        // Every sentence and each run's first call still show.
-        for index in [2, 3, 5, 6, 8, 11] { XCTAssertFalse(folding.hidden.contains(list[index].id)) }
+        // Each run's first call and each turn's reply still show.
+        for index in [3, 8, 11] { XCTAssertFalse(folding.hidden.contains(list[index].id)) }
     }
 
     func testAHiddenThoughtDoesNotSplitARun() {
