@@ -11,11 +11,17 @@ pub struct ReadEvidence {
     pub evidence_type: String,
     pub completeness: String,
     pub ranges: Vec<rustcode_core::InspectionRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_epoch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_output_artifact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive_path: Option<String>,
     pub archive_line: usize,
 }
@@ -27,8 +33,11 @@ pub struct CommandEvidence {
     pub pending: bool,
     pub exit_code: Option<i32>,
     pub completeness: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_output_artifact: Option<String>,
 }
 
@@ -58,8 +67,9 @@ fn is_harness_notice(content: &str) -> bool {
     )
 }
 
-/// A follow-up that only says "keep going". It carries no task, so it must
-/// not replace the last follow-up that did.
+/// A follow-up that only says "keep going" or acknowledges the last answer
+/// ("looks good"). It carries no task, so it must not replace the last
+/// follow-up that did.
 fn is_bare_continuation(message: &str) -> bool {
     let normalized = message
         .trim()
@@ -67,9 +77,42 @@ fn is_bare_continuation(message: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        "continue" | "go on" | "keep going" | "proceed" | "go ahead" | "ok" | "okay" | "yes"
+        "continue"
+            | "go on"
+            | "keep going"
+            | "proceed"
+            | "go ahead"
+            | "ok"
+            | "okay"
+            | "yes"
+            | "looks good"
+            | "lgtm"
+            | "good"
+            | "great"
+            | "nice"
+            | "perfect"
+            | "cool"
+            | "thanks"
+            | "thank you"
+            | "sounds good"
     )
 }
+
+/// What a later success of the same kind resolves: a command by its text, a
+/// file edit by any later edit, any other tool by its name.
+fn failure_key(tool_name: &str, command: Option<&str>) -> String {
+    match tool_name {
+        "run_command" | "background_task" => format!("{tool_name}:{}", command.unwrap_or("")),
+        "replace_file_content"
+        | "multi_replace_file_content"
+        | "write_to_file"
+        | "write_file_chunk" => "file_edit".to_owned(),
+        _ => tool_name.to_owned(),
+    }
+}
+
+const READ_EVIDENCE_ARCHIVE_PREFIX: &str = "Read evidence archive: ";
+const PROGRESS_NOTES_PREFIX: &str = "Recent progress notes (assistant narration, not verified): ";
 
 pub(crate) fn compact_context_line(content: &str, max_chars: usize) -> String {
     let line = content
@@ -94,6 +137,9 @@ pub(crate) fn compact_context_block(content: &str, max_chars: usize) -> String {
 impl StructuredSessionMemory {
     pub fn extract_from_history(history: &[ChatMessage]) -> Self {
         let mut memory = Self::default();
+        // Failures seen in this history, keyed so a later success of the same
+        // kind can resolve them; only the unresolved ones reach the record.
+        let mut failures: Vec<(Option<String>, String)> = Vec::new();
 
         for (index, message) in history.iter().enumerate() {
             if message.conversation_recap {
@@ -165,6 +211,7 @@ impl StructuredSessionMemory {
                         memory.modified_files.push(path.clone());
                     }
                 }
+                let key = failure_key(&result.tool_name, result.command.as_deref());
                 if !result.success || result.error_kind.is_some() {
                     let err = format!(
                         "{} ({}, exit={:?})",
@@ -172,9 +219,11 @@ impl StructuredSessionMemory {
                         result.error_kind.as_deref().unwrap_or("failed"),
                         result.exit_code
                     );
-                    if !memory.failures_and_errors.contains(&err) {
-                        memory.failures_and_errors.push(err);
+                    if !failures.iter().any(|(_, existing)| existing == &err) {
+                        failures.push((Some(key), err));
                     }
+                } else {
+                    failures.retain(|(failed, _)| failed.as_deref() != Some(key.as_str()));
                 }
                 if matches!(result.tool_name.as_str(), "run_command" | "background_task") {
                     if let Some(command) = result.command.as_ref() {
@@ -255,14 +304,20 @@ impl StructuredSessionMemory {
                     .as_ref()
                     .is_none_or(|result| !result.success || result.error_kind.is_some())
             {
-                if let Some((_, body)) = message.content.split_once(": ") {
+                if let Some((tool, body)) = message.content.split_once(": ") {
                     if body.contains("error:")
                         || body.contains("exit code: 1")
                         || body.contains("FAILED")
                     {
                         let snippet = compact_context_line(body, 200);
-                        if !snippet.is_empty() && !memory.failures_and_errors.contains(&snippet) {
-                            memory.failures_and_errors.push(snippet);
+                        let key = message.tool_result.as_ref().map_or_else(
+                            || failure_key(tool, None),
+                            |result| failure_key(&result.tool_name, result.command.as_deref()),
+                        );
+                        if !snippet.is_empty()
+                            && !failures.iter().any(|(_, existing)| existing == &snippet)
+                        {
+                            failures.push((Some(key), snippet));
                         }
                     }
                 }
@@ -283,13 +338,21 @@ impl StructuredSessionMemory {
             }
         }
 
+        for (_, failure) in failures {
+            if !memory.failures_and_errors.contains(&failure) {
+                memory.failures_and_errors.push(failure);
+            }
+        }
         memory
     }
 
     pub fn merge_from_text(&mut self, text: &str) {
+        let mut read_archive: Option<String> = None;
         for line in text.lines() {
             let trimmed = line.trim();
-            if let Some(goal) = trimmed.strip_prefix("Goal: ") {
+            if let Some(archive) = trimmed.strip_prefix(READ_EVIDENCE_ARCHIVE_PREFIX) {
+                read_archive = Some(archive.to_owned());
+            } else if let Some(goal) = trimmed.strip_prefix("Goal: ") {
                 if self.initial_goal.is_empty() {
                     self.initial_goal = goal.to_string();
                 }
@@ -321,8 +384,13 @@ impl StructuredSessionMemory {
                     }
                 }
             } else if let Some(evidence) = trimmed.strip_prefix("Read evidence: ")
-                && let Ok(evidence) = serde_json::from_str::<ReadEvidence>(evidence)
-                && !self.read_evidence.contains(&evidence)
+                && let Ok(mut evidence) = serde_json::from_str::<ReadEvidence>(evidence)
+                && {
+                    if evidence.archive_path.is_none() {
+                        evidence.archive_path.clone_from(&read_archive);
+                    }
+                    !self.read_evidence.contains(&evidence)
+                }
             {
                 if !self.inspected_files.contains(&evidence.path) {
                     self.inspected_files.push(evidence.path.clone());
@@ -358,8 +426,9 @@ impl StructuredSessionMemory {
                         self.key_architecture.push(a.to_string());
                     }
                 }
-            } else if let Some(decisions) =
-                trimmed.strip_prefix("Architecture/decisions/next steps: ")
+            } else if let Some(decisions) = trimmed
+                .strip_prefix(PROGRESS_NOTES_PREFIX)
+                .or_else(|| trimmed.strip_prefix("Architecture/decisions/next steps: "))
             {
                 for d in decisions.split("; ") {
                     if !self.decisions.iter().any(|existing| existing == d) {
@@ -469,7 +538,7 @@ impl StructuredSessionMemory {
             out.push('\n');
         }
         if !self.decisions.is_empty() {
-            out.push_str("Architecture/decisions/next steps: ");
+            out.push_str(PROGRESS_NOTES_PREFIX);
             out.push_str(
                 &self
                     .decisions
@@ -486,10 +555,12 @@ impl StructuredSessionMemory {
         if base_chars >= max_chars {
             return out.chars().take(max_chars).collect();
         }
-        out.push_str(&self.format_read_evidence(max_chars - base_chars));
+        // Command results say what passed or failed; they go first so a long
+        // read inventory cannot crowd them out.
+        out.push_str(&self.format_command_evidence(max_chars - base_chars));
         let used_chars = out.chars().count();
         if used_chars < max_chars {
-            out.push_str(&self.format_command_evidence(max_chars - used_chars));
+            out.push_str(&self.format_read_evidence(max_chars - used_chars));
         }
         out
     }
@@ -509,12 +580,33 @@ impl StructuredSessionMemory {
         let mut out = String::from(
             "Read evidence (document/source inspection only; this does not establish testing or runtime validation):\n",
         );
+        // Records from one compaction share an archive; name it once instead
+        // of on every line.
+        let shared_archive = self
+            .read_evidence
+            .first()
+            .and_then(|evidence| evidence.archive_path.as_deref())
+            .filter(|archive| {
+                self.read_evidence
+                    .iter()
+                    .all(|evidence| evidence.archive_path.as_deref() == Some(*archive))
+            });
+        if let Some(archive) = shared_archive {
+            out.push_str(&format!("{READ_EVIDENCE_ARCHIVE_PREFIX}{archive}\n"));
+        }
         if out.chars().count() > max_chars {
             return String::new();
         }
         let mut included = 0usize;
         for evidence in self.read_evidence.iter().rev().take(12) {
-            let Ok(json) = serde_json::to_string(evidence) else {
+            let json = if shared_archive.is_some() {
+                let mut line = evidence.clone();
+                line.archive_path = None;
+                serde_json::to_string(&line)
+            } else {
+                serde_json::to_string(evidence)
+            };
+            let Ok(json) = json else {
                 continue;
             };
             let line = format!("Read evidence: {json}\n");
@@ -675,6 +767,108 @@ mod tests {
         ];
         let memory = StructuredSessionMemory::extract_from_history(&history);
         assert_eq!(memory.current_task.as_deref(), Some("also run a review"));
+    }
+
+    // Session 01a16b37: the record carried edit mismatches that later edits
+    // had fixed, "looks good" as the current task, and the archive path on
+    // every read line.
+    #[test]
+    fn record_drops_resolved_failures_and_acknowledgements() {
+        let failed_edit = |content: &str| {
+            let mut message = ChatMessage::new("tool", content);
+            message.tool_result = Some(crate::app::ToolResultRecord {
+                tool_name: "multi_replace_file_content".into(),
+                success: false,
+                error_kind: Some("Internal".into()),
+                ..Default::default()
+            });
+            message
+        };
+        let mut fixed_edit = ChatMessage::new("tool", "replace_file_content: applied");
+        fixed_edit.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "replace_file_content".into(),
+            success: true,
+            ..Default::default()
+        });
+        let mut failed_test = ChatMessage::new("tool", "run_command: error: 1 test failed");
+        failed_test.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "run_command".into(),
+            command: Some("bun test".into()),
+            success: false,
+            exit_code: Some(1),
+            ..Default::default()
+        });
+        let mut other_command = ChatMessage::new("tool", "run_command: ok");
+        other_command.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "run_command".into(),
+            command: Some("ls".into()),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        let history = vec![
+            ChatMessage::new("user", "build the game"),
+            ChatMessage::new("user", "add a sell button"),
+            failed_edit("multi_replace_file_content: error: Discrepancy at replacement index 0"),
+            fixed_edit,
+            failed_test,
+            other_command,
+            ChatMessage::new("user", "looks good"),
+        ];
+        let memory = StructuredSessionMemory::extract_from_history(&history);
+        assert_eq!(memory.current_task.as_deref(), Some("add a sell button"));
+        assert_eq!(
+            memory.failures_and_errors,
+            ["run_command (failed, exit=Some(1))", "error: 1 test failed"]
+        );
+    }
+
+    #[test]
+    fn record_names_a_shared_archive_once_and_lists_commands_first() {
+        let read = |path: &str| {
+            let mut message = ChatMessage::new("tool", "view_file: ok");
+            message.tool_result = Some(crate::app::ToolResultRecord {
+                tool_name: "view_file".into(),
+                success: true,
+                inspection: Some(InspectionResultMetadata {
+                    returned_path: Some(path.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            message
+        };
+        let mut command = ChatMessage::new("tool", "run_command: ok");
+        command.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "run_command".into(),
+            command: Some("bun test".into()),
+            success: true,
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        let history = vec![
+            ChatMessage::new("user", "inspect"),
+            read("src/a.js"),
+            read("src/b.js"),
+            command,
+        ];
+        let archive = "/config/history_archive/shared.jsonl";
+        let mut memory = StructuredSessionMemory::extract_from_history(&history);
+        memory.attach_archive_to_unlinked_reads(archive);
+        let record = memory.format_record(4_000);
+        assert_eq!(record.matches(archive).count(), 1, "{record}");
+        assert!(!record.contains("null"), "{record}");
+        assert!(
+            record.find("Command evidence:") < record.find("Read evidence:"),
+            "{record}"
+        );
+        let mut restored = StructuredSessionMemory::default();
+        restored.merge_from_text(&record);
+        let mut restored_reads = restored.read_evidence.clone();
+        let mut original_reads = memory.read_evidence.clone();
+        restored_reads.sort_by(|left, right| left.path.cmp(&right.path));
+        original_reads.sort_by(|left, right| left.path.cmp(&right.path));
+        assert_eq!(restored_reads, original_reads);
     }
 
     #[test]

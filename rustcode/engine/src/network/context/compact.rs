@@ -489,8 +489,8 @@ async fn force_compact_internal(
     let command_evidence = evidence_memory.format_command_evidence(1_500);
     if !read_evidence.is_empty() || !command_evidence.is_empty() {
         summary.push_str("\n\n");
-        summary.push_str(&read_evidence);
         summary.push_str(&command_evidence);
+        summary.push_str(&read_evidence);
     }
 
     let tail: Vec<ChatMessage> = history[summarize_count..].to_vec();
