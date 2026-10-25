@@ -45,10 +45,16 @@ struct TranscriptRow: View, Equatable {
     /// This row's mark on a turn's pipeline.
     private var node: PipelineNode {
         switch item.content {
-        case .assistant: .said
-        case .thinking: .thought
-        case .tool(let tool): tool.status == .failed ? .failed : .call
-        default: .thought
+        case .assistant: return PipelineNode(symbol: "text.bubble", tint: .primary)
+        case .thinking: return PipelineNode(symbol: "brain", tint: .purple, state: isStreaming ? .running : .done)
+        case .tool(let tool):
+            var node = (fold?.count ?? 1) > 1
+                ? PipelineNode(symbol: "square.stack.3d.up", tint: .gray)
+                : PipelineNode.tool(tool.displayTitle)
+            if tool.status == .failed || (fold?.failed ?? 0) > 0 { node.state = .failed }
+            else if tool.status == .pending || tool.status == .inProgress { node.state = .running }
+            return node
+        default: return PipelineNode(symbol: "photo", tint: .gray)
         }
     }
 
@@ -70,8 +76,8 @@ struct TranscriptRow: View, Equatable {
             AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
                              isExpanded: isExpanded || isCurrentMatch)
         case .thinking(let text):
-            if isNested && !isStreaming {
-                ThoughtLine(text: text)
+            if isNested {
+                ThoughtLine(text: text, isLive: isStreaming)
             } else {
                 ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
             }
@@ -1065,9 +1071,30 @@ struct StoppedTurnRow: View {
     }
 }
 
-/// What a row is on a turn's pipeline, which its node shows.
-enum PipelineNode {
-    case said, call, failed, thought
+/// A step's mark on a turn's pipeline: a symbol for what it is, tinted by
+/// its kind, red when it failed and pulsing while it runs.
+struct PipelineNode: Equatable {
+    enum State { case done, running, failed }
+    var symbol: String
+    var tint: Color
+    var state = State.done
+
+    /// A call's mark, by the kind of tool its title names.
+    static func tool(_ title: String) -> PipelineNode {
+        switch title {
+        case "Read", "List", "Project map": PipelineNode(symbol: "doc.text", tint: .blue)
+        case "Search", "Web search": PipelineNode(symbol: "magnifyingglass", tint: .blue)
+        case "Read URL", "Preview": PipelineNode(symbol: "globe", tint: .teal)
+        case "Edit", "Write", "Delete", "Move", "Copy": PipelineNode(symbol: "pencil", tint: .orange)
+        case "Run", "Git status", "Git diff", "Git add", "Git commit": PipelineNode(symbol: "terminal", tint: .green)
+        case "Skill", "Skills": PipelineNode(symbol: "book.closed", tint: .indigo)
+        case "Plan", "Task", "Finish": PipelineNode(symbol: "checklist", tint: .indigo)
+        case "Remember", "Recall", "Forget": PipelineNode(symbol: "bookmark", tint: .indigo)
+        case "Question": PipelineNode(symbol: "questionmark", tint: .yellow)
+        case "Start agent", "Delegate": PipelineNode(symbol: "person.2", tint: .pink)
+        default: PipelineNode(symbol: "puzzlepiece.extension", tint: .cyan)
+        }
+    }
 }
 
 extension View {
@@ -1081,32 +1108,54 @@ extension View {
                     .padding(.bottom, -18)
                     .padding(.leading, 8.25)
             }
-            .overlay(alignment: .topLeading) { PipelineDot(node: node).padding(.top, 2) }
+            .overlay(alignment: .topLeading) { PipelineDot(node: node).padding(.top, -1) }
     }
 }
 
 private struct PipelineDot: View {
     let node: PipelineNode
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dim = false
+
+    private var color: Color {
+        switch node.state {
+        case .done, .running: node.tint
+        case .failed: .red
+        }
+    }
 
     var body: some View {
         ZStack {
-            Circle().fill(Color(nsColor: .windowBackgroundColor)).frame(width: 13, height: 13)
-            switch node {
-            case .said: Circle().fill(Color.primary.opacity(0.75)).frame(width: 7, height: 7)
-            case .call: Circle().strokeBorder(Color.secondary, lineWidth: 1.5).frame(width: 9, height: 9)
-            case .failed: Circle().strokeBorder(Color.red.opacity(0.85), lineWidth: 1.5).frame(width: 9, height: 9)
-            case .thought: Circle().fill(Color.secondary.opacity(0.45)).frame(width: 5, height: 5)
-            }
+            Circle().fill(Color(nsColor: .windowBackgroundColor))
+            Circle().fill(color.opacity(node.state == .done ? 0.16 : 0.28))
+            Circle().strokeBorder(color.opacity(0.5), lineWidth: 1)
+                .opacity(node.state == .running ? 1 : 0)
+            Image(systemName: node.state == .failed ? "xmark" : node.symbol)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(color.opacity(node.state == .done ? 0.85 : 1))
         }
-        .frame(width: 18, height: 13)
+        .frame(width: 18, height: 18)
+        .opacity(node.state == .running && dim ? 0.45 : 1)
+        .onAppear { pulse() }
+        .onChange(of: node) { pulse() }
         .accessibilityHidden(true)
+    }
+
+    private func pulse() {
+        guard node.state == .running, !reduceMotion else {
+            dim = false
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { dim = true }
     }
 }
 
-/// A thought in a turn's pipeline: its first lines, quiet, where a reasoning
-/// box would have stood.
+/// A thought in a turn's pipeline: one quiet line where a reasoning box
+/// would have stood. While it is written it reads `Thinking · ` and the
+/// heading the model is on.
 private struct ThoughtLine: View {
     let text: String
+    var isLive = false
 
     /// A summary is a run of `**Heading**` lines; the first names what the
     /// model turned to, and the rest stay in the tooltip and Copy.
@@ -1117,12 +1166,20 @@ private struct ThoughtLine: View {
             .filter { !$0.isEmpty }
     }
 
+    /// The `**Heading**` the model wrote last, else its last line.
+    private var current: String? {
+        let headings = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.count > 4 && $0.hasPrefix("**") && $0.hasSuffix("**") }
+        return headings.last.map { $0.replacingOccurrences(of: "**", with: "") } ?? lines.last
+    }
+
     var body: some View {
         let lines = lines
-        Text(lines.first ?? "")
+        let heading = Text((isLive ? current : lines.first) ?? "").italic().foregroundStyle(.tertiary)
+        (isLive ? Text("Thinking · ").foregroundStyle(.secondary) + heading : heading)
             .font(.callout)
-            .italic()
-            .foregroundStyle(.tertiary)
+            .contentTransition(.opacity)
             .lineLimit(1)
             .truncationMode(.tail)
             .help(lines.joined(separator: "\n"))
@@ -1147,7 +1204,7 @@ private struct TurnSummary: View {
                     .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
                     .foregroundStyle(.tertiary)
                     .frame(width: 10)
-                Text("\(fold.calls) tool calls").font(.subheadline.weight(.medium))
+                Text("\(fold.calls) tool calls").font(.subheadline).foregroundStyle(.secondary)
                 if fold.failed > 0 {
                     Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
                 }
@@ -1198,7 +1255,7 @@ private struct ToolRunSummary: View {
             if let call {
                 lone(call)
             } else {
-                Text("\(fold.count) tool calls").font(.subheadline.weight(.medium))
+                Text("\(fold.count) tool calls").font(.subheadline).foregroundStyle(.secondary)
                 if fold.failed > 0 {
                     Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
                 }
@@ -1234,7 +1291,7 @@ private struct ToolRunSummary: View {
 
     @ViewBuilder
     private func lone(_ call: ToolItem) -> some View {
-        Text(call.displayTitle).font(.subheadline.weight(.medium)).lineLimit(1).layoutPriority(1)
+        Text(call.displayTitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
         if call.status == .failed {
             Text("· failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
         }
