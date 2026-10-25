@@ -23,10 +23,10 @@ struct TranscriptRow: View, Equatable {
             if let turnFold {
                 VStack(alignment: .leading, spacing: 12) {
                     TurnSummary(fold: turnFold)
-                    if turnFold.isOpen { content.pipelineStep(node) }
+                    if turnFold.isOpen { content.insideTurn() }
                 }
             } else if isNested {
-                content.pipelineStep(node)
+                content.insideTurn()
             } else {
                 content
             }
@@ -40,22 +40,6 @@ struct TranscriptRow: View, Equatable {
             }
             .padding(isCurrentMatch ? -6 : 0)
             .animation(.snappy(duration: 0.2), value: isCurrentMatch)
-    }
-
-    /// This row's mark on a turn's pipeline.
-    private var node: PipelineNode {
-        switch item.content {
-        case .assistant: return PipelineNode(symbol: "text.bubble", tint: .primary)
-        case .thinking: return PipelineNode(symbol: "brain", tint: .purple, state: isStreaming ? .running : .done)
-        case .tool(let tool):
-            var node = (fold?.count ?? 1) > 1
-                ? PipelineNode(symbol: "square.stack.3d.up", tint: .gray)
-                : PipelineNode.tool(tool.displayTitle)
-            if tool.status == .failed || (fold?.failed ?? 0) > 0 { node.state = .failed }
-            else if tool.status == .pending || tool.status == .inProgress { node.state = .running }
-            return node
-        default: return PipelineNode(symbol: "photo", tint: .gray)
-        }
     }
 
     @ViewBuilder
@@ -76,17 +60,13 @@ struct TranscriptRow: View, Equatable {
             AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
                              isExpanded: isExpanded || isCurrentMatch)
         case .thinking(let text):
-            if isNested {
-                ThoughtLine(text: text, isLive: isStreaming)
-            } else {
-                ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
-            }
+            ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
         case .tool(let tool):
             if let agents {
                 AgentSpawnGroup(spawns: agents)
             } else if let fold {
-                VStack(alignment: .leading, spacing: 18) {
-                    ToolRunSummary(fold: fold, call: fold.count == 1 ? tool : nil)
+                VStack(alignment: .leading, spacing: 12) {
+                    ToolRunSummary(fold: fold)
                     if fold.isOpen, !tool.isBlank { ToolRow(tool: tool) }
                 }
             } else if !tool.isBlank {
@@ -212,10 +192,11 @@ private struct UserBubble: View {
     var isExpanded = false
     @Environment(\.messageActions) private var messageActions
     @Environment(\.findQuery) private var findQuery
+    @State private var isHovered = false
 
     var body: some View {
         FoldingMessage(id: id, text: text, folds: true, isExpanded: isExpanded,
-                       alignment: .trailing, chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
+                       chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
             Group {
                 if text.hasPrefix("/"), findQuery.isEmpty {
                     slashCommandText(text)
@@ -226,6 +207,11 @@ private struct UserBubble: View {
             .textSelection(.enabled)
             .lineSpacing(2)
         }
+            .onHover { isHovered = $0 }
+            .overlay(alignment: .topTrailing) {
+                HoverCopy(help: "Copy message", isShown: isHovered) { Clipboard.copy(text) }
+                    .padding(6)
+            }
             .messageMenu { [text, original, id, messageActions] in
                 var items = [MessageMenuItem(title: "Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }]
                 if let actions = messageActions {
@@ -237,6 +223,21 @@ private struct UserBubble: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 80)
+    }
+}
+
+/// Copy, shown over a message's top-right corner while the pointer is on it.
+private struct HoverCopy: View {
+    let help: String
+    let isShown: Bool
+    let action: () -> Void
+
+    var body: some View {
+        CopyButton(help: help, action: action)
+            .background(.regularMaterial, in: .rect(cornerRadius: 7))
+            .opacity(isShown ? 1 : 0)
+            .allowsHitTesting(isShown)
+            .animation(.easeOut(duration: 0.12), value: isShown)
     }
 }
 
@@ -302,15 +303,11 @@ private struct AssistantMessage: View {
             if !isStreaming, let turn { footer(turn) }
         }
         .onHover { isHovered = $0 }
-        .overlay(alignment: .bottomTrailing) {
-            // Other replies keep Copy out of the way until the pointer is on
-            // them; it floats over the reply, so nothing moves when it shows.
-            if !isStreaming, turn == nil {
-                CopyButton(help: "Copy reply") { Clipboard.copy(AssistantSummary.split(text).prose) }
-                    .background(.regularMaterial, in: .rect(cornerRadius: 7))
-                    .offset(y: 8)
-                    .opacity(isHovered ? 1 : 0)
-                    .animation(.easeOut(duration: 0.12), value: isHovered)
+        .overlay(alignment: .topTrailing) {
+            // Out of the way until the pointer is on the reply; it floats
+            // over it, so nothing moves when it shows.
+            if !isStreaming {
+                HoverCopy(help: "Copy reply", isShown: isHovered) { Clipboard.copy(AssistantSummary.split(text).prose) }
             }
         }
         .messageMenu { [text, messageActions] in
@@ -331,8 +328,6 @@ private struct AssistantMessage: View {
     /// last reply.
     private func footer(_ turn: TurnTiming) -> some View {
         HStack(spacing: 6) {
-            CopyButton(help: "Copy reply") { Clipboard.copy(AssistantSummary.split(text).prose) }
-                .padding(.leading, -8)
             Text(turn.label())
                 .font(.caption)
                 .monospacedDigit()
@@ -401,7 +396,7 @@ private struct ThinkingBlock: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Label(title, systemImage: "brain")
+                Text(title)
                     .contentTransition(.opacity)
                 if isLive { ProgressView().controlSize(.mini) }
             }
@@ -877,27 +872,60 @@ private struct QuietDisclosureStyle: DisclosureGroupStyle {
     }
 }
 
-/// Shown while a turn runs and the agent has not started writing yet.
+/// The one live line under a running turn: what it is doing now, such as
+/// `Running npm test` or the heading of the thought it is writing, and how
+/// long the turn has run, with a light sweeping across it. A new activity
+/// fades in over the last.
 struct WorkingIndicator: View {
-    /// When the turn began, for its clock: "Working… 00:12".
+    /// When the turn began, for its clock.
     var startedAt: Date?
+    var activity: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Group {
-                if let startedAt {
-                    TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                        Text("Working… " + TurnTiming.clock(context.date.timeIntervalSince(startedAt)))
-                            .monospacedDigit()
-                    }
-                } else {
-                    Text("Working…")
+        HStack(spacing: 6) {
+            Text(activity ?? "Working")
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .contentTransition(.opacity)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: activity)
+            if let startedAt {
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Text("· " + TurnTiming.clock(context.date.timeIntervalSince(startedAt)))
+                        .monospacedDigit()
                 }
             }
-            .font(.callout)
-            .foregroundStyle(.secondary)
         }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .modifier(Shimmer(isOn: !reduceMotion))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A band of light sweeping left to right across the content, as a live
+/// status line shows it is still working.
+private struct Shimmer: ViewModifier {
+    let isOn: Bool
+    @State private var phase = -1.0
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if isOn {
+                    GeometryReader { geometry in
+                        LinearGradient(colors: [.clear, Color.primary.opacity(0.55), .clear],
+                                       startPoint: .leading, endPoint: .trailing)
+                            .frame(width: geometry.size.width * 0.35)
+                            .offset(x: phase * geometry.size.width)
+                    }
+                    .mask(content)
+                    .allowsHitTesting(false)
+                }
+            }
+            .onAppear {
+                withAnimation(.linear(duration: 1.8).repeatForever(autoreverses: false)) { phase = 1 }
+            }
     }
 }
 
@@ -948,7 +976,6 @@ struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
     /// This kind of message folds when long.
     let folds: Bool
     let isExpanded: Bool
-    var alignment: HorizontalAlignment = .leading
     /// What goes around the text, such as a bubble, and how much taller it is.
     let chrome: Chrome
     var chromeHeight: Double = 0
@@ -963,10 +990,16 @@ struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
             ProposedHeight(height: MessageCollapse.foldHeight(lineHeight: lineHeight) + chromeHeight) {
                 ViewThatFits(in: .vertical) {
                     whole
-                    VStack(alignment: alignment, spacing: 0) {
-                        if isExpanded { whole } else { folded(lineHeight) }
-                        control(toggle)
+                    // The control inside the chrome, at its bottom right.
+                    VStack(alignment: .leading, spacing: 0) {
+                        if isExpanded {
+                            content().fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            folded(lineHeight)
+                        }
+                        control(toggle).frame(maxWidth: .infinity, alignment: .trailing)
                     }
+                    .modifier(chrome)
                 }
             }
         } else {
@@ -990,7 +1023,6 @@ struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
                         .frame(height: lineHeight * 2)
                 }
             }
-            .modifier(chrome)
     }
 
     private func control(_ toggle: MessageToggle) -> some View {
@@ -1007,7 +1039,7 @@ struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
         }
         .buttonStyle(QuietPressStyle())
         .hoverHighlight(cornerRadius: 7)
-        .padding(alignment == .leading ? .leading : .trailing, alignment == .leading ? -8 : 0)
+        .padding(.trailing, -8)
         .help(isExpanded ? "Fold this message" : "Show the whole message")
         .accessibilityHint(isExpanded ? "Folds the message to its first lines" : "Shows the whole message")
     }
@@ -1071,249 +1103,92 @@ struct StoppedTurnRow: View {
     }
 }
 
-/// A step's mark on a turn's pipeline: a symbol for what it is, tinted by
-/// its kind, red when it failed and pulsing while it runs.
-struct PipelineNode: Equatable {
-    enum State { case done, running, failed }
-    var symbol: String
-    var tint: Color
-    var state = State.done
-
-    /// A call's mark, by the kind of tool its title names.
-    static func tool(_ title: String) -> PipelineNode {
-        switch title {
-        case "Read", "List", "Project map": PipelineNode(symbol: "doc.text", tint: .blue)
-        case "Search", "Web search": PipelineNode(symbol: "magnifyingglass", tint: .blue)
-        case "Read URL", "Preview": PipelineNode(symbol: "globe", tint: .teal)
-        case "Edit", "Write", "Delete", "Move", "Copy": PipelineNode(symbol: "pencil", tint: .orange)
-        case "Run", "Git status", "Git diff", "Git add", "Git commit": PipelineNode(symbol: "terminal", tint: .green)
-        case "Skill", "Skills": PipelineNode(symbol: "book.closed", tint: .indigo)
-        case "Plan", "Task", "Finish": PipelineNode(symbol: "checklist", tint: .indigo)
-        case "Remember", "Recall", "Forget": PipelineNode(symbol: "bookmark", tint: .indigo)
-        case "Question": PipelineNode(symbol: "questionmark", tint: .yellow)
-        case "Start agent", "Delegate": PipelineNode(symbol: "person.2", tint: .pink)
-        default: PipelineNode(symbol: "puzzlepiece.extension", tint: .cyan)
-        }
-    }
-}
-
 extension View {
-    /// A row on a turn's pipeline: a rail down the left through every step,
-    /// with a node where each one starts.
-    func pipelineStep(_ node: PipelineNode) -> some View {
-        padding(.leading, 30)
-            .background(alignment: .topLeading) {
-                // Through the gap to the next row too, so the rail is unbroken.
-                Rectangle().fill(Color.secondary.opacity(0.22)).frame(width: 1.5)
+    /// A row inside an opened turn: indented, with a quiet line down its
+    /// left through to the next row.
+    func insideTurn() -> some View {
+        padding(.leading, 16)
+            .background(alignment: .leading) {
+                Rectangle().fill(.quaternary).frame(width: 1)
                     .padding(.bottom, -18)
-                    .padding(.leading, 8.25)
             }
-            .overlay(alignment: .topLeading) { PipelineDot(node: node).padding(.top, -1) }
     }
 }
 
-private struct PipelineDot: View {
-    let node: PipelineNode
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var dim = false
-
-    private var color: Color {
-        switch node.state {
-        case .done, .running: node.tint
-        case .failed: .red
-        }
-    }
-
-    var body: some View {
-        ZStack {
-            Circle().fill(Color(nsColor: .windowBackgroundColor))
-            Circle().fill(color.opacity(node.state == .done ? 0.16 : 0.28))
-            Circle().strokeBorder(color.opacity(0.5), lineWidth: 1)
-                .opacity(node.state == .running ? 1 : 0)
-            Image(systemName: node.state == .failed ? "xmark" : node.symbol)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(color.opacity(node.state == .done ? 0.85 : 1))
-        }
-        .frame(width: 18, height: 18)
-        .opacity(node.state == .running && dim ? 0.45 : 1)
-        .onAppear { pulse() }
-        .onChange(of: node) { pulse() }
-        .accessibilityHidden(true)
-    }
-
-    private func pulse() {
-        guard node.state == .running, !reduceMotion else {
-            dim = false
-            return
-        }
-        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { dim = true }
-    }
-}
-
-/// A thought in a turn's pipeline: one quiet line where a reasoning box
-/// would have stood. While it is written it reads `Thinking · ` and the
-/// heading the model is on.
-private struct ThoughtLine: View {
+/// A quiet row: what it says, then a small chevron that turns as it opens.
+private struct ActivityRow<Extra: View>: View {
     let text: String
-    var isLive = false
-
-    /// A summary is a run of `**Heading**` lines; the first names what the
-    /// model turned to, and the rest stay in the tooltip and Copy.
-    private var lines: [String] {
-        text.replacingOccurrences(of: "**", with: "")
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-    }
-
-    /// The `**Heading**` the model wrote last, else its last line.
-    private var current: String? {
-        let headings = text.split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { $0.count > 4 && $0.hasPrefix("**") && $0.hasSuffix("**") }
-        return headings.last.map { $0.replacingOccurrences(of: "**", with: "") } ?? lines.last
-    }
+    let isOpen: Bool
+    let help: String
+    let toggle: () -> Void
+    @ViewBuilder var extra: () -> Extra
 
     var body: some View {
-        let lines = lines
-        let heading = Text((isLive ? current : lines.first) ?? "").italic().foregroundStyle(.tertiary)
-        (isLive ? Text("Thinking · ").foregroundStyle(.secondary) + heading : heading)
-            .font(.callout)
-            .contentTransition(.opacity)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .help(lines.joined(separator: "\n"))
-            .contextMenu {
-                Button("Copy Thinking", systemImage: "doc.on.doc") { Clipboard.copy(text) }
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Text(text)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                extra()
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
             }
-            .accessibilityLabel(lines.joined(separator: ", "))
+            .font(.callout)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .hoverHighlight(cornerRadius: 6, padding: 4)
+        .pointingHandCursor()
+        .help(help)
+        .animation(.snappy(duration: 0.15), value: isOpen)
     }
 }
 
-/// The row a finished turn's work folds into: how many calls in how many
-/// steps, how many failed, and the tools used. A click lists the steps.
+private struct FailedCount: View {
+    let count: Int
+    var body: some View {
+        Text(count == 1 ? "· failed" : "· \(count) failed").foregroundStyle(.red.opacity(0.85))
+    }
+}
+
+/// The row a finished turn's work folds into: `Worked for 1m 29s`. A click
+/// shows the work as it happened.
 private struct TurnSummary: View {
     let fold: TurnFold
     @Environment(\.toggleToolRun) private var toggle
 
     var body: some View {
-        Button { toggle(fold.key) } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 10)
-                Text("\(fold.calls) tool calls").font(.subheadline).foregroundStyle(.secondary)
-                if fold.failed > 0 {
-                    Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
-                }
-                if let label = fold.label {
-                    Text("· \(label)")
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Spacer(minLength: 0)
-            }
-            .contentShape(.rect)
+        ActivityRow(text: fold.title, isOpen: fold.isOpen,
+                    help: fold.isOpen ? "Hide the work" : "Show the work") {
+            toggle(fold.key)
+        } extra: {
+            if fold.failed > 0 { FailedCount(count: fold.failed) }
         }
-        .buttonStyle(.plain)
-        .hoverHighlight(cornerRadius: 6, padding: 4)
-        .help(fold.isOpen ? "Fold this turn's steps" : "Show this turn's steps")
-        .animation(.snappy(duration: 0.15), value: fold.isOpen)
     }
 }
 
-/// The row a folded run of tool calls shows: how many, how many failed, and
-/// what they were. A click opens the run to its cards, and folds it again.
-/// A lone call names itself, and an edit its file and lines, without a count.
+/// The row a run of tool calls shows: what they did, in words. A click opens
+/// the run to its calls, and folds it again.
 private struct ToolRunSummary: View {
     let fold: ToolRunFold
-    var call: ToolItem? = nil
     @Environment(\.toggleToolRun) private var toggle
     @Environment(\.projectRoot) private var projectRoot
 
     var body: some View {
-        Button { toggle(fold.run) } label: {
-            header.contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .hoverHighlight(cornerRadius: 6, padding: 4)
-        .help(fold.isOpen ? "Fold these tool calls" : "Show these tool calls")
-        .animation(.snappy(duration: 0.15), value: fold.isOpen)
-    }
-
-    private var header: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
-                .foregroundStyle(.tertiary)
-                .frame(width: 10)
-            if let call {
-                lone(call)
-            } else {
-                Text("\(fold.count) tool calls").font(.subheadline).foregroundStyle(.secondary)
-                if fold.failed > 0 {
-                    Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
-                }
-                if let label = fold.label {
-                    Text("· \(label)")
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                if !fold.edited.isEmpty {
-                    Text(editedFiles)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                        .help(fold.edited.map { ProjectPath.relative($0, to: projectRoot) }.joined(separator: "\n"))
-                }
-                if let lines = fold.lines {
-                    DiffCount(added: lines.added, removed: lines.removed).layoutPriority(1)
-                }
-            }
-            Spacer(minLength: 0)
+        ActivityRow(text: fold.label, isOpen: fold.isOpen, help: help) {
+            toggle(fold.run)
+        } extra: {
+            if fold.failed > 0 { FailedCount(count: fold.failed) }
+            if let lines = fold.lines { DiffCount(added: lines.added, removed: lines.removed) }
         }
     }
 
-    /// `game.js, main.jsx +2`: the first files by name, then how many more.
-    private var editedFiles: String {
-        let names = fold.edited.prefix(2).map { URL(fileURLWithPath: $0).lastPathComponent }
-        let rest = fold.edited.count - names.count
-        return names.joined(separator: ", ") + (rest > 0 ? " +\(rest)" : "")
-    }
-
-    @ViewBuilder
-    private func lone(_ call: ToolItem) -> some View {
-        Text(call.displayTitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
-        if call.status == .failed {
-            Text("· failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
-        }
-        if let file = call.changes.count == 1 ? call.changes.first?.displayPath(relativeTo: projectRoot) : nil {
-            Text(file)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.head)
-                .layoutPriority(1)
-        }
-        if !call.changes.isEmpty {
-            DiffCount(added: call.changes.reduce(0) { $0 + $1.added },
-                      removed: call.changes.reduce(0) { $0 + $1.removed })
-        }
-        if let summary = call.summary ?? (call.changes.isEmpty ? call.detail : nil) {
-            Text("· \(summary)")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
+    private var help: String {
+        guard fold.edited.isEmpty else { return fold.edited.map { ProjectPath.relative($0, to: projectRoot) }.joined(separator: "\n") }
+        return fold.isOpen ? "Hide these calls" : "Show these calls"
     }
 }
 

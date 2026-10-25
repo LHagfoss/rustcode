@@ -22,13 +22,10 @@ final class TimelineRailState: ObservableObject {
 /// words. Hidden when the gutter is too narrow for it.
 struct TimelineRail: View {
     @ObservedObject var state: TimelineRailState
-    /// With the sidebar hidden the gutter reaches the window's edge, and the
-    /// rail sits against it rather than adrift in the middle of the gutter.
-    var hugsEdge = false
     let jump: (Int) -> Void
 
     static let width: Double = 28
-    /// From the window's edge when the rail hugs it.
+    /// From the gutter's left edge, where the rail always sits.
     static let edgeInset: Double = 10
     /// The chat's column and the padding either side of it (`ChatView`).
     static let column: Double = 760
@@ -42,9 +39,7 @@ struct TimelineRail: View {
             if TimelineLayout.shows(width: width, column: Self.column, padding: Self.padding, turns: state.turnCount) {
                 let gutter = TimelineLayout.gutter(width: width, column: Self.column, padding: Self.padding)
                 rail(height: geometry.size.height)
-                    // Centred in the gutter beside the sidebar, at the
-                    // window's edge without it.
-                    .offset(x: hugsEdge ? min(Self.edgeInset, (gutter - Self.width) / 2) : (gutter - Self.width) / 2)
+                    .offset(x: min(Self.edgeInset, (gutter - Self.width) / 2))
                     .transition(.opacity)
             }
         }
