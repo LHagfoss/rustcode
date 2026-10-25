@@ -80,7 +80,7 @@ public struct ToolRunFold: Equatable, Sendable {
             if counts[call.displayTitle] == nil { order.append(call.displayTitle) }
             counts[call.displayTitle, default: 0] += 1
         }
-        let shown = order.prefix(3).map { title in
+        let shown = order.prefix(order.count == 4 ? 4 : 3).map { title in
             counts[title, default: 1] > 1 ? "\(title) ×\(counts[title, default: 1])" : title
         }
         let rest = order.count - shown.count
