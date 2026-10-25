@@ -1,3 +1,8 @@
+## [v0.95.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.95.1) - 2026-10-25
+
+### Fixes
+- macOS: Check for Updates works again; it no longer hits GitHub's API rate limit. (#2406)
+- TUI: the effort picker offers every level the model lists, such as xhigh and max. (#2405)
 ## [v0.95.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.95.0) - 2026-10-25
 
 ### Features
