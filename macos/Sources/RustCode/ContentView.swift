@@ -830,13 +830,7 @@ private struct ChatView: View {
                         // Up for the whole turn, also while a reply streams or the
                         // model plans its next step, so a live turn always says so.
                         if isReplyStreaming {
-                            WorkingIndicator(startedAt: chat.transcript.turnStartedAt,
-                                             statusId: rows.folding.liveStatus,
-                                             status: rows.folding.liveStatus.flatMap { id in
-                                                 transcript.items.last { $0.id == id }.flatMap { item in
-                                                     if case .assistant(let text) = item.content { text } else { nil }
-                                                 }
-                                             })
+                            WorkingIndicator(startedAt: chat.transcript.turnStartedAt, activity: rows.folding.activity)
                                 .reportsChatRow(Self.workingRow, to: scroll)
                         } else if let stoppedReason {
                             StoppedTurnRow(reason: stoppedReason) {
