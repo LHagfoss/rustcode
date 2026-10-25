@@ -4,7 +4,7 @@ import Foundation
 /// `verbosity` setting does.
 public enum ToolVerbosity: String, CaseIterable, Identifiable, Sendable {
     /// Calls fold into one `N tool calls` row, a lone call too; while tools
-    /// run, the turn shows every step. A finished turn folds its work into
+    /// run, the turn shows what the model last said. A finished turn folds its work into
     /// one row, which opens to its steps.
     case low
     /// Every call is its own closed card.
@@ -151,6 +151,9 @@ public struct ToolFolding: Equatable, Sendable {
     /// Agents started together, by the id of their first spawn: that row
     /// draws them all, at every verbosity, and the others are hidden (#2327).
     public private(set) var agentGroups: [Int: [Int]] = [:]
+    /// What the model last said about the running turn's work, shown in
+    /// place of its steps while it runs.
+    public private(set) var liveStatus: Int?
 
     public init() {}
 
@@ -180,7 +183,7 @@ public struct ToolFolding: Equatable, Sendable {
     /// verbosities a finished turn reads as what the model said first, one
     /// row for its work, and its answer; opened, that row lists the turn's
     /// steps, each what the model said and its folded calls. A running turn
-    /// shows every step as it happens, nothing folded.
+    /// shows only what the model last said about its work.
     public init(items: [TranscriptItem], verbosity: ToolVerbosity, open: Set<Int>, running: Bool) {
         let thoughts = verbosity.folds ? Self.laterThoughts(in: items, running: running) : []
         hidden = thoughts
@@ -241,7 +244,7 @@ public struct ToolFolding: Equatable, Sendable {
         // pipeline, and inside its row when it is folded.
         let workThoughts = work.map(\.id).filter(thoughts.contains)
         if live {
-            foldLiveTurn(turn, start: start, verbosity: verbosity, open: open, thoughts: thoughts)
+            foldLiveTurn(turn, start: start)
             return
         }
         if calls.count == 1 {
@@ -272,23 +275,24 @@ public struct ToolFolding: Equatable, Sendable {
         }
     }
 
-    /// A running turn shows its whole pipeline as it happens: every call,
-    /// every thought and everything the model says, each its own step. A
-    /// finished call is one line; a running one, or an edit at `edits`,
-    /// keeps its card. It folds into the turn's row once the turn ends.
-    private mutating func foldLiveTurn(_ turn: ArraySlice<TranscriptItem>, start: Int, verbosity: ToolVerbosity, open: Set<Int>,
-                                       thoughts: Set<Int>) {
-        let work = turn[start...]
-        nested.formUnion(work.map(\.id))
-        hidden.subtract(work.map(\.id).filter(thoughts.contains))
-        for item in work where Self.isCall(item) {
-            guard case .tool(let tool) = item.content, tool.status?.isTerminal ?? true,
-                  !(verbosity.editsOpen && !tool.changes.isEmpty) else { continue }
-            let calls = [tool]
-            folds[item.id] = ToolRunFold(run: item.id, count: 1, failed: tool.status == .failed ? 1 : 0,
-                                         isOpen: open.contains(item.id), label: ToolRunFold.label(for: calls),
-                                         edited: ToolRunFold.edited(by: calls), lines: ToolRunFold.lines(of: calls))
-        }
+    /// A running turn shows only what the model last said about its work,
+    /// as `liveStatus` under the turn's spinner: its calls, its thoughts and
+    /// what it said before are hidden until the turn ends and folds into its
+    /// row, which opens to every step. What the model writes after its last
+    /// call streams as usual, as it may be the answer.
+    private mutating func foldLiveTurn(_ turn: ArraySlice<TranscriptItem>, start: Int) {
+        guard let lastCall = turn.lastIndex(where: Self.isCall) else { return }
+        let isThought = { (item: TranscriptItem) in if case .thinking = item.content { true } else { false } }
+        let isSaid = { (item: TranscriptItem) in if case .assistant = item.content { true } else { false } }
+        let done = turn[start...lastCall].filter { !Self.isAgentSpawn($0) }
+        hidden.formUnion(done.map(\.id))
+        let after = turn[(lastCall + 1)...]
+        hidden.formUnion(after.filter(isThought).map(\.id))
+        if !after.contains(where: isSaid) { liveStatus = done.last(where: isSaid)?.id }
+    }
+
+    private static func isAgentSpawn(_ item: TranscriptItem) -> Bool {
+        if case .tool(let tool) = item.content { tool.isAgentSpawn } else { false }
     }
 
     /// Fold `work` into steps: each run of calls between two things the model

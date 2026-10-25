@@ -74,7 +74,7 @@ struct TranscriptRow: View, Equatable {
                 .padding(.bottom, 10)
         case .assistant(let text):
             AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
-                             isExpanded: isExpanded || isCurrentMatch)
+                             isExpanded: isExpanded || isCurrentMatch, hasBubble: !isNested && turnFold == nil)
         case .thinking(let text):
             if isNested {
                 ThoughtLine(text: text, isLive: isStreaming)
@@ -253,6 +253,23 @@ private struct BubbleChrome: ViewModifier {
     }
 }
 
+/// A reply's bubble: lighter than the user's, so the two read apart.
+private struct ReplyChrome: ViewModifier {
+    let isOn: Bool
+
+    func body(content: Content) -> some View {
+        if isOn {
+            content
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.fill.quaternary, in: .rect(cornerRadius: 18))
+        } else {
+            content
+        }
+    }
+}
+
 /// Agent text, with `<think>` sections the engine leaves inline folded away.
 private struct AssistantMessage: View {
     let id: Int
@@ -261,6 +278,9 @@ private struct AssistantMessage: View {
     /// On a turn's last reply: how long the turn took and when it ended.
     var turn: TurnTiming?
     var isExpanded = false
+    /// A reply on its own sits in a light bubble; a step inside an opened
+    /// turn stays plain text on the pipeline.
+    var hasBubble = true
     @Environment(\.messageActions) private var messageActions
     @State private var isHovered = false
 
@@ -283,8 +303,8 @@ private struct AssistantMessage: View {
     var body: some View {
         let parsed = parsed
         VStack(alignment: .leading, spacing: 10) {
-            FoldingMessage(id: id, text: text, folds: false,
-                           isExpanded: isExpanded) {
+            FoldingMessage(id: id, text: text, folds: false, isExpanded: isExpanded,
+                           chrome: ReplyChrome(isOn: hasBubble)) {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
                         let isLast = index == parsed.blocks.count - 1
@@ -877,27 +897,48 @@ private struct QuietDisclosureStyle: DisclosureGroupStyle {
     }
 }
 
-/// Shown while a turn runs and the agent has not started writing yet.
+/// Shown while a turn runs: what the model last said about its work, in
+/// place of its steps, over the spinner and the turn's clock. A new step's
+/// words slide in as the last ones fade.
 struct WorkingIndicator: View {
     /// When the turn began, for its clock: "Working… 00:12".
     var startedAt: Date?
+    /// The item the status is, so a new one transitions in.
+    var statusId: Int?
+    var status: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Group {
-                if let startedAt {
-                    TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                        Text("Working… " + TurnTiming.clock(context.date.timeIntervalSince(startedAt)))
-                            .monospacedDigit()
-                    }
-                } else {
-                    Text("Working…")
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            if let status, let statusId {
+                Text(MarkdownText.inline(status))
+                    .lineSpacing(2)
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .id(statusId)
+                    .transition(reduceMotion ? .opacity : .asymmetric(
+                        insertion: .opacity.combined(with: .offset(y: 8)),
+                        removal: .opacity.combined(with: .offset(y: -8))))
             }
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Group {
+                    if let startedAt {
+                        TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                            Text("Working… " + TurnTiming.clock(context.date.timeIntervalSince(startedAt)))
+                                .monospacedDigit()
+                        }
+                    } else {
+                        Text("Working…")
+                    }
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
         }
+        .clipped()
+        .animation(.smooth(duration: 0.35), value: statusId)
     }
 }
 

@@ -113,25 +113,26 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertTrue(open.isNested(list[5].id), "opened, they are a step again")
     }
 
-    // A running turn shows its whole pipeline: every call, thought and
-    // thing said is its own step, with no row folding them.
-    func testWhileRunningEveryStepShows() {
-        let list = items("usrtrstts")
+    // A running turn shows only what the model last said about its work:
+    // its calls, thoughts and earlier words wait for the turn's row.
+    func testWhileRunningOnlyTheLastWordsShow() {
+        let list = items("usrtrstt")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
         XCTAssertTrue(folding.turns.isEmpty)
-        XCTAssertTrue(folding.hidden.isEmpty)
-        for index in [3, 6, 7] { XCTAssertEqual(folding.fold(for: list[index].id)?.count, 1, "each call is one line") }
-        XCTAssertEqual(folding.nested, Set((3...8).map { list[$0].id }))
-        XCTAssertFalse(folding.isNested(list[1].id), "the first words are the turn's own")
-        let done = ToolFolding(items: list, verbosity: .low, open: [], running: false)
-        XCTAssertNotNil(done.turn(for: list[3].id), "it folds once the turn ends")
-        // A call still running keeps its card, with its live output.
-        var running = list
-        if case .tool(var tool) = running[7].content {
-            tool.status = .inProgress
-            running[7].content = .tool(tool)
-        }
-        XCTAssertNil(ToolFolding(items: running, verbosity: .low, open: [], running: true).fold(for: list[7].id))
+        XCTAssertEqual(folding.hidden, Set((3...7).map { list[$0].id }))
+        XCTAssertEqual(folding.liveStatus, list[5].id)
+        XCTAssertFalse(folding.hidden.contains(list[1].id), "the first words are the turn's own")
+        // A thought after the last call waits too.
+        let thinking = items("usrtrsttr")
+        XCTAssertTrue(ToolFolding(items: thinking, verbosity: .low, open: [], running: true).hidden.contains(thinking[8].id))
+        // What it writes after its last call streams as usual, maybe the answer.
+        let writing = items("usrtrstts")
+        let live = ToolFolding(items: writing, verbosity: .low, open: [], running: true)
+        XCTAssertNil(live.liveStatus)
+        XCTAssertFalse(live.hidden.contains(writing[8].id))
+        let done = ToolFolding(items: writing, verbosity: .low, open: [], running: false)
+        XCTAssertNotNil(done.turn(for: writing[3].id), "it folds once the turn ends")
+        XCTAssertNil(done.liveStatus)
     }
 
     // The screenshots a preview took come back as a message the engine adds,
@@ -192,7 +193,7 @@ final class ToolFoldingTests: XCTestCase {
     func testEditsAreTheirOwnStepAtEdits() {
         let list = items("utetes")
         let live = ToolFolding(items: Array(list.prefix(5)), verbosity: .edits, open: [], running: true)
-        XCTAssertFalse(live.hidden.contains(list[4].id), "the current edit shows")
+        XCTAssertTrue(live.hidden.contains(list[4].id), "the edit waits for the turn's row")
         let done = ToolFolding(items: list, verbosity: .edits, open: [], running: false)
         XCTAssertEqual(done.turn(for: list[1].id)?.calls, 4)
         XCTAssertEqual(done.turn(for: list[1].id)?.steps, 4)
@@ -229,7 +230,8 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertFalse(low.hidden.contains(list[7].id), "the agents after the answer show")
         let live = ToolFolding(items: Array(list.prefix(3)), verbosity: .low, open: [], running: true)
         XCTAssertEqual(live.agents(for: list[2].id), [list[2].id])
-        XCTAssertTrue(live.hidden.isEmpty, "agents started now show")
+        XCTAssertFalse(live.hidden.contains(list[2].id), "agents started now show")
+        XCTAssertTrue(live.hidden.contains(list[0].id))
         XCTAssertNil(live.turn(for: list[0].id))
     }
 
@@ -247,10 +249,10 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertEqual(folding.turn(for: list[2].id)?.steps, 1)
     }
 
-    func testTheLiveThoughtShowsAndHighShowsEveryThought() {
+    func testTheLiveThoughtWaitsAndHighShowsEveryThought() {
         let list = items("urtsr")
         let live = ToolFolding(items: list, verbosity: .low, open: [], running: true)
-        XCTAssertFalse(live.hidden.contains(list[4].id))
+        XCTAssertTrue(live.hidden.contains(list[4].id))
         let done = ToolFolding(items: list, verbosity: .low, open: [], running: false)
         XCTAssertTrue(done.hidden.contains(list[4].id))
         let high = ToolFolding(items: list, verbosity: .high, open: [], running: false)
