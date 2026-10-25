@@ -678,8 +678,8 @@ private struct FileChangeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                if showsHeader {
+            if showsHeader {
+                HStack(spacing: 8) {
                     Image(systemName: change.isNewFile ? "doc.badge.plus" : "doc.text")
                         .foregroundStyle(.secondary)
                     Text(change.displayPath(relativeTo: projectRoot))
@@ -687,13 +687,21 @@ private struct FileChangeView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     DiffCount(added: change.added, removed: change.removed)
+                    Spacer(minLength: 8)
+                    FileActions(path: change.path).buttons
                 }
-                Spacer(minLength: 8)
-                FileActions(path: change.path).buttons
             }
             diff(Array(visibleRows))
             .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
             .clipShape(.rect(cornerRadius: 8))
+            .overlay(alignment: .topTrailing) {
+                if !showsHeader {
+                    FileActions(path: change.path).buttons
+                        .padding(2)
+                        .background(.regularMaterial, in: .rect(cornerRadius: 6))
+                        .padding(4)
+                }
+            }
             footer
         }
     }
