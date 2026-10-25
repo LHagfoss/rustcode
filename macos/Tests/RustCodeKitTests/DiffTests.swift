@@ -144,4 +144,12 @@ final class DiffTests: XCTestCase {
         XCTAssertEqual(change.gutterDigits, 3)
         XCTAssertEqual(gutters(change), [" 99", "120"])
     }
+
+    func testAPathInsideTheProjectDropsItsPrefixAndOneOutsideStaysWhole() {
+        XCTAssertEqual(ProjectPath.relative("/Users/a/code/src/game.js", to: "/Users/a/code"), "src/game.js")
+        XCTAssertEqual(ProjectPath.relative("/Users/a/code/src/game.js", to: "/Users/a/code/"), "src/game.js")
+        XCTAssertEqual(ProjectPath.relative("/Users/a/codex/game.js", to: "/Users/a/code"), "/Users/a/codex/game.js")
+        XCTAssertEqual(ProjectPath.relative("/etc/hosts", to: "/Users/a/code"), "/etc/hosts")
+        XCTAssertEqual(ProjectPath.relative("/etc/hosts", to: nil), "/etc/hosts")
+    }
 }

@@ -69,6 +69,35 @@ public struct ToolRunFold: Equatable, Sendable {
     /// What the run did, after its count: the tools it used, or what a lone
     /// call said it does.
     public var label: String? = nil
+    /// The files the run's edits changed, each once in the order first edited.
+    public var edited: [String] = []
+    /// The lines those edits added and removed, when every edit carries its diff.
+    public var lines: LineCounts? = nil
+
+    public struct LineCounts: Equatable, Sendable {
+        public var added: Int
+        public var removed: Int
+    }
+
+    static func edited(by calls: some Collection<ToolItem>) -> [String] {
+        var paths: [String] = []
+        for change in calls.flatMap(\.changes) where !paths.contains(change.path) {
+            paths.append(change.path)
+        }
+        return paths
+    }
+
+    /// Nil when a finished call of an editing tool came back without a diff,
+    /// so a total would leave its lines out.
+    static func lines(of calls: some Collection<ToolItem>) -> LineCounts? {
+        let editing = Set(calls.filter { !$0.changes.isEmpty }.map(\.title))
+        guard !editing.isEmpty else { return nil }
+        let missing = calls.contains { editing.contains($0.title) && $0.changes.isEmpty && $0.status != .failed }
+        guard !missing else { return nil }
+        let changes = calls.flatMap(\.changes)
+        return LineCounts(added: changes.reduce(0) { $0 + $1.added }, removed: changes.reduce(0) { $0 + $1.removed })
+    }
+
     /// `Web search ×3, Fetch`: each tool once, in the order first used.
     static func label(for calls: some Collection<ToolItem>) -> String? {
         if calls.count == 1, let call = calls.first {
@@ -309,7 +338,8 @@ public struct ToolFolding: Equatable, Sendable {
             let calls = run.prefix(count)
             folds[first] = ToolRunFold(run: first, count: count,
                                        failed: calls.filter { $0.status == .failed }.count,
-                                       isOpen: isOpen, label: ToolRunFold.label(for: calls))
+                                       isOpen: isOpen, label: ToolRunFold.label(for: calls),
+                                       edited: ToolRunFold.edited(by: calls), lines: ToolRunFold.lines(of: calls))
             if !isOpen { hidden.formUnion(ids.prefix(count).dropFirst()) }
         }
         for item in work where !thoughts.contains(item.id) {
