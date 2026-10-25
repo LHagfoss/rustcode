@@ -36,7 +36,14 @@ final class ToolFoldingTests: XCTestCase {
         let calls = transcript.items.compactMap { item -> ToolItem? in
             if case .tool(let tool) = item.content { tool } else { nil }
         }
-        XCTAssertEqual(ToolRunFold.label(for: calls), "Web search ×2, Fetch url, Read, 1 more")
+        XCTAssertEqual(ToolRunFold.label(for: calls), "Web search ×2, Fetch url, Read, Search")
+        XCTAssertEqual(ToolRunFold.label(for: calls.prefix(4)), "Web search ×2, Fetch url, Read")
+        transcript.apply(.toolCall(id: "c5", title: "run_command", kind: nil, status: .completed, input: nil))
+        transcript.apply(.toolCall(id: "c6", title: "plan", kind: nil, status: .completed, input: nil))
+        let more = transcript.items.compactMap { item -> ToolItem? in
+            if case .tool(let tool) = item.content { tool } else { nil }
+        }
+        XCTAssertEqual(ToolRunFold.label(for: more), "Web search ×2, Fetch url, Read, 3 more")
         XCTAssertEqual(ToolRunFold.label(for: calls.prefix(1)), "Web search · Step 0")
     }
 

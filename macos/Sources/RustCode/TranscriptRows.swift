@@ -80,7 +80,7 @@ struct TranscriptRow: View, Equatable {
                 AgentSpawnGroup(spawns: agents)
             } else if let fold {
                 VStack(alignment: .leading, spacing: 18) {
-                    ToolRunSummary(fold: fold)
+                    ToolRunSummary(fold: fold, call: fold.count == 1 ? tool : nil)
                     if fold.isOpen, !tool.isBlank { ToolRow(tool: tool) }
                 }
             } else if !tool.isBlank {
@@ -678,8 +678,8 @@ private struct FileChangeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                if showsHeader {
+            if showsHeader {
+                HStack(spacing: 8) {
                     Image(systemName: change.isNewFile ? "doc.badge.plus" : "doc.text")
                         .foregroundStyle(.secondary)
                     Text(change.displayPath(relativeTo: projectRoot))
@@ -687,13 +687,21 @@ private struct FileChangeView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     DiffCount(added: change.added, removed: change.removed)
+                    Spacer(minLength: 8)
+                    FileActions(path: change.path).buttons
                 }
-                Spacer(minLength: 8)
-                FileActions(path: change.path).buttons
             }
             diff(Array(visibleRows))
             .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
             .clipShape(.rect(cornerRadius: 8))
+            .overlay(alignment: .topTrailing) {
+                if !showsHeader {
+                    FileActions(path: change.path).buttons
+                        .padding(2)
+                        .background(.regularMaterial, in: .rect(cornerRadius: 6))
+                        .padding(4)
+                }
+            }
             footer
         }
     }
@@ -1052,7 +1060,7 @@ extension View {
                     .padding(.bottom, -18)
                     .padding(.leading, 8.25)
             }
-            .overlay(alignment: .topLeading) { PipelineDot(node: node).padding(.top, 5) }
+            .overlay(alignment: .topLeading) { PipelineDot(node: node).padding(.top, 2) }
     }
 }
 
@@ -1111,8 +1119,6 @@ private struct TurnSummary: View {
                     .foregroundStyle(.tertiary)
                     .frame(width: 10)
                 Text("\(fold.calls) tool calls").font(.subheadline.weight(.medium))
-                Text("· \(fold.steps) step\(fold.steps == 1 ? "" : "s")")
-                    .font(.subheadline).foregroundStyle(.secondary)
                 if fold.failed > 0 {
                     Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
                 }
@@ -1136,9 +1142,12 @@ private struct TurnSummary: View {
 
 /// The row a folded run of tool calls shows: how many, how many failed, and
 /// what they were. A click opens the run to its cards, and folds it again.
+/// A lone call names itself, and an edit its file and lines, without a count.
 private struct ToolRunSummary: View {
     let fold: ToolRunFold
+    var call: ToolItem? = nil
     @Environment(\.toggleToolRun) private var toggle
+    @Environment(\.projectRoot) private var projectRoot
 
     var body: some View {
         Button { toggle(fold.run) } label: {
@@ -1157,18 +1166,49 @@ private struct ToolRunSummary: View {
                 .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
                 .foregroundStyle(.tertiary)
                 .frame(width: 10)
-            Text("\(fold.count) tool call\(fold.count == 1 ? "" : "s")").font(.subheadline.weight(.medium))
-            if fold.failed > 0 {
-                Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
-            }
-            if let label = fold.label {
-                Text("· \(label)")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            if let call {
+                lone(call)
+            } else {
+                Text("\(fold.count) tool calls").font(.subheadline.weight(.medium))
+                if fold.failed > 0 {
+                    Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
+                }
+                if let label = fold.label {
+                    Text("· \(label)")
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private func lone(_ call: ToolItem) -> some View {
+        Text(call.displayTitle).font(.subheadline.weight(.medium)).lineLimit(1).layoutPriority(1)
+        if call.status == .failed {
+            Text("· failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
+        }
+        if let file = call.changes.count == 1 ? call.changes.first?.displayPath(relativeTo: projectRoot) : nil {
+            Text(file)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .layoutPriority(1)
+        }
+        if !call.changes.isEmpty {
+            DiffCount(added: call.changes.reduce(0) { $0 + $1.added },
+                      removed: call.changes.reduce(0) { $0 + $1.removed })
+        }
+        if let summary = call.summary ?? (call.changes.isEmpty ? call.detail : nil) {
+            Text("· \(summary)")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 }
