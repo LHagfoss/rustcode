@@ -45,6 +45,15 @@ public struct ChatScrollMap: Equatable, Sendable {
         revision += 1
     }
 
+    /// Another chat opened: its rows reuse the ids of the last one's, so
+    /// none of their heights apply.
+    public mutating func forgetHeights() {
+        heights = [:]
+        standIns = [:]
+        tops = nil
+        revision += 1
+    }
+
     /// A row was laid out at this height.
     public mutating func measured(_ row: Int, height: Double) {
         guard height.isFinite, height >= 0 else { return }

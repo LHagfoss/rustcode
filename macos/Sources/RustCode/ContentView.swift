@@ -934,6 +934,7 @@ private struct ChatView: View {
             } action: { ChatScrollInput.shared.chatFrame = $0 }
             .onChange(of: first) { _, _ in restoreTop(proxy) }
             .onChange(of: transcript.identity, initial: true) { _, identity in
+                scroll.chatChanged()
                 window.open(identity: identity, count: chat.transcript.items.count)
             }
             .onChange(of: rows.scroll, initial: true) { _, rows in

@@ -35,6 +35,17 @@ final class ChatScrollState: ObservableObject {
     static let trackMargin: Double = 6
     var track: Double { max(visible - 2 * Self.trackMargin, 0) }
 
+    /// Another chat opened in this view: the rows the map and the drawn
+    /// rows know are the last chat's.
+    func chatChanged() {
+        map.forgetHeights()
+        drawnRows.invalidate()
+        clipShift = nil
+        lastPositions = [:]
+        lastOffset = nil
+        setNeedsUpdate()
+    }
+
     func setRows(_ rows: [Int]) {
         #if DEBUG
         Self.current = self
