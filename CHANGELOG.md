@@ -1,3 +1,7 @@
+## [v0.96.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.96.0) - 2026-10-25
+
+### Features
+- macOS: a working turn reads like a conversation: the model's text, one row per group of actions, and one live line saying what it's doing; a finished turn folds to `Worked for …`. (#2408)
 ## [v0.95.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.95.1) - 2026-10-25
 
 ### Fixes
