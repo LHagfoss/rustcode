@@ -17,6 +17,20 @@ final class ChatScrollMapTests: XCTestCase {
         XCTAssertEqual(map.contentHeight(), 225)
     }
 
+    func testAnotherChatStartsWithoutTheLastChatsHeights() {
+        // The last chat's rows 0...9 were tall replies; the next chat reuses
+        // those ids for short rows not measured yet.
+        var map = map(Dictionary(uniqueKeysWithValues: (0..<10).map { ($0, 2_000.0) }), rows: Array(0..<10))
+        map.forgetHeights()
+        map.setRows(Array(0..<10))
+        XCTAssertNil(map.height(of: 3))
+        XCTAssertEqual(map.top(of: 3), 20 + 3 * (ChatScrollMap.defaultEstimate + 10))
+        // The rows the view is on are the ones drawn, not stand-ins.
+        var drawn = DrawnRows()
+        _ = drawn.update(map: &map, offset: 200, visible: 300)
+        XCTAssertTrue(Set(map.rows(within: 200...500)).isSubset(of: drawn.ids))
+    }
+
     func testUnmeasuredRowsTakeTheAverage() {
         var map = map([1: 100, 3: 50], rows: [1, 2, 3])
         XCTAssertEqual(map.estimate, 75)
