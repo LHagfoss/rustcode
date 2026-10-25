@@ -241,7 +241,7 @@ public struct ToolFolding: Equatable, Sendable {
         // pipeline, and inside its row when it is folded.
         let workThoughts = work.map(\.id).filter(thoughts.contains)
         if live {
-            foldLiveTurn(turn, start: start, thoughts: thoughts)
+            foldLiveTurn(turn, start: start, verbosity: verbosity, open: open, thoughts: thoughts)
             return
         }
         if calls.count == 1 {
@@ -273,12 +273,22 @@ public struct ToolFolding: Equatable, Sendable {
     }
 
     /// A running turn shows its whole pipeline as it happens: every call,
-    /// every thought and everything the model says, each its own step.
-    /// It folds into the turn's row once the turn ends.
-    private mutating func foldLiveTurn(_ turn: ArraySlice<TranscriptItem>, start: Int, thoughts: Set<Int>) {
-        let work = turn[start...].map(\.id)
-        nested.formUnion(work)
-        hidden.subtract(work.filter(thoughts.contains))
+    /// every thought and everything the model says, each its own step. A
+    /// finished call is one line; a running one, or an edit at `edits`,
+    /// keeps its card. It folds into the turn's row once the turn ends.
+    private mutating func foldLiveTurn(_ turn: ArraySlice<TranscriptItem>, start: Int, verbosity: ToolVerbosity, open: Set<Int>,
+                                       thoughts: Set<Int>) {
+        let work = turn[start...]
+        nested.formUnion(work.map(\.id))
+        hidden.subtract(work.map(\.id).filter(thoughts.contains))
+        for item in work where Self.isCall(item) {
+            guard case .tool(let tool) = item.content, tool.status?.isTerminal ?? true,
+                  !(verbosity.editsOpen && !tool.changes.isEmpty) else { continue }
+            let calls = [tool]
+            folds[item.id] = ToolRunFold(run: item.id, count: 1, failed: tool.status == .failed ? 1 : 0,
+                                         isOpen: open.contains(item.id), label: ToolRunFold.label(for: calls),
+                                         edited: ToolRunFold.edited(by: calls), lines: ToolRunFold.lines(of: calls))
+        }
     }
 
     /// Fold `work` into steps: each run of calls between two things the model

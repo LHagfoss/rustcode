@@ -119,12 +119,19 @@ final class ToolFoldingTests: XCTestCase {
         let list = items("usrtrstts")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
         XCTAssertTrue(folding.turns.isEmpty)
-        XCTAssertTrue(folding.folds.isEmpty)
         XCTAssertTrue(folding.hidden.isEmpty)
+        for index in [3, 6, 7] { XCTAssertEqual(folding.fold(for: list[index].id)?.count, 1, "each call is one line") }
         XCTAssertEqual(folding.nested, Set((3...8).map { list[$0].id }))
         XCTAssertFalse(folding.isNested(list[1].id), "the first words are the turn's own")
         let done = ToolFolding(items: list, verbosity: .low, open: [], running: false)
         XCTAssertNotNil(done.turn(for: list[3].id), "it folds once the turn ends")
+        // A call still running keeps its card, with its live output.
+        var running = list
+        if case .tool(var tool) = running[7].content {
+            tool.status = .inProgress
+            running[7].content = .tool(tool)
+        }
+        XCTAssertNil(ToolFolding(items: running, verbosity: .low, open: [], running: true).fold(for: list[7].id))
     }
 
     // The screenshots a preview took come back as a message the engine adds,
