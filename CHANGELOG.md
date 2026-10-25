@@ -1,3 +1,8 @@
+## [v0.95.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.95.0) - 2026-10-25
+
+### Features
+- macOS: a running turn shows every step of its pipeline, each finished call as one line, instead of folding finished rounds. (#2402)
+- macOS: quieter tool rows, and each pipeline step marked with a tinted icon for its kind (message, thought, read, edit, run, MCP…), red when failed and pulsing while running; thoughts are one line. (#2403)
 ## [v0.94.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.94.1) - 2026-10-25
 
 ### Fixes
