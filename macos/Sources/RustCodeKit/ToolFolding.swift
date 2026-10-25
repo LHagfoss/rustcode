@@ -258,6 +258,9 @@ public struct ToolFolding: Equatable, Sendable {
                                  failed: calls.filter { $0.status == .failed }.count,
                                  isOpen: isOpen, label: ToolRunFold.label(for: calls))
         let inside = work.map(\.id).filter { $0 != anchor && !thoughts.contains($0) }
+        // The reasoning before the work recaps it; it shows with the steps.
+        let recap = turn[..<start].filter { if case .thinking = $0.content { true } else { false } }.map(\.id)
+        if !isOpen { hidden.formUnion(recap) }
         if isOpen {
             nested.formUnion(inside)
             nested.formUnion(workThoughts)
@@ -286,6 +289,7 @@ public struct ToolFolding: Equatable, Sendable {
         let isSaid = { (item: TranscriptItem) in if case .assistant = item.content { true } else { false } }
         let done = turn[start...lastCall].filter { !Self.isAgentSpawn($0) }
         hidden.formUnion(done.map(\.id))
+        hidden.formUnion(turn[..<start].filter(isThought).map(\.id))
         let after = turn[(lastCall + 1)...]
         hidden.formUnion(after.filter(isThought).map(\.id))
         if !after.contains(where: isSaid) { liveStatus = done.last(where: isSaid)?.id }

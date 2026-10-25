@@ -119,7 +119,7 @@ final class ToolFoldingTests: XCTestCase {
         let list = items("usrtrstt")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
         XCTAssertTrue(folding.turns.isEmpty)
-        XCTAssertEqual(folding.hidden, Set((3...7).map { list[$0].id }))
+        XCTAssertEqual(folding.hidden, Set((2...7).map { list[$0].id }), "the first thought waits too")
         XCTAssertEqual(folding.liveStatus, list[5].id)
         XCTAssertFalse(folding.hidden.contains(list[1].id), "the first words are the turn's own")
         // A thought after the last call waits too.
@@ -239,7 +239,11 @@ final class ToolFoldingTests: XCTestCase {
         let list = items("urstrstrsurtrt")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
         for index in [4, 7, 12] { XCTAssertTrue(folding.hidden.contains(list[index].id)) }
-        for index in [1, 2, 3, 8, 10, 11] { XCTAssertFalse(folding.hidden.contains(list[index].id)) }
+        for index in [2, 3, 8, 11] { XCTAssertFalse(folding.hidden.contains(list[index].id)) }
+        // The first thought recaps the work, so it waits in the turn's row.
+        for index in [1, 10] { XCTAssertTrue(folding.hidden.contains(list[index].id)) }
+        let open = ToolFolding(items: list, verbosity: .low, open: [TurnFold.key(for: list[3].id)], running: false)
+        XCTAssertFalse(open.hidden.contains(list[1].id), "opened, it shows")
     }
 
     func testAHiddenThoughtDoesNotSplitARun() {

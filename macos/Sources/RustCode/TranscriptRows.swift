@@ -74,7 +74,7 @@ struct TranscriptRow: View, Equatable {
                 .padding(.bottom, 10)
         case .assistant(let text):
             AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
-                             isExpanded: isExpanded || isCurrentMatch, hasBubble: !isNested && turnFold == nil)
+                             isExpanded: isExpanded || isCurrentMatch)
         case .thinking(let text):
             if isNested {
                 ThoughtLine(text: text, isLive: isStreaming)
@@ -212,10 +212,11 @@ private struct UserBubble: View {
     var isExpanded = false
     @Environment(\.messageActions) private var messageActions
     @Environment(\.findQuery) private var findQuery
+    @State private var isHovered = false
 
     var body: some View {
         FoldingMessage(id: id, text: text, folds: true, isExpanded: isExpanded,
-                       alignment: .trailing, chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
+                       chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
             Group {
                 if text.hasPrefix("/"), findQuery.isEmpty {
                     slashCommandText(text)
@@ -226,6 +227,11 @@ private struct UserBubble: View {
             .textSelection(.enabled)
             .lineSpacing(2)
         }
+            .onHover { isHovered = $0 }
+            .overlay(alignment: .topTrailing) {
+                HoverCopy(help: "Copy message", isShown: isHovered) { Clipboard.copy(text) }
+                    .padding(6)
+            }
             .messageMenu { [text, original, id, messageActions] in
                 var items = [MessageMenuItem(title: "Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }]
                 if let actions = messageActions {
@@ -237,6 +243,21 @@ private struct UserBubble: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 80)
+    }
+}
+
+/// Copy, shown over a message's top-right corner while the pointer is on it.
+private struct HoverCopy: View {
+    let help: String
+    let isShown: Bool
+    let action: () -> Void
+
+    var body: some View {
+        CopyButton(help: help, action: action)
+            .background(.regularMaterial, in: .rect(cornerRadius: 7))
+            .opacity(isShown ? 1 : 0)
+            .allowsHitTesting(isShown)
+            .animation(.easeOut(duration: 0.12), value: isShown)
     }
 }
 
@@ -253,23 +274,6 @@ private struct BubbleChrome: ViewModifier {
     }
 }
 
-/// A reply's bubble: lighter than the user's, so the two read apart.
-private struct ReplyChrome: ViewModifier {
-    let isOn: Bool
-
-    func body(content: Content) -> some View {
-        if isOn {
-            content
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.fill.quaternary, in: .rect(cornerRadius: 18))
-        } else {
-            content
-        }
-    }
-}
-
 /// Agent text, with `<think>` sections the engine leaves inline folded away.
 private struct AssistantMessage: View {
     let id: Int
@@ -278,9 +282,6 @@ private struct AssistantMessage: View {
     /// On a turn's last reply: how long the turn took and when it ended.
     var turn: TurnTiming?
     var isExpanded = false
-    /// A reply on its own sits in a light bubble; a step inside an opened
-    /// turn stays plain text on the pipeline.
-    var hasBubble = true
     @Environment(\.messageActions) private var messageActions
     @State private var isHovered = false
 
@@ -303,8 +304,8 @@ private struct AssistantMessage: View {
     var body: some View {
         let parsed = parsed
         VStack(alignment: .leading, spacing: 10) {
-            FoldingMessage(id: id, text: text, folds: false, isExpanded: isExpanded,
-                           chrome: ReplyChrome(isOn: hasBubble)) {
+            FoldingMessage(id: id, text: text, folds: false,
+                           isExpanded: isExpanded) {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
                         let isLast = index == parsed.blocks.count - 1
@@ -322,15 +323,11 @@ private struct AssistantMessage: View {
             if !isStreaming, let turn { footer(turn) }
         }
         .onHover { isHovered = $0 }
-        .overlay(alignment: .bottomTrailing) {
-            // Other replies keep Copy out of the way until the pointer is on
-            // them; it floats over the reply, so nothing moves when it shows.
-            if !isStreaming, turn == nil {
-                CopyButton(help: "Copy reply") { Clipboard.copy(AssistantSummary.split(text).prose) }
-                    .background(.regularMaterial, in: .rect(cornerRadius: 7))
-                    .offset(y: 8)
-                    .opacity(isHovered ? 1 : 0)
-                    .animation(.easeOut(duration: 0.12), value: isHovered)
+        .overlay(alignment: .topTrailing) {
+            // Out of the way until the pointer is on the reply; it floats
+            // over it, so nothing moves when it shows.
+            if !isStreaming {
+                HoverCopy(help: "Copy reply", isShown: isHovered) { Clipboard.copy(AssistantSummary.split(text).prose) }
             }
         }
         .messageMenu { [text, messageActions] in
@@ -351,8 +348,6 @@ private struct AssistantMessage: View {
     /// last reply.
     private func footer(_ turn: TurnTiming) -> some View {
         HStack(spacing: 6) {
-            CopyButton(help: "Copy reply") { Clipboard.copy(AssistantSummary.split(text).prose) }
-                .padding(.leading, -8)
             Text(turn.label())
                 .font(.caption)
                 .monospacedDigit()
@@ -989,7 +984,6 @@ struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
     /// This kind of message folds when long.
     let folds: Bool
     let isExpanded: Bool
-    var alignment: HorizontalAlignment = .leading
     /// What goes around the text, such as a bubble, and how much taller it is.
     let chrome: Chrome
     var chromeHeight: Double = 0
@@ -1004,10 +998,16 @@ struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
             ProposedHeight(height: MessageCollapse.foldHeight(lineHeight: lineHeight) + chromeHeight) {
                 ViewThatFits(in: .vertical) {
                     whole
-                    VStack(alignment: alignment, spacing: 0) {
-                        if isExpanded { whole } else { folded(lineHeight) }
-                        control(toggle)
+                    // The control inside the chrome, at its bottom right.
+                    VStack(alignment: .leading, spacing: 0) {
+                        if isExpanded {
+                            content().fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            folded(lineHeight)
+                        }
+                        control(toggle).frame(maxWidth: .infinity, alignment: .trailing)
                     }
+                    .modifier(chrome)
                 }
             }
         } else {
@@ -1031,7 +1031,6 @@ struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
                         .frame(height: lineHeight * 2)
                 }
             }
-            .modifier(chrome)
     }
 
     private func control(_ toggle: MessageToggle) -> some View {
@@ -1048,7 +1047,7 @@ struct FoldingMessage<Content: View, Chrome: ViewModifier>: View {
         }
         .buttonStyle(QuietPressStyle())
         .hoverHighlight(cornerRadius: 7)
-        .padding(alignment == .leading ? .leading : .trailing, alignment == .leading ? -8 : 0)
+        .padding(.trailing, -8)
         .help(isExpanded ? "Fold this message" : "Show the whole message")
         .accessibilityHint(isExpanded ? "Folds the message to its first lines" : "Shows the whole message")
     }

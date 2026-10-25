@@ -877,7 +877,7 @@ private struct ChatView: View {
             // In the gutter left of the column; only it observes the
             // markers, so scrolling redraws the rail and not the chat.
             .overlay(alignment: .topLeading) {
-                TimelineRail(state: scroll.rail, hugsEdge: !model.showsSidebar) { id in jumpToTurn(id, proxy) }
+                TimelineRail(state: scroll.rail) { id in jumpToTurn(id, proxy) }
             }
             // Over the chat rather than a pinned footer inside it: a pinned
             // view re-lays out its whole section on every scrolled frame.
@@ -1069,9 +1069,14 @@ private struct ChatView: View {
                 }
                 .padding(.leading, 70)
             }
+            // `~/code / Title`: the chat's folder, a divider, its title.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
+                ChatProjectMenu(model: model, name: projectName, path: model.chatProject.path.abbreviatingHome)
+                Text("/")
+                    .font(.title3.weight(.light))
+                    .foregroundStyle(.quaternary)
+                    .accessibilityHidden(true)
                 Text(title).font(.headline).lineLimit(1)
-                ChatProjectMenu(model: model, name: projectName)
             }
             Spacer()
             if let usage = chat.transcript.usage {
@@ -1643,6 +1648,8 @@ private struct EmptyChat: View {
 private struct ChatProjectMenu: View {
     @ObservedObject var model: DesktopModel
     let name: String
+    /// What the label shows: the folder's path, from home as `~`.
+    let path: String
 
     var body: some View {
         Menu {
@@ -1668,7 +1675,7 @@ private struct ChatProjectMenu: View {
             Button("Open in Finder", systemImage: "folder") { NSWorkspace.shared.open(folder) }
         } label: {
             HStack(spacing: 3) {
-                Text(name)
+                Text(path).truncationMode(.head)
                 Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
             }
             .font(.callout)
