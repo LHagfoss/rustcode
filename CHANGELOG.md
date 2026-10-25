@@ -1,3 +1,9 @@
+## [v0.94.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.94.1) - 2026-10-25
+
+### Fixes
+- Folded tool steps in the Mac chat name a lone call directly, and a folded edit shows its file and added/removed lines. (#2398)
+- The Mac chat's turn timeline shows one activity per thought, a quieter first reasoning line, file names and line totals on grouped edits, and project-relative paths on Read cards. (#2399)
+- Fixed the Mac chat sometimes going blank after switching from a long chat and scrolling. (#2400)
 ## [v0.94.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.94.0) - 2026-10-25
 
 ### Features
