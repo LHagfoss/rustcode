@@ -4,7 +4,7 @@ import Foundation
 /// `verbosity` setting does.
 public enum ToolVerbosity: String, CaseIterable, Identifiable, Sendable {
     /// Calls fold into one `N tool calls` row, a lone call too; while tools
-    /// run, only the current call shows. A finished turn folds its work into
+    /// run, the turn shows every step. A finished turn folds its work into
     /// one row, which opens to its steps.
     case low
     /// Every call is its own closed card.
@@ -180,8 +180,7 @@ public struct ToolFolding: Equatable, Sendable {
     /// verbosities a finished turn reads as what the model said first, one
     /// row for its work, and its answer; opened, that row lists the turn's
     /// steps, each what the model said and its folded calls. A running turn
-    /// shows its steps as they happen, with everything but the current call
-    /// of the current step folded.
+    /// shows every step as it happens, nothing folded.
     public init(items: [TranscriptItem], verbosity: ToolVerbosity, open: Set<Int>, running: Bool) {
         let thoughts = verbosity.folds ? Self.laterThoughts(in: items, running: running) : []
         hidden = thoughts
@@ -246,12 +245,12 @@ public struct ToolFolding: Equatable, Sendable {
             return
         }
         if calls.count == 1 {
-            _ = foldSteps(work, verbosity: verbosity, open: open, live: false, thoughts: thoughts)
+            _ = foldSteps(work, verbosity: verbosity, open: open, thoughts: thoughts)
             return
         }
         let anchor = work[start].id
         let isOpen = open.contains(TurnFold.key(for: anchor))
-        let steps = foldSteps(work, verbosity: verbosity, open: open, live: false, thoughts: thoughts)
+        let steps = foldSteps(work, verbosity: verbosity, open: open, thoughts: thoughts)
         turns[anchor] = TurnFold(anchor: anchor, steps: steps, calls: calls.count,
                                  failed: calls.filter { $0.status == .failed }.count,
                                  isOpen: isOpen, label: ToolRunFold.label(for: calls))
@@ -273,65 +272,35 @@ public struct ToolFolding: Equatable, Sendable {
         }
     }
 
-    /// A running turn shows only its current round: the thought, what the
-    /// model says, and the calls it makes now. Each finished round folds into
-    /// the turn's row as the next one starts, so the chat does not grow a
-    /// step at a time; the row opens to them like a finished turn's.
-    private mutating func foldLiveTurn(_ turn: ArraySlice<TranscriptItem>, start: Int, verbosity: ToolVerbosity,
-                                       open: Set<Int>, thoughts: Set<Int>) {
-        let callIndices = turn.indices.filter { Self.isCall(turn[$0]) }
-        guard let last = callIndices.last else { return }
-        // The round starts after the last call of the round before: what the
-        // model says after a call opens the next one, and a batch of calls
-        // with what led to it is the round still going.
-        let roundStart: Int
-        if last < turn.endIndex - 1 {
-            roundStart = last + 1
-        } else {
-            var batch = last
-            while batch > start, Self.isCall(turn[batch - 1]) { batch -= 1 }
-            roundStart = callIndices.last { $0 < batch }.map { $0 + 1 } ?? start
-        }
-        let round = turn[max(roundStart, start)...]
-        let roundThoughts = round.map(\.id).filter(thoughts.contains)
-        if let firstRoundCall = round.firstIndex(where: Self.isCall) {
-            _ = foldSteps(round[firstRoundCall...], verbosity: verbosity, open: open, live: true, thoughts: thoughts)
-        }
-        nested.formUnion(round.map(\.id))
-        hidden.subtract(roundThoughts)
-        guard roundStart > start else { return }
-        let done = turn[start..<roundStart]
-        let calls = done.filter(Self.isCall).compactMap { item -> ToolItem? in
-            if case .tool(let tool) = item.content { tool } else { nil }
-        }
-        guard !calls.isEmpty, let anchorIndex = done.firstIndex(where: { !thoughts.contains($0.id) }) else { return }
-        let anchor = done[anchorIndex].id
-        let isOpen = open.contains(TurnFold.key(for: anchor))
-        let steps = foldSteps(done, verbosity: verbosity, open: open, live: false, thoughts: thoughts)
-        turns[anchor] = TurnFold(anchor: anchor, steps: steps, calls: calls.count,
-                                 failed: calls.filter { $0.status == .failed }.count,
-                                 isOpen: isOpen, label: ToolRunFold.label(for: calls))
-        let inside = done.map(\.id).filter { $0 != anchor }
-        let doneThoughts = inside.filter(thoughts.contains)
-        if isOpen {
-            nested.formUnion(inside)
-            hidden.subtract(doneThoughts)
-        } else {
-            hidden.formUnion(inside)
+    /// A running turn shows its whole pipeline as it happens: every call,
+    /// every thought and everything the model says, each its own step. A
+    /// finished call is one line; a running one, or an edit at `edits`,
+    /// keeps its card. It folds into the turn's row once the turn ends.
+    private mutating func foldLiveTurn(_ turn: ArraySlice<TranscriptItem>, start: Int, verbosity: ToolVerbosity, open: Set<Int>,
+                                       thoughts: Set<Int>) {
+        let work = turn[start...]
+        nested.formUnion(work.map(\.id))
+        hidden.subtract(work.map(\.id).filter(thoughts.contains))
+        for item in work where Self.isCall(item) {
+            guard case .tool(let tool) = item.content, tool.status?.isTerminal ?? true,
+                  !(verbosity.editsOpen && !tool.changes.isEmpty) else { continue }
+            let calls = [tool]
+            folds[item.id] = ToolRunFold(run: item.id, count: 1, failed: tool.status == .failed ? 1 : 0,
+                                         isOpen: open.contains(item.id), label: ToolRunFold.label(for: calls),
+                                         edited: ToolRunFold.edited(by: calls), lines: ToolRunFold.lines(of: calls))
         }
     }
 
     /// Fold `work` into steps: each run of calls between two things the model
-    /// said is one row. While `live`, the last run's current call shows.
-    /// Returns how many steps there are.
+    /// said is one row. Returns how many steps there are.
     private mutating func foldSteps(_ work: ArraySlice<TranscriptItem>, verbosity: ToolVerbosity,
-                                    open: Set<Int>, live: Bool, thoughts: Set<Int>) -> Int {
+                                    open: Set<Int>, thoughts: Set<Int>) -> Int {
         var steps = 0
         var run: [ToolItem] = []
         var ids: [Int] = []
-        func close(atEnd: Bool) {
+        func close() {
             defer { run = []; ids = [] }
-            let count = atEnd && live ? run.count - 1 : run.count
+            let count = run.count
             guard count >= 1, let first = ids.first else { return }
             steps += 1
             let isOpen = open.contains(first)
@@ -344,19 +313,19 @@ public struct ToolFolding: Equatable, Sendable {
         }
         for item in work where !thoughts.contains(item.id) {
             guard Self.isCall(item), case .tool(let tool) = item.content else {
-                close(atEnd: false)
+                close()
                 continue
             }
             // An edit stays out of the runs with its diff open.
             if verbosity.editsOpen && !tool.changes.isEmpty {
-                close(atEnd: false)
+                close()
                 steps += 1
                 continue
             }
             run.append(tool)
             ids.append(item.id)
         }
-        close(atEnd: true)
+        close()
         return steps
     }
 
