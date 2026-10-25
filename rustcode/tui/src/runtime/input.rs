@@ -1179,7 +1179,7 @@ pub(super) async fn handle_app_event(
                             }
                             KeyCode::Down => {
                                 let mut s = app_state.lock().await;
-                                let last = rustcode::app::AppState::effort_choices(
+                                let last = rustcode::controller::effort_choices(
                                     s.active_model_profile().as_ref(),
                                 )
                                 .len()
@@ -1189,7 +1189,7 @@ pub(super) async fn handle_app_event(
                             }
                             KeyCode::Enter => {
                                 let mut s = app_state.lock().await;
-                                let choices = rustcode::app::AppState::effort_choices(
+                                let choices = rustcode::controller::effort_choices(
                                     s.active_model_profile().as_ref(),
                                 );
                                 let value = choices.get(s.modal_picker_index).cloned().flatten();

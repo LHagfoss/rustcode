@@ -181,7 +181,7 @@ pub(in crate::ui) fn render_effort_picker_modal(
         .active_model_profile()
         .and_then(|prof| prof.reasoning_effort.as_deref());
 
-    let choices = rustcode::app::AppState::effort_choices(state.active_model_profile())
+    let choices = rustcode::controller::effort_choices(state.active_model_profile())
         .into_iter()
         .map(|effort| {
             let (name, desc) = match effort.as_deref() {
