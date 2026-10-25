@@ -45,10 +45,12 @@ struct TranscriptRow: View, Equatable {
     /// This row's mark on a turn's pipeline.
     private var node: PipelineNode {
         switch item.content {
-        case .assistant: .said
-        case .thinking: .thought
-        case .tool(let tool): tool.status == .failed ? .failed : .call
-        default: .thought
+        case .thinking: isStreaming ? .running : .done
+        case .tool(let tool):
+            if tool.status == .failed || (fold?.failed ?? 0) > 0 { .failed }
+            else if tool.status == .pending || tool.status == .inProgress { .running }
+            else { .done }
+        default: .done
         }
     }
 
@@ -70,8 +72,8 @@ struct TranscriptRow: View, Equatable {
             AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
                              isExpanded: isExpanded || isCurrentMatch)
         case .thinking(let text):
-            if isNested && !isStreaming {
-                ThoughtLine(text: text)
+            if isNested {
+                ThoughtLine(text: text, isLive: isStreaming)
             } else {
                 ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
             }
@@ -1065,9 +1067,9 @@ struct StoppedTurnRow: View {
     }
 }
 
-/// What a row is on a turn's pipeline, which its node shows.
+/// How a step on a turn's pipeline stands, which its node's colour shows.
 enum PipelineNode {
-    case said, call, failed, thought
+    case done, running, failed
 }
 
 extension View {
@@ -1087,26 +1089,44 @@ extension View {
 
 private struct PipelineDot: View {
     let node: PipelineNode
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dim = false
+
+    private var color: Color {
+        switch node {
+        case .done: Color.secondary.opacity(0.55)
+        case .running: Color.brand
+        case .failed: Color.red.opacity(0.85)
+        }
+    }
 
     var body: some View {
         ZStack {
             Circle().fill(Color(nsColor: .windowBackgroundColor)).frame(width: 13, height: 13)
-            switch node {
-            case .said: Circle().fill(Color.primary.opacity(0.75)).frame(width: 7, height: 7)
-            case .call: Circle().strokeBorder(Color.secondary, lineWidth: 1.5).frame(width: 9, height: 9)
-            case .failed: Circle().strokeBorder(Color.red.opacity(0.85), lineWidth: 1.5).frame(width: 9, height: 9)
-            case .thought: Circle().fill(Color.secondary.opacity(0.45)).frame(width: 5, height: 5)
-            }
+            Circle().fill(color).frame(width: 7, height: 7)
+                .opacity(node == .running && dim ? 0.35 : 1)
         }
+        .onAppear { pulse() }
+        .onChange(of: node) { pulse() }
         .frame(width: 18, height: 13)
         .accessibilityHidden(true)
     }
+
+    private func pulse() {
+        guard node == .running, !reduceMotion else {
+            dim = false
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { dim = true }
+    }
 }
 
-/// A thought in a turn's pipeline: its first lines, quiet, where a reasoning
-/// box would have stood.
+/// A thought in a turn's pipeline: one quiet line where a reasoning box
+/// would have stood. While it is written it reads `Thinking · ` and the
+/// heading the model is on.
 private struct ThoughtLine: View {
     let text: String
+    var isLive = false
 
     /// A summary is a run of `**Heading**` lines; the first names what the
     /// model turned to, and the rest stay in the tooltip and Copy.
@@ -1117,12 +1137,20 @@ private struct ThoughtLine: View {
             .filter { !$0.isEmpty }
     }
 
+    /// The `**Heading**` the model wrote last, else its last line.
+    private var current: String? {
+        let headings = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.count > 4 && $0.hasPrefix("**") && $0.hasSuffix("**") }
+        return headings.last.map { $0.replacingOccurrences(of: "**", with: "") } ?? lines.last
+    }
+
     var body: some View {
         let lines = lines
-        Text(lines.first ?? "")
+        let heading = Text((isLive ? current : lines.first) ?? "").italic().foregroundStyle(.tertiary)
+        (isLive ? Text("Thinking · ").foregroundStyle(.secondary) + heading : heading)
             .font(.callout)
-            .italic()
-            .foregroundStyle(.tertiary)
+            .contentTransition(.opacity)
             .lineLimit(1)
             .truncationMode(.tail)
             .help(lines.joined(separator: "\n"))
@@ -1147,7 +1175,7 @@ private struct TurnSummary: View {
                     .rotationEffect(.degrees(fold.isOpen ? 90 : 0))
                     .foregroundStyle(.tertiary)
                     .frame(width: 10)
-                Text("\(fold.calls) tool calls").font(.subheadline.weight(.medium))
+                Text("\(fold.calls) tool calls").font(.subheadline).foregroundStyle(.secondary)
                 if fold.failed > 0 {
                     Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
                 }
@@ -1198,7 +1226,7 @@ private struct ToolRunSummary: View {
             if let call {
                 lone(call)
             } else {
-                Text("\(fold.count) tool calls").font(.subheadline.weight(.medium))
+                Text("\(fold.count) tool calls").font(.subheadline).foregroundStyle(.secondary)
                 if fold.failed > 0 {
                     Text("· \(fold.failed) failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
                 }
@@ -1234,7 +1262,7 @@ private struct ToolRunSummary: View {
 
     @ViewBuilder
     private func lone(_ call: ToolItem) -> some View {
-        Text(call.displayTitle).font(.subheadline.weight(.medium)).lineLimit(1).layoutPriority(1)
+        Text(call.displayTitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
         if call.status == .failed {
             Text("· failed").font(.subheadline).foregroundStyle(.red.opacity(0.85))
         }
