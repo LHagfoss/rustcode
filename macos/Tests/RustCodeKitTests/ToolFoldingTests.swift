@@ -27,6 +27,36 @@ final class ToolFoldingTests: XCTestCase {
         return transcript.items
     }
 
+    private func editRun(_ calls: [(String, ToolStatus, String?)]) -> [ToolItem] {
+        var transcript = Transcript()
+        for (index, (title, status, path)) in calls.enumerated() {
+            transcript.apply(.toolCall(id: "c\(index)", title: title, kind: nil, status: status, input: nil))
+            if let path {
+                transcript.apply(.toolCallUpdate(id: "c\(index)", title: nil, status: status, output: nil,
+                                                 diffs: [FileDiff(path: path, oldText: "a\nb\n", newText: "a\nc\nd\n")]))
+            }
+        }
+        return transcript.items.compactMap { item -> ToolItem? in
+            if case .tool(let tool) = item.content { tool } else { nil }
+        }
+    }
+
+    func testARunNamesTheFilesItEditedAndTheirLines() {
+        let calls = editRun([("replace_file_content", .completed, "/p/src/game.js"), ("view_file", .completed, nil),
+                             ("replace_file_content", .completed, "/p/src/main.jsx"),
+                             ("replace_file_content", .completed, "/p/src/game.js"),
+                             ("replace_file_content", .failed, nil)])
+        XCTAssertEqual(ToolRunFold.edited(by: calls), ["/p/src/game.js", "/p/src/main.jsx"])
+        XCTAssertEqual(ToolRunFold.lines(of: calls), .init(added: 6, removed: 3))
+    }
+
+    func testARunLeavesOutLinesWhenAnEditCameBackWithoutADiff() {
+        let calls = editRun([("replace_file_content", .completed, "/p/a.js"), ("replace_file_content", .completed, nil)])
+        XCTAssertEqual(ToolRunFold.edited(by: calls), ["/p/a.js"])
+        XCTAssertNil(ToolRunFold.lines(of: calls))
+        XCTAssertNil(ToolRunFold.lines(of: editRun([("view_file", .completed, nil)])))
+    }
+
     func testTheLabelNamesEachToolOnceAndALoneCallsSummary() {
         var transcript = Transcript()
         for (index, title) in ["web_search", "web_search", "fetch_url", "view_file", "grep"].enumerated() {

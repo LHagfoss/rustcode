@@ -394,19 +394,16 @@ private struct ThinkingBlock: View {
                 Button(isSummary ? "Copy Reasoning Summary" : "Copy Thinking", systemImage: "doc.on.doc") { Clipboard.copy(trimmed) }
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Label(title, systemImage: "brain")
                     .contentTransition(.opacity)
                 if isLive { ProgressView().controlSize(.mini) }
             }
-            .font(.callout.weight(.medium))
-            .foregroundStyle(.secondary)
+            .font(.callout)
+            .foregroundStyle(.tertiary)
         }
-        .disclosureGroupStyle(RowDisclosureStyle())
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .disclosureGroupStyle(QuietDisclosureStyle())
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.fill.quaternary, in: .rect(cornerRadius: 12))
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: isLive)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
@@ -503,7 +500,7 @@ private struct ToolRow: View {
         if tool.changes.count == 1, let change = tool.changes.first {
             return change.displayPath(relativeTo: projectRoot)
         }
-        return tool.detail
+        return tool.detail.map { ProjectPath.relative($0, to: projectRoot) }
     }
 
     private var label: some View {
@@ -850,6 +847,30 @@ private struct RowDisclosureStyle: DisclosureGroupStyle {
     }
 }
 
+/// A toggle that reads as a quiet line: its label, then a small chevron.
+private struct QuietDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { configuration.isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    configuration.label
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .hoverHighlight(cornerRadius: 6, padding: 4)
+            .pointingHandCursor()
+            if configuration.isExpanded { configuration.content }
+        }
+    }
+}
+
 /// Shown while a turn runs and the agent has not started writing yet.
 struct WorkingIndicator: View {
     /// When the turn began, for its clock: "Working… 00:12".
@@ -1087,20 +1108,28 @@ private struct PipelineDot: View {
 private struct ThoughtLine: View {
     let text: String
 
-    var body: some View {
-        // A summary is a run of `**Heading**` lines: one line of them reads
-        // as what the model thought about, without the blank lines between.
-        Text(text.replacingOccurrences(of: "**", with: "")
+    /// A summary is a run of `**Heading**` lines; the first names what the
+    /// model turned to, and the rest stay in the tooltip and Copy.
+    private var lines: [String] {
+        text.replacingOccurrences(of: "**", with: "")
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .joined(separator: " · "))
+    }
+
+    var body: some View {
+        let lines = lines
+        Text(lines.first ?? "")
             .font(.callout)
             .italic()
             .foregroundStyle(.tertiary)
             .lineLimit(1)
             .truncationMode(.tail)
-            .textSelection(.enabled)
+            .help(lines.joined(separator: "\n"))
+            .contextMenu {
+                Button("Copy Thinking", systemImage: "doc.on.doc") { Clipboard.copy(text) }
+            }
+            .accessibilityLabel(lines.joined(separator: ", "))
     }
 }
 
@@ -1180,9 +1209,27 @@ private struct ToolRunSummary: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                if !fold.edited.isEmpty {
+                    Text(editedFiles)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                        .help(fold.edited.map { ProjectPath.relative($0, to: projectRoot) }.joined(separator: "\n"))
+                }
+                if let lines = fold.lines {
+                    DiffCount(added: lines.added, removed: lines.removed).layoutPriority(1)
+                }
             }
             Spacer(minLength: 0)
         }
+    }
+
+    /// `game.js, main.jsx +2`: the first files by name, then how many more.
+    private var editedFiles: String {
+        let names = fold.edited.prefix(2).map { URL(fileURLWithPath: $0).lastPathComponent }
+        let rest = fold.edited.count - names.count
+        return names.joined(separator: ", ") + (rest > 0 ? " +\(rest)" : "")
     }
 
     @ViewBuilder

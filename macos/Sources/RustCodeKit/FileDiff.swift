@@ -164,13 +164,21 @@ public struct FileChange: Equatable, Sendable, Identifiable {
     /// The path under `root` without its prefix, else under the home folder
     /// as `~/…`, else as is.
     public func displayPath(relativeTo root: String?) -> String {
-        if let root, !root.isEmpty {
-            let base = root.hasSuffix("/") ? root : root + "/"
-            if path.hasPrefix(base) { return String(path.dropFirst(base.count)) }
-        }
+        let relative = ProjectPath.relative(path, to: root)
+        if relative != path { return relative }
         let home = NSHomeDirectory() + "/"
         if path.hasPrefix(home) { return "~/" + path.dropFirst(home.count) }
         return path
+    }
+}
+
+/// Paths shown against the open chat's project.
+public enum ProjectPath {
+    /// `path` without the project's prefix when it is inside `root`, else as is.
+    public static func relative(_ path: String, to root: String?) -> String {
+        guard let root, !root.isEmpty else { return path }
+        let base = root.hasSuffix("/") ? root : root + "/"
+        return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : path
     }
 }
 
