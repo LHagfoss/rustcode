@@ -1907,14 +1907,32 @@ impl AppState {
         true
     }
 
-    /// Picker row for an effort: 0 low, 1 medium, 2 high, 3 off/other.
-    pub fn effort_picker_index(effort: Option<&str>) -> usize {
-        match effort {
-            Some("low") => 0,
-            Some("medium") => 1,
-            Some("high") => 2,
-            _ => 3,
+    /// The effort picker's rows: the levels the profile's provider lists
+    /// (OpenAI's catalog adds `xhigh`), as the macOS app offers them, else
+    /// low, medium and high; then Off (`None`).
+    pub fn effort_choices(profile: Option<&crate::config::ModelProfile>) -> Vec<Option<String>> {
+        let mut levels: Vec<String> = profile
+            .map(crate::remote::projection::reasoning_efforts)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|effort| effort != "default")
+            .collect();
+        if levels.is_empty() {
+            levels = vec!["low".into(), "medium".into(), "high".into()];
         }
+        levels
+            .into_iter()
+            .map(Some)
+            .chain(std::iter::once(None))
+            .collect()
+    }
+
+    /// Picker row for an effort among `choices`; Off for one it does not list.
+    pub fn effort_picker_index(choices: &[Option<String>], effort: Option<&str>) -> usize {
+        choices
+            .iter()
+            .position(|choice| choice.as_deref() == effort)
+            .unwrap_or(choices.len().saturating_sub(1))
     }
 
     /// Whether the active endpoint/model should receive the local-model

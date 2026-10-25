@@ -452,7 +452,7 @@ pub(super) const UPDATE_PROMPT_HEIGHT: u16 = 14;
 pub(super) const VERBOSITY_PICKER_HEIGHT: u16 = 10;
 pub(super) const YOLO_PICKER_HEIGHT: u16 = 10;
 pub(super) const THINKING_PICKER_HEIGHT: u16 = 10;
-pub(super) const EFFORT_PICKER_HEIGHT: u16 = 11;
+pub(super) const EFFORT_PICKER_HEIGHT: u16 = 14;
 pub(super) const PROTOCOL_PICKER_HEIGHT: u16 = 10;
 /// Header, blank, value and bar, blank, hint, blank, footer, plus padding.
 pub(super) const SCROLL_SPEED_PICKER_HEIGHT: u16 = 10;

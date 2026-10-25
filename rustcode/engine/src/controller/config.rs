@@ -25,6 +25,12 @@ pub fn sandbox_effective_description(mode: SandboxMode) -> &'static str {
     mode.effective_description()
 }
 
+/// The effort picker's rows for `profile`: the levels its provider lists,
+/// else low, medium and high; then Off (`None`).
+pub fn effort_choices(profile: Option<&ModelProfile>) -> Vec<Option<String>> {
+    crate::app::AppState::effort_choices(profile)
+}
+
 /// Persist `config` to disk, preserving project overrides like the
 /// settings and MCP flows expect. No-op for invalid configs.
 pub fn save_config(config: &AppConfig) {

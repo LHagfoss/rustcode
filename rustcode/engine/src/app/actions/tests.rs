@@ -2631,6 +2631,55 @@ async fn effort_command_updates_the_active_profile_when_profiles_share_a_url() {
 }
 
 #[tokio::test]
+async fn effort_command_offers_the_levels_the_provider_lists() {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    let mut app = crate::app::AppState::new();
+    app.config.models = vec![crate::config::ModelProfile {
+        name: "luna".into(),
+        url: "https://chatgpt.example.test".into(),
+        model: "luna-model".into(),
+        supports_reasoning_effort: Some(true),
+        reasoning_efforts: Some(vec![
+            "low".into(),
+            "medium".into(),
+            "high".into(),
+            "xhigh".into(),
+        ]),
+        ..Default::default()
+    }];
+    app.config.default.set_big("luna".into());
+    app.api_base_url = "https://chatgpt.example.test".into();
+    app.model_name = "luna-model".into();
+    let state = Arc::new(Mutex::new(app));
+    let client = reqwest::Client::new();
+    let mut cancel = CancellationToken::new();
+
+    state.lock().await.input_buffer = "/effort xhigh".to_owned();
+    super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await;
+    let mut s = state.lock().await;
+    assert_eq!(
+        s.active_model_profile()
+            .and_then(|profile| profile.reasoning_effort),
+        Some("xhigh".into())
+    );
+    let choices = crate::app::state::AppState::effort_choices(s.active_model_profile().as_ref());
+    assert_eq!(choices.len(), 5, "four levels, then Off");
+    assert_eq!(choices.last(), Some(&None));
+
+    s.input_buffer = "/effort".to_owned();
+    drop(s);
+    super::handle_enter(&state, &client, &mut cancel, &|| Vec::new()).await;
+    assert_eq!(
+        state.lock().await.modal_picker_index,
+        3,
+        "picker opens on xhigh"
+    );
+}
+
+#[tokio::test]
 async fn session_model_and_effort_leave_the_default_for_new_sessions_alone() {
     use crate::app::state::AppState;
     use crate::config::{CONFIG_TOML_FILE, ModelProfile, get_config_dir, load_config_from};
