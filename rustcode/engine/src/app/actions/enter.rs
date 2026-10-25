@@ -500,23 +500,31 @@ async fn handle_enter_inner(
             }
             "/effort" => {
                 let current = s.active_reasoning_effort();
-                let value = match tokens.get(1) {
+                let choices =
+                    crate::app::state::AppState::effort_choices(s.active_model_profile().as_ref());
+                let value = match tokens.get(1).copied() {
                     None => {
-                        s.modal_picker_index =
-                            crate::app::state::AppState::effort_picker_index(current.as_deref());
+                        s.modal_picker_index = crate::app::state::AppState::effort_picker_index(
+                            &choices,
+                            current.as_deref(),
+                        );
                         s.settings_picker = Some(crate::app::SettingsPicker::Effort);
                         None
                     }
-                    Some(&"low") => Some(Some("low".to_string())),
-                    Some(&"med") | Some(&"medium") => Some(Some("medium".to_string())),
-                    Some(&"high") => Some(Some("high".to_string())),
-                    Some(&"off") | Some(&"none") | Some(&"default") => Some(None),
-                    _ => {
-                        s.show_command_panel(
-                            "Reasoning effort",
-                            "Invalid option. Use 'low', 'medium', 'high', or 'off'.",
-                        );
-                        None
+                    Some("off") | Some("default") => Some(None),
+                    Some(given) => {
+                        let given = if given == "med" { "medium" } else { given };
+                        if choices.iter().flatten().any(|choice| choice == given) {
+                            Some(Some(given.to_string()))
+                        } else {
+                            let levels = choices.iter().flatten().map(|c| format!("'{c}'"));
+                            let message = format!(
+                                "Invalid option. Use {}, or 'off'.",
+                                levels.collect::<Vec<_>>().join(", ")
+                            );
+                            s.show_command_panel("Reasoning effort", &message);
+                            None
+                        }
                     }
                 };
                 if let Some(value) = value {

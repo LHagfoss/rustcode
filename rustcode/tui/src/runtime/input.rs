@@ -1179,17 +1179,20 @@ pub(super) async fn handle_app_event(
                             }
                             KeyCode::Down => {
                                 let mut s = app_state.lock().await;
+                                let last = rustcode::app::AppState::effort_choices(
+                                    s.active_model_profile().as_ref(),
+                                )
+                                .len()
+                                .saturating_sub(1);
                                 s.modal_picker_index =
-                                    s.modal_picker_index.saturating_add(1).min(3); // 0 low, 1 medium, 2 high, 3 off
+                                    s.modal_picker_index.saturating_add(1).min(last);
                             }
                             KeyCode::Enter => {
                                 let mut s = app_state.lock().await;
-                                let value = match s.modal_picker_index {
-                                    0 => Some("low".to_string()),
-                                    1 => Some("medium".to_string()),
-                                    2 => Some("high".to_string()),
-                                    _ => None,
-                                };
+                                let choices = rustcode::app::AppState::effort_choices(
+                                    s.active_model_profile().as_ref(),
+                                );
+                                let value = choices.get(s.modal_picker_index).cloned().flatten();
                                 s.set_active_reasoning_effort(value);
                                 s.close_modal_status();
                             }

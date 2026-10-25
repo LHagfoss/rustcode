@@ -181,12 +181,21 @@ pub(in crate::ui) fn render_effort_picker_modal(
         .active_model_profile()
         .and_then(|prof| prof.reasoning_effort.as_deref());
 
-    let choices = [
-        ("Low", Some("low"), "Compact reasoning traces (fastest)"),
-        ("Medium", Some("medium"), "Balanced reasoning depth"),
-        ("High", Some("high"), "Deep reasoning analysis"),
-        ("Off", None, "Clear reasoning effort parameter"),
-    ];
+    let choices = rustcode::app::AppState::effort_choices(state.active_model_profile())
+        .into_iter()
+        .map(|effort| {
+            let (name, desc) = match effort.as_deref() {
+                None => ("Off".to_owned(), "Clear reasoning effort parameter"),
+                Some("minimal") => ("Minimal".to_owned(), "Least reasoning"),
+                Some("low") => ("Low".to_owned(), "Compact reasoning traces (fastest)"),
+                Some("medium") => ("Medium".to_owned(), "Balanced reasoning depth"),
+                Some("high") => ("High".to_owned(), "Deep reasoning analysis"),
+                Some("xhigh") => ("Xhigh".to_owned(), "Deepest reasoning (slowest)"),
+                Some(other) => (capitalized(other), ""),
+            };
+            (name, effort, desc)
+        })
+        .collect::<Vec<_>>();
 
     let selected_idx = state
         .modal_picker_index()
@@ -195,7 +204,7 @@ pub(in crate::ui) fn render_effort_picker_modal(
     let mut list_lines = Vec::new();
     for (idx, (name, val, desc)) in choices.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let is_current = current == *val;
+        let is_current = current == val.as_deref();
         let active_badge = if is_current { " (active)" } else { "" };
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
@@ -520,4 +529,12 @@ pub(in crate::ui) fn render_update_prompt_modal(
         Paragraph::new(footer).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[5],
     );
+}
+
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
