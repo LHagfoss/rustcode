@@ -113,14 +113,18 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertTrue(open.isNested(list[5].id), "opened, they are a step again")
     }
 
-    // What the model says after a call opens the next round.
-    func testWhatIsSaidAfterACallStartsTheNextRound() {
-        let list = items("usrtrsts")
+    // A running turn shows its whole pipeline: every call, thought and
+    // thing said is its own step, with no row folding them.
+    func testWhileRunningEveryStepShows() {
+        let list = items("usrtrstts")
         let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
-        XCTAssertEqual(folding.turn(for: list[3].id)?.calls, 2)
-        XCTAssertTrue(folding.hidden.isSuperset(of: [4, 5, 6].map { list[$0].id }))
-        XCTAssertTrue(folding.isNested(list[7].id))
+        XCTAssertTrue(folding.turns.isEmpty)
+        XCTAssertTrue(folding.folds.isEmpty)
+        XCTAssertTrue(folding.hidden.isEmpty)
+        XCTAssertEqual(folding.nested, Set((3...8).map { list[$0].id }))
         XCTAssertFalse(folding.isNested(list[1].id), "the first words are the turn's own")
+        let done = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        XCTAssertNotNil(done.turn(for: list[3].id), "it folds once the turn ends")
     }
 
     // The screenshots a preview took come back as a message the engine adds,
@@ -176,36 +180,6 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertNotNil(folding.fold(for: list[9].id))
     }
 
-    func testWhileRunningOnlyTheCurrentCallShows() {
-        let list = items("sttt")
-        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
-        XCTAssertTrue(folding.turns.isEmpty)
-        XCTAssertEqual(folding.fold(for: list[1].id)?.count, 2)
-        XCTAssertEqual(folding.hidden, [list[2].id])
-        let two = items("tt")
-        XCTAssertEqual(ToolFolding(items: two, verbosity: .low, open: [], running: true).fold(for: two[0].id)?.count, 1)
-    }
-
-    // A running turn shows only its current round; each finished round folds
-    // into the turn's row as the next one starts.
-    func testWhileRunningOnlyTheCurrentRoundShows() {
-        let list = items("ststst")
-        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: true)
-        XCTAssertEqual(folding.turn(for: list[1].id)?.calls, 2)
-        XCTAssertTrue(folding.hidden.isSuperset(of: [list[2].id, list[3].id]))
-        XCTAssertFalse(folding.hidden.contains(list[4].id), "what it says now shows")
-        XCTAssertFalse(folding.hidden.contains(list[5].id), "the current call shows")
-        XCTAssertTrue(folding.isNested(list[4].id))
-        // Opened, the finished rounds show as steps beside the current one.
-        let open = ToolFolding(items: list, verbosity: .low, open: [TurnFold.key(for: list[1].id)], running: true)
-        XCTAssertTrue(open.hidden.isEmpty)
-        // A batch of calls is one round with what led to it.
-        let batch = items("ustrstt")
-        let live = ToolFolding(items: batch, verbosity: .low, open: [], running: true)
-        XCTAssertEqual(live.turn(for: batch[2].id)?.calls, 1)
-        for index in [3, 4, 5, 6] { XCTAssertFalse(live.hidden.contains(batch[index].id), "\(index)") }
-    }
-
     // At `edits` an edit is its own step with its diff, in the current round
     // and inside the row once opened; at `low` it folds with the calls.
     func testEditsAreTheirOwnStepAtEdits() {
@@ -248,8 +222,8 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertFalse(low.hidden.contains(list[7].id), "the agents after the answer show")
         let live = ToolFolding(items: Array(list.prefix(3)), verbosity: .low, open: [], running: true)
         XCTAssertEqual(live.agents(for: list[2].id), [list[2].id])
-        XCTAssertFalse(live.hidden.contains(list[2].id), "agents started now show")
-        XCTAssertEqual(live.turn(for: list[0].id)?.calls, 2)
+        XCTAssertTrue(live.hidden.isEmpty, "agents started now show")
+        XCTAssertNil(live.turn(for: list[0].id))
     }
 
     func testLowShowsOnlyEachTurnsFirstThought() {
