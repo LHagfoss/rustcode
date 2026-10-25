@@ -31,34 +31,32 @@ public struct AppVersion: Comparable, Equatable, Sendable, CustomStringConvertib
 public struct AppRelease: Equatable, Sendable {
     public static let appAssetName = "rustcode-macos-aarch64-swift-app.zip"
     public static let checksumsAssetName = "SHA256SUMS"
-    public static let latestURL = URL(string: "https://api.github.com/repos/LHagfoss/rustcode/releases/latest")!
+    /// The web page GitHub redirects to the latest release's tag. Unlike the
+    /// REST API, which allows 60 unauthenticated requests an hour per address
+    /// and answered 403 once polling had spent them, it has no such limit.
+    public static let latestURL = URL(string: "https://github.com/LHagfoss/rustcode/releases/latest")!
 
     public var version: AppVersion
     public var tag: String
-    public var notes: String
     public var pageURL: URL?
     public var appURL: URL
     public var checksumsURL: URL?
 
-    /// Reads `GET /repos/{owner}/{repo}/releases/latest`. Nil for a release
-    /// without a macOS app build.
-    public init?(githubJSON data: Data) {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tag = json["tag_name"] as? String,
-              let version = AppVersion(tag) else { return nil }
-        let assets = (json["assets"] as? [[String: Any]]) ?? []
-        func asset(_ name: String) -> URL? {
-            assets.first { $0["name"] as? String == name }
-                .flatMap { $0["browser_download_url"] as? String }
-                .flatMap(URL.init(string:))
-        }
-        guard let app = asset(Self.appAssetName) else { return nil }
+    /// Reads the release page `releases/latest` redirected to,
+    /// `…/releases/tag/v0.95.0`; its assets download from the tag. Nil for any
+    /// other page.
+    public init?(releasePage url: URL) {
+        let parts = url.pathComponents
+        guard let index = parts.lastIndex(of: "tag"), index > 0, parts[index - 1] == "releases",
+              index + 1 < parts.count, let version = AppVersion(parts[index + 1]) else { return nil }
+        let tag = parts[index + 1]
+        let download = url.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("download").appendingPathComponent(tag)
         self.version = version
         self.tag = tag
-        self.notes = json["body"] as? String ?? ""
-        self.pageURL = (json["html_url"] as? String).flatMap(URL.init(string:))
-        self.appURL = app
-        self.checksumsURL = asset(Self.checksumsAssetName)
+        self.pageURL = url
+        self.appURL = download.appendingPathComponent(Self.appAssetName)
+        self.checksumsURL = download.appendingPathComponent(Self.checksumsAssetName)
     }
 
     /// The hex SHA-256 listed for `name` in a `sha256sum`-style file.
