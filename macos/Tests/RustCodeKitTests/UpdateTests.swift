@@ -8,16 +8,15 @@ final class UpdateTests: XCTestCase {
         XCTAssertNil(AppVersion("development"))
     }
 
-    func testReleaseNeedsTheMacAppAsset() throws {
-        let json = """
-        {"tag_name":"v0.70.0","body":"Notes","html_url":"https://github.com/LHagfoss/rustcode/releases/tag/v0.70.0",
-         "assets":[{"name":"rustcode-macos-aarch64-swift-app.zip","browser_download_url":"https://example.com/app.zip"},
-                   {"name":"SHA256SUMS","browser_download_url":"https://example.com/sums"}]}
-        """
-        let release = try XCTUnwrap(AppRelease(githubJSON: Data(json.utf8)))
-        XCTAssertEqual(release.version, AppVersion("0.70.0"))
-        XCTAssertEqual(release.checksumsURL?.absoluteString, "https://example.com/sums")
-        XCTAssertNil(AppRelease(githubJSON: Data(#"{"tag_name":"v1.0.0","assets":[]}"#.utf8)))
+    func testTheLatestReleasePageNamesItsAssets() throws {
+        let page = try XCTUnwrap(URL(string: "https://github.com/LHagfoss/rustcode/releases/tag/v0.95.0"))
+        let release = try XCTUnwrap(AppRelease(releasePage: page))
+        XCTAssertEqual(release.version, AppVersion("0.95.0"))
+        XCTAssertEqual(release.appURL.absoluteString,
+                       "https://github.com/LHagfoss/rustcode/releases/download/v0.95.0/rustcode-macos-aarch64-swift-app.zip")
+        XCTAssertEqual(release.checksumsURL?.absoluteString,
+                       "https://github.com/LHagfoss/rustcode/releases/download/v0.95.0/SHA256SUMS")
+        XCTAssertNil(AppRelease(releasePage: AppRelease.latestURL), "a page that did not redirect")
     }
 
     func testChecksumIsFoundByAssetName() {
