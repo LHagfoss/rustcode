@@ -134,9 +134,9 @@ extension TranscriptItem {
 /// a folded run hides its calls and its first row carries the summary.
 ///
 /// At the folding verbosities a turn only grows while it runs: what the
-/// model says stays where it said it, each run of calls between is one row
-/// of what they did, and its thoughts wait, read by the line under the turn
-/// instead (`activity`). Once done, the work between its first words and its
+/// model says stays where it said it, each finished round's calls are one
+/// row of what they did, the round still going shows its calls, and its
+/// thoughts wait, read by the line under the turn instead (`activity`). Once done, the work between its first words and its
 /// answer folds into one `Worked for…` row, which opens to all of it.
 public struct ToolFolding: Equatable, Sendable {
     /// Rows not drawn.
@@ -249,10 +249,15 @@ public struct ToolFolding: Equatable, Sendable {
     }
 
     /// Each run of calls between two things the model said is one row of
-    /// what they did. While `live`, a call still running waits for the line
-    /// under the turn, and joins its run once done.
+    /// what they did. While `live`, the round still going, the calls since
+    /// the model last said or thought something, shows each call as its own
+    /// card, a running one with its output; it folds into a row once the next
+    /// round starts (#2411).
     private mutating func foldRuns(_ work: ArraySlice<TranscriptItem>, verbosity: ToolVerbosity,
                                    open: Set<Int>, live: Bool) {
+        let currentRound = live
+            ? (work.lastIndex { Self.isSaid($0) || Self.isThought($0) }).map { $0 + 1 } ?? work.startIndex
+            : work.endIndex
         var run: [ToolItem] = []
         var ids: [Int] = []
         func close() {
@@ -265,14 +270,14 @@ public struct ToolFolding: Equatable, Sendable {
                                        edited: ToolRunFold.edited(by: run), lines: ToolRunFold.lines(of: run))
             if !isOpen { hidden.formUnion(ids.dropFirst()) }
         }
-        for item in work {
+        for (index, item) in zip(work.indices, work) {
             if Self.isThought(item) { continue }
             guard Self.isCall(item), case .tool(let tool) = item.content else {
                 close()
                 continue
             }
-            if live, !(tool.status?.isTerminal ?? true) {
-                hidden.insert(item.id)
+            if index >= currentRound {
+                close()
                 continue
             }
             // An edit stays out of the runs with its diff open.
