@@ -1,3 +1,18 @@
+## [v0.97.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.97.0) - 2026-10-26
+
+### Features
+- Show the reasoning effort as `xHigh`, not `Xhigh`. (#2419)
+- Show the context/usage meter from the start of a session, not only after the first turn ends. (#2420)
+- Make ⌘⏎ steer the running turn immediately instead of queueing. (#2421)
+- Recall the last message with ↑ in the macOS composer to edit and resend it. (#2422)
+- Stop the message Copy button flickering when the pointer moves onto it. (#2423)
+- Give the macOS chat more horizontal room on wide windows. (#2424)
+- Make the macOS sidebar resizable and remember its width. (#2425)
+- Move the macOS sidebar's Archived control up beside the Chats heading instead of a detached row. (#2426)
+- The chat you are working in moves to the top of the sidebar as soon as its turn starts, not only when it ends. (#2427)
+- The pointer turns into a pointing hand over links in the chat. (#2428)
+- macOS: while a turn runs, its current round shows each tool call with its status and output, and finished rounds fold into one row you can open. (#2429)
+- New chats get a short, generated title from your first request, in the macOS app and the terminal, without delaying the reply. (#2430)
 ## [v0.96.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.96.0) - 2026-10-25
 
 ### Features
