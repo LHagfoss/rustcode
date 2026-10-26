@@ -1333,6 +1333,10 @@ pub struct AppConfig {
     /// work. Manual `/recap` remains available.
     #[serde(default = "default_true")]
     pub auto_recap: bool,
+    /// Ask the active model for a short title as a new session's first turn
+    /// starts, in place of its first line. Off keeps the first line.
+    #[serde(default = "default_true")]
+    pub generate_session_titles: bool,
     /// Rewrite each prompt that starts a turn with the active model before
     /// running it. Off by default; `/pi` toggles it.
     #[serde(default)]
@@ -1589,6 +1593,8 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_recap: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    generate_session_titles: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     prompt_improver: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     yolo: Option<bool>,
@@ -1747,6 +1753,9 @@ impl Default for AppConfig {
             reduced_motion: false,
             scroll_lines: None,
             auto_recap: true,
+            // Engine tests run turns against mock providers that answer a set
+            // number of requests; a title request would take one of them.
+            generate_session_titles: !cfg!(test),
             prompt_improver: false,
             yolo: false,
             legacy_laya: None,
@@ -2150,6 +2159,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         reduced_motion: Some(config.reduced_motion),
         scroll_lines: config.scroll_lines,
         auto_recap: Some(config.auto_recap),
+        generate_session_titles: (!config.generate_session_titles).then_some(false),
         prompt_improver: Some(config.prompt_improver),
         yolo: config.yolo.then_some(true),
         legacy_laya: config.legacy_laya.clone(),
@@ -2276,6 +2286,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(auto_recap) = file.auto_recap {
         config.auto_recap = auto_recap;
+    }
+    if let Some(generate_session_titles) = file.generate_session_titles {
+        config.generate_session_titles = generate_session_titles;
     }
     if let Some(prompt_improver) = file.prompt_improver {
         config.prompt_improver = prompt_improver;
@@ -2469,6 +2482,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         reduced_motion: None,
         scroll_lines: None,
         auto_recap: None,
+        generate_session_titles: None,
         prompt_improver: None,
         yolo: None,
         legacy_laya: None,
