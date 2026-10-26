@@ -313,6 +313,9 @@ struct CodeBlock: View {
             HorizontalOverflow {
                 Text(highlighted)
                     .font(.system(.callout, design: .monospaced))
+                    // Every line shows: offered less height, a short block
+                    // could cut to its first line and an ellipsis (#2432).
+                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .padding(12)
             }

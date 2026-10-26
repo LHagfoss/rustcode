@@ -417,7 +417,7 @@ enum DebugDriver {
                 try? await Task.sleep(for: .milliseconds(16))
             }
         case "big":
-            // `big <prose|code|line|tool> <size> [chunks]`: a large reply
+            // `big <prose|code|line|tool|markdown> <size> [chunks]`: a large reply
             // streamed in `chunks` pieces at 30 ms each.
             let kind = parts.count > 1 ? parts[1] : "prose"
             let size = Int(parts.count > 2 ? parts[2] : "2000") ?? 2000
@@ -432,6 +432,7 @@ enum DebugDriver {
             case "code": "Here:\n\n```swift\n" + (0..<size).map { "let value\($0) = compute(\($0)) // line" }.joined(separator: "\n") + "\n```\n"
             case "wide": "Here:\n\n```swift\n" + (0..<size).map { "let value\($0) = compute(\($0)) // " + String(repeating: "wide ", count: 40) }.joined(separator: "\n") + "\n```\n"
             case "line": String(repeating: "word ", count: size)
+            case "markdown": DebugDriver.markdownSample
             default: (0..<size).map { "Paragraph \($0) of a long reply, with `code` and **bold** text." }.joined(separator: "\n\n")
             }
             let step = max(text.count / chunks, 1)
@@ -773,5 +774,52 @@ enum DebugDriver {
         default: break
         }
     }
+}
+#endif
+
+#if DEBUG
+extension DebugDriver {
+    /// `big markdown`: the tables and fences replies hold (#2432).
+    static let markdownSample = """
+    Here is the comparison:
+
+    | Option | Speed | Notes |
+    |:--|:-:|--:|
+    | `ripgrep` | fast | Skips `.gitignore`d files; the pipe in `a|b` stays in its cell |
+    | grep | slow | — |
+    | ast-grep | medium | Structural search over the syntax tree, with rewrites and lint rules for many languages |
+
+    A wide one:
+
+    | Crate | Version | License | Downloads | Last release | Maintainers | MSRV | Features |
+    |---|---|---|---|---|---|---|---|
+    | serde | 1.0.210 | MIT/Apache-2.0 | 400M | 2026-09-01 | dtolnay | 1.61 | derive, std, alloc |
+    | tokio | 1.40.0 | MIT | 250M | 2026-08-20 | tokio-rs | 1.70 | full, rt, macros |
+
+    Steps:
+
+    1. Install it:
+
+       ```sh
+       brew install ripgrep
+       rg --files | head
+       ```
+
+    2. Then run:
+       ```rust
+       fn main() {
+           println!("{}", "a|b"); // a pipe in code
+       }
+       ```
+
+    ```python
+    def total(xs: list[int]) -> int:
+        return sum(x for x in xs if x > 0)  # a long line that runs on past the width of the chat so it has to scroll sideways
+    ```
+
+    ~~~json
+    {"a": 1, "b": [true, null]}
+    ~~~
+    """
 }
 #endif
