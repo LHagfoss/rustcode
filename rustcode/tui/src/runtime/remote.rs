@@ -1103,6 +1103,8 @@ mod tests {
                 ..ModelProfile::default()
             }];
             state.record_function_calling_support(&self.endpoint, false);
+            // The provider counts requests; a session title would be another.
+            state.config.generate_session_titles = false;
             state
         }
     }
