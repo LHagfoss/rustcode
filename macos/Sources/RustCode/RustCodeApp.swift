@@ -1101,6 +1101,9 @@ final class DesktopModel: ObservableObject {
 
     /// Chats created here that the engine does not list yet.
     private var startedSessions: [String: SessionSummary] = [:]
+    /// When each chat was last used here. The engine's list can lag a running
+    /// turn, so a refresh mid-turn must not move the chat back down (#2418).
+    private var lastActivity: [String: Date] = [:]
 
     var isSelectedPinned: Bool { selectedSession.map(pinnedSessions.contains) ?? false }
 
@@ -1574,19 +1577,18 @@ final class DesktopModel: ObservableObject {
         startedSessions = startedSessions.filter { id, _ in !listed.contains { $0.id == id } }
         let scope = listedScope?.path
         let pinned = sessionPages.unlistedPinned(savedPinned, pinned: pinnedSessions, scope: scope)
-        sessions = SessionSummary.merging(listed + pinned, started: Array(startedSessions.values).filter {
+        sessions = SessionSummary.touched(SessionSummary.merging(listed + pinned, started: Array(startedSessions.values).filter {
             scope == nil || $0.cwd == scope
-        })
+        }), lastActivity)
         hasMoreSessions = sessionPages.hasMore
         rememberPinned()
     }
 
-    /// A turn just ended in `id`: it is the latest activity until the engine's
-    /// list says so too.
+    /// A turn just started or ended in `id`: it is the latest activity until
+    /// the engine's list says so too.
     private func touchSession(_ id: String) {
-        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        sessions[index].updatedAt = Date()
-        sessions = SessionSummary.byActivity(sessions)
+        lastActivity[id] = Date()
+        sessions = SessionSummary.touched(sessions, lastActivity)
     }
 
     /// Keep what the sidebar knows of each pinned chat for the next launch.
@@ -1873,6 +1875,9 @@ final class DesktopModel: ObservableObject {
         // keep spinning after its answer.
         let turn = isCommand ? nil : turnActivity.begin(id)
         if turn != nil, id == selectedSession { pollAgents() }
+        // The chat in use moves to the top as its turn starts, not only once
+        // a long turn ends (#2418); the end touches it again below.
+        touchSession(id)
         var stopped = false
         var cancelled = false
         var failure: String?
