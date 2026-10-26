@@ -249,6 +249,19 @@ public struct SessionSummary: Identifiable, Equatable, Codable, Sendable {
         }.map(\.element)
     }
 
+    /// `sessions` with the local last use of each chat, when later than what
+    /// the engine listed, latest activity first.
+    public static func touched(_ sessions: [SessionSummary], _ activity: [String: Date]) -> [SessionSummary] {
+        guard !activity.isEmpty else { return sessions }
+        return byActivity(sessions.map { session in
+            var session = session
+            if let used = activity[session.id], used > (session.updatedAt ?? .distantPast) {
+                session.updatedAt = used
+            }
+            return session
+        })
+    }
+
     /// `provider/model` reads as just the model.
     public var modelName: String? { model.map { $0.split(separator: "/").last.map(String.init) ?? $0 } }
 

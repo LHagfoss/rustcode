@@ -128,6 +128,20 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(SessionSummary.merging(listed, started: []).map(\.id), ["old", "new", "older", "undated"])
     }
 
+    /// #2418: a chat whose turn started here stays on top though the engine's
+    /// list, read mid-turn, still dates it earlier; a later listing wins.
+    func testLocalActivityOutranksAStaleListing() {
+        let now = Date()
+        let listed = [SessionSummary(id: "idle", cwd: "/p", updatedAt: now),
+                      SessionSummary(id: "running", cwd: "/p", updatedAt: now.addingTimeInterval(-600))]
+        let used = ["running": now.addingTimeInterval(10)]
+        XCTAssertEqual(SessionSummary.touched(listed, used).map(\.id), ["running", "idle"])
+        XCTAssertEqual(SessionSummary.touched(listed, [:]).map(\.id), ["idle", "running"])
+        let newer = [SessionSummary(id: "idle", cwd: "/p", updatedAt: now.addingTimeInterval(20)),
+                     SessionSummary(id: "running", cwd: "/p", updatedAt: now.addingTimeInterval(-600))]
+        XCTAssertEqual(SessionSummary.touched(newer, used).map(\.id), ["idle", "running"])
+    }
+
     func testAvailableCommandsCarryActionAndArguments() {
         let update = SessionUpdate(notificationParams: ["sessionId": "s", "update": [
             "sessionUpdate": "available_commands_update",
