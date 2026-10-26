@@ -195,23 +195,26 @@ private struct UserBubble: View {
     @State private var isHovered = false
 
     var body: some View {
-        FoldingMessage(id: id, text: text, folds: true, isExpanded: isExpanded,
-                       chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
-            Group {
-                if text.hasPrefix("/"), findQuery.isEmpty {
-                    slashCommandText(text)
-                } else {
-                    Text(FindHighlight.apply(ChatLinks.linked(text), query: findQuery))
+        // The bubble and its Copy button share one hover region, so moving
+        // the pointer onto the button does not drop the bubble's hover and
+        // hide the button again, which flickered it in and out (#2415).
+        ZStack(alignment: .topTrailing) {
+            FoldingMessage(id: id, text: text, folds: true, isExpanded: isExpanded,
+                           chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
+                Group {
+                    if text.hasPrefix("/"), findQuery.isEmpty {
+                        slashCommandText(text)
+                    } else {
+                        Text(FindHighlight.apply(ChatLinks.linked(text), query: findQuery))
+                    }
                 }
+                .textSelection(.enabled)
+                .lineSpacing(2)
             }
-            .textSelection(.enabled)
-            .lineSpacing(2)
+            HoverCopy(help: "Copy message", isShown: isHovered) { Clipboard.copy(text) }
+                .padding(6)
         }
             .onHover { isHovered = $0 }
-            .overlay(alignment: .topTrailing) {
-                HoverCopy(help: "Copy message", isShown: isHovered) { Clipboard.copy(text) }
-                    .padding(6)
-            }
             .messageMenu { [text, original, id, messageActions] in
                 var items = [MessageMenuItem(title: "Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }]
                 if let actions = messageActions {
@@ -283,33 +286,36 @@ private struct AssistantMessage: View {
 
     var body: some View {
         let parsed = parsed
-        VStack(alignment: .leading, spacing: 10) {
-            FoldingMessage(id: id, text: text, folds: false,
-                           isExpanded: isExpanded) {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
-                        let isLast = index == parsed.blocks.count - 1
-                        switch block {
-                        case .markdown(let text):
-                            MarkdownText(text: text, visualizations: true, isStreaming: isStreaming && isLast)
-                        case .thinking(let text, let isComplete):
-                            ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
+        // The reply and its Copy button share one hover region, so moving the
+        // pointer onto the button does not drop the reply's hover and hide the
+        // button again, which flickered it in and out (#2415).
+        ZStack(alignment: .topTrailing) {
+            VStack(alignment: .leading, spacing: 10) {
+                FoldingMessage(id: id, text: text, folds: false,
+                               isExpanded: isExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
+                            let isLast = index == parsed.blocks.count - 1
+                            switch block {
+                            case .markdown(let text):
+                                MarkdownText(text: text, visualizations: true, isStreaming: isStreaming && isLast)
+                            case .thinking(let text, let isComplete):
+                                ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
+                            }
                         }
+                        if let summary = parsed.summary { SummaryCard(summary: summary) }
                     }
-                    if let summary = parsed.summary { SummaryCard(summary: summary) }
                 }
+                // Never while the reply is written, so the footer cannot claim it is done.
+                if !isStreaming, let turn { footer(turn) }
             }
-            // Never while the reply is written, so the footer cannot claim it is done.
-            if !isStreaming, let turn { footer(turn) }
-        }
-        .onHover { isHovered = $0 }
-        .overlay(alignment: .topTrailing) {
             // Out of the way until the pointer is on the reply; it floats
             // over it, so nothing moves when it shows.
             if !isStreaming {
                 HoverCopy(help: "Copy reply", isShown: isHovered) { Clipboard.copy(AssistantSummary.split(text).prose) }
             }
         }
+        .onHover { isHovered = $0 }
         .messageMenu { [text, messageActions] in
             var items = [
                 MessageMenuItem(title: "Copy Reply", systemImage: "doc.on.doc") { Clipboard.copy(AssistantSummary.split(text).prose) },
