@@ -73,6 +73,17 @@ final class ModelDefaultsTests: XCTestCase {
         XCTAssertEqual(options.choices.map(\.id), ["fast", "deep"])
         XCTAssertTrue(defaults.efforts(for: "fast").isEmpty)
     }
+
+    func testXhighLabelReadsAsXHighKeepingTheWireValue() throws {
+        let json = Data("""
+        {"model":"deep","effort":"default","models":[
+          {"name":"deep","model":"deep-1","efforts":["default","low","xhigh"]}]}
+        """.utf8)
+        let defaults = try ModelDefaults(json: json)
+        let choices = defaults.efforts(for: "deep")
+        XCTAssertEqual(choices.map(\.name), ["Off", "Low", "xHigh"])
+        XCTAssertEqual(choices.map(\.id), ["default", "low", "xhigh"])
+    }
 }
 
 final class NotificationTextTests: XCTestCase {

@@ -283,6 +283,17 @@ public struct ModelChoice: Identifiable, Equatable, Sendable {
     public var id: String
     public var name: String
     public var detail: String?
+
+    /// How an effort level reads in a picker: `Off` for the provider default,
+    /// `xHigh` (not the awkward `Xhigh`), else the first letter capitalised.
+    /// The `id` stays the canonical wire value.
+    public static func effortLabel(_ effort: String) -> String {
+        switch effort {
+        case "default": return "Off"
+        case "xhigh": return "xHigh"
+        default: return effort.prefix(1).uppercased() + effort.dropFirst()
+        }
+    }
 }
 
 public struct ModelOptions: Equatable, Sendable {

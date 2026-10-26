@@ -70,7 +70,8 @@ pub use apply::{
 pub use attachments::save_image_attachment;
 pub use config::{
     AgentMode, ApiProtocol, AppConfig, ModelProfile, MonthlyUsage, SandboxMode, SessionMeta,
-    ToolProtocol, config_dir, effort_choices, sandbox_effective_description, save_config,
+    ToolProtocol, config_dir, effort_choices, effort_label, sandbox_effective_description,
+    save_config,
 };
 pub use context::{
     SkillInfo, discover_skills, estimate_message_tokens, estimate_tokens, tool_system_prompt,

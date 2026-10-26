@@ -441,7 +441,7 @@ struct TranscriptView: View {
                 Text(current?.model ?? store.selectedSession?.model ?? "Model")
                     .lineLimit(1).truncationMode(.middle)
                 if let effort = settings?.reasoningEffort, effort != "default" {
-                    Text(effort.capitalized).foregroundStyle(.secondary)
+                    Text(SessionModelChoice.effortLabel(effort)).foregroundStyle(.secondary)
                 }
             }
             .font(.subheadline.weight(.medium))

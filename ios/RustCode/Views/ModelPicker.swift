@@ -28,7 +28,7 @@ struct ModelPicker: View {
                             Task { await store.setSessionSettings(model: settings.selectedModel, reasoningEffort: effort) }
                         })) {
                             ForEach(current?.reasoningEfforts ?? [], id: \.self) { effort in
-                                Text(effort.capitalized).tag(effort)
+                                Text(SessionModelChoice.effortLabel(effort)).tag(effort)
                             }
                         }
                         .disabled(!canChange)

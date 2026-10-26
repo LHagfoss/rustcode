@@ -49,11 +49,7 @@ fn effort_option(state: &crate::app::AppState) -> Option<SessionConfigOption> {
     let options = efforts
         .iter()
         .map(|effort| {
-            let name = if effort == "default" {
-                "Off".to_owned()
-            } else {
-                capitalized(effort)
-            };
+            let name = crate::remote::projection::effort_label(effort);
             SessionConfigSelectOption::new(effort.clone(), name)
         })
         .collect::<Vec<_>>();
@@ -62,14 +58,6 @@ fn effort_option(state: &crate::app::AppState) -> Option<SessionConfigOption> {
             .category(SessionConfigOptionCategory::ThoughtLevel)
             .description("Reasoning effort"),
     )
-}
-
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or_default()
 }
 
 pub(crate) fn handle_set_config_option(

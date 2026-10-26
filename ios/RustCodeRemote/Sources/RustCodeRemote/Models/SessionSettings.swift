@@ -9,6 +9,17 @@ public struct SessionModelChoice: Hashable, Sendable {
         self.model = model
         self.reasoningEfforts = reasoningEfforts
     }
+
+    /// How an effort level reads in the picker: `Off` for the provider default,
+    /// `xHigh` (not the awkward `Xhigh`), else the first letter capitalised.
+    /// The wire value is unchanged.
+    public static func effortLabel(_ effort: String) -> String {
+        switch effort {
+        case "default": return "Off"
+        case "xhigh": return "xHigh"
+        default: return effort.prefix(1).uppercased() + effort.dropFirst()
+        }
+    }
 }
 
 /// Choices supplied by the host, scoped to this session. Absence means unsupported.
