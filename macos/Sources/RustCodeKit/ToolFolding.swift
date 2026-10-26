@@ -133,11 +133,11 @@ extension TranscriptItem {
 /// Which tool cards a chat shows at a verbosity: rows stay one per item, so
 /// a folded run hides its calls and its first row carries the summary.
 ///
-/// At the folding verbosities a turn only grows while it runs: what the
-/// model says stays where it said it, each finished round's calls are one
-/// row of what they did, the round still going shows its calls, and its
-/// thoughts wait, read by the line under the turn instead (`activity`). Once done, the work between its first words and its
-/// answer folds into one `Worked for…` row, which opens to all of it.
+/// At the folding verbosities a running turn shows one step at a time: what
+/// the model last said, and the line under the turn saying what it does now
+/// (`activity`). Once done, its work folds into one `Worked for…` row above
+/// its answer, which opens to every step: what the model said and thought,
+/// and each run of calls as one row of what they did.
 public struct ToolFolding: Equatable, Sendable {
     /// Rows not drawn.
     public private(set) var hidden: Set<Int> = []
@@ -209,34 +209,34 @@ public struct ToolFolding: Equatable, Sendable {
 
     private mutating func foldTurn(_ turn: ArraySlice<TranscriptItem>, verbosity: ToolVerbosity,
                                    open: Set<Int>, live: Bool) {
-        // A running turn's thoughts are read by the line under it.
-        if live { hidden.formUnion(turn.filter(Self.isThought).map(\.id)) }
-        guard let first = turn.firstIndex(where: Self.isCall),
-              let last = turn.lastIndex(where: Self.isWork) else { return }
+        if live {
+            foldLiveTurn(turn)
+            return
+        }
+        guard turn.contains(where: Self.isCall), let last = turn.lastIndex(where: Self.isWork) else { return }
         // A turn that worked says so with what it did, not its reasoning; a
         // reply without calls keeps its thought.
         hidden.formUnion(turn.filter(Self.isThought).map(\.id))
-        // The work starts at the call, or at what the model said after its
-        // first words when that comes before the first call.
-        let start = turn[..<first].filter(Self.isSaid).dropFirst().first
-            .flatMap { item in turn.firstIndex { $0.id == item.id } } ?? first
-        if live {
-            foldRuns(turn[start...], verbosity: verbosity, open: open, live: true)
-            return
-        }
-        let work = turn[start...last]
+        // The work is everything before the answer, the model's first words
+        // too, so a finished turn reads as its answer under one row (#2435).
+        let work = turn[turn.startIndex...last]
         let calls = work.filter(Self.isCall).compactMap { item -> ToolItem? in
             if case .tool(let tool) = item.content { tool } else { nil }
         }
-        let anchor = work[start].id
+        let anchor = work[work.startIndex].id
+        // The row is drawn on the anchor, so it shows even when that is a thought.
+        hidden.remove(anchor)
         let isOpen = open.contains(TurnFold.key(for: anchor))
         turns[anchor] = TurnFold(anchor: anchor, calls: calls.count,
                                  failed: calls.filter { $0.status == .failed }.count, isOpen: isOpen,
                                  elapsed: turn.last { $0.turn != nil }?.turn?.elapsed)
-        foldRuns(work, verbosity: verbosity, open: open, live: false)
+        foldRuns(work, verbosity: verbosity, open: open)
         let inside = work.map(\.id).filter { $0 != anchor }
         if isOpen {
             nested.formUnion(inside)
+            // Opened, the turn's steps show what the model thought between
+            // them; a thought inside a run of calls stays with the run.
+            hidden.subtract(Self.thoughtsBetweenSteps(in: work))
             return
         }
         hidden.formUnion(inside)
@@ -248,16 +248,35 @@ public struct ToolFolding: Equatable, Sendable {
         }
     }
 
+    /// While it works, a turn shows one step at a time instead of a growing
+    /// list: what the model last said, and the line under the turn saying
+    /// what it does now (`activity`). Each step goes as the next one comes;
+    /// once done, the turn folds and opens to all of them. Agents it started
+    /// keep their row, so their progress can be followed.
+    private mutating func foldLiveTurn(_ turn: ArraySlice<TranscriptItem>) {
+        let lastSaid = turn.last(where: Self.isSaid)?.id
+        for item in turn where item.id != lastSaid {
+            if case .tool(let tool) = item.content, tool.isAgentSpawn { continue }
+            hidden.insert(item.id)
+        }
+    }
+
+    /// The thoughts of `work` not between two calls of one run.
+    private static func thoughtsBetweenSteps(in work: ArraySlice<TranscriptItem>) -> [Int] {
+        var thoughts: [Int] = []
+        for index in work.indices where isThought(work[index]) {
+            let before = work[..<index].last { !isThought($0) }
+            let after = work[work.index(after: index)...].first { !isThought($0) }
+            if !(before.map(isCall) ?? false && after.map(isCall) ?? false) {
+                thoughts.append(work[index].id)
+            }
+        }
+        return thoughts
+    }
+
     /// Each run of calls between two things the model said is one row of
-    /// what they did. While `live`, the round still going, the calls since
-    /// the model last said or thought something, shows each call as its own
-    /// card, a running one with its output; it folds into a row once the next
-    /// round starts (#2411).
-    private mutating func foldRuns(_ work: ArraySlice<TranscriptItem>, verbosity: ToolVerbosity,
-                                   open: Set<Int>, live: Bool) {
-        let currentRound = live
-            ? (work.lastIndex { Self.isSaid($0) || Self.isThought($0) }).map { $0 + 1 } ?? work.startIndex
-            : work.endIndex
+    /// what they did, which opens to the calls.
+    private mutating func foldRuns(_ work: ArraySlice<TranscriptItem>, verbosity: ToolVerbosity, open: Set<Int>) {
         var run: [ToolItem] = []
         var ids: [Int] = []
         func close() {
@@ -270,13 +289,9 @@ public struct ToolFolding: Equatable, Sendable {
                                        edited: ToolRunFold.edited(by: run), lines: ToolRunFold.lines(of: run))
             if !isOpen { hidden.formUnion(ids.dropFirst()) }
         }
-        for (index, item) in zip(work.indices, work) {
+        for item in work {
             if Self.isThought(item) { continue }
             guard Self.isCall(item), case .tool(let tool) = item.content else {
-                close()
-                continue
-            }
-            if index >= currentRound {
                 close()
                 continue
             }

@@ -23,10 +23,10 @@ struct TranscriptRow: View, Equatable {
             if let turnFold {
                 VStack(alignment: .leading, spacing: 12) {
                     TurnSummary(fold: turnFold)
-                    if turnFold.isOpen { content.insideTurn() }
+                    if turnFold.isOpen { content.pipelineStep(node) }
                 }
             } else if isNested {
-                content.insideTurn()
+                content.pipelineStep(node)
             } else {
                 content
             }
@@ -41,6 +41,20 @@ struct TranscriptRow: View, Equatable {
             .padding(isCurrentMatch ? -6 : 0)
             .animation(.snappy(duration: 0.2), value: isCurrentMatch)
     }
+
+    /// This row's mark on an opened turn's rail.
+    private var node: PipelineNode {
+        switch item.content {
+        case .assistant: return .said
+        case .thinking: return .thought
+        case .tool(let tool):
+            return tool.status == .failed || (fold?.failed ?? 0) > 0 ? .failed : .call
+        default: return .call
+        }
+    }
+
+    /// Inside an opened turn a thought is one quiet line, not a box.
+    private var isStep: Bool { isNested || turnFold?.isOpen == true }
 
     @ViewBuilder
     private var content: some View {
@@ -59,6 +73,8 @@ struct TranscriptRow: View, Equatable {
         case .assistant(let text):
             AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
                              isExpanded: isExpanded || isCurrentMatch)
+        case .thinking(let text) where isStep:
+            ThoughtLine(text: text)
         case .thinking(let text):
             ThinkingBlock(text: text, isLive: isStreaming, duration: item.duration, isSummary: item.isReasoningSummary)
         case .tool(let tool):
@@ -1111,14 +1127,77 @@ struct StoppedTurnRow: View {
 }
 
 extension View {
-    /// A row inside an opened turn: indented, with a quiet line down its
-    /// left through to the next row.
-    func insideTurn() -> some View {
-        padding(.leading, 16)
-            .background(alignment: .leading) {
-                Rectangle().fill(.quaternary).frame(width: 1)
+    /// A step of an opened turn: a rail down the left through every step,
+    /// with a mark where each one starts.
+    func pipelineStep(_ node: PipelineNode) -> some View {
+        padding(.leading, 30)
+            .background(alignment: .topLeading) {
+                // Through the gap to the next row too, so the rail is unbroken.
+                Rectangle().fill(Color.secondary.opacity(0.22)).frame(width: 1.5)
                     .padding(.bottom, -18)
+                    .padding(.leading, 8.25)
             }
+            .overlay(alignment: .topLeading) { PipelineDot(node: node).padding(.top, 2) }
+    }
+}
+
+/// What a step of an opened turn is, as its mark on the rail shows it.
+enum PipelineNode {
+    case said, call, failed, thought
+}
+
+private struct PipelineDot: View {
+    let node: PipelineNode
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.chatBackground).frame(width: 13, height: 13)
+            switch node {
+            case .said: Circle().fill(Color.primary.opacity(0.75)).frame(width: 7, height: 7)
+            case .call: Circle().strokeBorder(Color.secondary, lineWidth: 1.5).frame(width: 9, height: 9)
+            case .failed: Circle().strokeBorder(Color.red.opacity(0.85), lineWidth: 1.5).frame(width: 9, height: 9)
+            case .thought: Circle().fill(Color.secondary.opacity(0.45)).frame(width: 5, height: 5)
+            }
+        }
+        .frame(width: 18, height: 13)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A thought in an opened turn: its headings on one quiet line, where a
+/// reasoning box would have stood; the whole of it in the tooltip and Copy.
+private struct ThoughtLine: View {
+    let text: String
+
+    private var lines: [String] {
+        text.replacingOccurrences(of: "**", with: "")
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// The `**Heading**` lines a summary is made of, else its first line.
+    private var headings: [String] {
+        let marked = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.count > 4 && $0.hasPrefix("**") && $0.hasSuffix("**") }
+            .map { $0.replacingOccurrences(of: "**", with: "") }
+        return marked.isEmpty ? Array(lines.prefix(1)) : marked
+    }
+
+    var body: some View {
+        let lines = lines
+        Text(headings.joined(separator: " · "))
+            .font(.callout)
+            .italic()
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .help(lines.joined(separator: "\n"))
+            .contextMenu {
+                Button("Copy Thinking", systemImage: "doc.on.doc") { Clipboard.copy(text) }
+            }
+            .accessibilityLabel(lines.joined(separator: ", "))
     }
 }
 
@@ -1172,6 +1251,9 @@ private struct TurnSummary: View {
                     help: fold.isOpen ? "Hide the work" : "Show the work") {
             toggle(fold.key)
         } extra: {
+            if fold.elapsed != nil {
+                Text("· \(fold.calls) tool \(fold.calls == 1 ? "call" : "calls")").foregroundStyle(.tertiary)
+            }
             if fold.failed > 0 { FailedCount(count: fold.failed) }
         }
     }
