@@ -1,3 +1,10 @@
+## [v0.98.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.98.2) - 2026-10-26
+
+### Fixes
+- Move Archived into the sidebar toolbar and unify the sidebar footer background. (#2452)
+- Align chat-link cursor hit areas with rendered text and normalize underline thickness. (#2453)
+- Checking a finished background task returns the end of its output instead of resending all of it. (#2456)
+- The Mac app again shows every message and round of a running turn, and the header's context meter updates after each round. (#2454)
 ## [v0.98.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.98.1) - 2026-10-26
 
 ### Fixes
