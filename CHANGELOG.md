@@ -1,3 +1,9 @@
+## [v0.98.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.98.0) - 2026-10-26
+
+### Features
+- The sidebar's divider now lines up with the sidebar's edge. (#2436)
+- Tables with short separators, and code blocks inside list items, now render properly in the macOS chat. (#2437)
+- macOS: a working turn shows one step at a time; a finished turn shows just its answer under a `Worked for …` row that opens to every step on a rail. (#2438)
 ## [v0.97.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.97.0) - 2026-10-26
 
 ### Features
