@@ -19,8 +19,17 @@ struct ContentView: View {
             if model.showsSidebar {
                 SessionSidebar(model: model, updater: model.updater)
                     .frame(width: sidebarClampedWidth)
+                    // The line sits on the sidebar's edge, its grab area
+                    // either side of it; laid out beside the sidebar, the
+                    // handle's own width showed as a strip of sidebar past
+                    // the line (#2433). Above the chat, so the half over it
+                    // still takes the drag.
+                    .overlay(alignment: .trailing) {
+                        SidebarResizeHandle(width: $sidebarWidth)
+                            .offset(x: SidebarResizeHandle.width / 2)
+                    }
+                    .zIndex(1)
                     .transition(.move(edge: .leading))
-                SidebarResizeHandle(width: $sidebarWidth)
             }
             ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
@@ -59,7 +68,7 @@ struct ContentView: View {
         // beside it are left out.
         .overlay {
             ToastStack(model: model,
-                       leadingInset: model.showsSidebar ? sidebarClampedWidth + SidebarResizeHandle.width : 0,
+                       leadingInset: model.showsSidebar ? sidebarClampedWidth : 0,
                        trailingInset: model.showsPreview ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
         }
     }
