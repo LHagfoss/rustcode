@@ -29,6 +29,9 @@ public enum MarkdownBlock: Sendable, Equatable {
         var blocks: [MarkdownBlock] = []
         var paragraph: [String] = []
         var code: (fence: MarkdownFence, opening: String, lines: [String])?
+        /// How far the open fence is indented: a fence in a list item is, and
+        /// its lines lose that much, so the code does not start indented.
+        var codeIndent = 0
 
         func isVisualization(_ fence: MarkdownFence) -> Bool {
             visualizations && Visualization.isInfoString(fence.language)
@@ -56,7 +59,8 @@ public enum MarkdownBlock: Sendable, Equatable {
                     }
                     code = nil
                 } else {
-                    code?.lines.append(line)
+                    let indent = min(codeIndent, line.prefix { $0 == " " }.count)
+                    code?.lines.append(String(line.dropFirst(indent)))
                 }
                 continue
             }
@@ -64,6 +68,7 @@ public enum MarkdownBlock: Sendable, Equatable {
             if let fence = MarkdownFence.opening(line) {
                 flushParagraph()
                 code = (fence, line, [])
+                codeIndent = line.prefix { $0 == " " }.count
             } else if index < lines.count,
                       let headers = tableCells(line),
                       let separators = tableCells(lines[index]),
@@ -147,9 +152,10 @@ public enum MarkdownBlock: Sendable, Equatable {
             || trimmed.hasPrefix(">") || isRule(trimmed) || MarkdownFence.opening(line) != nil
     }
 
+    /// `---`, `:--`, `:-:`: one dash is enough, as GitHub has it (#2432).
     private static func isTableSeparator(_ cell: String) -> Bool {
         let dashes = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-        return dashes.count >= 3 && dashes.allSatisfy { $0 == "-" }
+        return !dashes.isEmpty && dashes.allSatisfy { $0 == "-" }
     }
 
     /// Pipes escaped with a backslash or inside code spans belong to the cell.
