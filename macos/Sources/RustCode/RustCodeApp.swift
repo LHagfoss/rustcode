@@ -1204,6 +1204,21 @@ final class DesktopModel: ObservableObject {
         images = message.images.compactMap { try? ImageAttachment.load($0) }
     }
 
+    /// ↑ on an empty composer: bring the last message the user sent back to
+    /// edit and resend, as the terminal does. False when there is nothing to
+    /// recall or the composer already holds something, so ↑ still moves the
+    /// cursor within the text.
+    @discardableResult
+    func recallLastMessage() -> Bool {
+        guard draftCommand == nil, draft.isEmpty, attachments.isEmpty, images.isEmpty else { return false }
+        guard let message = transcript.items.last(where: { item in
+            if case .user(let text) = item.content { return !ToolAttachment.isAttachment(text) }
+            return false
+        }), case .user(let text) = message.content else { return false }
+        edit(text)
+        return true
+    }
+
     /// Retry: the chat goes back to just before message `id` and sends it
     /// again, so it does not show twice (#2278). Messages after it go too,
     /// once the user confirms. An engine without rewind sends it again below.

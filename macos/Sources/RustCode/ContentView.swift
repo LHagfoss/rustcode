@@ -1813,9 +1813,14 @@ private struct Composer: View {
                     return .handled
                 }
                 .onKeyPress(.upArrow) {
-                    guard !model.commandSuggestions.isEmpty else { return .ignored }
-                    model.moveCommandSelection(-1)
-                    return .handled
+                    if !model.commandSuggestions.isEmpty {
+                        model.moveCommandSelection(-1)
+                        return .handled
+                    }
+                    // An empty composer: ↑ recalls the last message to edit
+                    // and resend, as the terminal does. With text in it, ↑
+                    // moves the cursor within the text.
+                    return model.recallLastMessage() ? .handled : .ignored
                 }
                 .onKeyPress(.downArrow) {
                     guard !model.commandSuggestions.isEmpty else { return .ignored }
