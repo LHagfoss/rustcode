@@ -56,7 +56,7 @@ struct MarkdownText: View {
                         StreamingProse(text: text).lineSpacing(2)
                     } else {
                         let shown = FindHighlight.apply(text, query: findQuery)
-                        Text(shown).linkCursor(shown).lineSpacing(2)
+                        Text(shown).lineSpacing(2).linkCursor(shown, lineSpacing: 2)
                     }
                 case .block(let block):
                     view(for: block)
@@ -121,7 +121,7 @@ struct MarkdownText: View {
             WrappingTable(columns: headers.count) {
                 ForEach(Array(headers.enumerated()), id: \.offset) { _, cell in
                     let shown = highlighted(cell)
-                    Text(shown).linkCursor(shown).fontWeight(.semibold)
+                    Text(shown).fontWeight(.semibold).linkCursor(shown, fontWeight: .semibold)
                         .tableCell(isHeader: true)
                 }
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
@@ -186,12 +186,12 @@ enum ChatLinks {
         underline(&string)
     }
 
-    /// The underline is a fainter brand colour than the text: drawn as thick
-    /// as the font is heavy, a full-strength one read as a bar under bold
-    /// and heading links (#2413).
+    /// Keep link underlines restrained and the same thickness for regular,
+    /// bold, and heading text (#2413).
     private static func underline(_ string: inout AttributedString) {
         for run in string.runs where run.link != nil {
             string[run.range].underlineStyle = Text.LineStyle(pattern: .solid, color: Color.brand.opacity(0.45))
+            string[run.range].appKit.underlineStyle = .single
             string[run.range].appKit.underlineColor = NSColor(Color.brand).withAlphaComponent(0.45)
             string[run.range].foregroundColor = Color.brand
         }
@@ -208,9 +208,9 @@ extension View {
     /// The pointing hand over the links of `text`, this view's own text, and
     /// the text cursor over the rest (#2413). Text with no link is left as is.
     @ViewBuilder
-    func linkCursor(_ text: AttributedString) -> some View {
+    func linkCursor(_ text: AttributedString, fontWeight: Font.Weight? = nil, lineSpacing: CGFloat = 0) -> some View {
         if #available(macOS 15, *), text.runs.contains(where: { $0.link != nil }) {
-            modifier(LinkCursor(text: text))
+            modifier(LinkCursor(text: text, fontWeight: fontWeight, lineSpacing: lineSpacing))
         } else {
             self
         }
@@ -233,6 +233,8 @@ private final class LinkFrames {
 @available(macOS 15, *)
 private struct LinkCursor: ViewModifier {
     let text: AttributedString
+    let fontWeight: Font.Weight?
+    let lineSpacing: CGFloat
     @State private var frames = LinkFrames()
     @State private var overLink = false
 
@@ -240,6 +242,8 @@ private struct LinkCursor: ViewModifier {
         content
             .overlay {
                 marked
+                    .fontWeight(fontWeight)
+                    .lineSpacing(lineSpacing)
                     .textRenderer(LinkFrameRenderer(frames: frames))
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -427,15 +431,19 @@ struct StreamingProse: View {
         let head = StreamingSplit.settledLength(of: text.characters, settled: settled)
         VStack(alignment: .leading, spacing: 0) {
             if head > 0 {
-                Text(AttributedString(text[text.startIndex..<index(head, count: count)]))
+                let settledText = AttributedString(text[text.startIndex..<index(head, count: count)])
+                Text(settledText).linkCursor(settledText, lineSpacing: 2)
             }
             Group {
                 if #available(macOS 15, *), reveals, !reduceMotion {
                     TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !arrivals.isAnimating)) { context in
-                        faded(from: head > 0 ? head + 1 : 0, count: count).textRenderer(FadeInRenderer(now: context.date))
+                        faded(from: head > 0 ? head + 1 : 0, count: count)
+                            .textRenderer(FadeInRenderer(now: context.date))
+                            .linkCursor(AttributedString(text[index(head > 0 ? head + 1 : 0, count: count)...]), lineSpacing: 2)
                     }
                 } else {
-                    Text(AttributedString(text[index(head > 0 ? head + 1 : 0, count: count)...]))
+                    let tailText = AttributedString(text[index(head > 0 ? head + 1 : 0, count: count)...])
+                    Text(tailText).linkCursor(tailText, lineSpacing: 2)
                 }
             }
         }
