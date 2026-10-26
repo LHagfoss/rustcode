@@ -630,6 +630,34 @@ enum DebugDriver {
                                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) {
                 NSApp.postEvent(event, atStart: false)
             }
+        case "mouse":
+            // `mouse down|drag|up <x> <y>`: a left-button event at a point in
+            // the window, from its top-left, as the mouse sends it.
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  parts.count > 3, let x = Double(parts[2]), let y = Double(parts[3]) else { break }
+            let type: NSEvent.EventType = switch parts[1] {
+            case "down": .leftMouseDown
+            case "drag": .leftMouseDragged
+            default: .leftMouseUp
+            }
+            let point = NSPoint(x: x, y: (window.contentView?.frame.height ?? 0) - y)
+            if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                                              pressure: type == .leftMouseUp ? 0 : 1) {
+                NSApp.postEvent(event, atStart: false)
+            }
+        case "responder":
+            // What has the keyboard, and what the window hits at a point.
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { break }
+            var lines = ["first \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "-")"]
+            if parts.count > 2, let x = Double(parts[1]), let y = Double(parts[2]), let content = window.contentView {
+                let hit = content.hitTest(NSPoint(x: x, y: content.frame.height - y))
+                var chain: [String] = []
+                var view = hit
+                while let current = view, chain.count < 8 { chain.append(String(describing: type(of: current))); view = current.superview }
+                lines.append("hit " + chain.joined(separator: " < "))
+            }
+            try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/responder", atomically: true, encoding: .utf8)
         case "sidebarend":
             // Scroll the sidebar's chat list to its end, as a reader would.
             func walk(_ view: NSView) -> NSScrollView? {
