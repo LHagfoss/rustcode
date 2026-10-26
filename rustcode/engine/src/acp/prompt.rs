@@ -67,6 +67,28 @@ impl SessionTitleTracker {
     }
 }
 
+/// A new session's title, asked for beside its first turn, which does not
+/// wait for it: the client shows the first line until it comes (#2416).
+fn spawn_session_title(
+    state: &Arc<Mutex<crate::app::AppState>>,
+    client: &Arc<reqwest::Client>,
+    connection: &ConnectionTo<Client>,
+    session_id: &str,
+    prompt: &str,
+) {
+    let (state, client, connection) = (Arc::clone(state), Arc::clone(client), connection.clone());
+    let (session_id, prompt) = (session_id.to_owned(), prompt.to_owned());
+    tokio::spawn(async move {
+        let title =
+            crate::app::actions::generate_session_title(&state, &client, &session_id, &prompt)
+                .await;
+        if let Some(title) = title {
+            let update = SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title));
+            let _ = send_updates(&connection, &session_id, vec![update]);
+        }
+    });
+}
+
 /// Push the prompt onto history and, like the terminal does, name a session
 /// with no saved title after its first prompt. The saved title is what keeps
 /// the name stable once compaction moves that prompt out of history.
@@ -383,7 +405,15 @@ pub(crate) async fn run_prompt(
                 });
             }
         };
-        record_prompt(&mut *state.lock().await, &session_id, &text);
+        let is_first_prompt = {
+            let mut state = state.lock().await;
+            let is_first = !crate::config::session_has_content(&state.history);
+            record_prompt(&mut state, &session_id, &text);
+            is_first
+        };
+        if is_first_prompt {
+            spawn_session_title(&state, &client, &connection, &session_id, &text);
+        }
         // Send the context and token usage as the turn begins, so a long
         // running turn keeps the client's meter current instead of only
         // updating once the turn ends.

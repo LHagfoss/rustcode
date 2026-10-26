@@ -130,7 +130,15 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
         lease: Some(lease.clone()),
     };
     loop {
-        let (next_prompt, is_wakeup, is_promoted_steer, turn_context, turn_session_id, turn_id) = {
+        let (
+            next_prompt,
+            is_wakeup,
+            is_promoted_steer,
+            is_first_prompt,
+            turn_context,
+            turn_session_id,
+            turn_id,
+        ) = {
             let mut s = state.lock().await;
             // Cancellation owns the current turn until it reaches this
             // boundary. Do not dequeue the next item while the token is
@@ -209,6 +217,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
                 prompt,
                 is_wakeup,
                 is_promoted_steer,
+                is_first_prompt,
                 turn_context,
                 turn_session_id,
                 turn_id,
@@ -242,6 +251,27 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             s.end_turn_identity(&turn_id);
             super::clear_turn_steerability_for_session(&mut s, &turn_session_id);
             break;
+        }
+        // A new session's title is asked for beside its first turn, which
+        // does not wait for it; the first line stays until it comes (#2416).
+        if is_first_prompt {
+            let (state, client) = (Arc::clone(&state), client.clone());
+            let (session_id, prompt) = (turn_session_id.clone(), next_prompt.clone());
+            tokio::spawn(async move {
+                if crate::app::actions::generate_session_title(
+                    &state,
+                    &client,
+                    &session_id,
+                    &prompt,
+                )
+                .await
+                .is_some()
+                {
+                    let mut s = state.lock().await;
+                    s.invalidate_session_title_cache();
+                    s.request_redraw();
+                }
+            });
         }
         // The token routes one turn; the next turn gets its own.
         state.lock().await.provider_turn_state = None;
