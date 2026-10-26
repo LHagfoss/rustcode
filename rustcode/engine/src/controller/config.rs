@@ -31,6 +31,13 @@ pub fn effort_choices(profile: Option<&ModelProfile>) -> Vec<Option<String>> {
     crate::app::AppState::effort_choices(profile)
 }
 
+/// How an effort level reads in a picker, the footer or the status line:
+/// `Off` for the provider default, `xHigh` (not `Xhigh`), else capitalised.
+/// The wire value is unchanged.
+pub fn effort_label(effort: &str) -> String {
+    crate::remote::projection::effort_label(effort)
+}
+
 /// Persist `config` to disk, preserving project overrides like the
 /// settings and MCP flows expect. No-op for invalid configs.
 pub fn save_config(config: &AppConfig) {

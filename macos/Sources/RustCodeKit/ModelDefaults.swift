@@ -23,7 +23,7 @@ public struct ModelDefaults: Decodable, Equatable, Sendable {
     public func efforts(for profile: String) -> [ModelChoice] {
         let efforts = models.first { $0.name == profile }?.efforts ?? []
         guard efforts.count > 1 else { return [] }
-        return efforts.map { ModelChoice(id: $0, name: $0 == "default" ? "Off" : $0.prefix(1).uppercased() + $0.dropFirst(), detail: nil) }
+        return efforts.map { ModelChoice(id: $0, name: ModelChoice.effortLabel($0), detail: nil) }
     }
 
     /// The composer options of a new chat that starts from these defaults.

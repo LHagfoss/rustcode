@@ -203,6 +203,23 @@ pub(crate) fn reasoning_efforts(profile: &crate::config::ModelProfile) -> Vec<St
     efforts
 }
 
+/// How an effort level reads to a person: `Off` for the provider default,
+/// `xHigh` (not the awkward `Xhigh`), and the first letter capitalised for the
+/// rest. The wire value is unchanged; only the label differs.
+pub fn effort_label(effort: &str) -> String {
+    match effort {
+        "default" => "Off".to_owned(),
+        "xhigh" => "xHigh".to_owned(),
+        other => {
+            let mut chars = other.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
 /// Controls are optional: omit an oversized catalog rather than changing
 /// opaque profile IDs or publishing a partial selection list.
 pub(super) fn bound_settings(
@@ -927,6 +944,19 @@ mod tests {
             snapshot.settings.is_none(),
             "oversized controls are unavailable, never partially named"
         );
+    }
+
+    #[test]
+    fn effort_labels_read_naturally_and_leave_wire_values_alone() {
+        assert_eq!(effort_label("default"), "Off");
+        assert_eq!(effort_label("low"), "Low");
+        assert_eq!(effort_label("medium"), "Medium");
+        assert_eq!(effort_label("high"), "High");
+        // `xhigh` reads as `xHigh`, never the awkward `Xhigh`; the wire value
+        // stays `xhigh`.
+        assert_eq!(effort_label("xhigh"), "xHigh");
+        assert_eq!(effort_label("max"), "Max");
+        assert_eq!(effort_label(""), "");
     }
 
     #[test]

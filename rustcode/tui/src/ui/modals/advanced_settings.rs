@@ -190,8 +190,8 @@ pub(in crate::ui) fn render_effort_picker_modal(
                 Some("low") => ("Low".to_owned(), "Compact reasoning traces (fastest)"),
                 Some("medium") => ("Medium".to_owned(), "Balanced reasoning depth"),
                 Some("high") => ("High".to_owned(), "Deep reasoning analysis"),
-                Some("xhigh") => ("Xhigh".to_owned(), "Deepest reasoning (slowest)"),
-                Some(other) => (capitalized(other), ""),
+                Some("xhigh") => ("xHigh".to_owned(), "Deepest reasoning (slowest)"),
+                Some(other) => (rustcode::controller::effort_label(other), ""),
             };
             (name, effort, desc)
         })
@@ -529,12 +529,4 @@ pub(in crate::ui) fn render_update_prompt_modal(
         Paragraph::new(footer).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[5],
     );
-}
-
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or_default()
 }

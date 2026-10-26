@@ -2282,8 +2282,10 @@ fn welcome_banner_shows_active_model_effort_and_context_window() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    // The banner labels the effort as the pickers do: `High`, not the raw
+    // `high` wire value (#2414).
     assert!(
-        rendered.contains("effort:      high"),
+        rendered.contains("effort:      High"),
         "rendered: {rendered:?}"
     );
     assert!(
