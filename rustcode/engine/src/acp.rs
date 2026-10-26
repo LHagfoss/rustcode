@@ -906,7 +906,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     server.sessions.lock().await.insert(
                         session_id.clone(),
                         AcpSession {
-                            state,
+                            state: Arc::clone(&state),
                             cwd,
                             turns: Arc::new(SessionTurnState::new()),
                             task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
@@ -918,11 +918,23 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     responder.respond(
                         NewSessionResponse::new(session_id.clone()).config_options(config_options),
                     )?;
-                    // Commands follow the session they belong to, as ACP expects.
-                    _connection.send_notification(SessionNotification::new(
-                        session_id,
-                        commands::available_commands_update(),
-                    ))
+                    // Commands, then the session's opening usage, so the client
+                    // shows its context meter from the start rather than only
+                    // after the first turn ends (#2414 follow-up).
+                    let opening_usage = {
+                        let state = state.lock().await;
+                        usage::usage_update(&state)
+                    };
+                    for update in [commands::available_commands_update(), opening_usage] {
+                        if let Err(error) = _connection
+                            .send_notification(SessionNotification::new(session_id.clone(), update))
+                        {
+                            unregister_acp_session(&server, &session_id).await;
+                            return Err(agent_client_protocol::Error::internal_error()
+                                .data(error.to_string()));
+                        }
+                    }
+                    Ok(())
                 }
             },
             agent_client_protocol::on_receive_request!(),

@@ -384,6 +384,11 @@ pub(crate) async fn run_prompt(
             }
         };
         record_prompt(&mut *state.lock().await, &session_id, &text);
+        // Send the context and token usage as the turn begins, so a long
+        // running turn keeps the client's meter current instead of only
+        // updating once the turn ends.
+        let opening_usage = super::usage::usage_update(&*state.lock().await);
+        send_updates(&connection, &session_id, vec![opening_usage])?;
 
         let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
         let policy = Arc::new(AcpPolicy {
