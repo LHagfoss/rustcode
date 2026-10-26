@@ -1233,7 +1233,24 @@ private struct ChatView: View {
     /// by id once they are in, and put back where it was.
     private func showEarlier(_ proxy: ScrollViewProxy) {
         let transcript = chat.transcript
-        guard window.hasEarlier(identity: transcript.identity, count: transcript.items.count) else { return }
+        let count = transcript.items.count
+        guard window.hasEarlier(identity: transcript.identity, count: count) else { return }
+        if #available(macOS 15, *) {
+            // The rows that join are drawn as stand-ins at heights the map
+            // fixes now, so how much they add above the reader is known
+            // before they are in: the chat scrolls down by exactly that as
+            // the document grows, in the same pass. Found again by id after,
+            // the reader's row was a frame late, flashed away and back, and
+            // was sometimes a row from far below (#2445).
+            let old = window.firstShown(identity: transcript.identity, count: count)
+            window.showEarlier(identity: transcript.identity, count: count)
+            let new = window.firstShown(identity: transcript.identity, count: count)
+            let folding = ToolFolding(items: transcript.items, verbosity: verbosity,
+                                      open: model.openToolRuns, running: isReplyStreaming)
+            let joining = transcript.items[new..<old].filter { !folding.hidden.contains($0.id) }.map(\.id)
+            scroll.willPrepend(joining, dropsEarlierRow: new == 0)
+            return
+        }
         pendingTop = scroll.topRow()
         scroll.willJump()
         scroll.pauseNearTop()

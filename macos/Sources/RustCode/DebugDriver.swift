@@ -81,7 +81,7 @@ enum DebugDriver {
             window?.displayIfNeeded()
             report("synth items \(model.transcript.items.count) first frame \(ms(start, Date())) ms")
         case "timescroll":
-            // `timescroll <steps> <points>`: scroll the chat up step by step,
+            // `timescroll <steps> <points> [reader] [trace]`: scroll the chat up step by step,
             // laying out and drawing each, as a reader paging back would.
             let steps = Int(parts[1]) ?? 40
             let delta = Double(parts.count > 2 ? parts[2] : "800") ?? 800
@@ -94,6 +94,9 @@ enum DebugDriver {
             var worst = 0.0, total = 0.0
             for _ in 0..<steps {
                 let start = Date()
+                // `reader`: each step is the reader's own wheel, which lets go
+                // of the end, as a real scroll does.
+                if parts.contains("reader") { ChatScrollInput.shared.debugObserve(deltaY: delta) }
                 var bounds = scroll.contentView.bounds
                 bounds.origin.y -= delta
                 scroll.contentView.setBoundsOrigin(scroll.contentView.constrainBoundsRect(bounds).origin)
@@ -313,6 +316,35 @@ enum DebugDriver {
             streaming.cancel()
             ticker.invalidate()
             report("wheelstream \(steps)x\(points): \(rowMoved)moved \(Int(startY - wheeledY)) of \(Int(steps) * Int(points)), drift at rest \(Int(restY - wheeledY)), worst stall wheeling \(Int(wheelGap)) ms, overall \(Int(worstGap)) ms")
+        case "readback":
+            // `readback <steps> <points> [trace]`: the reader wheels up the
+            // chat a frame at a time, through pages of older rows joining
+            // above (#2442, #2445). Each step follows the row at the top of
+            // the view: it should move down by exactly the step. Reports how
+            // often and how far it strayed, and the pages that joined.
+            let steps = Int(parts.count > 1 ? parts[1] : "300") ?? 300
+            let points = Double(parts.count > 2 ? parts[2] : "120") ?? 120
+            guard let state = ChatScrollState.current else { break }
+            var strays = 0, worst = 0.0, pages = 0, lost = 0
+            var rows = state.debugRowCount
+            for index in 0..<steps {
+                let before = state.topRow().flatMap { top in top.row == Int.max ? nil : state.debugScreenTop(top.row).map { (top.row, $0, top.minY) } }
+                ChatScrollInput.shared.debugObserve(deltaY: points)
+                state.scroll(by: -points, animated: false)
+                try? await Task.sleep(for: .milliseconds(16))
+                if state.debugRowCount != rows { pages += 1; rows = state.debugRowCount }
+                guard let (row, top, frameTop) = before else { continue }
+                guard let now = state.debugScreenTop(row) else { lost += 1; continue }
+                let stray = now - top - points
+                // Where the row reported itself drawn, from its own frame.
+                let frameStray = state.debugFrameTop(row).map { $0 - frameTop - points }
+                if abs(stray) > 2 {
+                    strays += 1
+                    worst = max(worst, abs(stray))
+                    if parts.contains("trace") { report("  step \(index) row \(row) stray \(Int(stray)) frame \(frameStray.map { String(Int($0)) } ?? "-") rows \(rows)") }
+                }
+            }
+            report("readback \(steps)x\(Int(points)): strays \(strays), worst \(Int(worst)), lost \(lost), pages \(pages), rows \(rows), \(state.debugDescription)")
         case "toolstream":
             // `toolstream <steps> [ms] [text] [wheel] [noitems]`: a turn keeps
             // working while the reader is away from the end (#2310). Each step

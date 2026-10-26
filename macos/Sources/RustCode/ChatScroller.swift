@@ -16,6 +16,9 @@ final class ChatScrollState: ObservableObject {
     var map = ChatScrollMap(spacing: 18, topPadding: 20, bottomPadding: 2 + 18 + 1)
     /// The rows laid out now, in the scroll view's coordinates.
     private var frames: [Int: CGRect] = [:]
+    /// When each row last reported its frame, as a count of reports.
+    private var reported: [Int: Int] = [:]
+    private var reports = 0
     private var scrollOffset: Double = 0
     private var viewport: Double = 0
     private(set) var insetTop: Double = 0
@@ -41,6 +44,9 @@ final class ChatScrollState: ObservableObject {
         map.forgetHeights()
         drawnRows.invalidate()
         clipShift = nil
+        // Owed for the last chat's older rows, which never join this one.
+        pendingShift = nil
+        anchor = nil
         lastPositions = [:]
         lastOffset = nil
         setNeedsUpdate()
@@ -90,6 +96,8 @@ final class ChatScrollState: ObservableObject {
     func rowFrame(_ row: Int, _ frame: CGRect) {
         let before = map.laidOutHeight(of: row)
         frames[row] = frame
+        reports += 1
+        reported[row] = reports
         map.measured(row, height: frame.height)
         holdAnchor(row, frame)
         keepToggled(row)
@@ -134,6 +142,11 @@ final class ChatScrollState: ObservableObject {
     /// first time or again: everything below it moved by the difference,
     /// which is scrolled back so the reader's place stays.
     private func keepPlace(above row: Int, _ frame: CGRect, before: Double?) {
+        // A hold over is gone, whether or not its row reported since: the
+        // reader has usually scrolled it away, and a hold left standing
+        // kept every row above from being put back for the rest of the
+        // chat, so the reader's row jumped once a screen (#2442, #2445).
+        if let anchor, Date() >= anchor.until { self.anchor = nil }
         guard anchoredToTop, anchor == nil, toggled == nil, Date() >= jumpUntil, let before else { return }
         let delta = frame.height - before
         guard abs(delta) > 0.5, frame.minY + before <= 0.5 else { return }
@@ -203,6 +216,8 @@ final class ChatScrollState: ObservableObject {
     /// Where `row` is in the view, as it last reported.
     func debugFrame(_ row: Int) -> CGRect? { frames[row] }
     /// The row at the top of the view, where it is, and the rows mapped.
+    var debugRowCount: Int { map.rows.count }
+    func debugFrameTop(_ row: Int) -> Double? { frames[row].map { Double($0.minY) } }
     var debugDescription: String {
         let top = reference.map { "top row \($0.key) at \(Int($0.value.minY))" } ?? "no rows"
         return "\(top), rows \(map.rows.count) first \(map.rows.first.map(String.init) ?? "-")"
@@ -251,13 +266,27 @@ final class ChatScrollState: ObservableObject {
     /// The row at the top of the view and where it is, other than the
     /// earlier-messages row.
     func topRow() -> (row: Int, minY: Double)? {
-        frames.filter { $0.key != earlierRow }.min { distance($0.value) < distance($1.value) }
+        frames.filter { $0.key != earlierRow }.min(by: nearer)
             .map { ($0.key, Double($0.value.minY)) }
     }
 
     /// Rows are about to be added above the view: ask for no more until the
     /// row in view is held again.
     private var pausedUntil = Date.distantPast
+
+    /// `rows` are joining above everything shown, as stand-ins (#2445):
+    /// scroll down by the height they add once the document has room for
+    /// it, so the rows in view stay where they are. With the last page in,
+    /// the earlier-messages row above them goes.
+    func willPrepend(_ rows: [Int], dropsEarlierRow: Bool) {
+        var added = rows.reduce(0) { $0 + map.standInHeight(of: $1) + map.spacing }
+        if dropsEarlierRow, let earlierRow, let frame = frames[earlierRow] {
+            added -= Double(frame.height) + map.spacing
+        }
+        pendingShift = (pendingShift ?? 0) + added
+        // Until the rows are in; then the view is well clear of the top.
+        pausedUntil = Date().addingTimeInterval(0.5)
+    }
 
     func pauseNearTop() {
         pausedUntil = Date().addingTimeInterval(Self.anchorDuration)
@@ -344,6 +373,7 @@ final class ChatScrollState: ObservableObject {
 
     func rowGone(_ row: Int) {
         frames[row] = nil
+        reported[row] = nil
     }
 
     /// The scroll view's own geometry changed. `offset` is in its estimated
@@ -363,7 +393,19 @@ final class ChatScrollState: ObservableObject {
     /// The scroll view's coordinates start at the top of that area, below
     /// the title bar's inset.
     private var reference: (key: Int, value: CGRect)? {
-        frames.min { distance($0.value) < distance($1.value) }
+        frames.min(by: nearer)
+    }
+
+    /// Whether `a` is nearer the top of the view than `b`. A row that left
+    /// the view without being laid out again keeps the frame it last had,
+    /// so a row at the top an hour of scrolling ago ties with the one there
+    /// now; the one that reported last is the one really there. Picked by
+    /// dictionary order instead, a page of older rows joining put the
+    /// reader back at that stale row, near the end of the chat (#2445).
+    private func nearer(_ a: (key: Int, value: CGRect), _ b: (key: Int, value: CGRect)) -> Bool {
+        let (da, db) = (distance(a.value), distance(b.value))
+        if da != db { return da < db }
+        return (reported[a.key] ?? 0) > (reported[b.key] ?? 0)
     }
     /// Each laid-out row's top at the last update.
     private var lastPositions: [Int: Double] = [:]
