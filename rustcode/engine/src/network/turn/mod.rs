@@ -243,6 +243,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
     ctx: &mut TurnContext,
     turn_session_id: &str,
+    round_updates: Option<&crate::network::AgentUiEventSender>,
 ) -> bool {
     dbg_log!("Starting agent loop round {}", ctx.budget.tool_rounds);
 
@@ -296,6 +297,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         Err(request::RoundCollectionError::Stop) => return false,
         Err(request::RoundCollectionError::Continue) => return true,
     };
+    if let Some(round_updates) = round_updates {
+        let usage = {
+            let app = state.lock().await;
+            crate::acp::usage::usage_update(&app)
+        };
+        round_updates.send(crate::network::AgentUiEvent::RoundCompleted { usage });
+    }
     let request::RoundResponse {
         content,
         final_answer_boundary,

@@ -279,7 +279,9 @@ pub(crate) fn from_agent_ui_event(
                 prompt,
             ))]
         }
-        AgentUiEvent::SubagentUpdated { .. } => return Vec::new(),
+        AgentUiEvent::SubagentUpdated { .. } | AgentUiEvent::RoundCompleted { .. } => {
+            return Vec::new();
+        }
     };
     updates
         .into_iter()
