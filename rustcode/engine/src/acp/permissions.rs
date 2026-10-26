@@ -244,6 +244,19 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
     fn should_verify_completion(&self) -> bool {
         true
     }
+
+    /// An ACP turn is the regular interactive turn, so `_rustcode/steer` can
+    /// hand it a message mid-turn. Without this the marker stayed unset and
+    /// every steer the client sent was refused and queued instead.
+    fn supports_live_turn_steering(&self) -> bool {
+        acp_turn_supports_live_steering()
+    }
+}
+
+/// An ACP turn is the regular interactive turn (#2255). Named so the decision
+/// is covered by a test without constructing an ACP connection.
+pub(crate) fn acp_turn_supports_live_steering() -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -324,6 +337,14 @@ mod tests {
             &state.config,
             &run_command("rm -rf target")
         ));
+    }
+
+    /// #2255: the macOS app steers with ⌘⏎. An ACP turn is the regular
+    /// interactive turn, so live steering must be admitted; otherwise the
+    /// steerable marker stays unset and every steer is refused and queued.
+    #[test]
+    fn acp_turns_admit_live_steering() {
+        assert!(acp_turn_supports_live_steering());
     }
 
     #[test]
