@@ -154,8 +154,8 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertEqual(folding.activity, "Thinking", "the thought it is writing")
     }
 
-    // The call still running waits for the line under the turn, which says
-    // what it is doing; done, it joins its run.
+    // The round still going shows its calls, the running one too, and the
+    // line under the turn says what it is doing.
     func testTheRunningCallIsTheTurnsActivity() {
         var transcript = Transcript()
         transcript.apply(.userText("test it"))
@@ -164,9 +164,31 @@ final class ToolFoldingTests: XCTestCase {
         let list = transcript.items
         let live = ToolFolding(items: list, verbosity: .low, open: [], running: true)
         XCTAssertEqual(live.activity, "Running npm test")
-        XCTAssertTrue(live.hidden.contains(list[2].id))
-        XCTAssertEqual(live.fold(for: list[1].id)?.label, "Ran npm run build")
+        XCTAssertFalse(live.hidden.contains(list[1].id))
+        XCTAssertFalse(live.hidden.contains(list[2].id))
+        XCTAssertNil(live.fold(for: list[1].id), "the current round is not folded")
         XCTAssertNil(ToolFolding(items: list, verbosity: .low, open: [], running: false).activity)
+    }
+
+    // #2411: a round folds into its row as the next one starts, with a thought
+    // or what the model says; opened, the row shows its calls again.
+    func testAFinishedRoundFoldsAsTheNextStarts() {
+        let list = items("urttrt")
+        let live = ToolFolding(items: list, verbosity: .low, open: [], running: true)
+        XCTAssertEqual(live.fold(for: list[2].id)?.label, "Ran 2 commands")
+        XCTAssertTrue(live.hidden.contains(list[3].id), "the finished round is folded")
+        XCTAssertNil(live.fold(for: list[5].id))
+        XCTAssertFalse(live.hidden.contains(list[5].id), "the current round shows its call")
+
+        let opened = ToolFolding(items: list, verbosity: .low, open: [list[2].id], running: true)
+        XCTAssertFalse(opened.hidden.contains(list[3].id))
+
+        // A thought does not split a run, so the rounds fold into one row.
+        let thinking = ToolFolding(items: items("urttrtr"), verbosity: .low, open: [], running: true)
+        XCTAssertEqual(thinking.fold(for: list[2].id)?.count, 3, "a new thought folds the round before it")
+
+        let done = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        XCTAssertNotNil(done.turn(for: list[2].id), "the finished turn folds as before")
     }
 
     func testTheActivityIsTheHeadingOfTheThought() {
@@ -214,7 +236,7 @@ final class ToolFoldingTests: XCTestCase {
         let live = ToolFolding(items: Array(list.prefix(4)), verbosity: .edits, open: [], running: true)
         XCTAssertNil(live.fold(for: list[2].id), "the edit shows with its diff")
         XCTAssertFalse(live.hidden.contains(list[2].id))
-        let low = ToolFolding(items: Array(list.prefix(4)), verbosity: .low, open: [], running: true)
+        let low = ToolFolding(items: items("utetr"), verbosity: .low, open: [], running: true)
         XCTAssertEqual(low.fold(for: list[1].id)?.label, "Ran 2 commands, edited 1 file")
     }
 
@@ -242,7 +264,10 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertFalse(low.hidden.contains(list[7].id), "the agents after the answer show")
         let live = ToolFolding(items: Array(list.prefix(3)), verbosity: .low, open: [], running: true)
         XCTAssertFalse(live.hidden.contains(list[2].id), "agents started now show")
-        XCTAssertEqual(live.fold(for: list[0].id)?.label, "Ran 2 commands")
+        XCTAssertFalse(live.hidden.contains(list[1].id), "the round still going shows its calls")
+        // What the model says next starts the next round, which folds this one.
+        let next = ToolFolding(items: Array(list.prefix(3)) + [list[6]], verbosity: .low, open: [], running: true)
+        XCTAssertEqual(next.fold(for: list[0].id)?.label, "Ran 2 commands")
     }
 
     func testAThoughtDoesNotSplitARun() {
