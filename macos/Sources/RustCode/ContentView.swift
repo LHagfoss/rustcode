@@ -228,10 +228,6 @@ private struct SessionSidebar: View {
                 Spacer()
                 ToolbarCluster {
                     ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Hide sidebar", .toggleSidebar)) { model.toggleSidebar() }
-                    ClusterButton(systemImage: "archivebox", help: model.showsArchived ? "Back to chats" : "Archived chats",
-                                  isOn: model.showsArchived) {
-                        withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
-                    }
                     ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New chat", .newChat)) { Task { await model.newSession() } }
                 }
             }
@@ -278,10 +274,9 @@ private struct SessionSidebar: View {
                 Text(model.showsArchived ? "Archived" : "Chats")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Spacer()
-                // The archive lives with the sidebar's own controls, not as a
-                // detached row at the bottom (#2412): a clear pill that shows
-                // how many are tucked away and returns from the archived list.
+                // The archive's one control, beside the heading it switches
+                // (#2412, #2441): a pill that shows how many are tucked away
+                // and returns from the archived list.
                 if model.showsArchived || !model.archivedSessions.isEmpty {
                     Button { withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() } } label: {
                         HStack(spacing: 3) {
@@ -298,7 +293,9 @@ private struct SessionSidebar: View {
                     }
                     .buttonStyle(.plain)
                     .help(model.showsArchived ? "Back to chats" : "Archived chats")
+                    .pointingHandCursor()
                 }
+                Spacer()
                 ScopeToggle(showsAll: $model.showsAllProjects)
             }
             .padding(.leading, 20)
@@ -394,10 +391,11 @@ private struct SessionSidebar: View {
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .contentShape(.rect)
+                    .padding(.vertical, 7)
+                    .contentShape(.rect(cornerRadius: 10))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ProjectButtonStyle())
+                .pointingHandCursor()
                 .help(model.keybindings.help("Choose the default project for new chats. Open chats keep their own folder", .chooseProject))
                 ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.showsSettings = true }
             }
@@ -477,6 +475,31 @@ enum TextSelection {
             view = current.superview
         }
         window.makeFirstResponder(nil)
+    }
+}
+
+/// The sidebar's project folder: a quiet filled control at rest, so it reads
+/// as pressable, a little stronger under the pointer and while pressed.
+private struct ProjectButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Styled(configuration: configuration)
+    }
+
+    private struct Styled: View {
+        let configuration: Configuration
+        @State private var isHovered = false
+
+        var body: some View {
+            configuration.label
+                .background(fill, in: .rect(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+                .onHover { isHovered = $0 }
+                .animation(.easeOut(duration: 0.12), value: isHovered)
+        }
+
+        private var fill: Color {
+            Color.primary.opacity(configuration.isPressed ? 0.12 : isHovered ? 0.08 : 0.045)
+        }
     }
 }
 
@@ -661,10 +684,16 @@ struct SessionRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                indicator
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.title ?? "New chat")
-                        .lineLimit(1)
+                    // The state sits at the title's trailing end, so every
+                    // title starts on the same edge with nothing reserved
+                    // before it, and its metadata never moves (#2412).
+                    HStack(spacing: 6) {
+                        Text(session.title ?? "New chat")
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        indicator
+                    }
                     if let searchSnippet {
                         Text(highlighted(searchSnippet))
                             .font(.caption)
@@ -698,8 +727,7 @@ struct SessionRow: View {
                     }
                 }
             }
-            .padding(.leading, 5)
-            .padding(.trailing, 10)
+            .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(rowFill, in: .rect(cornerRadius: 9))
@@ -716,27 +744,29 @@ struct SessionRow: View {
         }
     }
 
-    /// The chat's state on the leading edge, in a slot of its own width so
-    /// titles line up whether a row shows one or not.
+    /// The chat's state, when it has one, in a slot as tall as the title
+    /// line so the row's height does not change as it comes and goes.
+    @ViewBuilder
     private var indicator: some View {
-        ZStack {
-            Color.clear
-            if needsAnswer {
-                Image(systemName: "questionmark.bubble.fill")
-                    .font(.caption)
-                    .foregroundStyle(Color.attention)
-                    .help("Waiting for your answer")
-            } else if isRunning {
-                RowSpinner()
-            } else if hasUnseenReply {
-                Circle()
-                    .fill(.blue)
-                    .frame(width: 7, height: 7)
-                    .help("New reply")
-                    .accessibilityLabel("New reply")
+        if needsAnswer || isRunning || hasUnseenReply {
+            ZStack {
+                if needsAnswer {
+                    Image(systemName: "questionmark.bubble.fill")
+                        .font(.caption)
+                        .foregroundStyle(Color.attention)
+                        .help("Waiting for your answer")
+                } else if isRunning {
+                    RowSpinner()
+                } else {
+                    Circle()
+                        .fill(.blue)
+                        .frame(width: 7, height: 7)
+                        .help("New reply")
+                        .accessibilityLabel("New reply")
+                }
             }
+            .frame(width: 16, height: 14)
         }
-        .frame(width: 16, height: 16)
     }
 
     /// The snippet with every occurrence of the query emphasized.
