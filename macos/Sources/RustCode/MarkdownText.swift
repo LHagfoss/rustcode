@@ -55,7 +55,8 @@ struct MarkdownText: View {
                     if isStreaming, index == segments.count - 1 {
                         StreamingProse(text: text).lineSpacing(2)
                     } else {
-                        Text(FindHighlight.apply(text, query: findQuery)).lineSpacing(2)
+                        let shown = FindHighlight.apply(text, query: findQuery)
+                        Text(shown).linkCursor(shown).lineSpacing(2)
                     }
                 case .block(let block):
                     view(for: block)
@@ -191,6 +192,95 @@ enum ChatLinks {
         let lower = string.characters.index(string.startIndex, offsetBy: offsets.lowerBound)
         let upper = string.characters.index(lower, offsetBy: offsets.count)
         return lower..<upper
+    }
+}
+
+extension View {
+    /// The pointing hand over the links of `text`, this view's own text, and
+    /// the text cursor over the rest (#2413). Text with no link is left as is.
+    @ViewBuilder
+    func linkCursor(_ text: AttributedString) -> some View {
+        if #available(macOS 15, *), text.runs.contains(where: { $0.link != nil }) {
+            modifier(LinkCursor(text: text))
+        } else {
+            self
+        }
+    }
+}
+
+/// A run of text that is a link, so the measuring renderer can find it.
+private struct LinkRun: TextAttribute {}
+
+/// Where the links were laid out, written as the text is drawn. A class, so
+/// writing it from the renderer does not redraw the view.
+private final class LinkFrames {
+    var rects: [CGRect] = []
+}
+
+/// SwiftUI does not say where a link run of a `Text` lies, so a copy of the
+/// text, laid out the same and drawn by a renderer that draws nothing, keeps
+/// the frames of its link runs. The hover over the text checks them. The text
+/// itself is untouched, so selection and clicks work as before.
+@available(macOS 15, *)
+private struct LinkCursor: ViewModifier {
+    let text: AttributedString
+    @State private var frames = LinkFrames()
+    @State private var pushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                marked
+                    .textRenderer(LinkFrameRenderer(frames: frames))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .onContinuousHover { phase in
+                var over = false
+                if case .active(let point) = phase {
+                    over = frames.rects.contains { $0.insetBy(dx: -1, dy: -1).contains(point) }
+                }
+                guard over != pushed else { return }
+                if over {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                    // Popped, the cursor is what it was before the text set
+                    // its own, the arrow; still over the text it is the I-beam.
+                    if case .active = phase { NSCursor.iBeam.set() }
+                }
+                pushed = over
+            }
+            // Text that goes while under the pointer would leave the hand behind.
+            .onDisappear {
+                if pushed { NSCursor.pop() }
+                pushed = false
+            }
+    }
+
+    /// The text with its link runs tagged.
+    private var marked: Text {
+        var result = Text("")
+        for run in text.runs {
+            let piece = Text(AttributedString(text[run.range]))
+            result = result + (run.link == nil ? piece : piece.customAttribute(LinkRun()))
+        }
+        return result
+    }
+}
+
+@available(macOS 15, *)
+private struct LinkFrameRenderer: TextRenderer {
+    let frames: LinkFrames
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        var rects: [CGRect] = []
+        for line in layout {
+            for run in line where run[LinkRun.self] != nil {
+                rects.append(run.typographicBounds.rect)
+            }
+        }
+        frames.rects = rects
     }
 }
 

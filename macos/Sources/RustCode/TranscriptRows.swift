@@ -205,7 +205,8 @@ private struct UserBubble: View {
                     if text.hasPrefix("/"), findQuery.isEmpty {
                         slashCommandText(text)
                     } else {
-                        Text(FindHighlight.apply(ChatLinks.linked(text), query: findQuery))
+                        let shown = FindHighlight.apply(ChatLinks.linked(text), query: findQuery)
+                        Text(shown).linkCursor(shown)
                     }
                 }
                 .textSelection(.enabled)
