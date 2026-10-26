@@ -179,6 +179,7 @@ struct ToolbarCluster<Content: View>: View {
 struct ClusterButton: View {
     let systemImage: String
     let help: String
+    var badge: String? = nil
     var isOn = false
     let action: () -> Void
     @State private var isHovered = false
@@ -190,6 +191,18 @@ struct ClusterButton: View {
                 .foregroundStyle(isOn ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
                 .offset(y: Self.opticalOffset[systemImage] ?? 0)
                 .frame(width: 32, height: 24)
+                .overlay(alignment: .topTrailing) {
+                    if let badge {
+                        Text(badge)
+                            .font(.system(size: 8, weight: .semibold))
+                            .monospacedDigit()
+                            .padding(.horizontal, 3)
+                            .frame(minWidth: 12, minHeight: 12)
+                            .background(Color.brandFill, in: .capsule)
+                            .foregroundStyle(.white)
+                            .offset(x: 2, y: -4)
+                    }
+                }
                 .background(isHovered || isOn ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .capsule)
                 .contentShape(.capsule)
         }
@@ -227,6 +240,16 @@ private struct SessionSidebar: View {
             HStack(spacing: 2) {
                 Spacer()
                 ToolbarCluster {
+                    if model.showsArchived || !model.archivedSessions.isEmpty {
+                        ClusterButton(
+                            systemImage: model.showsArchived ? "chevron.left" : "archivebox",
+                            help: model.showsArchived ? "Back to chats" : "Archived chats (\(model.archivedSessions.count))",
+                            badge: model.showsArchived ? nil : "\(model.archivedSessions.count)",
+                            isOn: model.showsArchived
+                        ) {
+                            withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
+                        }
+                    }
                     ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Hide sidebar", .toggleSidebar)) { model.toggleSidebar() }
                     ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New chat", .newChat)) { Task { await model.newSession() } }
                 }
@@ -274,27 +297,6 @@ private struct SessionSidebar: View {
                 Text(model.showsArchived ? "Archived" : "Chats")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                // The archive's one control, beside the heading it switches
-                // (#2412, #2441): a pill that shows how many are tucked away
-                // and returns from the archived list.
-                if model.showsArchived || !model.archivedSessions.isEmpty {
-                    Button { withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() } } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: model.showsArchived ? "chevron.left" : "archivebox")
-                            Text(model.showsArchived ? "Chats" : "\(model.archivedSessions.count)")
-                                .monospacedDigit()
-                        }
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(model.showsArchived ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
-                        .padding(.horizontal, 8)
-                        .frame(height: 20)
-                        .background(.fill.tertiary, in: .capsule)
-                        .contentShape(.capsule)
-                    }
-                    .buttonStyle(.plain)
-                    .help(model.showsArchived ? "Back to chats" : "Archived chats")
-                    .pointingHandCursor()
-                }
                 Spacer()
                 ScopeToggle(showsAll: $model.showsAllProjects)
             }
@@ -401,6 +403,8 @@ private struct SessionSidebar: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.045))
         }
     }
 }
@@ -492,13 +496,12 @@ private struct ProjectButtonStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .background(fill, in: .rect(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
                 .onHover { isHovered = $0 }
                 .animation(.easeOut(duration: 0.12), value: isHovered)
         }
 
         private var fill: Color {
-            Color.primary.opacity(configuration.isPressed ? 0.12 : isHovered ? 0.08 : 0.045)
+            Color.primary.opacity(configuration.isPressed ? 0.12 : isHovered ? 0.08 : 0)
         }
     }
 }
