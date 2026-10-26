@@ -255,7 +255,11 @@ pub(super) fn session_model_label(state: &RenderSnapshot) -> String {
         .and_then(|profile| profile.reasoning_effort.as_deref())
         .filter(|effort| !effort.is_empty());
     match effort {
-        Some(effort) => format!("{} {}", state.model_name(), rustcode::controller::effort_label(effort)),
+        Some(effort) => format!(
+            "{} {}",
+            state.model_name(),
+            rustcode::controller::effort_label(effort)
+        ),
         None => state.model_name().to_string(),
     }
 }

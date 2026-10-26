@@ -561,9 +561,12 @@ pub(crate) fn build_claude_startup_banner_snapshot(
         .active_model_profile()
         .and_then(|profile| profile.reasoning_effort.clone())
         .unwrap_or_else(|| "default".to_string());
-    let effort_display = fit_to_width(&rustcode::controller::effort_label(&effort), inner_w.saturating_sub(label_w))
-        .trim_end()
-        .to_owned();
+    let effort_display = fit_to_width(
+        &rustcode::controller::effort_label(&effort),
+        inner_w.saturating_sub(label_w),
+    )
+    .trim_end()
+    .to_owned();
     let effort_width = effort_display.width();
 
     let context_window = format!(
