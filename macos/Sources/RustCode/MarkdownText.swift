@@ -97,7 +97,10 @@ struct MarkdownText: View {
                 var bar = AttributedString("▍ ")
                 bar.foregroundColor = Color.secondary.opacity(0.5)
                 var quote = inline(text)
-                quote.foregroundColor = .secondary
+                // Links keep their colour, so they read as links here too.
+                for run in quote.runs where run.link == nil {
+                    quote[run.range].foregroundColor = .secondary
+                }
                 result += bar + quote
             default:
                 break
@@ -117,12 +120,14 @@ struct MarkdownText: View {
             // never scrolls sideways.
             WrappingTable(columns: headers.count) {
                 ForEach(Array(headers.enumerated()), id: \.offset) { _, cell in
-                    Text(highlighted(cell)).fontWeight(.semibold)
+                    let shown = highlighted(cell)
+                    Text(shown).linkCursor(shown).fontWeight(.semibold)
                         .tableCell(isHeader: true)
                 }
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                        Text(highlighted(cell)).tableCell(isHeader: false)
+                        let shown = highlighted(cell)
+                        Text(shown).linkCursor(shown).tableCell(isHeader: false)
                     }
                 }
             }
@@ -181,9 +186,13 @@ enum ChatLinks {
         underline(&string)
     }
 
+    /// The underline is a fainter brand colour than the text: drawn as thick
+    /// as the font is heavy, a full-strength one read as a bar under bold
+    /// and heading links (#2413).
     private static func underline(_ string: inout AttributedString) {
         for run in string.runs where run.link != nil {
-            string[run.range].underlineStyle = Text.LineStyle(pattern: .solid)
+            string[run.range].underlineStyle = Text.LineStyle(pattern: .solid, color: Color.brand.opacity(0.45))
+            string[run.range].appKit.underlineColor = NSColor(Color.brand).withAlphaComponent(0.45)
             string[run.range].foregroundColor = Color.brand
         }
     }
@@ -225,7 +234,7 @@ private final class LinkFrames {
 private struct LinkCursor: ViewModifier {
     let text: AttributedString
     @State private var frames = LinkFrames()
-    @State private var pushed = false
+    @State private var overLink = false
 
     func body(content: Content) -> some View {
         content
@@ -236,25 +245,27 @@ private struct LinkCursor: ViewModifier {
                     .accessibilityHidden(true)
             }
             .onContinuousHover { phase in
-                var over = false
-                if case .active(let point) = phase {
-                    over = frames.rects.contains { $0.insetBy(dx: -1, dy: -1).contains(point) }
+                guard case .active(let point) = phase else {
+                    // Off the text, whatever is under the pointer sets its own.
+                    if overLink { NSCursor.arrow.set() }
+                    overLink = false
+                    return
                 }
-                guard over != pushed else { return }
-                if over {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
-                    // Popped, the cursor is what it was before the text set
-                    // its own, the arrow; still over the text it is the I-beam.
-                    if case .active = phase { NSCursor.iBeam.set() }
+                let over = frames.rects.contains { $0.insetBy(dx: -1, dy: -1).contains(point) }
+                // Selectable text is an AppKit text field that sets the I-beam
+                // on every move over it, so a hand pushed once was undone on
+                // the next move (#2413). Set on every move, after the text
+                // has set its own for this one.
+                guard over || overLink else { return }
+                overLink = over
+                DispatchQueue.main.async {
+                    (over ? NSCursor.pointingHand : NSCursor.iBeam).set()
                 }
-                pushed = over
             }
             // Text that goes while under the pointer would leave the hand behind.
             .onDisappear {
-                if pushed { NSCursor.pop() }
-                pushed = false
+                if overLink { NSCursor.arrow.set() }
+                overLink = false
             }
     }
 

@@ -433,6 +433,7 @@ enum DebugDriver {
             case "wide": "Here:\n\n```swift\n" + (0..<size).map { "let value\($0) = compute(\($0)) // " + String(repeating: "wide ", count: 40) }.joined(separator: "\n") + "\n```\n"
             case "line": String(repeating: "word ", count: size)
             case "markdown": DebugDriver.markdownSample
+            case "links": DebugDriver.linksSample
             default: (0..<size).map { "Paragraph \($0) of a long reply, with `code` and **bold** text." }.joined(separator: "\n\n")
             }
             let step = max(text.count / chunks, 1)
@@ -631,13 +632,14 @@ enum DebugDriver {
                 NSApp.postEvent(event, atStart: false)
             }
         case "mouse":
-            // `mouse down|drag|up <x> <y>`: a left-button event at a point in
+            // `mouse down|drag|move|up <x> <y>`: a left-button event at a point in
             // the window, from its top-left, as the mouse sends it.
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
                   parts.count > 3, let x = Double(parts[2]), let y = Double(parts[3]) else { break }
             let type: NSEvent.EventType = switch parts[1] {
             case "down": .leftMouseDown
             case "drag": .leftMouseDragged
+            case "move": .mouseMoved
             default: .leftMouseUp
             }
             let point = NSPoint(x: x, y: (window.contentView?.frame.height ?? 0) - y)
@@ -649,7 +651,9 @@ enum DebugDriver {
         case "responder":
             // What has the keyboard, and what the window hits at a point.
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { break }
-            var lines = ["first \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "-")"]
+            let cursors: [(NSCursor, String)] = [(.pointingHand, "hand"), (.iBeam, "ibeam"), (.arrow, "arrow")]
+            let cursor = cursors.first { $0.0 == NSCursor.current }?.1 ?? "other"
+            var lines = ["first \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "-") cursor \(cursor)"]
             if parts.count > 2, let x = Double(parts[1]), let y = Double(parts[2]), let content = window.contentView {
                 let hit = content.hitTest(NSPoint(x: x, y: content.frame.height - y))
                 var chain: [String] = []
@@ -808,6 +812,23 @@ enum DebugDriver {
 #if DEBUG
 extension DebugDriver {
     /// `big markdown`: the tables and fences replies hold (#2432).
+    /// Every way a reply writes a link (#2413).
+    static let linksSample = """
+    A [named link](https://example.com/docs) in a sentence, and a bare one: https://github.com/LHagfoss/rustcode/issues/2413.
+
+    ## A heading with [a link](https://example.com/heading)
+
+    - A list item with **[a bold link](https://example.com/bold)** and *[an italic one](https://example.com/italic)*.
+    - [`code in a link`](https://example.com/code) and `https://not.a.link/in/code`.
+
+    > A quote with [a link](https://example.com/quote).
+
+    | Site | Address |
+    |---|---|
+    | Docs | [docs](https://example.com/table) |
+    | Bare | https://example.com/bare |
+    """
+
     static let markdownSample = """
     Here is the comparison:
 
