@@ -1648,7 +1648,7 @@ fn wait_for_background_tasks(
     let subscription = manager.subscribe_session(session_id.to_owned());
     let deliver = |completion: &rustcode_tasks::TaskCompletion| {
         note_wait_delivered(session_id, completion.id.as_str());
-        format_completion_result(completion)
+        format_completion_result(completion, None)
     };
     if task_ids.is_empty() {
         return "No task IDs were provided to wait for.".to_owned();
@@ -1740,7 +1740,12 @@ fn wait_for_background_tasks(
     }
 }
 
-fn format_completion_result(completion: &rustcode_tasks::TaskCompletion) -> String {
+/// `completion` as a tool result; with `tail`, only that many bytes from the
+/// end of its output, where a failure says what went wrong.
+fn format_completion_result(
+    completion: &rustcode_tasks::TaskCompletion,
+    tail: Option<usize>,
+) -> String {
     use rustcode_tasks::TaskTerminalReason;
     let status = match &completion.reason {
         TaskTerminalReason::Exited {
@@ -1799,6 +1804,10 @@ fn format_completion_result(completion: &rustcode_tasks::TaskCompletion) -> Stri
                 "[no output captured]".to_owned()
             }
         });
+    let output = match tail {
+        Some(limit) => output_tail(output, limit),
+        None => output,
+    };
     format!(
         "Task '{}' {}. Started at {} ms; ended at {} ms. Command: {}. Output:\n{}{}{}",
         completion.id,
@@ -1821,6 +1830,25 @@ fn format_completion_result(completion: &rustcode_tasks::TaskCompletion) -> Stri
         } else {
             String::new()
         }
+    )
+}
+
+/// The last `limit` bytes of `output`, cut at a line where one is near, with
+/// a note of what was left out.
+fn output_tail(output: String, limit: usize) -> String {
+    if output.len() <= limit {
+        return output;
+    }
+    let mut start = output.len() - limit;
+    while !output.is_char_boundary(start) {
+        start += 1;
+    }
+    if let Some(line) = output[start..].find('\n').filter(|line| *line < limit / 2) {
+        start += line + 1;
+    }
+    format!(
+        "[{start} earlier bytes not shown; manage_task action 'logs' with full=true reads them]\n{}",
+        &output[start..]
     )
 }
 
@@ -1859,6 +1887,14 @@ fn task_wait_hint(task_id: &str, notify_on_complete: bool, has_log: bool) -> Str
         String::new()
     };
     format!("{policy}{log}")
+}
+
+/// The `tail_bytes` a status or logs read asks for, 16 KB by default.
+fn task_tail_bytes(args: &serde_json::Value) -> usize {
+    args.get("tail_bytes")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(16_384)
+        .clamp(1, 65_536) as usize
 }
 
 pub(crate) fn read_task_log(
@@ -1988,7 +2024,11 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                     task_wait_hint(task_id, info.notify_on_complete, info.output_log.is_some())
                 ))
             } else if let Some(completion) = manager.completion(&session_id, task_id) {
-                Ok(format_completion_result(&completion))
+                // Its completion was delivered already; a status check reads
+                // its end unless asked for all of it.
+                let full = args.get("full").and_then(parse_json_bool).unwrap_or(false);
+                let tail = (!full).then(|| task_tail_bytes(args));
+                Ok(format_completion_result(&completion, tail))
             } else {
                 Ok(format!(
                     "No retained task status for '{task_id}' in this session."
@@ -2013,12 +2053,7 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 ));
             };
             let full = args.get("full").and_then(parse_json_bool).unwrap_or(false);
-            let limit = args
-                .get("tail_bytes")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(16_384)
-                .clamp(1, 65_536) as usize;
-            let (excerpt, start, total) = read_task_log(&path, full, limit)?;
+            let (excerpt, start, total) = read_task_log(&path, full, task_tail_bytes(args))?;
             let prefix = if start > 0 {
                 format!(
                     "Task '{}' log tail ({} of {} bytes):\n",
@@ -2177,9 +2212,9 @@ mod tests {
         TaskOutputTail, cancel_result_message, command_confirmation_preview,
         command_confirmation_scope, command_manages_own_background_jobs,
         command_requires_confirmation, has_interactive_sudo, has_shell_background_operator,
-        manage_task_tool, pull_request_base, reject_broad_git_stage, run_command,
+        manage_task_tool, output_tail, pull_request_base, reject_broad_git_stage, run_command,
         run_command_output, run_command_output_cancellable, run_command_output_with_progress,
-        task_event_to_tool_output, wait_for_background_tasks,
+        task_event_to_tool_output, task_tail_bytes, wait_for_background_tasks,
     };
     use std::io::Write;
 
@@ -3687,6 +3722,27 @@ mod tests {
         );
         assert!(single_task_id(&serde_json::json!({ "task_ids": [] }), "status").is_err());
         assert!(single_task_id(&serde_json::json!({ "task_ids": ["a", "b"] }), "kill").is_err());
+    }
+
+    // A status check of a finished task reads the end of its output, where
+    // a failing test run names its failures, not the whole output again.
+    #[test]
+    fn a_status_tail_keeps_the_end_of_the_output() {
+        let output = format!(
+            "{}failures:\n    tests::flaky\n",
+            "test a ... ok\n".repeat(1_000)
+        );
+        let tail = output_tail(output.clone(), 64);
+        assert!(tail.ends_with("failures:\n    tests::flaky\n"), "{tail}");
+        assert!(tail.starts_with('['), "{tail}");
+        assert!(tail.len() < 200, "{}", tail.len());
+        assert_eq!(output_tail("short".to_owned(), 64), "short");
+        assert!(output_tail("é".repeat(100), 3).ends_with('é'));
+        assert_eq!(task_tail_bytes(&serde_json::json!({})), 16_384);
+        assert_eq!(
+            task_tail_bytes(&serde_json::json!({ "tail_bytes": 8_000 })),
+            8_000
+        );
     }
 
     #[test]
