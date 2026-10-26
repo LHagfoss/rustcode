@@ -707,6 +707,12 @@ private struct RowSpinner: View {
 }
 
 private struct ChatView: View {
+    /// How wide the chat column (transcript, composer, panels) may grow. Wide
+    /// windows used to cap the conversation at 760pt and leave the rest empty
+    /// (#2410); a larger cap keeps line length comfortable while using more of
+    /// the window. Narrow windows are constrained by the width they have.
+    static let columnMaxWidth: CGFloat = 980
+
     @ObservedObject var model: DesktopModel
     /// The transcript publishes on its own, so streaming redraws the chat
     /// but not the sidebar or the composer.
@@ -854,7 +860,7 @@ private struct ChatView: View {
                 #if DEBUG
                 .coordinateSpace(.named(ChatScrollState.contentSpace))
                 #endif
-                .frame(maxWidth: 760)
+                .frame(maxWidth: Self.columnMaxWidth)
                 .padding(.horizontal, 28)
                 .padding(.top, 20)
                 .frame(maxWidth: .infinity)
@@ -883,7 +889,7 @@ private struct ChatView: View {
                             Spacer(minLength: 0)
                             LatestButton { jumpToLatest(proxy) }
                         }
-                        .frame(maxWidth: 760)
+                        .frame(maxWidth: Self.columnMaxWidth)
                         .padding(.horizontal, 28)
                         .padding(.bottom, 12)
                         .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottomTrailing)))
@@ -1010,7 +1016,7 @@ private struct ChatView: View {
                 Composer(model: model, composer: model.composer)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             }
-            .frame(maxWidth: 760)
+            .frame(maxWidth: Self.columnMaxWidth)
             .padding(.horizontal, 28)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity)
@@ -1042,7 +1048,7 @@ private struct ChatView: View {
                     .glassSurface(in: .rect(cornerRadius: 20))
                     if panel == .add { Spacer(minLength: 0) }
                 }
-                .frame(maxWidth: 760)
+                .frame(maxWidth: Self.columnMaxWidth)
                 .padding(.horizontal, 28)
                 .padding(.bottom, composerHeight + 16 + 8)
                 .frame(maxWidth: .infinity)
