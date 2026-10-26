@@ -632,13 +632,14 @@ enum DebugDriver {
                 NSApp.postEvent(event, atStart: false)
             }
         case "mouse":
-            // `mouse down|drag|up <x> <y>`: a left-button event at a point in
+            // `mouse down|drag|move|up <x> <y>`: a left-button event at a point in
             // the window, from its top-left, as the mouse sends it.
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
                   parts.count > 3, let x = Double(parts[2]), let y = Double(parts[3]) else { break }
             let type: NSEvent.EventType = switch parts[1] {
             case "down": .leftMouseDown
             case "drag": .leftMouseDragged
+            case "move": .mouseMoved
             default: .leftMouseUp
             }
             let point = NSPoint(x: x, y: (window.contentView?.frame.height ?? 0) - y)
@@ -650,7 +651,9 @@ enum DebugDriver {
         case "responder":
             // What has the keyboard, and what the window hits at a point.
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { break }
-            var lines = ["first \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "-")"]
+            let cursors: [(NSCursor, String)] = [(.pointingHand, "hand"), (.iBeam, "ibeam"), (.arrow, "arrow")]
+            let cursor = cursors.first { $0.0 == NSCursor.current }?.1 ?? "other"
+            var lines = ["first \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "-") cursor \(cursor)"]
             if parts.count > 2, let x = Double(parts[1]), let y = Double(parts[2]), let content = window.contentView {
                 let hit = content.hitTest(NSPoint(x: x, y: content.frame.height - y))
                 var chain: [String] = []
