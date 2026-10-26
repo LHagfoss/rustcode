@@ -265,11 +265,31 @@ private struct SessionSidebar: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
-            HStack {
+            HStack(spacing: 6) {
                 Text(model.showsArchived ? "Archived" : "Chats")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
+                // The archive lives with the sidebar's own controls, not as a
+                // detached row at the bottom (#2412): a clear pill that shows
+                // how many are tucked away and returns from the archived list.
+                if model.showsArchived || !model.archivedSessions.isEmpty {
+                    Button { withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() } } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: model.showsArchived ? "chevron.left" : "archivebox")
+                            Text(model.showsArchived ? "Chats" : "\(model.archivedSessions.count)")
+                                .monospacedDigit()
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(model.showsArchived ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
+                        .padding(.horizontal, 8)
+                        .frame(height: 20)
+                        .background(.fill.tertiary, in: .capsule)
+                        .contentShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .help(model.showsArchived ? "Back to chats" : "Archived chats")
+                }
                 ScopeToggle(showsAll: $model.showsAllProjects)
             }
             .padding(.leading, 20)
@@ -329,27 +349,6 @@ private struct SessionSidebar: View {
                 }
             }
 
-            if !model.archivedSessions.isEmpty || model.showsArchived {
-                Button { withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() } } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: model.showsArchived ? "chevron.left" : "archivebox")
-                            .frame(width: 16)
-                        Text(model.showsArchived ? "Back to Chats" : "Archived")
-                        Spacer(minLength: 0)
-                        if !model.showsArchived {
-                            Text("\(model.archivedSessions.count)").foregroundStyle(.tertiary).monospacedDigit()
-                        }
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .frame(height: 30)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .padding(.top, 4)
-            }
             if let release = updater.available {
                 Button { Task { await updater.install() } } label: {
                     HStack(spacing: 8) {
