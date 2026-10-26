@@ -222,6 +222,26 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// ↑ with an empty composer recalls the last message to edit and resend;
+    /// it does nothing when the composer already holds text.
+    func testUpArrowRecallsTheLastMessage() async throws {
+        let model = try await started()
+        await model.newSession()
+        await send("first request", in: model)
+        try await until { !model.busy }
+        await send("second request", in: model)
+        try await until { !model.busy }
+
+        XCTAssertTrue(model.recallLastMessage())
+        XCTAssertEqual(model.draft, "second request")
+
+        // With text in the composer ↑ must not clobber it.
+        model.draft = "work in progress"
+        XCTAssertFalse(model.recallLastMessage())
+        XCTAssertEqual(model.draft, "work in progress")
+        model.stop()
+    }
+
     /// Picking a chat back while its first load still runs shows it once it is in.
     func testReturningToALoadingChatShowsItWhenLoaded() async throws {
         let model = try await started()
