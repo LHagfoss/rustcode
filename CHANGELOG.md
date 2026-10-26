@@ -1,3 +1,10 @@
+## [v0.98.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.98.1) - 2026-10-26
+
+### Fixes
+- Show one Archived control beside the sidebar heading, line chat titles up with state shown at the row's end, and make the project folder look like a button. (#2446)
+- Put the Copy button below messages, clear of their text, and clear a chat text selection by clicking blank space. (#2447)
+- Show the pointing hand reliably over chat links, including in tables, and draw link underlines lighter so bold and heading links no longer look heavy. (#2448)
+- Keep your place while scrolling back through long chats: older history now loads without jumps, flashes or the view leaping toward the end. (#2449)
 ## [v0.98.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.98.0) - 2026-10-26
 
 ### Features
