@@ -55,6 +55,12 @@ pub enum AgentUiEvent {
         id: String,
         result: ToolResult,
     },
+    /// A provider response has completed. ACP forwards its usage snapshot to
+    /// refresh the header before the next request starts.
+    RoundCompleted {
+        usage: agent_client_protocol::schema::v1::SessionUpdate,
+    },
+
     #[cfg(test)]
     TurnRecovered {
         message: String,
@@ -538,6 +544,7 @@ pub(crate) async fn run_agent_turn_with_events_and_context_for_session<P: TurnPo
         context,
         turn_session_id,
         false,
+        false,
     )
     .await
 }
@@ -576,6 +583,7 @@ pub(crate) async fn run_agent_turn_with_events_for_acp<P: TurnPolicy + 'static>(
         turn_context,
         turn_session_id,
         true,
+        true,
     )
     .await
 }
@@ -605,6 +613,7 @@ pub(crate) async fn run_agent_turn_with_events_and_context_for_acp<P: TurnPolicy
         context,
         turn_session_id,
         true,
+        true,
     )
     .await
 }
@@ -620,6 +629,7 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
     context: super::TurnContext,
     turn_session_id: String,
     suppress_synthetic_background_completion: bool,
+    report_round_usage: bool,
 ) -> super::TurnContext {
     let timing = state.lock().await.active_turn_timing.clone();
     sender.send(AgentUiEvent::PromptStarted { prompt, timing });
@@ -632,6 +642,7 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
         stream_buffer,
         context,
         turn_session_id,
+        report_round_usage.then(|| sender.clone()),
     ));
     let context = drive_turn_with_snapshots(
         turn.as_mut(),

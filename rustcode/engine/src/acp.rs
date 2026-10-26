@@ -13,7 +13,7 @@ mod rewind;
 mod session;
 mod steer;
 mod streaming;
-mod usage;
+pub(crate) mod usage;
 
 pub(crate) use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock,

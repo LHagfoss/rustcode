@@ -61,6 +61,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
         stream_buffer,
         ctx,
         turn_session_id,
+        None,
     )
     .await
 }
@@ -73,6 +74,7 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
     mut ctx: TurnContext,
     turn_session_id: String,
+    round_updates: Option<crate::network::AgentUiEventSender>,
 ) -> TurnContext {
     let _awake = crate::keep_awake::KeepAwake::acquire();
     // Every provider-driven turn is live user work. Older configs and saved
@@ -89,6 +91,7 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
         stream_buffer,
         &mut ctx,
         &turn_session_id,
+        round_updates.as_ref(),
     )
     .await
     {}

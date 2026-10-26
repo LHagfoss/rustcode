@@ -150,7 +150,8 @@ impl TranscriptModel {
             | rustcode::controller::AgentUiEvent::ReasoningSource { .. }
             | rustcode::controller::AgentUiEvent::ApprovalRequested { .. }
             | rustcode::controller::AgentUiEvent::QuestionRequested { .. }
-            | rustcode::controller::AgentUiEvent::ToolFinished { .. } => {}
+            | rustcode::controller::AgentUiEvent::ToolFinished { .. }
+            | rustcode::controller::AgentUiEvent::RoundCompleted { .. } => {}
         }
     }
 

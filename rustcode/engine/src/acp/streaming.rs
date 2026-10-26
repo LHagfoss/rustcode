@@ -278,6 +278,7 @@ impl AcpEventStream {
                 }
                 updates
             }
+            crate::network::AgentUiEvent::RoundCompleted { usage } => vec![usage],
             crate::network::AgentUiEvent::PromptStarted { .. }
             | crate::network::AgentUiEvent::SubagentUpdated { .. }
             | crate::network::AgentUiEvent::ApprovalRequested { .. }
@@ -331,6 +332,25 @@ pub(crate) fn attach_turn_timing(updates: &mut [SessionUpdate], turn: &crate::ap
     rustcode.insert("turn".into(), serde_json::Value::Object(timing));
     meta.insert("rustcode".into(), serde_json::Value::Object(rustcode));
     chunk.meta = Some(meta);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AcpEventStream;
+    use crate::network::AgentUiEvent;
+
+    #[test]
+    fn completed_round_forwards_its_usage_update() {
+        let usage = crate::acp::usage::usage_update(&crate::app::AppState::new());
+        let mut stream = AcpEventStream::new();
+
+        assert_eq!(
+            stream.updates(AgentUiEvent::RoundCompleted {
+                usage: usage.clone(),
+            }),
+            vec![usage]
+        );
+    }
 }
 
 fn rustcode_meta(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
