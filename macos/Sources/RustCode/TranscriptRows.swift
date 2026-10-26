@@ -213,8 +213,10 @@ private struct UserBubble: View {
     var body: some View {
         // The bubble and its Copy button share one hover region, so moving
         // the pointer onto the button does not drop the bubble's hover and
-        // hide the button again, which flickered it in and out (#2415).
-        ZStack(alignment: .topTrailing) {
+        // hide the button again, which flickered it in and out (#2415). The
+        // button sits below the bubble, clear of its text, in room kept for
+        // it so nothing moves as it shows (#2444).
+        VStack(alignment: .trailing, spacing: HoverCopy.gap) {
             FoldingMessage(id: id, text: text, folds: true, isExpanded: isExpanded,
                            chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
                 Group {
@@ -229,7 +231,6 @@ private struct UserBubble: View {
                 .lineSpacing(2)
             }
             HoverCopy(help: "Copy message", isShown: isHovered) { Clipboard.copy(text) }
-                .padding(6)
         }
             .onHover { isHovered = $0 }
             .messageMenu { [text, original, id, messageActions] in
@@ -246,15 +247,16 @@ private struct UserBubble: View {
     }
 }
 
-/// Copy, shown over a message's top-right corner while the pointer is on it.
+/// Copy, shown below a message while the pointer is on it.
 private struct HoverCopy: View {
     let help: String
     let isShown: Bool
     let action: () -> Void
+    /// The room between a message and its Copy button.
+    static let gap: CGFloat = 4
 
     var body: some View {
-        CopyButton(help: help, action: action)
-            .background(.regularMaterial, in: .rect(cornerRadius: 7))
+        CopyButton(help: help, height: 22, action: action)
             .opacity(isShown ? 1 : 0)
             .allowsHitTesting(isShown)
             .animation(.easeOut(duration: 0.12), value: isShown)
@@ -306,31 +308,26 @@ private struct AssistantMessage: View {
         // The reply and its Copy button share one hover region, so moving the
         // pointer onto the button does not drop the reply's hover and hide the
         // button again, which flickered it in and out (#2415).
-        ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: 10) {
-                FoldingMessage(id: id, text: text, folds: false,
-                               isExpanded: isExpanded) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
-                            let isLast = index == parsed.blocks.count - 1
-                            switch block {
-                            case .markdown(let text):
-                                MarkdownText(text: text, visualizations: true, isStreaming: isStreaming && isLast)
-                            case .thinking(let text, let isComplete):
-                                ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
-                            }
+        VStack(alignment: .leading, spacing: 10) {
+            FoldingMessage(id: id, text: text, folds: false,
+                           isExpanded: isExpanded) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
+                        let isLast = index == parsed.blocks.count - 1
+                        switch block {
+                        case .markdown(let text):
+                            MarkdownText(text: text, visualizations: true, isStreaming: isStreaming && isLast)
+                        case .thinking(let text, let isComplete):
+                            ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
                         }
-                        if let summary = parsed.summary { SummaryCard(summary: summary) }
                     }
+                    if let summary = parsed.summary { SummaryCard(summary: summary) }
                 }
-                // Never while the reply is written, so the footer cannot claim it is done.
-                if !isStreaming, let turn { footer(turn) }
             }
-            // Out of the way until the pointer is on the reply; it floats
-            // over it, so nothing moves when it shows.
-            if !isStreaming {
-                HoverCopy(help: "Copy reply", isShown: isHovered) { Clipboard.copy(AssistantSummary.split(text).prose) }
-            }
+            // Never while the reply is written, so the footer cannot claim
+            // it is done. Copy waits below the reply, out of its text, in
+            // room kept for it so nothing moves as it shows (#2444).
+            if !isStreaming { footer(turn) }
         }
         .onHover { isHovered = $0 }
         .messageMenu { [text, messageActions] in
@@ -347,17 +344,21 @@ private struct AssistantMessage: View {
         }
     }
 
-    /// Copy, then how long the turn took and when it ended, under a turn's
-    /// last reply.
-    private func footer(_ turn: TurnTiming) -> some View {
+    /// Under a reply: how long the turn took and when it ended, on a turn's
+    /// last reply, then Copy while the pointer is on the reply.
+    private func footer(_ turn: TurnTiming?) -> some View {
         HStack(spacing: 6) {
-            Text(turn.label())
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.tertiary)
-                .help(turn.finished.formatted(date: .complete, time: .standard))
+            if let turn {
+                Text(turn.label())
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .help(turn.finished.formatted(date: .complete, time: .standard))
+            }
+            HoverCopy(help: "Copy reply", isShown: isHovered) { Clipboard.copy(AssistantSummary.split(text).prose) }
+                .padding(.leading, turn == nil ? -8 : 0)
         }
-        .padding(.top, -6)
+        .padding(.top, HoverCopy.gap - 10)
     }
 }
 

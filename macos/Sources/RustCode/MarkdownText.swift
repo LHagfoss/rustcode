@@ -331,6 +331,7 @@ struct CodeBlock: View {
 /// and shrinks back, cross-fading between the labels.
 struct CopyButton: View {
     let help: String
+    var height: CGFloat = 26
     let action: () -> Void
     @State private var copiedAt: Date?
     @State private var isHovered = false
@@ -356,7 +357,7 @@ struct CopyButton: View {
             .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
-            .frame(height: 26)
+            .frame(height: height)
             .background(isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 7))
             .contentShape(.rect(cornerRadius: 7))
         }

@@ -454,6 +454,30 @@ private extension View {
     }
 }
 
+/// The chat's text selection, which a click outside any text does not end
+/// on its own: the selected text keeps the keyboard until something else
+/// takes it.
+enum TextSelection {
+    /// Drop the selection for a click on the chat that lands outside any
+    /// text (#2440): the blank space beside and between messages. Only when
+    /// the keyboard is with selected text, not a field the reader types in.
+    @MainActor static func endIfOutsideText(_ event: NSEvent) {
+        guard let window = event.window, let content = window.contentView,
+              let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
+              let field = editor.delegate as? NSTextField, !field.isEditable,
+              let hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
+        else { return }
+        // Selectable text is a text field of its own; a click in it moves
+        // the selection, and one in another field starts there.
+        var view: NSView? = hit
+        while let current = view {
+            if current is NSTextField || current is NSTextView { return }
+            view = current.superview
+        }
+        window.makeFirstResponder(nil)
+    }
+}
+
 /// The sidebar's project folder: a quiet filled control at rest, so it reads
 /// as pressable, a little stronger under the pointer and while pressed.
 private struct ProjectButtonStyle: ButtonStyle {
@@ -1532,7 +1556,7 @@ final class ChatScrollInput {
 
     func start() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged]) { event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged, .leftMouseDown]) { event in
             MainActor.assumeIsolated { ChatScrollInput.shared.observe(event) }
             return event
         }
@@ -1551,6 +1575,10 @@ final class ChatScrollInput {
         guard let content = event.window?.contentView else { return }
         let location = event.locationInWindow
         guard chatFrame.contains(CGPoint(x: location.x, y: content.bounds.height - location.y)) else { return }
+        if event.type == .leftMouseDown {
+            TextSelection.endIfOutsideText(event)
+            return
+        }
         lastInput = Date()
         // Wheel deltas are positive toward the top; a scroller drag moves its
         // knob, so down is toward the end.
