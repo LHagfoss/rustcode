@@ -9,13 +9,18 @@ import WebKit
 struct ContentView: View {
     @ObservedObject var model: DesktopModel
     @AppStorage("previewWidth") private var previewWidth: Double = 480
+    /// The sidebar width, remembered across launches. An out-of-range stored
+    /// value is clamped on read, so a bad value never strands the sidebar.
+    @AppStorage("sidebarWidth") private var sidebarWidth: Double = Double(SessionSidebar.width)
+    private var sidebarClampedWidth: CGFloat { SidebarResizeHandle.clamp(sidebarWidth) }
 
     var body: some View {
         HStack(spacing: 0) {
             if model.showsSidebar {
                 SessionSidebar(model: model, updater: model.updater)
-                    .frame(width: SessionSidebar.width)
+                    .frame(width: sidebarClampedWidth)
                     .transition(.move(edge: .leading))
+                SidebarResizeHandle(width: $sidebarWidth)
             }
             ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
@@ -54,9 +59,49 @@ struct ContentView: View {
         // beside it are left out.
         .overlay {
             ToastStack(model: model,
-                       leadingInset: model.showsSidebar ? SessionSidebar.width : 0,
+                       leadingInset: model.showsSidebar ? sidebarClampedWidth + SidebarResizeHandle.width : 0,
                        trailingInset: model.showsPreview ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
         }
+    }
+}
+
+/// The line between the sidebar and the chat, dragged to resize the sidebar.
+/// The chosen width is stored (`sidebarWidth`), so it comes back next launch;
+/// `clamp` keeps it in range, so an invalid stored value is safe.
+struct SidebarResizeHandle: View {
+    @Binding var width: Double
+    @State private var startWidth: Double?
+
+    /// The sidebar stays usable and the chat keeps enough room.
+    static let range: ClosedRange<Double> = 200...460
+    /// The line and the padding either side that can be grabbed.
+    static let width: CGFloat = 7
+
+    static func clamp(_ width: Double) -> CGFloat {
+        CGFloat(min(max(width, range.lowerBound), range.upperBound))
+    }
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.1))
+            .frame(width: 1)
+            .padding(.horizontal, (Self.width - 1) / 2)
+            .contentShape(.rect)
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { drag in
+                        let start = startWidth ?? width
+                        startWidth = start
+                        // The handle is on the sidebar's trailing edge, so
+                        // dragging right (positive translation) widens it.
+                        width = min(max(start + drag.translation.width, Self.range.lowerBound), Self.range.upperBound)
+                    }
+                    .onEnded { _ in startWidth = nil }
+            )
+            .accessibilityHidden(true)
     }
 }
 

@@ -39,4 +39,13 @@ final class FollowStateTests: XCTestCase {
         XCTAssertFalse(state.showsLatest)
         XCTAssertEqual(changes, 4)
     }
+
+    /// #2417: a stored sidebar width is clamped to the usable range, so an
+    /// invalid value (a stale or hand-edited default) never strands the bar.
+    func testSidebarWidthIsClamped() {
+        XCTAssertEqual(SidebarResizeHandle.clamp(300), 300)
+        XCTAssertEqual(SidebarResizeHandle.clamp(0), SidebarResizeHandle.range.lowerBound)
+        XCTAssertEqual(SidebarResizeHandle.clamp(10_000), SidebarResizeHandle.range.upperBound)
+        XCTAssertEqual(SidebarResizeHandle.clamp(-50), SidebarResizeHandle.range.lowerBound)
+    }
 }
