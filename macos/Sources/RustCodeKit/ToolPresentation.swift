@@ -17,6 +17,7 @@ public enum ToolPresentation {
     /// else the first line of its output. Nil when there is nothing to add.
     public static func detail(input: JSONValue?, output: String?) -> String? {
         if let input {
+            if let github = githubDetail(input) { return github }
             for key in detailKeys {
                 if let value = input[key]?.stringValue, let line = firstLine(value) { return clipped(line) }
             }
@@ -33,6 +34,24 @@ public enum ToolPresentation {
 
     static func summary(_ text: String) -> String? {
         firstLine(text).map(clipped)
+    }
+
+    /// `issue #7 · owner/name` or `list_prs · label:bug` for the `github` tool.
+    private static func githubDetail(_ input: JSONValue) -> String? {
+        guard let action = input["action"]?.stringValue,
+              ["issue", "pr", "pr_diff", "checks", "list_issues", "list_prs", "run_log"].contains(action) else { return nil }
+        let label: String = switch action {
+        case "pr_diff": "PR diff"
+        case "list_issues": "Issues"
+        case "list_prs": "Pull requests"
+        case "run_log": "Run log"
+        case "pr": "PR"
+        default: action.prefix(1).uppercased() + action.dropFirst()
+        }
+        var parts = [input["number"]?.intValue.map { "\(label) #\($0)" } ?? label]
+        if let query = input["query"]?.stringValue, !query.isEmpty { parts.append(query) }
+        if let repo = input["repo"]?.stringValue, !repo.isEmpty { parts.append(repo) }
+        return clipped(parts.joined(separator: " · "))
     }
 
     private static let detailKeys = ["command", "path", "file_path", "pattern", "query", "url", "task", "name", "description"]
@@ -76,6 +95,7 @@ public enum ToolPresentation {
         "find_symbol": "Search",
         "search_web": "Web search",
         "read_url": "Read URL",
+        "github": "GitHub",
         "run_command": "Run",
         "manage_task": "Task",
         "ask_question": "Question",

@@ -21,6 +21,7 @@ public enum ToolIcon {
     /// Only for a page the agent already fetched, so showing it tells the
     /// site nothing new. Nil for anything else, and for local addresses.
     public static func siteIcon(for call: ToolItem) -> URL? {
+        if call.displayTitle == "GitHub" { return URL(string: "https://github.com/favicon.ico") }
         guard call.displayTitle == "Read URL", let detail = call.detail,
               let url = URL(string: detail.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",

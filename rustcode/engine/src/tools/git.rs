@@ -6,7 +6,7 @@ use super::{Tool, ToolCapability, ToolSafety};
 
 const MAX_GIT_OUTPUT_BYTES: usize = 20_000;
 
-fn working_directory() -> PathBuf {
+pub(super) fn working_directory() -> PathBuf {
     super::active_task_working_directory()
         .or_else(|| {
             std::env::current_dir()

@@ -38,7 +38,7 @@ public enum ToolPhrase {
         switch call.displayTitle {
         case "Read", "List", "Project map": return .read
         case "Search": return .search
-        case "Web search", "Read URL", "Preview": return .web
+        case "Web search", "Read URL", "Preview", "GitHub": return .web
         case "Edit", "Write", "Delete", "Move", "Copy": return .edit
         case "Run", "Git status", "Git diff", "Git add", "Git commit": return .run
         case "Skill", "Skills": return .skill

@@ -11,6 +11,7 @@ mod envelope;
 pub(crate) mod exec;
 mod filesystem;
 mod git;
+mod github;
 pub(crate) mod mcp_discovery;
 #[cfg(all(test, unix))]
 mod mcp_servers_tests;
@@ -1443,6 +1444,7 @@ pub const TOOLS: &[Tool] = &[
     exec::MANAGE_TASK,
     misc::SEARCH_WEB,
     misc::READ_URL,
+    github::GITHUB,
     search::FIND_SYMBOL,
     search::GET_PROJECT_MAP,
     filesystem::VIEW_FILE,

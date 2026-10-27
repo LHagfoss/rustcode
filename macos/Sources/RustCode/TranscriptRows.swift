@@ -598,7 +598,7 @@ private struct ToolRow: View {
             return change.displayPath(relativeTo: projectRoot)
         }
         // A page reads as `github.com/…/rest`, as links in replies do.
-        if ToolIcon.siteIcon(for: tool) != nil, let detail = tool.detail, let url = URL(string: detail) {
+        if tool.displayTitle == "Read URL", ToolIcon.siteIcon(for: tool) != nil, let detail = tool.detail, let url = URL(string: detail) {
             return Linkify.label(for: url)
         }
         return tool.detail.map { ProjectPath.relative($0, to: projectRoot) }
