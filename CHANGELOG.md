@@ -1,3 +1,8 @@
+## [v0.103.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.103.0) - 2026-10-27
+
+### Features
+- macOS: chats idle for a week are archived automatically, and chats archived for a month move to the Trash; pinned chats are never touched. (#2493)
+- macOS: working subagents appear as nested chats under their parent in the sidebar and open in the main chat area; the agents pill no longer overlaps the composer. (#2494)
 ## [v0.102.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.102.0) - 2026-10-27
 
 ### Features
