@@ -326,6 +326,10 @@ final class DesktopModel: ObservableObject {
         .flatMap { try? JSONDecoder().decode([SessionSummary].self, from: $0) } ?? []
     /// Chats hidden from the list without deleting them, kept on this Mac.
     @Published private(set) var archivedSessions = Set(UserDefaults.standard.stringArray(forKey: "archivedSessions") ?? [])
+    /// When each archived chat was archived, which starts its month before
+    /// the retention sweep moves it to the Trash (`SessionRetention`).
+    private var archivedDates: [String: Date] = (UserDefaults.standard.dictionary(forKey: "archivedSessionDates") as? [String: Date]) ?? [:]
+    private var sweepingRetention = false
     @Published var showsArchived = false {
         didSet { if showsArchived { readAllSessionsForFilter() } }
     }
@@ -1134,15 +1138,81 @@ final class DesktopModel: ObservableObject {
     func toggleArchive(_ session: SessionSummary) {
         if archivedSessions.contains(session.id) {
             archivedSessions.remove(session.id)
+            archivedDates[session.id] = nil
             confirm("Moved out of the archive", systemImage: "tray.and.arrow.up.fill")
         } else {
             archivedSessions.insert(session.id)
+            archivedDates[session.id] = Date()
             confirm("Archived", systemImage: "archivebox.fill")
             pinnedSessions.remove(session.id)
             UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
             if selectedSession == session.id { Task { await newSession() } }
         }
+        rememberArchived()
+    }
+
+    private func rememberArchived() {
         UserDefaults.standard.set(Array(archivedSessions), forKey: "archivedSessions")
+        UserDefaults.standard.set(archivedDates, forKey: "archivedSessionDates")
+    }
+
+    /// Archive chats idle a week and move chats archived a month to the
+    /// Trash (#2489), at most once a day, over every project's chats. Pinned
+    /// chats and chats running, open or just started are left alone. The
+    /// first sweep dates the chats archived before dates were kept, so it
+    /// archives but trashes nothing.
+    private func sweepRetention() async {
+        let now = Date()
+        if let last = UserDefaults.standard.object(forKey: "sessionRetentionSweep") as? Date,
+           now.timeIntervalSince(last) < SessionRetention.sweepInterval { return }
+        guard !sweepingRetention, let connection = engine?.connection, capabilities?.listSessions == true else { return }
+        sweepingRetention = true
+        defer { sweepingRetention = false }
+        var pages = SessionPages()
+        do {
+            repeat {
+                let params = ACPRequests.listSessions(cwd: nil, cursor: pages.cursor)
+                let result = try await connection.request(ACPMethod.sessionList, params: params, timeout: .seconds(15))
+                pages.append(SessionSummary.list(from: result), next: SessionSummary.nextCursor(from: result))
+            } while pages.hasMore
+        } catch { return }
+        archivedDates = SessionRetention.dated(archivedSessions, dates: archivedDates, now: now)
+        var inUse = runningSessions.union(openSessions.keys).union(startedSessions.keys)
+        if let selectedSession { inUse.insert(selectedSession) }
+        let plan = SessionRetention.plan(sessions: pages.listed, archived: archivedDates, pinned: pinnedSessions,
+                                         inUse: inUse, now: now)
+        for id in plan.toArchive {
+            archivedSessions.insert(id)
+            archivedDates[id] = now
+        }
+        let expired = Set(plan.toTrash)
+        var trashed = 0
+        for session in pages.listed where expired.contains(session.id) {
+            guard let directory = await sessionDirectory(session),
+                  (try? await NSWorkspace.shared.recycle([directory])) != nil else { continue }
+            forget(session.id)
+            trashed += 1
+        }
+        rememberArchived()
+        UserDefaults.standard.set(now, forKey: "sessionRetentionSweep")
+        let lines = [plan.toArchive.isEmpty ? nil : "Archived \(plan.toArchive.count) chat\(plan.toArchive.count == 1 ? "" : "s") idle for a week.",
+                     trashed == 0 ? nil : "Moved \(trashed) chat\(trashed == 1 ? "" : "s") archived for a month to the Trash."]
+            .compactMap { $0 }
+        guard !lines.isEmpty else { return }
+        showToast(Toast(style: .info, systemImage: "archivebox", title: "Tidied the chat list",
+                        message: lines.joined(separator: " ")))
+    }
+
+    /// Drop a chat whose folder is gone from everything the sidebar keeps.
+    private func forget(_ id: String) {
+        pinnedSessions.remove(id)
+        UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
+        archivedSessions.remove(id)
+        archivedDates[id] = nil
+        sessions.removeAll { $0.id == id }
+        sessionPages.remove(id)
+        startedSessions[id] = nil
+        parkedDrafts[id] = nil
     }
 
     /// Chats created here that the engine does not list yet.
@@ -1226,13 +1296,9 @@ final class DesktopModel: ObservableObject {
             self.error = "Could not move the chat to the Trash: \(error.localizedDescription)"
             return
         }
-        pinnedSessions.remove(session.id)
-        UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
-        sessions.removeAll { $0.id == session.id }
-        sessionPages.remove(session.id)
-        startedSessions[session.id] = nil
+        forget(session.id)
+        rememberArchived()
         confirm("Moved to the Trash", systemImage: "trash.fill")
-        parkedDrafts[session.id] = nil
         if selectedSession == session.id {
             selectedSession = nil
             transcript.removeAll()
@@ -1563,6 +1629,7 @@ final class DesktopModel: ObservableObject {
             moreSessionsFailed = false
             publishSessions()
             sessionsLoaded = true
+            Task { await sweepRetention() }
         } catch {
             guard sessionListRequests.isCurrent(request) else { return }
             self.error = String(describing: error)
