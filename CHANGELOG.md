@@ -1,3 +1,9 @@
+## [v0.101.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.101.0) - 2026-10-27
+
+### Features
+- Settings has a Connections page: connect GitHub through the GitHub CLI with a one-time code, and see or sign out of your GitHub and model accounts. (#2479)
+- The agent can read GitHub issues, pull requests, diffs, CI checks and failed run logs through your GitHub CLI sign-in, without an approval prompt. (#2480)
+- Opening a turn's steps near the top of a chat no longer leaves blank space below them, and steps now fade in as a turn or tool run opens. (#2482)
 ## [v0.100.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.100.0) - 2026-10-27
 
 ### Features
