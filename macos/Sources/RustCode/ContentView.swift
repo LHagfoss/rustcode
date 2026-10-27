@@ -482,18 +482,21 @@ enum TextSelection {
     /// Drop the selection for a click on the chat that lands outside any
     /// text (#2440): the blank space beside and between messages. Only when
     /// the keyboard is with selected text, not a field the reader types in.
-    @MainActor static func endIfOutsideText(_ event: NSEvent) {
-        guard let window = event.window, let content = window.contentView, holdsSelection(window),
+    /// Returns whether the click was outside any text.
+    @discardableResult
+    @MainActor static func endIfOutsideText(_ event: NSEvent) -> Bool {
+        guard let window = event.window, let content = window.contentView,
               let hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
-        else { return }
+        else { return false }
         // Selectable text is a text field of its own; a click in it moves
         // the selection, and one in another field starts there.
         var view: NSView? = hit
         while let current = view {
-            if current is NSTextField || current is NSTextView { return }
+            if current is NSTextField || current is NSTextView { return false }
             view = current.superview
         }
-        window.makeFirstResponder(nil)
+        if holdsSelection(window) { window.makeFirstResponder(nil) }
+        return true
     }
 
     /// Esc drops a selection in the chat, wherever the pointer is (#2440).
@@ -510,6 +513,78 @@ enum TextSelection {
         guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
               let field = editor.delegate as? NSTextField else { return false }
         return !field.isEditable
+    }
+}
+
+/// A drag that starts in the blank space beside the chat's text, such as the
+/// margin left of a reply or beside a bubble, selects from the text's edge
+/// on that line, as if it had started there (#2440). The press is moved to
+/// the column's edge once the pointer moves, so the chat's own text
+/// selection takes over; a click without a drag only ends the selection,
+/// so controls in the chat keep their clicks.
+@MainActor
+final class GutterSelection {
+    static let shared = GutterSelection()
+
+    /// Where a press outside any text went down, in window coordinates.
+    private var start: (window: NSWindow, point: NSPoint, chat: CGRect)?
+    /// The press was moved into the column; the drag now belongs to it.
+    private var moved = false
+    /// How far the pointer must move before a press becomes a selection.
+    static let threshold: CGFloat = 4
+
+    func begin(_ event: NSEvent, in chat: CGRect) {
+        start = nil
+        moved = false
+        guard let window = event.window else { return }
+        // Not on the timeline rail at the left, when the window is wide
+        // enough to show it, or the scroller at the right: dragging those
+        // moves through the chat.
+        let x = event.locationInWindow.x
+        let railShown = TimelineLayout.shows(width: chat.width, column: TimelineRail.column,
+                                             padding: TimelineRail.padding, turns: 2)
+        let left = chat.minX + (railShown ? TimelineRail.edgeInset + TimelineRail.width + 6 : 0)
+        guard x > left, x < chat.maxX - 24 else { return }
+        start = (window, event.locationInWindow, chat)
+    }
+
+    /// Returns whether the event was used up, so it is not delivered.
+    func drag(_ event: NSEvent) -> Bool {
+        guard let start, !moved, event.window === start.window else { return false }
+        let point = event.locationInWindow
+        guard hypot(point.x - start.point.x, point.y - start.point.y) >= Self.threshold else { return false }
+        moved = true
+        let column = Self.column(in: start.chat)
+        // Only a press beside the column moves; one inside it, between
+        // lines, has no text to start at.
+        let x = min(max(start.point.x, column.lowerBound + 1), column.upperBound - 1)
+        guard x != start.point.x else {
+            self.start = nil
+            return false
+        }
+        let press = NSPoint(x: x, y: start.point.y)
+        for (type, location) in [(NSEvent.EventType.leftMouseDown, press), (.leftMouseDragged, point)] {
+            if let synthetic = NSEvent.mouseEvent(with: type, location: location, modifierFlags: event.modifierFlags,
+                                                  timestamp: event.timestamp, windowNumber: start.window.windowNumber,
+                                                  context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                start.window.sendEvent(synthetic)
+            }
+        }
+        return true
+    }
+
+    func end() {
+        start = nil
+        moved = false
+    }
+
+    /// The chat column's horizontal span in window coordinates, as
+    /// `ChatView` lays it out: centred, at most its maximum width, with its
+    /// padding either side.
+    static func column(in chat: CGRect) -> ClosedRange<CGFloat> {
+        let padding: CGFloat = 28
+        let width = min(max(chat.width - 2 * padding, 0), ChatView.columnMaxWidth)
+        return (chat.midX - width / 2)...(chat.midX + width / 2)
     }
 }
 
@@ -1690,9 +1765,9 @@ final class ChatScrollInput {
 
     func start() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged, .leftMouseDown]) { event in
-            MainActor.assumeIsolated { ChatScrollInput.shared.observe(event) }
-            return event
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged, .leftMouseDown, .leftMouseUp]) { event in
+            let consumed = MainActor.assumeIsolated { ChatScrollInput.shared.observe(event) }
+            return consumed ? nil : event
         }
     }
 
@@ -1705,13 +1780,25 @@ final class ChatScrollInput {
     }
     #endif
 
-    private func observe(_ event: NSEvent) {
-        guard let content = event.window?.contentView else { return }
+    /// Returns whether the event was used up, so it is not delivered.
+    private func observe(_ event: NSEvent) -> Bool {
+        // A drag that began beside a message selects its text wherever the
+        // pointer goes, inside the chat or not.
+        switch event.type {
+        case .leftMouseDragged where GutterSelection.shared.drag(event): return true
+        case .leftMouseUp:
+            GutterSelection.shared.end()
+            return false
+        default: break
+        }
+        guard let content = event.window?.contentView else { return false }
         let location = event.locationInWindow
-        guard chatFrame.contains(CGPoint(x: location.x, y: content.bounds.height - location.y)) else { return }
+        guard chatFrame.contains(CGPoint(x: location.x, y: content.bounds.height - location.y)) else { return false }
         if event.type == .leftMouseDown {
-            TextSelection.endIfOutsideText(event)
-            return
+            if TextSelection.endIfOutsideText(event) {
+                GutterSelection.shared.begin(event, in: chatFrame)
+            }
+            return false
         }
         lastInput = Date()
         // Wheel deltas are positive toward the top; a scroller drag moves its
@@ -1726,6 +1813,7 @@ final class ChatScrollInput {
         if event.type == .scrollWheel, event.scrollingDeltaY > 0, event.momentumPhase.isEmpty {
             onScrollUp()
         }
+        return false
     }
 }
 
