@@ -1,3 +1,20 @@
+## [v0.104.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.104.0) - 2026-10-28
+
+### Features
+- The macOS app now shows a short What's New card after it updates, with the full release notes one click away. (#2518)
+- Dragging from the blank space beside a message now starts selecting its text. (#2519)
+- Project memory now matches whole words, skips filler words, flags stale and conflicting facts, and is saved and read from the same project folder in every session. (#2513)
+- The archive button in the sidebar no longer shows a count badge. (#2517)
+
+### Fixes
+- Fixed long sessions losing old messages and their prompt cache every round when the context was nearly full. (#2512)
+- Fixed the agent re-listing MCP tools on every turn after it had already found them. (#2514)
+
+### Performance
+- The macOS app no longer starts every MCP server for chats that never run a turn; servers start on the first message. (#2515)
+
+### Diagnostics
+- Session logs name the engine version, subagent requests log their cost and cache use, pending background commands no longer count as failed tools, and memory selection is logged without fact contents. (#2509, #2511, #2513)
 ## [v0.103.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.103.0) - 2026-10-27
 
 ### Features
