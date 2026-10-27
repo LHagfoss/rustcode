@@ -32,4 +32,16 @@ final class LinkifyTests: XCTestCase {
         let text = "👋 https://example.com"
         XCTAssertEqual(Linkify.links(in: text).first?.range, 2..<21)
     }
+
+    func testBareAddressesReadAsHostAndPath() {
+        func label(_ text: String) -> String { Linkify.label(for: URL(string: text)!) }
+        XCTAssertEqual(label("https://example.com"), "example.com")
+        XCTAssertEqual(label("https://www.example.com/"), "example.com")
+        XCTAssertEqual(label("https://github.com/LHagfoss/rustcode/issues/2460?x=1#top"), "github.com/LHagfoss/rustcode/issues/2460")
+        XCTAssertEqual(label("http://localhost:8080/app"), "localhost:8080/app")
+        XCTAssertEqual(label("mailto:me@example.com?subject=Hi"), "me@example.com")
+        XCTAssertEqual(label("https://docs.example.com/guides/getting-started/installation/macos/troubleshooting"),
+                       "docs.example.com/…/macos/troubleshooting")
+        XCTAssertEqual(label("https://example.com/%E2%9C%93/done"), "example.com/✓/done")
+    }
 }
