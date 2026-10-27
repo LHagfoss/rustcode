@@ -1,3 +1,14 @@
+## [v0.99.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.99.0) - 2026-10-27
+
+### Features
+- The Mac sidebar toolbar puts the sidebar toggle first, then Archived, then New Chat. (#2464)
+- The Mac chat shows when each message was sent and each reply written, with Copy always visible below every message. (#2465)
+- The Mac app's update button floats over the chat list instead of taking a row above the project bar. (#2466)
+- Mac chat links show the pointing hand, the full address on hover and Copy Link on right-click, and bare URLs read as a short host and path. (#2467)
+- Esc clears a text selection in the Mac chat. (#2468)
+- Tool calls in the Mac chat show as compact single lines, and an opened turn's work can be hidden from a bar that stays at the top while you read it. (#2469)
+- The Mac app can move an open chat to another project folder from the title bar's folder menu. (#2470)
+- New text in a streaming Mac reply fades in again, as the Streaming text setting intends. (#2471)
 ## [v0.98.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.98.2) - 2026-10-26
 
 ### Fixes
