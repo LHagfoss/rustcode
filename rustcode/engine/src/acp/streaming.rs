@@ -321,6 +321,34 @@ pub(crate) fn attach_turn_timing(updates: &mut [SessionUpdate], turn: &crate::ap
         crate::app::TurnOutcome::Failed => "failed",
     };
     timing.insert("outcome".into(), outcome.into());
+    insert_rustcode_meta(chunk, "turn", serde_json::Value::Object(timing));
+}
+
+/// When a replayed message was written, as `_meta.rustcode.at`, so the
+/// client can show when it was sent or answered. History saved without a
+/// time sends none.
+pub(crate) fn message_time_meta(
+    timestamp: &str,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    (!timestamp.is_empty()).then(|| rustcode_meta(serde_json::json!({ "at": timestamp })))
+}
+
+/// Put a replayed reply's time on its last prose chunk, next to its turn.
+pub(crate) fn attach_message_time(updates: &mut [SessionUpdate], timestamp: &str) {
+    if timestamp.is_empty() {
+        return;
+    }
+    let Some(SessionUpdate::AgentMessageChunk(chunk)) = updates
+        .iter_mut()
+        .rev()
+        .find(|update| matches!(update, SessionUpdate::AgentMessageChunk(_)))
+    else {
+        return;
+    };
+    insert_rustcode_meta(chunk, "at", timestamp.into());
+}
+
+fn insert_rustcode_meta(chunk: &mut ContentChunk, key: &str, value: serde_json::Value) {
     let mut meta = chunk.meta.take().unwrap_or_default();
     let mut rustcode = meta
         .remove("rustcode")
@@ -329,7 +357,7 @@ pub(crate) fn attach_turn_timing(updates: &mut [SessionUpdate], turn: &crate::ap
             _ => None,
         })
         .unwrap_or_default();
-    rustcode.insert("turn".into(), serde_json::Value::Object(timing));
+    rustcode.insert(key.into(), value);
     meta.insert("rustcode".into(), serde_json::Value::Object(rustcode));
     chunk.meta = Some(meta);
 }

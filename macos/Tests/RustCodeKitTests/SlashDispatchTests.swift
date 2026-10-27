@@ -70,7 +70,7 @@ final class SlashDispatchTests: XCTestCase {
         ]]
         XCTAssertTrue(SessionUpdate.isReport(notificationParams: report))
         XCTAssertFalse(SessionUpdate.isReport(notificationParams: turn))
-        guard case .agentText(let text, _) = SessionUpdate(notificationParams: report) else { return XCTFail("text") }
+        guard case .agentText(let text, _, _) = SessionUpdate(notificationParams: report) else { return XCTFail("text") }
         XCTAssertEqual(text, "**Status**")
     }
 

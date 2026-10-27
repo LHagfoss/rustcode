@@ -45,6 +45,9 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
     public var isReasoningSummary = false
     /// On a turn's last reply: how long the turn took and when it ended.
     public var turn: TurnTiming?
+    /// When a user's message was sent, or a reply finished being written.
+    /// Nil while a reply streams, and for history the engine sent no time for.
+    public var at: Date?
 
     /// Everything a find in the chat can match.
     public var searchableText: String {
@@ -90,6 +93,9 @@ public struct Transcript: Equatable, Sendable {
     public private(set) var turnStartedAt: Date?
     /// The first item the running turn may have added.
     private var turnFirstId: Int?
+    /// A reply that arrived live and has no finish time yet. Replayed
+    /// replies never get one made up.
+    private var liveReplyId: Int?
 
     public init() {}
 
@@ -106,6 +112,7 @@ public struct Transcript: Equatable, Sendable {
         identity = UUID()
         turnStartedAt = nil
         turnFirstId = nil
+        liveReplyId = nil
     }
 
     /// A turn starts at `now`. A message handed to a running turn does not
@@ -116,10 +123,11 @@ public struct Transcript: Equatable, Sendable {
         turnFirstId = nextId
     }
 
-    /// A prompt the user sent. The engine echoes user messages only when it
-    /// replays a session, so the client adds its own.
-    public mutating func appendUser(_ text: String) {
+    /// A prompt the user sent at `at`. The engine echoes user messages only
+    /// when it replays a session, so the client adds its own.
+    public mutating func appendUser(_ text: String, at: Date? = nil) {
         append(.user(text))
+        items[items.count - 1].at = at
     }
 
     /// Take back the latest message the user sent as `text`, as a steer the
@@ -158,9 +166,10 @@ public struct Transcript: Equatable, Sendable {
     /// took; a replayed session passes nil.
     public mutating func apply(_ update: SessionUpdate, at now: Date? = nil) {
         switch update {
-        case .userText(let text):
+        case .userText(let text, let at):
             append(.user(text), at: now)
-        case .agentText(let text, let turn):
+            items[items.count - 1].at = at ?? now
+        case .agentText(let text, let turn, let at):
             if case .command(let input, let output) = items.last?.content {
                 items[items.count - 1].content = .command(input: input, output: output + text)
             } else if case .assistant(let previous) = items.last?.content {
@@ -168,7 +177,10 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 append(.assistant(text), at: now)
             }
-            if let turn, case .assistant = items.last?.content { stamp(turn, on: items.count - 1) }
+            if case .assistant = items.last?.content {
+                if let turn { stamp(turn, on: items.count - 1) }
+                if let at { items[items.count - 1].at = at }
+            }
         case .thoughtText(let text, let summary, let durationMs):
             if case .thinking(let previous) = items.last?.content, items[items.count - 1].isReasoningSummary == summary {
                 items[items.count - 1].content = .thinking(previous + text)
@@ -248,6 +260,7 @@ public struct Transcript: Equatable, Sendable {
     /// shows none.
     public mutating func finishTurn(at now: Date, failure: String? = nil, cancelled: Bool = false) {
         finishThinking(at: now)
+        finishReply(at: now)
         if let started = turnStartedAt, let first = turnFirstId, failure == nil || cancelled,
            let last = items.lastIndex(where: { item in
                if case .assistant = item.content { item.id >= first } else { false }
@@ -281,11 +294,24 @@ public struct Transcript: Equatable, Sendable {
         items[index].turn = turn
     }
 
+    /// The live reply still being written was done by `now`, when whatever
+    /// follows it arrived.
+    private mutating func finishReply(at now: Date) {
+        guard let id = liveReplyId else { return }
+        liveReplyId = nil
+        guard let last = items.indices.last, items[last].id == id, items[last].at == nil else { return }
+        items[last].at = now
+    }
+
     private mutating func append(_ content: TranscriptItem.Content, at now: Date? = nil) {
-        // Whatever follows a thought ends it.
-        if let now { finishThinking(at: now) }
+        // Whatever follows a thought or a reply ends it.
+        if let now {
+            finishThinking(at: now)
+            finishReply(at: now)
+        }
         var item = TranscriptItem(id: nextId, content: content)
         if case .thinking = content { item.startedAt = now }
+        if case .assistant = content, now != nil { liveReplyId = nextId }
         items.append(item)
         nextId += 1
     }

@@ -267,9 +267,13 @@ fn replay_history_updates(
     for message in history {
         match message.role.as_str() {
             "user" if !message.content.is_empty() => {
-                updates.push(SessionUpdate::UserMessageChunk(ContentChunk::new(
-                    ContentBlock::Text(TextContent::new(message.content.clone())),
-                )))
+                let mut chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(
+                    message.content.clone(),
+                )));
+                if let Some(meta) = streaming::message_time_meta(&message.timestamp) {
+                    chunk = chunk.meta(meta);
+                }
+                updates.push(SessionUpdate::UserMessageChunk(chunk))
             }
             "assistant" => {
                 // Reasoning goes out as thought chunks, as it did live, so
@@ -282,6 +286,7 @@ fn replay_history_updates(
                 if let Some(turn) = &message.turn {
                     streaming::attach_turn_timing(&mut replayed, turn);
                 }
+                streaming::attach_message_time(&mut replayed, &message.timestamp);
                 updates.extend(replayed);
                 for call in &message.tool_calls {
                     let raw_input = serde_json::from_str(&call.arguments)
@@ -2545,6 +2550,7 @@ mod tests {
         let mut reply = crate::app::ChatMessage::new("assistant", "<think>Hm.</think>Done.");
         reply.turn = Some(turn.clone());
         let mut open = crate::app::ChatMessage::new("assistant", "Still going.");
+        open.timestamp = String::new();
         open.turn = Some(crate::app::TurnTiming {
             ended_at: None,
             outcome: None,
@@ -2572,6 +2578,36 @@ mod tests {
             })
         );
         assert!(metas[1].is_none());
+    }
+
+    // #2461, #2463: replayed messages say when they were sent and written.
+    #[test]
+    fn replayed_messages_carry_their_time() {
+        let mut question = crate::app::ChatMessage::new("user", "Why?");
+        question.timestamp = "2026-10-27T09:16:01.473007+01:00".into();
+        let mut answer = crate::app::ChatMessage::new("assistant", "<think>Hm.</think>Because.");
+        answer.timestamp = "2026-10-27T09:16:16.043688+01:00".into();
+
+        let updates = replay_history_updates(&[question, answer], None);
+
+        let metas = updates
+            .iter()
+            .filter_map(|update| match update {
+                SessionUpdate::UserMessageChunk(chunk)
+                | SessionUpdate::AgentMessageChunk(chunk) => Some(chunk.meta.clone().unwrap()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            metas
+                .iter()
+                .map(|meta| meta["rustcode"]["at"].clone())
+                .collect::<Vec<_>>(),
+            vec![
+                serde_json::json!("2026-10-27T09:16:01.473007+01:00"),
+                serde_json::json!("2026-10-27T09:16:16.043688+01:00"),
+            ]
+        );
     }
 
     // #2299: a replayed turn sends its reasoning as thought chunks with the
