@@ -165,9 +165,9 @@ enum ChatLinks {
     /// A user's message, as sent, with its addresses linked.
     static func linked(_ text: String) -> AttributedString {
         var string = AttributedString(text)
-        for link in Linkify.links(in: text, skipCodeSpans: true) {
-            let range = characterRange(link.range, in: string)
-            string[range].link = link.url
+        // From the end, so shortening an address leaves the earlier offsets right.
+        for link in Linkify.links(in: text, skipCodeSpans: true).reversed() {
+            shorten(characterRange(link.range, in: string), to: link.url, in: &string)
         }
         underline(&string)
         return string
@@ -176,14 +176,27 @@ enum ChatLinks {
     /// Link the bare addresses outside code, then underline every link.
     static func style(_ string: inout AttributedString) {
         let plain = String(string.characters)
-        for link in Linkify.links(in: plain) {
+        for link in Linkify.links(in: plain).reversed() {
             let range = characterRange(link.range, in: string)
-            let isCodeOrLinked = string[range].runs.contains { run in
-                run.link != nil || run.inlinePresentationIntent?.contains(.code) == true
+            let written = String(string[range].characters)
+            // Markdown links bare addresses itself; only an address inside
+            // code, or inside a link with a label of its own, stays as written.
+            let keeps = string[range].runs.contains { run in
+                run.inlinePresentationIntent?.contains(.code) == true
+                    || run.link.map { $0 != link.url && $0.absoluteString != written } ?? false
             }
-            if !isCodeOrLinked { string[range].link = link.url }
+            if !keeps { shorten(range, to: link.url, in: &string) }
         }
         underline(&string)
+    }
+
+    /// A bare address reads as its host and path rather than the whole
+    /// address (#2460); the link still goes to all of it.
+    private static func shorten(_ range: Range<AttributedString.Index>, to url: URL, in string: inout AttributedString) {
+        var label = AttributedString(Linkify.label(for: url))
+        if let attributes = string[range].runs.first?.attributes { label.mergeAttributes(attributes) }
+        label.link = url
+        string.replaceSubrange(range, with: label)
     }
 
     /// Keep link underlines restrained and the same thickness for regular,
@@ -205,8 +218,8 @@ enum ChatLinks {
 }
 
 extension View {
-    /// The pointing hand over the links of `text`, this view's own text, and
-    /// the text cursor over the rest (#2413). Text with no link is left as is.
+    /// The pointing hand, the address on hover and Copy Link over the links of
+    /// `text`, this view's own text (#2413). Text with no link is left as is.
     @ViewBuilder
     func linkCursor(_ text: AttributedString, fontWeight: Font.Weight? = nil, lineSpacing: CGFloat = 0) -> some View {
         if #available(macOS 15, *), text.runs.contains(where: { $0.link != nil }) {
@@ -217,26 +230,46 @@ extension View {
     }
 }
 
-/// A run of text that is a link, so the measuring renderer can find it.
-private struct LinkRun: TextAttribute {}
+/// A run of text that is a link to `url`, so the measuring renderer can find it.
+private struct LinkRun: TextAttribute {
+    let url: URL
+}
 
 /// Where the links were laid out, written as the text is drawn. A class, so
-/// writing it from the renderer does not redraw the view.
-private final class LinkFrames {
-    var rects: [CGRect] = []
+/// writing it from the renderer does not redraw the view; the AppKit view
+/// over the text reads it.
+private final class LinkAreas {
+    struct Area: Equatable {
+        var rect: CGRect
+        var url: URL
+    }
+
+    var areas: [Area] = []
+    weak var view: LinkHitView?
+
+    func update(_ new: [Area]) {
+        guard new != areas else { return }
+        areas = new
+        DispatchQueue.main.async { [weak self] in self?.view?.areasChanged() }
+    }
 }
 
 /// SwiftUI does not say where a link run of a `Text` lies, so a copy of the
 /// text, laid out the same and drawn by a renderer that draws nothing, keeps
-/// the frames of its link runs. The hover over the text checks them. The text
-/// itself is untouched, so selection and clicks work as before.
+/// the frames of its link runs.
+///
+/// Selectable text is an AppKit text field SwiftUI lays over the text, and
+/// its I-beam cursor rect won over every hover handler that set the hand
+/// (#2413). So an AppKit view above it takes the pointer over the links
+/// alone: its cursor rects show the hand, it opens the link on a click, and
+/// it shows the address on hover and Copy Link on a right-click. Anywhere
+/// else it is not there for the pointer, so selection works as before.
 @available(macOS 15, *)
 private struct LinkCursor: ViewModifier {
     let text: AttributedString
     let fontWeight: Font.Weight?
     let lineSpacing: CGFloat
-    @State private var frames = LinkFrames()
-    @State private var overLink = false
+    @State private var areas = LinkAreas()
 
     func body(content: Content) -> some View {
         content
@@ -244,33 +277,15 @@ private struct LinkCursor: ViewModifier {
                 marked
                     .fontWeight(fontWeight)
                     .lineSpacing(lineSpacing)
-                    .textRenderer(LinkFrameRenderer(frames: frames))
+                    .textRenderer(LinkFrameRenderer(areas: areas))
+                    // Selectable text is drawn by AppKit, which never calls a
+                    // renderer: with the chat's selection inherited, no link
+                    // was ever measured.
+                    .textSelection(.disabled)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
-            .onContinuousHover { phase in
-                guard case .active(let point) = phase else {
-                    // Off the text, whatever is under the pointer sets its own.
-                    if overLink { NSCursor.arrow.set() }
-                    overLink = false
-                    return
-                }
-                let over = frames.rects.contains { $0.insetBy(dx: -1, dy: -1).contains(point) }
-                // Selectable text is an AppKit text field that sets the I-beam
-                // on every move over it, so a hand pushed once was undone on
-                // the next move (#2413). Set on every move, after the text
-                // has set its own for this one.
-                guard over || overLink else { return }
-                overLink = over
-                DispatchQueue.main.async {
-                    (over ? NSCursor.pointingHand : NSCursor.iBeam).set()
-                }
-            }
-            // Text that goes while under the pointer would leave the hand behind.
-            .onDisappear {
-                if overLink { NSCursor.arrow.set() }
-                overLink = false
-            }
+            .overlay { LinkHitArea(areas: areas).accessibilityHidden(true) }
     }
 
     /// The text with its link runs tagged.
@@ -278,7 +293,7 @@ private struct LinkCursor: ViewModifier {
         var result = Text("")
         for run in text.runs {
             let piece = Text(AttributedString(text[run.range]))
-            result = result + (run.link == nil ? piece : piece.customAttribute(LinkRun()))
+            result = result + (run.link.map { piece.customAttribute(LinkRun(url: $0)) } ?? piece)
         }
         return result
     }
@@ -286,17 +301,98 @@ private struct LinkCursor: ViewModifier {
 
 @available(macOS 15, *)
 private struct LinkFrameRenderer: TextRenderer {
-    let frames: LinkFrames
+    let areas: LinkAreas
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
-        var rects: [CGRect] = []
+        var found: [LinkAreas.Area] = []
         for line in layout {
-            for run in line where run[LinkRun.self] != nil {
-                rects.append(run.typographicBounds.rect)
+            for run in line {
+                if let link = run[LinkRun.self] { found.append(.init(rect: run.typographicBounds.rect, url: link.url)) }
             }
         }
-        frames.rects = rects
+        areas.update(found)
     }
+}
+
+private struct LinkHitArea: NSViewRepresentable {
+    let areas: LinkAreas
+
+    func makeNSView(context: Context) -> LinkHitView {
+        let view = LinkHitView()
+        view.areas = areas
+        areas.view = view
+        return view
+    }
+
+    func updateNSView(_ view: LinkHitView, context: Context) {
+        view.areas = areas
+        areas.view = view
+        view.areasChanged()
+    }
+}
+
+private final class LinkHitView: NSView, NSViewToolTipOwner {
+    var areas: LinkAreas?
+    private var pressed: LinkAreas.Area?
+
+    override var isFlipped: Bool { true }
+
+    private func area(at point: NSPoint) -> LinkAreas.Area? {
+        areas?.areas.first { $0.rect.insetBy(dx: -1, dy: -1).contains(point) }
+    }
+
+    func areasChanged() {
+        window?.invalidateCursorRects(for: self)
+        removeAllToolTips()
+        for area in areas?.areas ?? [] { addToolTip(area.rect, owner: self, userData: nil) }
+    }
+
+    // Only the links take the pointer; the text field below gets the rest.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let superview, area(at: convert(point, from: superview)) != nil else { return nil }
+        return self
+    }
+
+    override func resetCursorRects() {
+        for area in areas?.areas ?? [] { addCursorRect(area.rect.intersection(bounds), cursor: .pointingHand) }
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        area(at: point)?.url.absoluteString ?? ""
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pressed = area(at: convert(event.locationInWindow, from: nil))
+    }
+
+    // A click opens the link; a press that leaves it opens nothing.
+    override func mouseUp(with event: NSEvent) {
+        defer { pressed = nil }
+        guard let pressed, area(at: convert(event.locationInWindow, from: nil)) == pressed else { return }
+        NSWorkspace.shared.open(pressed.url)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let area = area(at: convert(event.locationInWindow, from: nil)) else { return nil }
+        let menu = NSMenu()
+        menu.addItem(LinkMenuItem(title: "Open Link") { NSWorkspace.shared.open(area.url) })
+        menu.addItem(LinkMenuItem(title: "Copy Link") { Clipboard.copy(area.url.absoluteString) })
+        return menu
+    }
+}
+
+private final class LinkMenuItem: NSMenuItem {
+    private let run: () -> Void
+
+    init(title: String, run: @escaping () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(runAction), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    @objc private func runAction() { run() }
 }
 
 struct CodeBlock: View {

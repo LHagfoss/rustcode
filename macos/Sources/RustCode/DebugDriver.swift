@@ -136,6 +136,13 @@ enum DebugDriver {
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+        case "hit":
+            // `hit <x> <y>`: which AppKit view takes the pointer at a point
+            // of the window, from its top left; a link shows `LinkHitView`.
+            guard parts.count > 2, let x = Double(parts[1]), let y = Double(parts[2]),
+                  let root = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?.contentView?.superview else { break }
+            let hit = root.hitTest(NSPoint(x: x, y: root.bounds.height - y))
+            report("hit \(Int(x)),\(Int(y)): \(hit.map { String(describing: type(of: $0)) } ?? "nothing")")
         case "vizguide": model.showsVisualizationGuide = true
         case "vizreply":
             // `vizreply [ms] [type]`: a reply holding the guide samples (or

@@ -35,6 +35,28 @@ public enum Linkify {
         }
     }
 
+    /// How a bare address reads in the chat (#2460): no scheme, `www.`,
+    /// query or fragment, and a long path cut in the middle so the host and
+    /// the last part stay, `github.com/…/issues/2460`. The full address
+    /// stays the link's destination and shows on hover.
+    public static func label(for url: URL, limit: Int = 48) -> String {
+        if url.scheme?.lowercased() == "mailto" {
+            return url.absoluteString.dropFirst("mailto:".count).split(separator: "?").first.map(String.init) ?? url.absoluteString
+        }
+        guard var host = url.host(percentEncoded: false), !host.isEmpty else { return url.absoluteString }
+        if host.lowercased().hasPrefix("www.") { host = String(host.dropFirst(4)) }
+        if let port = url.port { host += ":\(port)" }
+        var parts = url.path(percentEncoded: false).split(separator: "/").map(String.init)
+        let label = ([host] + parts).joined(separator: "/")
+        guard label.count > limit, parts.count > 1 else { return label }
+        // The host, then as many trailing parts as fit after "/…/".
+        var tail = [parts.removeLast()]
+        while let last = parts.last, ([host, "…", last] + tail).joined(separator: "/").count <= limit {
+            tail.insert(parts.removeLast(), at: 0)
+        }
+        return (parts.isEmpty ? [host] + tail : [host, "…"] + tail).joined(separator: "/")
+    }
+
     /// Character ranges of code spans and fenced blocks, delimiters
     /// included: a run of backticks opens one, and the next run of the same
     /// length closes it, as in Markdown.
