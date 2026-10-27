@@ -33,6 +33,18 @@ struct ContentView: View {
             }
             ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
+                // A subagent opens in the chat's place, the chat kept alive
+                // under it so its scroll position is there on the way back
+                // (#2492).
+                .overlay {
+                    if let agent = model.viewedAgent {
+                        AgentPanel(model: model, agent: agent)
+                            .background(Color.chatBackground)
+                            .environment(\.closePanel) { model.viewedAgent = nil }
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.snappy(duration: 0.2), value: model.viewedAgent?.id)
                 .terminalDrawer(model.terminal, keybindings: model.keybindings)
             if model.showsPreview {
                 HStack(spacing: 0) {
@@ -50,7 +62,6 @@ struct ContentView: View {
         .clickAwayPanel(isPresented: $model.showsSettings) { SettingsView(model: model) }
         .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0) }
-        .clickAwayPanel(item: $model.viewedAgent) { AgentPanel(model: model, agent: $0) }
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
         .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
         .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
@@ -328,10 +339,15 @@ private struct SessionSidebar: View {
                         case .divider:
                             Divider().opacity(0.4).padding(.vertical, 6).padding(.horizontal, 10)
                         case .session(let session):
-                            row(session)
-                                .onAppear {
-                                    if session.id == prefetch { Task { await model.loadMoreSessions() } }
+                            VStack(alignment: .leading, spacing: 2) {
+                                row(session)
+                                    .onAppear {
+                                        if session.id == prefetch { Task { await model.loadMoreSessions() } }
+                                    }
+                                if session.id == model.selectedSession {
+                                    SubagentChildRows(model: model)
                                 }
+                            }
                         }
                     }
                     if model.hasMoreSessions || model.moreSessionsFailed {
@@ -2125,11 +2141,12 @@ private struct Composer: View {
                 RoundedRectangle(cornerRadius: 22).strokeBorder(Color.brand, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             }
         }
-        // Over the top edge, so working agents take no room in the composer
-        // (#2327); leading, clear of the Latest button on the right.
+        // Above the top edge, so working agents take no room in the composer
+        // (#2327) and never cover its text or buttons (#2492); leading, clear
+        // of the Latest button on the right.
         .overlay(alignment: .topLeading) {
             AgentPill(model: model)
-                .alignmentGuide(.top) { $0[VerticalAlignment.center] }
+                .alignmentGuide(.top) { $0[.bottom] + 8 }
                 .padding(.leading, 18)
         }
         .animation(.snappy(duration: 0.2), value: SubagentInfo.workingLabel(model.subagents))

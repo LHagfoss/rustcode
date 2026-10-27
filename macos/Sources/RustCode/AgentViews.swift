@@ -205,9 +205,78 @@ struct AgentStatusMark: View {
     }
 }
 
-/// One subagent's conversation, read as the terminal shows a selected child:
-/// what it was asked, what it did, and a field to send it more. Cancel stops
-/// it and the agents it started.
+/// The open chat's working agents, nested under its row in the sidebar
+/// (#2492). A row opens the agent's conversation in the chat's place. A
+/// finished agent's row leaves; its result stays on its row in the chat.
+struct SubagentChildRows: View {
+    @ObservedObject var model: DesktopModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let viewing = model.viewedAgent?.id
+        let children = SubagentInfo.sidebarChildren(model.subagents, viewing: viewing)
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(children) { agent in
+                SubagentChildRow(agent: agent, isSelected: agent.id == viewing) {
+                    if agent.id == viewing { model.viewedAgent = nil } else { model.openAgent(agent) }
+                }
+                .padding(.leading, CGFloat(max(agent.depth - 1, 0)) * 12)
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.leading, 18)
+        .overlay(alignment: .leading) {
+            if !children.isEmpty {
+                Rectangle().fill(.quaternary).frame(width: 1).padding(.leading, 11).padding(.vertical, 4)
+            }
+        }
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: children.map(\.id))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Agents of this chat")
+    }
+}
+
+private struct SubagentChildRow: View {
+    let agent: SubagentInfo
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                AgentStatusMark(agent: agent).frame(width: 14)
+                Text(agent.name).fontWeight(.medium).lineLimit(1)
+                if agent.agentType != "default" {
+                    Text(agent.agentType).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(agent.isActive ? agent.elapsed(now: context.date) ?? "" : agent.status.label)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+            }
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(isSelected ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 8))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .hoverHighlight(cornerRadius: 8, padding: 0)
+        .pointingHandCursor()
+        .help("\(agent.name): \(agent.task)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent \(agent.name), \(agent.agentType), \(agent.isActive ? "working" : agent.status.label)")
+        .accessibilityHint(isSelected ? "Goes back to the chat" : "Opens the agent's conversation")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// One subagent's conversation in the chat's place, read as the terminal
+/// shows a selected child: which chat started it, what it was asked, what it
+/// did, and a field to send it more. Cancel stops it and the agents it
+/// started; Back (Esc) returns to the chat.
 struct AgentPanel: View {
     @ObservedObject var model: DesktopModel
     let agent: DesktopModel.ViewedAgent
@@ -225,16 +294,34 @@ struct AgentPanel: View {
             Divider()
             composer.padding(14)
         }
-        .frame(width: 760, height: 620)
+        .frame(maxWidth: 980, maxHeight: .infinity) // The chat column's width.
+        .frame(maxWidth: .infinity)
         .onAppear { focused = true }
+    }
+
+    private var parentTitle: String {
+        model.sessions.first { $0.id == model.selectedSession }?.title ?? "Chat"
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Button { close() } label: {
+                Label(parentTitle, systemImage: "chevron.left").lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .pointingHandCursor()
+            .keyboardShortcut(.cancelAction)
+            .help("Back to the chat that started \(info.name) (Esc)")
+            .accessibilityLabel("Back to \(parentTitle)")
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 AgentStatusMark(agent: info)
                 Text(info.name).font(.headline)
                 Text(info.agentType).font(.callout).foregroundStyle(.secondary)
+                Text("subagent").font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(.fill.tertiary, in: .capsule)
                 if info.writeAccess {
                     Text("writes").font(.caption).padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Color.orange.opacity(0.18), in: .capsule)
@@ -308,8 +395,6 @@ struct AgentPanel: View {
                     .buttonStyle(PillButtonStyle(prominent: false))
                     .help("Stop \(info.name) and the agents it started")
             }
-            Button("Done") { close() }
-                .buttonStyle(PillButtonStyle(prominent: false))
         }
     }
 
