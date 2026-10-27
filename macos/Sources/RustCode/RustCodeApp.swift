@@ -27,6 +27,7 @@ struct RustCodeApp: App {
                     ContentView(model: model)
                         .task { await model.start() }
                         .task { model.updater.startPolling() }
+                        .task { await model.whatsNew.checkOnLaunch(current: model.updater.currentVersion) }
                         #if DEBUG
                         .task { DebugDriver.start(model) }
                         #endif
@@ -98,6 +99,9 @@ struct RustCodeApp: App {
                 TerminalMenuItems(terminal: model.terminal, keybindings: model.keybindings)
             }
             CommandGroup(after: .help) {
+                Button("What's New in RustCode") {
+                    Task { await model.whatsNew.reopen(current: model.updater.currentVersion) }
+                }
                 Button("Charts, Tables & Trees in Chat…") { model.showsVisualizationGuide = true }
             }
         }
@@ -144,6 +148,8 @@ final class ComposerDraft: ObservableObject {
 @MainActor
 final class DesktopModel: ObservableObject {
     let updater = Updater()
+    /// The once-per-release What's New card and its changelog (#2506).
+    let whatsNew = WhatsNew()
     /// The user's app shortcuts, shared by the menus and Settings.
     let keybindings = KeybindingStore()
     /// Keeps the real menu's key equivalents in step with `keybindings`.

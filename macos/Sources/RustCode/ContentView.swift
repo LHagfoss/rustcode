@@ -65,6 +65,7 @@ struct ContentView: View {
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
         .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
         .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
+        .modifier(WhatsNewPresenter(whatsNew: model.whatsNew))
         .overlay { SessionSwitcherOverlay(model: model) }
         .overlay {
             if let image = model.viewedImage {

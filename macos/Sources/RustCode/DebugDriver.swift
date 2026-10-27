@@ -167,6 +167,9 @@ enum DebugDriver {
                   let root = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?.contentView?.superview else { break }
             let hit = root.hitTest(NSPoint(x: x, y: root.bounds.height - y))
             report("hit \(Int(x)),\(Int(y)): \(hit.map { String(describing: type(of: $0)) } ?? "nothing")")
+        case "whatsnew":
+            // `whatsnew <tag> [full]`: that release's What's New card, or its changelog.
+            await model.whatsNew.debugShow(tag: parts.count > 1 ? parts[1] : "v0.103.0", full: parts.contains("full"))
         case "vizguide": model.showsVisualizationGuide = true
         case "vizreply":
             // `vizreply [ms] [type]`: a reply holding the guide samples (or
