@@ -4961,3 +4961,77 @@ fn localhost_preview_is_offered_only_with_a_client_preview() {
     super::schema::append_preview_hint(&mut prompt, regular.with_preview_tool());
     assert!(prompt.contains("localhost_preview"));
 }
+
+/// A pin full of tools nobody called, as the previous request's menu, and two
+/// later turns. The tool found by discovery on turn one is still bound on
+/// turn three, and the tool the model called by its canonical name, while
+/// it is advertised bare, counts as previously used (#2502).
+#[test]
+fn bound_and_used_mcp_tools_stay_selected_on_later_turns() {
+    let schema = serde_json::json!({"type":"object","properties":{}});
+    let mut mcp = (0..MAX_MCP_NATIVE_SCHEMAS)
+        .map(|index| {
+            (
+                format!("draft_{index:02}"),
+                "Archive a historical item".to_string(),
+                schema.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut owners = vec!["notes".to_string(); MAX_MCP_NATIVE_SCHEMAS];
+    let mut raw_names = mcp.iter().map(|tool| tool.0.clone()).collect::<Vec<_>>();
+    let pin = raw_names.clone();
+    for (server, name, description) in [
+        (
+            "teams",
+            "send_chat_message",
+            "Send one message to a visible chat",
+        ),
+        (
+            "inbox",
+            "get_chat_messages",
+            "Read the latest messages of a chat",
+        ),
+    ] {
+        mcp.push((name.to_string(), description.to_string(), schema.clone()));
+        owners.push(server.to_string());
+        raw_names.push(name.to_string());
+    }
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"Read what JMRanked said"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{"function":{
+                "name":"list_mcp_tools",
+                "arguments":"{\"server\":\"teams\",\"select\":[\"send_chat_message\"]}"
+            }}]
+        }),
+        serde_json::json!({"role":"tool","content":"{\"results\":[]}"}),
+        serde_json::json!({
+            "role":"assistant",
+            "tool_calls":[{"function":{"name":"mcp__inbox__get_chat_messages","arguments":"{}"}}]
+        }),
+        serde_json::json!({"role":"tool","content":"two messages"}),
+        serde_json::json!({"role":"user","content":"check again"}),
+        serde_json::json!({"role":"assistant","content":"Nothing new."}),
+        serde_json::json!({"role":"user","content":"and once more"}),
+    ];
+
+    let (selected, stats) = super::schema::select_mcp_tools_for_context_with_raw_names(
+        &mcp,
+        &owners,
+        &raw_names,
+        &[],
+        &messages,
+        &pin,
+        super::schema::ToolSchemaPhase::Established,
+    );
+    let names: Vec<&str> = selected
+        .iter()
+        .map(|index| mcp[*index].0.as_str())
+        .collect();
+    assert!(names.contains(&"send_chat_message"), "{names:?}");
+    assert!(names.contains(&"get_chat_messages"), "{names:?}");
+    assert_eq!(stats.previously_used, 1);
+    assert_eq!(selected.len(), MAX_MCP_NATIVE_SCHEMAS);
+}
