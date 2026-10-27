@@ -17,7 +17,11 @@ final class RenderCache<Value>: @unchecked Sendable {
         storage.countLimit = countLimit
     }
 
-    func value(for key: String, make: () -> Value) -> Value {
+    /// `cached` false computes without keeping it: text still streaming
+    /// changes every frame, and keeping each version would push out the
+    /// messages that are done.
+    func value(for key: String, cached: Bool = true, make: () -> Value) -> Value {
+        guard cached else { return make() }
         let key = key as NSString
         if let hit = storage.object(forKey: key) { return hit.value }
         let value = make()

@@ -71,8 +71,10 @@ struct TranscriptRow: View, Equatable {
             UserMessage(id: item.id, text: text, isExpanded: isExpanded || isCurrentMatch, sentAt: item.at)
                 .padding(.bottom, 10)
         case .assistant(let text):
-            AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn, writtenAt: item.at,
-                             isExpanded: isExpanded || isCurrentMatch, isStep: isStep)
+            PacedReply(text: text, isStreaming: isStreaming) { shown, isWriting in
+                AssistantMessage(id: item.id, text: shown, isStreaming: isWriting, turn: item.turn, writtenAt: item.at,
+                                 isExpanded: isExpanded || isCurrentMatch, isStep: isStep)
+            }
         case .thinking(let text) where isStep:
             ThoughtLine(text: text)
         case .thinking(let text):
@@ -293,6 +295,59 @@ private struct BubbleChrome: ViewModifier {
     }
 }
 
+/// A reply being written, played out at an even pace (`StreamPacer`): the
+/// stream comes in bursts, and the text is written steadily a moment behind
+/// it, then the rest plays out quickly once the stream ends. The reply counts
+/// as still being written until it has all been shown. A reply that was
+/// already there when it came into view shows whole. With Reduce Motion, or
+/// the fade turned off in Settings, text shows as it arrives.
+private struct PacedReply<Content: View>: View {
+    let text: String
+    let isStreaming: Bool
+    @ViewBuilder let content: (_ shown: String, _ isWriting: Bool) -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(StreamingProse.revealKey) private var reveals = true
+    @State private var pacer: StreamPacer?
+    /// Characters shown, while the pacer is behind the stream.
+    @State private var shown: Int?
+
+    private var paces: Bool { reveals && !reduceMotion }
+
+    var body: some View {
+        let behind = shown.map { $0 < text.count } ?? false
+        content(behind ? String(text.pacedPrefix(shown ?? 0)) : text, isStreaming || behind)
+            .onChange(of: text.count) { _, count in pacer?.received(count, at: Date()) }
+            .task(id: isStreaming) { await play() }
+    }
+
+    /// Writes the reply out a frame at a time until it is all shown and the
+    /// stream is over.
+    private func play() async {
+        guard paces else { return pacer = nil }
+        if pacer == nil {
+            guard isStreaming else { return }
+            pacer = StreamPacer(showing: text.count)
+        }
+        let clock = ContinuousClock()
+        var last = clock.now
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(16))
+            // Read after the sleep: text that arrived meanwhile is in it.
+            guard var next = pacer else { return }
+            let now = clock.now
+            let count = next.advance(by: (now - last) / .seconds(1), streaming: isStreaming)
+            last = now
+            pacer = next
+            if shown != count { shown = count }
+            if !isStreaming, next.isCaughtUp {
+                pacer = nil
+                shown = nil
+                return
+            }
+        }
+    }
+}
+
 /// Agent text, with `<think>` sections the engine leaves inline folded away.
 private struct AssistantMessage: View {
     let id: Int
@@ -318,7 +373,7 @@ private struct AssistantMessage: View {
     /// Split once per text: finding the summary tries to read JSON at every
     /// `{` from the end, too slow to repeat for every message on every redraw.
     private var parsed: Parsed {
-        Self.cache.value(for: (isStreaming ? "s\u{0}" : "\u{0}") + text) {
+        Self.cache.value(for: "\u{0}" + text, cached: !isStreaming) {
             let (prose, summary) = AssistantSummary.split(text)
             return Parsed(blocks: AssistantBlock.parse(prose, isStreaming: isStreaming), summary: summary)
         }

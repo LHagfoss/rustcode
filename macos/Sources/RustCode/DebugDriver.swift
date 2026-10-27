@@ -118,12 +118,17 @@ enum DebugDriver {
             model.transcript.apply(.toolCallUpdate(id: "diff", title: nil, status: .completed, output: nil,
                                                    diffs: [FileDiff(path: "/tmp/styles.css", oldText: old, newText: new)]))
         case "stream":
-            // `stream <chunks>`: a reply streamed into the shown chat at 30 ms
-            // a chunk; the time beyond that is what drawing it cost.
+            // `stream <chunks> [table]`: a reply streamed into the shown chat
+            // at 30 ms a chunk; the time beyond that is what drawing it cost.
+            // With `table`, the reply is a table written a cell at a time.
             let chunks = Int(parts[1]) ?? 100
+            let table = parts.contains("table")
             let start = Date()
             for index in 0..<chunks {
-                model.transcript.apply(.agentText(index % 12 == 0 ? "\n\nNext paragraph with `code` and **bold** " : "word "))
+                let chunk = table
+                    ? (index == 0 ? "| Name | Kind | Notes |\n|---|---|---|\n" : index % 3 == 0 ? "row \(index) note |\n" : "| cell \(index) ")
+                    : index % 12 == 0 ? "\n\nNext paragraph with `code` and **bold** " : "word "
+                model.transcript.apply(.agentText(chunk))
                 try? await Task.sleep(for: .milliseconds(30))
             }
             let elapsed = Date().timeIntervalSince(start) * 1000
