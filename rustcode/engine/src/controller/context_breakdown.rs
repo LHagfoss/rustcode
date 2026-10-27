@@ -83,6 +83,8 @@ pub struct ContextBreakdownInput<'a> {
     /// The `rustcode-viz` level the frontend renders; above 0, root requests
     /// carry the visualization hint for that level (#2088, #2217).
     pub visualization_level: u8,
+    /// Root requests carry the Smart UI hint (#2484).
+    pub smart_ui: bool,
     /// The last compaction applied to the active history, when the frontend
     /// has one to show. Reporting only; it does not change any number above.
     pub compaction: Option<crate::app::CompactionStats>,
@@ -166,6 +168,7 @@ impl ContextBreakdown {
             agent_mode: state.agent_mode,
             subagent_tokens,
             visualization_level: state.visualization_level,
+            smart_ui: state.smart_ui,
             compaction: state.last_compaction.clone(),
         })
     }
@@ -263,6 +266,9 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
     // Subagent prompts never carry the hint.
     if input.selected_subagent_model.is_none() {
         tools_prompt.push_str(&super::visualization_prompt_hint(input.visualization_level));
+        if input.smart_ui {
+            tools_prompt.push_str(crate::tools::schema::SMART_UI_PROMPT_HINT);
+        }
     }
     let full_system_prompt_tokens = super::estimate_tokens(&tools_prompt);
     let skills = super::discover_skills();

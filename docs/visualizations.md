@@ -40,8 +40,9 @@ Shared fields:
   the live viewport until its closing fence arrives.
 
 A typed content block or a tool-result artifact would need protocol changes
-in every provider adapter and client. That is left for a later milestone,
-for example a sandboxed HTML viewer in a GUI frontend.
+in every provider adapter and client. Interactive HTML uses the same fence
+approach instead: the macOS app's opt-in [Smart UI](smart-ui.md) runs
+`rustcode-ui v1` blocks in a sandboxed web view.
 
 ## Widget allowlist (version 1)
 

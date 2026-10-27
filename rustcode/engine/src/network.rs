@@ -1624,6 +1624,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             schema_policy,
             s.visualization_level,
         );
+        crate::tools::schema::append_smart_ui_hint(&mut system_prompt, schema_policy, s.smart_ui);
         crate::tools::schema::append_preview_hint(&mut system_prompt, schema_policy);
         // Built only from the MCP registry, config and startup failures, so
         // the cached prompt prefix holds until the server set changes.

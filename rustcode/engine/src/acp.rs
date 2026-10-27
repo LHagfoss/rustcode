@@ -76,6 +76,23 @@ fn client_visualization_level(
         })
 }
 
+/// Version of the `_meta.rustcode.smartUi` capability (#2484). A client
+/// advertises it only while the user has Smart UI turned on, and its sessions
+/// are then taught `rustcode-ui v1` blocks.
+const SMART_UI_CAPABILITY_VERSION: u64 = 1;
+
+fn client_runs_smart_ui(
+    capabilities: &agent_client_protocol::schema::v1::ClientCapabilities,
+) -> bool {
+    capabilities
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("rustcode"))
+        .and_then(|rustcode| rustcode.get("smartUi"))
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|version| version >= SMART_UI_CAPABILITY_VERSION)
+}
+
 fn server_capabilities() -> AgentCapabilities {
     AgentCapabilities::new()
         .load_session(true)
@@ -89,6 +106,7 @@ fn server_capabilities() -> AgentCapabilities {
             "rustcode".to_owned(),
             serde_json::json!({
                 "visualizations": VISUALIZATIONS_CAPABILITY_VERSION,
+                "smartUi": SMART_UI_CAPABILITY_VERSION,
                 "preview": crate::preview::PREVIEW_CAPABILITY_VERSION,
                 "remote": remote::REMOTE_CAPABILITY_VERSION,
                 "steer": steer::STEER_CAPABILITY_VERSION,
@@ -455,6 +473,7 @@ async fn acp_load_session(
         }
         let mut state = build_loaded_app_state(&session_id, &cwd, history.clone());
         state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
+        state.smart_ui = server.client_runs_smart_ui.load(Ordering::Relaxed);
         state.preview_client = preview::preview_client_for(
             server.client_has_preview.load(Ordering::Relaxed),
             connection,
@@ -745,6 +764,8 @@ struct AcpServer {
     /// Set from the client's initialize capabilities; read when each session
     /// state is created so its prompt never changes mid-session.
     visualization_level: Arc<AtomicU8>,
+    /// The client advertised `_meta.rustcode.smartUi` (#2484).
+    client_runs_smart_ui: Arc<AtomicBool>,
     /// The client advertised `_meta.rustcode.preview` (#2138), so its
     /// sessions get `localhost_preview`.
     client_has_preview: Arc<AtomicBool>,
@@ -798,6 +819,7 @@ impl AcpServer {
             auto_approve,
             task_routes,
             visualization_level: Arc::new(AtomicU8::new(0)),
+            client_runs_smart_ui: Arc::new(AtomicBool::new(false)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
@@ -842,6 +864,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     client_visualization_level(&request.client_capabilities),
                     Ordering::Relaxed,
                 );
+                server.client_runs_smart_ui.store(
+                    client_runs_smart_ui(&request.client_capabilities),
+                    Ordering::Relaxed,
+                );
                 server.client_has_preview.store(
                     crate::preview::client_meta_supports_preview(
                         request.client_capabilities.meta.as_ref(),
@@ -867,6 +893,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
                     let mut state = new_session_state(&cwd);
                     state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
+                    state.smart_ui = server.client_runs_smart_ui.load(Ordering::Relaxed);
+                    state.smart_ui = server.client_runs_smart_ui.load(Ordering::Relaxed);
                     let session_id = state.active_session_id.clone();
                     state.preview_client = preview::preview_client_for(
                         server.client_has_preview.load(Ordering::Relaxed),
@@ -1589,6 +1617,32 @@ mod tests {
     }
 
     #[test]
+    fn smart_ui_comes_only_from_the_client_capability() {
+        let parse = |value: serde_json::Value| {
+            client_runs_smart_ui(
+                &serde_json::from_value::<agent_client_protocol::schema::v1::ClientCapabilities>(
+                    value,
+                )
+                .unwrap(),
+            )
+        };
+        assert!(parse(
+            serde_json::json!({"_meta": {"rustcode": {"smartUi": 1}}})
+        ));
+        assert!(!parse(
+            serde_json::json!({"_meta": {"rustcode": {"smartUi": 0}}})
+        ));
+        assert!(!parse(
+            serde_json::json!({"_meta": {"rustcode": {"smartUi": true}}})
+        ));
+        assert!(!parse(
+            serde_json::json!({"_meta": {"rustcode": {"visualizations": 2}}})
+        ));
+        assert!(!parse(serde_json::json!({})));
+        assert!(!crate::app::AppState::new().smart_ui);
+    }
+
+    #[test]
     fn a_saved_session_model_restores_profile_and_effort() {
         let mut state = crate::app::AppState::new();
         state.config.models = vec![crate::config::ModelProfile {
@@ -1647,6 +1701,7 @@ mod tests {
             auto_approve: false,
             task_routes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             visualization_level: Arc::new(AtomicU8::new(0)),
+            client_runs_smart_ui: Arc::new(AtomicBool::new(false)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),

@@ -25,6 +25,25 @@ enum DebugDriver {
         }
     }
 
+    private static let smartUISample = """
+        <title>Slowest tests</title>
+        <meta name="description" content="Filter by name, click a heading to sort">
+        <style>
+        input { width: 100%; box-sizing: border-box; padding: 4px 8px; margin-bottom: 6px; border-radius: 6px; border: 1px solid #8886; background: Canvas; color: CanvasText; }
+        table { border-collapse: collapse; width: 100%; } th { text-align: left; cursor: pointer; color: AccentColor; }
+        td, th { padding: 3px 6px; border-bottom: 1px solid #8883; } td:last-child, th:last-child { text-align: right; }
+        </style>
+        <input id="q" placeholder="Filter tests"><table><thead><tr><th data-c="0">Test</th><th data-c="1">Time (s)</th></tr></thead><tbody id="b"></tbody></table>
+        <script>
+        let rows = [["network::tests::stream_retry", 4.2], ["config::session_open", 0.4], ["tools::exec::timeout", 3.1], ["acp::load_session", 1.7], ["compaction::repeated", 0.9], ["tui::scroll::anchor", 2.6]];
+        let desc = true;
+        const body = document.getElementById('b'), q = document.getElementById('q');
+        const draw = () => { body.innerHTML = rows.filter(r => r[0].includes(q.value)).map(r => `<tr><td>${r[0]}</td><td>${r[1].toFixed(1)}</td></tr>`).join(''); };
+        document.querySelectorAll('th').forEach(th => th.onclick = () => { const c = +th.dataset.c; desc = !desc; rows.sort((a, b) => (a[c] > b[c] ? 1 : -1) * (desc ? -1 : 1)); draw(); });
+        q.oninput = draw; rows.sort((a, b) => b[1] - a[1]); draw();
+        </script>
+        """
+
     private static func session(_ index: String, _ model: DesktopModel) -> SessionSummary? {
         Int(index).flatMap { model.visibleSessions.indices.contains($0) ? model.visibleSessions[$0] : nil }
     }
@@ -162,6 +181,18 @@ enum DebugDriver {
                     model.transcript.apply(.agentText(String(rest.prefix(40))))
                     rest = rest.dropFirst(40)
                     try? await Task.sleep(for: .milliseconds(delay))
+                }
+            }
+        case "uireply":
+            // `uireply`: a reply holding a Smart UI block (#2484), streamed
+            // like `vizreply`. Needs Smart UI on (`-smartUIEnabled YES`).
+            let text = "Here is a filterable view:\n\n```rustcode-ui v1\n\(smartUISample)\n```\n\nType to filter; click a heading to sort."
+            Task { @MainActor in
+                var rest = Substring(text)
+                while !rest.isEmpty {
+                    model.transcript.apply(.agentText(String(rest.prefix(80))))
+                    rest = rest.dropFirst(80)
+                    try? await Task.sleep(for: .milliseconds(15))
                 }
             }
         case "send":

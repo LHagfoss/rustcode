@@ -9,6 +9,9 @@ struct MarkdownText: View {
     let text: String
     /// Draw `rustcode-viz` blocks as widgets. Only assistant replies set it.
     var visualizations = false
+    /// Run `rustcode-ui` blocks. Only assistant replies set it, and only while
+    /// Smart UI is on.
+    var smartUI = false
     /// The reply is still streaming, so an unclosed visualization shows a placeholder.
     var isStreaming = false
     @Environment(\.findQuery) private var findQuery
@@ -25,14 +28,14 @@ struct MarkdownText: View {
     /// Parsed once per text: a message redrawn unchanged reuses its blocks,
     /// and a growing one re-styles only the paragraphs that are new.
     private var segments: [Segment] {
-        Self.segmentCache.value(for: (visualizations ? "v\u{0}" : "\u{0}") + text, cached: !isStreaming) {
+        Self.segmentCache.value(for: (visualizations ? "v" : "") + (smartUI ? "s" : "") + "\u{0}" + text, cached: !isStreaming) {
             var segments: [Segment] = []
             var run: [MarkdownBlock] = []
             func flush() {
                 if !run.isEmpty { segments.append(.prose(Self.prose(run))) }
                 run.removeAll()
             }
-            for block in MarkdownBlock.parse(text, visualizations: visualizations) {
+            for block in MarkdownBlock.parse(text, visualizations: visualizations, smartUI: smartUI) {
                 switch block {
                 case .paragraph, .heading, .listItem, .quote:
                     run.append(block)
@@ -153,6 +156,8 @@ struct MarkdownText: View {
             InlineImage(url: url, alt: alt)
         case .visualization(let visualization):
             VisualizationView(block: visualization, isStreaming: isStreaming)
+        case .smartUI(let block):
+            SmartUIView(block: block, isStreaming: isStreaming)
         default:
             EmptyView()
         }
