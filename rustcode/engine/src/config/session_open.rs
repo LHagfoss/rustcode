@@ -231,7 +231,16 @@ mod tests {
         let path = open_lock_path(config.path(), &id).unwrap();
         assert!(try_take(&path, SessionHolder::App).is_none());
         release_session_open(&id, SessionHolder::Terminal);
-        assert!(try_take(&path, SessionHolder::App).is_some());
+        // A child another test forks while the lock is held shares its flock
+        // until the child execs, so it can stay busy for a moment (#2360).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while try_take(&path, SessionHolder::App).is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lock stayed busy after its last holder let go"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]
