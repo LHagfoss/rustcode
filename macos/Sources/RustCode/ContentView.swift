@@ -190,7 +190,6 @@ struct ToolbarCluster<Content: View>: View {
 struct ClusterButton: View {
     let systemImage: String
     let help: String
-    var badge: String? = nil
     var isOn = false
     let action: () -> Void
     @State private var isHovered = false
@@ -202,18 +201,6 @@ struct ClusterButton: View {
                 .foregroundStyle(isOn ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
                 .offset(y: Self.opticalOffset[systemImage] ?? 0)
                 .frame(width: 32, height: 24)
-                .overlay(alignment: .topTrailing) {
-                    if let badge {
-                        Text(badge)
-                            .font(.system(size: 8, weight: .semibold))
-                            .monospacedDigit()
-                            .padding(.horizontal, 3)
-                            .frame(minWidth: 12, minHeight: 12)
-                            .background(Color.brandFill, in: .capsule)
-                            .foregroundStyle(.white)
-                            .offset(x: 2, y: -4)
-                    }
-                }
                 .background(isHovered || isOn ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .capsule)
                 .contentShape(.capsule)
         }
@@ -255,8 +242,7 @@ private struct SessionSidebar: View {
                     if model.showsArchived || !model.archivedSessions.isEmpty {
                         ClusterButton(
                             systemImage: model.showsArchived ? "chevron.left" : "archivebox",
-                            help: model.showsArchived ? "Back to chats" : "Archived chats (\(model.archivedSessions.count))",
-                            badge: model.showsArchived ? nil : "\(model.archivedSessions.count)",
+                            help: model.showsArchived ? "Back to chats" : "Archived chats",
                             isOn: model.showsArchived
                         ) {
                             withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
