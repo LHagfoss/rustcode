@@ -14,6 +14,7 @@ pub mod benchmark;
 pub mod capabilities;
 pub mod clipboard;
 pub mod config;
+pub mod connections;
 mod context;
 pub mod controller;
 pub mod daemon;

@@ -490,6 +490,16 @@ async fn store_api_key(
     })
 }
 
+/// Every saved model account, for the Connections settings page.
+pub(crate) fn saved_accounts() -> Result<Vec<AccountStatus>> {
+    load_accounts()
+}
+
+/// Sign one saved account out, as `/logout <provider> <account>` does.
+pub(crate) async fn sign_out(provider: &str, account: &str) -> Result<String> {
+    Ok(logout(provider, Some(account)).await?.message)
+}
+
 async fn logout(provider: &str, account: Option<&str>) -> Result<AuthCommandResult> {
     let claude_cli = provider.eq_ignore_ascii_case(claude_cli::PROVIDER);
     if claude_cli {
