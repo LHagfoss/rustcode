@@ -25,7 +25,7 @@ struct MarkdownText: View {
     /// Parsed once per text: a message redrawn unchanged reuses its blocks,
     /// and a growing one re-styles only the paragraphs that are new.
     private var segments: [Segment] {
-        Self.segmentCache.value(for: (visualizations ? "v\u{0}" : "\u{0}") + text) {
+        Self.segmentCache.value(for: (visualizations ? "v\u{0}" : "\u{0}") + text, cached: !isStreaming) {
             var segments: [Segment] = []
             var run: [MarkdownBlock] = []
             func flush() {
@@ -59,7 +59,10 @@ struct MarkdownText: View {
                         Text(shown).lineSpacing(2).linkCursor(shown, lineSpacing: 2)
                     }
                 case .block(let block):
-                    view(for: block)
+                    // Any block of a reply being written, not only the last:
+                    // a row still arriving can parse as a paragraph after the
+                    // table for a moment, and the table must keep its cells.
+                    view(for: block, isWriting: isStreaming)
                 }
             }
         }
@@ -110,8 +113,9 @@ struct MarkdownText: View {
         return result
     }
 
+    /// `isWriting`: the block is part of a reply still being written.
     @ViewBuilder
-    private func view(for block: MarkdownBlock) -> some View {
+    private func view(for block: MarkdownBlock, isWriting: Bool) -> some View {
         switch block {
         case .code(let language, let text):
             CodeBlock(language: language, text: text)
@@ -119,15 +123,25 @@ struct MarkdownText: View {
             // Columns share the reply's width and long cells wrap, so a table
             // never scrolls sideways.
             WrappingTable(columns: headers.count) {
+                // While the table is written, each cell's text fades in as
+                // the reply's prose does.
                 ForEach(Array(headers.enumerated()), id: \.offset) { _, cell in
                     let shown = highlighted(cell)
-                    Text(shown).fontWeight(.semibold).linkCursor(shown, fontWeight: .semibold)
-                        .tableCell(isHeader: true)
+                    if isWriting {
+                        StreamingProse(text: shown).fontWeight(.semibold).tableCell(isHeader: true)
+                    } else {
+                        Text(shown).fontWeight(.semibold).linkCursor(shown, fontWeight: .semibold)
+                            .tableCell(isHeader: true)
+                    }
                 }
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
                         let shown = highlighted(cell)
-                        Text(shown).linkCursor(shown).tableCell(isHeader: false)
+                        if isWriting {
+                            StreamingProse(text: shown).tableCell(isHeader: false)
+                        } else {
+                            Text(shown).linkCursor(shown).tableCell(isHeader: false)
+                        }
                     }
                 }
             }
