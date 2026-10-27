@@ -523,19 +523,13 @@ pub(super) fn discover(
     outcome
 }
 
-/// Tools the `list_mcp_tools` calls made since the latest user turn bound,
-/// newest call first, `select` hits ahead of search hits.
+/// Tools the request's `list_mcp_tools` calls bound, across every turn it
+/// carries, newest call first, `select` hits ahead of search hits.
 pub(super) fn bound_by_discovery_calls(docs: &[McpToolDoc<'_>], messages: &[Value]) -> Vec<usize> {
-    let Some(latest_user) = messages
-        .iter()
-        .rposition(crate::network::messages::is_user_turn_boundary)
-    else {
-        return Vec::new();
-    };
     let mut running = docs.iter().map(|doc| doc.server).collect::<Vec<_>>();
     running.sort_unstable();
     running.dedup();
-    let outcomes = messages[latest_user..]
+    let outcomes = messages
         .iter()
         .flat_map(|message| {
             message

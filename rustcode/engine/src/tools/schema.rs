@@ -1256,9 +1256,10 @@ fn user_mentions_mcp_server(messages: &[Value], server: &str) -> bool {
 /// relevance scoring intentionally ignores; without this hint, a tool found
 /// by query could be omitted before the model gets a chance to call it.
 ///
-/// Every discovery call since the user's latest message counts, newest
-/// first: binding only the latest one let finding tool B evict tool A, and
-/// the model listed the same tools again and again.
+/// Every discovery call in the request counts, newest first: binding only
+/// the latest one let finding tool B evict tool A, and binding only the
+/// current turn's dropped what an earlier turn found, so the model listed
+/// the same tools again on every turn (#2502).
 fn mcp_tools_selected_by_discovery_calls(
     tools: &[(String, String, Value)],
     owners: &[String],
@@ -1515,13 +1516,23 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
                 fresh.push((index, score));
             }
         }
+        // The model may call a tool by its advertised or its canonical
+        // `mcp__server__tool` name; either is a use (#2502). A bare raw name
+        // that is not the advertised one could be a built-in's, so it is not.
+        let raw = raw_names.get(index).map(String::as_str).unwrap_or(name);
+        let canonical = owners
+            .get(index)
+            .map(|owner| mcp_canonical_name(owner, raw))
+            .unwrap_or_else(|| name.clone());
+        let was_used =
+            tool_name_was_used(name, messages) || tool_name_was_used(&canonical, messages);
         if server_wide.contains(name) {
             server_requested.push((
                 index,
-                tool_name_was_used(name, messages),
+                was_used,
                 mcp_tool_relevance(name, description, schema, &terms),
             ));
-        } else if tool_name_was_used(name, messages) {
+        } else if was_used {
             previous.push(index);
         } else {
             let score = mcp_tool_relevance(name, description, schema, &terms);
@@ -1640,19 +1651,29 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
                 }
             }),
     );
+    // Tools the model has called in this conversation outrank the rest of
+    // the pin: a full pin of tools nobody used kept a used one out, and the
+    // model listed it again every turn (#2502). A used tool is almost always
+    // pinned already, so this rarely changes the menu.
+    candidates.extend(
+        previous
+            .iter()
+            .copied()
+            .filter(|index| !rejected_indices.contains(index))
+            .map(|index| {
+                if sticky_names.contains(&tools[index].0) {
+                    (index, Admitted::Retained)
+                } else {
+                    (index, Admitted::Previous)
+                }
+            }),
+    );
     candidates.extend(
         sticky_names
             .iter()
             .filter_map(|sticky| tools.iter().position(|(name, _, _)| name == sticky))
             .filter(|index| !rejected_indices.contains(index))
             .map(|index| (index, Admitted::Retained)),
-    );
-    candidates.extend(
-        previous
-            .iter()
-            .copied()
-            .filter(|index| !rejected_indices.contains(index))
-            .map(|index| (index, Admitted::Previous)),
     );
     candidates.extend(
         relevant
