@@ -1833,6 +1833,12 @@ private struct ChatProjectMenu: View {
                 Button("New Chat in Another Folder…", systemImage: "folder.badge.plus") {
                     Task { await model.chooseChatProject() }
                 }
+                if model.canMoveChat {
+                    Button("Change Project Folder…", systemImage: "folder.badge.gearshape") {
+                        Task { await model.moveChatProject() }
+                    }
+                    .disabled(model.isTurnRunning)
+                }
             }
             Divider()
             Button("Open in Finder", systemImage: "folder") { NSWorkspace.shared.open(folder) }

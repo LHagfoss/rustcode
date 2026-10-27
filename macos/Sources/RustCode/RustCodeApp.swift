@@ -550,6 +550,8 @@ final class DesktopModel: ObservableObject {
     private var handledInbound = 0
     private var inboundWaiters: [(count: Int, resume: CheckedContinuation<Void, Never>)] = []
     private var capabilities: AgentInfo?
+    /// The engine can move a chat to another folder (#2459).
+    var canMoveChat: Bool { capabilities?.sessionMove == true && capabilities?.closeSession == true }
 
     init() {
         let savedPath = UserDefaults.standard.string(forKey: "workspacePath")
@@ -886,6 +888,45 @@ final class DesktopModel: ObservableObject {
         }
         guard panel.runModal() == .OK, let url = panel.url, usableProject(url) else { return }
         await newSession(in: url)
+    }
+
+    /// Change Project Folder… (#2459): the shown chat, and only it, works in
+    /// the folder picked from now on; the default project and other chats
+    /// keep theirs. The engine moves a closed chat, so the chat is closed,
+    /// moved and opened again there. Cancelling changes nothing.
+    func moveChatProject() async {
+        guard capabilities?.sessionMove == true, capabilities?.closeSession == true,
+              let id = selectedSession, let connection = engine?.connection else { return }
+        guard !runningSessions.contains(id) else {
+            error = "Stop the running turn before changing this chat's folder."
+            return
+        }
+        let current = chatProject
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = current
+        panel.prompt = "Move Chat Here"
+        panel.message = "This chat works in the folder you pick from now on. Other chats and new chats keep their folders."
+        guard panel.runModal() == .OK, let url = panel.url, usableProject(url),
+              url.standardizedFileURL.path != current.standardizedFileURL.path else { return }
+        var summary = sessions.first { $0.id == id } ?? SessionSummary(id: id, cwd: current.path)
+        _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(id), timeout: .seconds(10))
+        openSessions[id] = nil
+        do {
+            let result = try await connection.request(ACPMethod.sessionMove, params: ACPRequests.moveSession(id: id, cwd: url),
+                                                      timeout: .seconds(10))
+            summary.cwd = result["cwd"]?.stringValue ?? url.path
+            showToast(Toast(style: .info, systemImage: "folder", title: "Chat moved to \(url.lastPathComponent)",
+                            message: summary.cwd.abbreviatingHome))
+        } catch {
+            // Still where it was: open it there again.
+            self.error = "Could not move this chat: \(error)"
+        }
+        sessionProjects[id] = summary.cwd
+        if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].cwd = summary.cwd }
+        await select(summary, reload: true)
     }
 
     /// A folder that cannot be read is no project: say so and keep things
@@ -1632,20 +1673,24 @@ final class DesktopModel: ObservableObject {
     /// A chat picked while the engine was still starting, opened once it is up.
     private var pendingSelection: SessionSummary?
 
-    func select(_ session: SessionSummary) async {
+    /// `reload`: open the shown chat again, as it is after a move; its draft
+    /// stays in the composer.
+    func select(_ session: SessionSummary, reload: Bool = false) async {
         // Picked before the engine answered: the click used to do nothing.
         guard let connection = engine?.connection, capabilities != nil else {
             pendingSelection = session
             return
         }
         pendingSelection = nil
-        guard capabilities?.loadSession == true, session.id != selectedSession else { return }
+        guard capabilities?.loadSession == true, reload || session.id != selectedSession else { return }
         // A summary without its folder, as a pinned chat restored before the
         // list arrives, takes the listed one's.
         let session = session.cwd.isEmpty ? (sessions.first { $0.id == session.id } ?? session) : session
-        stashSelectedSession()
-        parkDraft()
-        restoreDraft(for: session.id)
+        if !reload {
+            stashSelectedSession()
+            parkDraft()
+            restoreDraft(for: session.id)
+        }
         // An open terminal stays open, showing this chat's folder's shells.
         if !session.cwd.isEmpty { sessionProjects[session.id] = session.cwd }
         if let open = openSessions[session.id] {
