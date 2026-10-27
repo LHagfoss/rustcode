@@ -18,7 +18,13 @@ struct EnvironmentRevision {
 
 /// A workspace whose revision takes longer than this to measure is too large
 /// to walk on every request.
+#[cfg(not(test))]
 const SLOW_REVISION: std::time::Duration = std::time::Duration::from_millis(500);
+/// A loaded test run can take longer than the real threshold to walk a
+/// tempdir, which held the revision and hid the external edit a test makes
+/// next. Tests that cover the hold insert it directly.
+#[cfg(test)]
+const SLOW_REVISION: std::time::Duration = std::time::Duration::MAX;
 /// How long such a workspace keeps its last revision while nothing RustCode
 /// can see cheaply (its own writes, git state, the directory, the date) moved.
 const HELD_REVISION_TTL: std::time::Duration = std::time::Duration::from_secs(30);
