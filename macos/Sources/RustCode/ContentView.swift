@@ -347,6 +347,10 @@ private struct SessionSidebar: View {
             // A chat opened from the keyboard, a toast or a notification
             // leaves the pointer's row lit beside the new selection.
             .onChange(of: model.selectedSession) { _, _ in hoveredSession = nil }
+            // Room under the last chat, so the update pill floating over the
+            // list's foot never covers it.
+            .contentMargins(.bottom, updater.available == nil ? 0 : 56, for: .scrollContent)
+            .overlay(alignment: .bottom) { UpdatePill(updater: updater) }
             .overlay {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
@@ -357,29 +361,6 @@ private struct SessionSidebar: View {
                 }
             }
 
-            if let release = updater.available {
-                Button { Task { await updater.install() } } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.brand)
-                        Text(updater.canInstallInPlace ? "Update to \(release.version)" : "Download \(release.version)")
-                            .font(.callout.weight(.medium))
-                        Spacer(minLength: 0)
-                        if case .downloading(_, let progress) = updater.state {
-                            ProgressView(value: progress).frame(width: 50)
-                        } else if case .installing = updater.state {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(height: 34)
-                    .background(Color.brand.opacity(0.14), in: .capsule)
-                    .contentShape(.capsule)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .help("Install the new version and restart RustCode")
-            }
             HStack(spacing: 4) {
                 Button { model.chooseWorkspace() } label: {
                     HStack(spacing: 8) {
@@ -405,6 +386,39 @@ private struct SessionSidebar: View {
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.primary.opacity(0.045))
+        }
+    }
+}
+
+/// A new version, floating over the foot of the chat list in glass, so it
+/// neither takes a row of its own nor leaves a gap above the project bar.
+private struct UpdatePill: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        if let release = updater.available {
+            Button { Task { await updater.install() } } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.brand)
+                    Text(updater.canInstallInPlace ? "Update to \(release.version)" : "Download \(release.version)")
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                    if case .downloading(_, let progress) = updater.state {
+                        ProgressView(value: progress).frame(width: 44)
+                    } else if case .installing = updater.state {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 32)
+                .contentShape(.capsule)
+            }
+            .buttonStyle(QuietPressStyle())
+            .interactiveGlassSurface(in: .capsule)
+            .pointingHandCursor()
+            .padding(.bottom, 12)
+            .help("Install the new version and restart RustCode")
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 }
