@@ -72,7 +72,7 @@ struct TranscriptRow: View, Equatable {
                 .padding(.bottom, 10)
         case .assistant(let text):
             AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn, writtenAt: item.at,
-                             isExpanded: isExpanded || isCurrentMatch)
+                             isExpanded: isExpanded || isCurrentMatch, isStep: isStep)
         case .thinking(let text) where isStep:
             ThoughtLine(text: text)
         case .thinking(let text):
@@ -86,7 +86,8 @@ struct TranscriptRow: View, Equatable {
                     if fold.isOpen, !tool.isBlank { ToolRow(tool: tool) }
                 }
             } else if !tool.isBlank {
-                ToolRow(tool: tool)
+                // Calls in a row sit closer than the chat's other rows, as one list.
+                ToolRow(tool: tool).padding(.vertical, -6)
             }
         case .command(let input, let output): CommandCard(input: input, output: output)
         }
@@ -302,6 +303,9 @@ private struct AssistantMessage: View {
     /// When this reply was done being written, if known.
     var writtenAt: Date?
     var isExpanded = false
+    /// A step of an opened turn: no footer, so the rail reads as one line
+    /// of steps. Copy is in its menu.
+    var isStep = false
     @Environment(\.messageActions) private var messageActions
 
     private struct Parsed {
@@ -341,7 +345,7 @@ private struct AssistantMessage: View {
             // Never while the reply is written, so the footer cannot claim
             // it is done. Copy sits below the reply, out of its text, and
             // always shows (#2444).
-            if !isStreaming { footer }
+            if !isStreaming, !isStep { footer }
         }
         .messageMenu { [text, messageActions] in
             var items = [
@@ -476,9 +480,13 @@ private struct ToolRow: View {
     }
 
     private static let liveTailLines = 6
+    /// Detail, output and diffs line up under the title, past the status.
+    static let indent: CGFloat = 26
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // One quiet line, no card, so a round of calls reads as a list
+        // rather than a stack of boxes (#2434); a click opens its detail.
+        VStack(alignment: .leading, spacing: 4) {
             card
             if let liveTail {
                 Text(liveTail)
@@ -487,11 +495,10 @@ private struct ToolRow: View {
                     .lineLimit(Self.liveTailLines)
                     .truncationMode(.head)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 30)
+                    .padding(.leading, Self.indent)
                     .transition(.opacity)
             }
         }
-        .card()
         .contextMenu {
             if let input = tool.input { Button("Copy Input", systemImage: "arrow.down.doc") { Clipboard.copy(input) } }
             if let output = tool.output { Button("Copy Output", systemImage: "arrow.up.doc") { Clipboard.copy(output) } }
@@ -517,7 +524,9 @@ private struct ToolRow: View {
                             }
                         }
                     }
-                    .padding(.top, 10)
+                    .padding(.leading, Self.indent)
+                    .padding(.top, 6)
+                    .padding(.bottom, 4)
                 } label: {
                     label
                 }
@@ -537,38 +546,40 @@ private struct ToolRow: View {
     }
 
     private var label: some View {
-        HStack(spacing: 10) {
-            statusIcon.frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(tool.displayTitle)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    // What the model said the call does.
-                    if let summary = tool.summary {
-                        Text(summary)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-                if let detail = detailLine {
-                    Text(detail)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            statusIcon
+                .font(.system(size: 12))
+                .frame(width: 18)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            Text(tool.displayTitle)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+                .layoutPriority(2)
+            // What the model said the call does, then what it acted on.
+            if let summary = tool.summary {
+                Text(summary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+            }
+            if let detail = detailLine {
+                Text(detail)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(detail)
             }
             if !tool.changes.isEmpty {
-                Spacer(minLength: 8)
                 DiffCount(
                     added: tool.changes.reduce(0) { $0 + $1.added },
                     removed: tool.changes.reduce(0) { $0 + $1.removed })
+                    .fixedSize()
             }
         }
+        .frame(minHeight: 24)
     }
 
     @ViewBuilder
@@ -579,7 +590,7 @@ private struct ToolRow: View {
         case .failed:
             Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         case .pending, .inProgress:
-            ProgressView().controlSize(.small)
+            ProgressView().controlSize(.mini)
         case nil:
             Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
         }
@@ -863,18 +874,20 @@ private struct RowDisclosureStyle: DisclosureGroupStyle {
             Button {
                 withAnimation(.snappy(duration: 0.2)) { configuration.isExpanded.toggle() }
             } label: {
-                HStack {
+                HStack(spacing: 6) {
                     configuration.label
-                    Spacer(minLength: 8)
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                    Spacer(minLength: 0)
                 }
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .hoverHighlight(cornerRadius: 6, padding: 4)
             .pointingHandCursor()
+            .accessibilityHint(configuration.isExpanded ? "Hides the call's detail" : "Shows the call's detail")
             if configuration.isExpanded { configuration.content }
         }
     }
