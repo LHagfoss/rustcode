@@ -35,7 +35,8 @@ public struct TurnTiming: Equatable, Sendable {
         self.init(id: json["id"]?.stringValue, finished: finished, elapsed: max(elapsed, 0), outcome: outcome)
     }
 
-    private static func date(_ text: String) -> Date? {
+    /// An engine timestamp (RFC 3339, with or without fractional seconds).
+    public static func date(_ text: String) -> Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
@@ -47,14 +48,21 @@ public struct TurnTiming: Equatable, Sendable {
                       timeZone: TimeZone = .current) -> String {
         let took = Self.duration(elapsed)
         guard outcome == .completed else { return "Stopped after \(took)" }
+        return "\(took) · \(Self.time(finished, now: now, locale: locale, calendar: calendar, timeZone: timeZone))"
+    }
+
+    /// "14:32", with its date when it was not today and its year when it was
+    /// not this year: when a message was sent or a reply written.
+    public static func time(_ date: Date, now: Date = Date(), locale: Locale = .current, calendar: Calendar = .current,
+                            timeZone: TimeZone = .current) -> String {
         var calendar = calendar
         calendar.timeZone = timeZone
         var style = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar, timeZone: timeZone)
-        if !calendar.isDate(finished, inSameDayAs: now) {
+        if !calendar.isDate(date, inSameDayAs: now) {
             style = style.day().month(.abbreviated)
-            if !calendar.isDate(finished, equalTo: now, toGranularity: .year) { style = style.year() }
+            if !calendar.isDate(date, equalTo: now, toGranularity: .year) { style = style.year() }
         }
-        return "\(took) · \(finished.formatted(style))"
+        return date.formatted(style)
     }
 
     /// "12s", "1m 12s", "1h 3m": how long a turn took.

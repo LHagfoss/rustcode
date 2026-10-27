@@ -443,6 +443,8 @@ struct CodeBlock: View {
 struct CopyButton: View {
     let help: String
     var height: CGFloat = 26
+    /// Just the icon, in a square, for a quiet Copy under every message.
+    var iconOnly = false
     let action: () -> Void
     @State private var copiedAt: Date?
     @State private var isHovered = false
@@ -464,11 +466,11 @@ struct CopyButton: View {
                 }
             }
             .transition(.opacity)
-            .labelStyle(CopyLabelStyle())
+            .labelStyle(CopyLabelStyle(iconOnly: iconOnly))
             .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .frame(height: height)
+            .padding(.horizontal, iconOnly ? 0 : 8)
+            .frame(width: iconOnly ? height : nil, height: height)
             .background(isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 7))
             .contentShape(.rect(cornerRadius: 7))
         }
@@ -489,10 +491,12 @@ struct CopyButton: View {
 
 /// Icon and title with a fixed icon slot, so both copy labels line up.
 private struct CopyLabelStyle: LabelStyle {
+    var iconOnly = false
+
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 4) {
             configuration.icon.frame(width: 14)
-            configuration.title
+            if !iconOnly { configuration.title }
         }
     }
 }
