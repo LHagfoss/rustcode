@@ -240,6 +240,7 @@ private struct SessionSidebar: View {
             HStack(spacing: 2) {
                 Spacer()
                 ToolbarCluster {
+                    ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Hide sidebar", .toggleSidebar)) { model.toggleSidebar() }
                     if model.showsArchived || !model.archivedSessions.isEmpty {
                         ClusterButton(
                             systemImage: model.showsArchived ? "chevron.left" : "archivebox",
@@ -250,7 +251,6 @@ private struct SessionSidebar: View {
                             withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
                         }
                     }
-                    ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Hide sidebar", .toggleSidebar)) { model.toggleSidebar() }
                     ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New chat", .newChat)) { Task { await model.newSession() } }
                 }
             }
