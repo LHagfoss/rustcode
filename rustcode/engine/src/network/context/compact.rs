@@ -7,7 +7,7 @@ use std::time::Duration;
 
 pub(super) const SUMMARY_INPUT_MAX_BYTES: usize = 64 * 1024;
 
-/// Provider output is requested at 1024 tokens; 16 KiB is a generous defensive
+/// Provider output is requested at 2048 tokens; 16 KiB is a generous defensive
 /// byte ceiling for providers that ignore that limit.
 pub(super) const SUMMARY_OUTPUT_MAX_BYTES: usize = 16 * 1024;
 const PRESERVED_USER_REQUEST_MAX_TOKENS: usize = 20_000;
@@ -138,6 +138,26 @@ const COMPACTION_BOUNDARY_VERSION: u8 = 1;
 /// Preserve the existing per-message limit while additionally enforcing the
 /// whole-input byte ceiling above.
 const SUMMARY_MESSAGE_MAX_CHARS: usize = 2_000;
+
+/// Output requested from the summarizer. A handoff covers goal, constraints,
+/// decisions, files, verification and next steps; 1024 tokens cut it short.
+const SUMMARY_MAX_TOKENS: u32 = 2_048;
+
+/// Size the carried handoff may reach before it is consolidated into one
+/// record. Roughly three thousand tokens: small next to the retained tail.
+const CARRIED_SUMMARY_MAX_BYTES: usize = 12 * 1024;
+
+/// How much of the earlier handoff the summarizer sees as context, so the new
+/// section reports what changed instead of repeating it.
+const PRIOR_SUMMARY_CONTEXT_MAX_BYTES: usize = 8 * 1024;
+
+/// Heading of each section added by a later compaction.
+const WORK_SINCE_MARKER: &str = "[Work since the previous compaction]";
+
+/// Headings of the evidence lists appended after the narrative.
+const EVIDENCE_HEADINGS: [&str; 2] = ["Command evidence (", "Read evidence ("];
+
+const HANDOFF_INSTRUCTIONS: &str = "You write the handoff that lets a coding agent continue a session after its earlier messages are removed from context. The agent will see only your record, a few pinned user requests, and the most recent raw messages. Write a concise bullet-point record under these headings, omitting a heading only when nothing belongs there: Goal (the original objective); Current task (what the latest user request asks for now); User constraints and instructions (keep the user's wording); Decisions (with the reason); Files changed; Files inspected; Verified (only what a command, test or tool result in the conversation showed, naming it); Not verified or assumed; Failures and attempted fixes; Unresolved work and risks; Next steps (concrete actions). Keep exact file paths, commands, error text and outcomes that still matter. Never invent facts, never present a guess as verified, and do not include tool call syntax, JSON, secrets, source-code dumps or full command output.";
 
 /// Check if history needs compaction and compact if so.
 /// Returns true if compaction was performed.
@@ -502,7 +522,10 @@ async fn force_compact_internal(
                         .trim_start_matches('\n')
                         .to_string()
                 })
-        });
+        })
+        // Evidence lists are rebuilt from each pass's own archive; carrying
+        // the old ones forward would repeat them on every compaction.
+        .map(|summary| carried_narrative(&summary).to_string());
 
     // Pin the original task (first user message, or the marker left by an
     // earlier compaction) so the goal is never blurred away.
@@ -543,15 +566,34 @@ async fn force_compact_internal(
     if to_summarize.is_empty() {
         return Err("Not enough messages to compact.".to_string());
     }
-    let mut summary = match generate_summary(client, url, model, &to_summarize, cancel_token).await
-    {
-        Some(delta) => match prior_summary.as_deref() {
-            Some(prior) if !prior.trim().is_empty() => {
-                format!("{prior}\n\n[Work since the previous compaction]\n{delta}")
+    let prior_summary = prior_summary.filter(|prior| !prior.trim().is_empty());
+    let delta = generate_summary(
+        client,
+        url,
+        model,
+        &to_summarize,
+        prior_summary.as_deref(),
+        cancel_token,
+    )
+    .await
+    .ok_or_else(|| "Failed to generate summary.".to_string())?;
+    let mut summary = match prior_summary.as_deref() {
+        Some(prior) => {
+            let carried = format!("{prior}\n\n{WORK_SINCE_MARKER}\n{delta}");
+            if carried.len() <= CARRIED_SUMMARY_MAX_BYTES {
+                carried
+            } else {
+                // Appending a section per pass keeps earlier facts verbatim but
+                // grows without bound over a long session. Past the cap, merge
+                // once into a single record; if that fails, keep the first
+                // section (goal and constraints) and the newest work.
+                match consolidate_summary(client, url, model, &carried, cancel_token).await {
+                    Some(merged) => merged,
+                    None => trim_carried_sections(&carried, CARRIED_SUMMARY_MAX_BYTES),
+                }
             }
-            _ => delta,
-        },
-        None => return Err("Failed to generate summary.".to_string()),
+        }
+        None => delta,
     };
 
     let archival_prefix = archival_source
@@ -857,10 +899,17 @@ fn render_summary_message(message: &ChatMessage) -> String {
 ///
 /// An earlier summary is never fed back through the model: the caller carries
 /// it forward verbatim and this input covers only the work since then.
-pub(super) fn build_summary_input(messages: &[&ChatMessage]) -> String {
+pub(super) fn build_summary_input(messages: &[&ChatMessage], prior: Option<&str>) -> String {
     let first_user_index = messages.iter().position(|message| message.role == "user");
     let mut input = String::with_capacity(SUMMARY_INPUT_MAX_BYTES);
-    input.push_str("Summarize the work in this coding conversation.\n\n");
+    match prior {
+        Some(prior) => {
+            input.push_str("An earlier handoff already covers the start of this session. It is kept as it is; do not repeat it. Write only what the messages below add or change, including any earlier item they complete or overturn.\n\nEarlier handoff (context only):\n");
+            input.push_str(truncate_utf8(prior, PRIOR_SUMMARY_CONTEXT_MAX_BYTES));
+            input.push_str("\n\n");
+        }
+        None => input.push_str("Summarize the work in this coding conversation.\n\n"),
+    }
 
     if let Some(index) = first_user_index {
         input.push_str("Original user task (preserve this objective):\n");
@@ -951,18 +1000,94 @@ async fn generate_summary(
     url: &str,
     model: &str,
     messages: &[&ChatMessage],
+    prior: Option<&str>,
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Option<String> {
     // The earlier summary is carried forward verbatim by the caller, so the
     // model only reports the work that happened after it.
-    let user_content = build_summary_input(messages);
+    let user_content = build_summary_input(messages, prior);
+    request_summary(client, url, model, &user_content, cancel_token).await
+}
 
+/// Merge a carried handoff that outgrew its cap into one record. This is the
+/// only pass that rewrites earlier summary text, and it runs once per cap
+/// crossing rather than on every compaction.
+async fn consolidate_summary(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    carried: &str,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Option<String> {
+    let input = format!(
+        "These are handoff sections written at successive compactions of one session, oldest first. Merge them into a single record. Keep the Goal and the user's constraints and instructions word for word. Where a later section completes or overturns an earlier item, keep only the current state. Drop nothing that still matters.\n\n{}",
+        truncate_utf8(carried, SUMMARY_INPUT_MAX_BYTES)
+    );
+    let merged = request_summary(client, url, model, &input, cancel_token).await?;
+    // A merge that leaves little room would be merged again on the very next
+    // pass, which is the repeated rewriting this cap exists to avoid.
+    (merged.len() <= CARRIED_SUMMARY_MAX_BYTES / 2).then_some(merged)
+}
+
+/// Fallback when consolidation fails: keep the first section, which holds the
+/// goal and constraints, then as many of the newest sections as fit.
+pub(super) fn trim_carried_sections(carried: &str, max_bytes: usize) -> String {
+    let separator = format!("\n\n{WORK_SINCE_MARKER}\n");
+    let mut sections = carried.split(separator.as_str());
+    let first = sections.next().unwrap_or_default();
+    let later: Vec<&str> = sections.collect();
+    let omitted_note = |count: usize| {
+        format!(
+            "\n\n[{count} earlier work sections omitted here; the exact history is in the compacted history archives]"
+        )
+    };
+    let first = truncate_utf8(first, max_bytes / 2);
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = first.len() + omitted_note(later.len()).len();
+    for section in later.iter().rev() {
+        let cost = separator.len() + section.len();
+        if used + cost > max_bytes {
+            break;
+        }
+        used += cost;
+        kept.push(section);
+    }
+    let mut out = first.to_string();
+    let omitted = later.len() - kept.len();
+    if omitted > 0 {
+        out.push_str(&omitted_note(omitted));
+    }
+    for section in kept.into_iter().rev() {
+        out.push_str(&separator);
+        out.push_str(section);
+    }
+    out
+}
+
+/// The narrative part of a handoff, without the evidence lists appended after
+/// it.
+pub(super) fn carried_narrative(summary: &str) -> &str {
+    let end = EVIDENCE_HEADINGS
+        .iter()
+        .filter_map(|heading| summary.find(&format!("\n\n{heading}")))
+        .min()
+        .unwrap_or(summary.len());
+    summary[..end].trim_end()
+}
+
+async fn request_summary(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    user_content: &str,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Option<String> {
     let payload = serde_json::json!({
         "model": model,
         "messages": [
             {
                 "role": "system",
-                "content": "You are a conversation summarizer for a coding session. Produce a concise, incremental, inspectable bullet-point state record; merge new facts into the existing summary instead of retelling the transcript. Preserve these headings when applicable: Goal; Constraints; Architecture/discoveries; Decisions; Modified files; Failures and attempted fixes; Verification/test state; Unresolved work; Next steps. Keep exact file paths, commands, diagnostics, and outcomes that remain relevant. Retain recent raw evidence elsewhere in the conversation. Never invent facts, never drop a still-relevant fact from the existing summary, and do not include tool call syntax, JSON, secrets, source-code dumps, or full command output."
+                "content": HANDOFF_INSTRUCTIONS
             },
             {
                 "role": "user",
@@ -971,7 +1096,7 @@ async fn generate_summary(
         ],
         "stream": false,
         "temperature": 0.3,
-        "max_tokens": 1024,
+        "max_tokens": SUMMARY_MAX_TOKENS,
     });
 
     let request = async {

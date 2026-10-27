@@ -1371,7 +1371,14 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
                 .active_model_profile()
                 .as_ref()
                 .and_then(|profile| profile.credential.as_ref())
-                .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt);
+                .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+                // An automatic compaction that barely shrank the history means
+                // the retained tail itself fills the window. Another summarizer
+                // round-trip would cost a request and reclaim as little, every
+                // turn; the local record is enough until a pass frees room.
+                || s.last_compaction
+                    .as_ref()
+                    .is_some_and(crate::app::CompactionStats::was_ineffective_auto);
             let context_budget = s.active_context_budget();
             (
                 s.api_base_url.clone(),

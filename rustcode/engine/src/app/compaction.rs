@@ -100,6 +100,14 @@ impl CompactionStats {
     pub fn is_repeated(&self) -> bool {
         self.count > 1
     }
+
+    /// True when an automatic compaction reclaimed under a tenth of the
+    /// history. Repeating the summarizer then would refill and recompact on
+    /// every turn without freeing room.
+    pub fn was_ineffective_auto(&self) -> bool {
+        self.trigger == CompactionTrigger::Auto
+            && self.reclaimed_tokens.saturating_mul(10) < self.before_tokens
+    }
 }
 
 #[cfg(test)]
@@ -137,5 +145,31 @@ mod tests {
         assert!(stats.is_repeated());
         assert!(stats.mode.is_reduced());
         assert_eq!(stats.trigger.label(), "manual");
+        assert!(
+            !stats.was_ineffective_auto(),
+            "manual runs are the user's call"
+        );
+    }
+
+    #[test]
+    fn an_automatic_pass_that_frees_little_is_ineffective() {
+        let weak = CompactionStats::new(
+            CompactionTrigger::Auto,
+            CompactionMode::AiSummary,
+            100_000,
+            95_000,
+            40,
+            0,
+        );
+        assert!(weak.was_ineffective_auto());
+        let strong = CompactionStats::new(
+            CompactionTrigger::Auto,
+            CompactionMode::AiSummary,
+            100_000,
+            40_000,
+            40,
+            0,
+        );
+        assert!(!strong.was_ineffective_auto());
     }
 }

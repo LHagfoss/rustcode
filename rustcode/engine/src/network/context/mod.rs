@@ -311,7 +311,7 @@ mod tests {
         ));
         let refs: Vec<&ChatMessage> = history.iter().collect();
 
-        let input = build_summary_input(&refs);
+        let input = build_summary_input(&refs, None);
 
         assert!(
             input.len() <= SUMMARY_INPUT_MAX_BYTES,
@@ -663,6 +663,90 @@ mod tests {
         );
         assert!(history.iter().any(|message| {
             message.content == format!("{ORIGINAL_TASK_MARKER}\noriginal objective")
+        }));
+        assert!(history.iter().any(|message| {
+            message.content
+                == format!("{PRESERVED_USER_REQUEST_MARKER}\ndo not change the public API")
+        }));
+    }
+
+    #[test]
+    fn carried_handoff_drops_old_evidence_lists() {
+        let summary = "Goal: ship it\n- decided X\n\nCommand evidence (observed commands/results; classification does not assert testing or runtime validation):\nCommand evidence: {}\nRead evidence (document/source inspection only):\n";
+        assert_eq!(carried_narrative(summary), "Goal: ship it\n- decided X");
+        assert_eq!(carried_narrative("Goal: only"), "Goal: only");
+    }
+
+    #[test]
+    fn summarizer_sees_the_earlier_handoff_as_context_only() {
+        let user = ChatMessage::new("user", "add the flag");
+        let input = build_summary_input(&[&user], Some("Goal: keep the API stable"));
+        assert!(input.contains("Earlier handoff (context only):\nGoal: keep the API stable"));
+        assert!(input.contains("do not repeat it"));
+        assert!(!build_summary_input(&[&user], None).contains("Earlier handoff"));
+    }
+
+    #[test]
+    fn trimming_keeps_the_first_section_and_the_newest_work() {
+        let separator = "\n\n[Work since the previous compaction]\n";
+        let mut carried = "Goal: original objective\nConstraints: no new deps".to_string();
+        for index in 0..40 {
+            carried.push_str(separator);
+            carried.push_str(&format!("pass {index}: {}", "detail ".repeat(60)));
+        }
+        let trimmed = trim_carried_sections(&carried, 4_096);
+        assert!(trimmed.len() <= 4_096, "{}", trimmed.len());
+        assert!(trimmed.starts_with("Goal: original objective\nConstraints: no new deps"));
+        assert!(trimmed.contains("pass 39:"));
+        assert!(!trimmed.contains("pass 0:"));
+        assert!(trimmed.contains("earlier work sections omitted"));
+    }
+
+    /// One task carried through several compactions keeps its goal, the
+    /// user's constraint and the newest work, and the carried handoff stays
+    /// bounded instead of growing a section per pass.
+    #[tokio::test]
+    async fn repeated_compaction_keeps_task_state_within_a_bound() {
+        let mut history = vec![
+            ChatMessage::new("user", "Migrate the config loader to TOML"),
+            ChatMessage::new("user", "do not change the public API"),
+        ];
+        for pass in 0..6 {
+            history.push(ChatMessage::new(
+                "user",
+                format!("continue with pass {pass}"),
+            ));
+            history.extend((0..14).map(|index| {
+                ChatMessage::new(
+                    "assistant",
+                    format!("pass {pass} step {index} {}", "work ".repeat(2_000)),
+                )
+            }));
+            let url = one_shot_json_server(serde_json::json!({
+                "choices": [{"message": {"content": format!(
+                    "Current task: pass {pass}\n{}",
+                    "- changed loader.rs and verified with cargo test\n".repeat(60)
+                )}}]
+            }))
+            .await;
+            force_compact(&reqwest::Client::new(), &url, "model", &mut history, None)
+                .await
+                .expect("each pass should compact");
+        }
+
+        let summary = &history[0]
+            .compaction_boundary
+            .as_ref()
+            .expect("typed boundary")
+            .summary;
+        assert!(
+            summary.len() <= 16 * 1024,
+            "handoff grew to {} bytes",
+            summary.len()
+        );
+        assert!(summary.contains("Current task: pass 5"));
+        assert!(history.iter().any(|message| {
+            message.content == format!("{ORIGINAL_TASK_MARKER}\nMigrate the config loader to TOML")
         }));
         assert!(history.iter().any(|message| {
             message.content
