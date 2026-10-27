@@ -3611,8 +3611,13 @@ async fn question_answered_after_a_delay_is_user_wait_not_tool_time() {
         crate::benchmark::duration_us(user_wait),
     );
     assert!(performance.user_wait_us >= delay_us);
-    assert!(performance.tool_wall_us < delay_us);
-    assert!(performance.tool_work_us < delay_us);
+    // The wait is taken out of tool time exactly. Comparing what is left
+    // against the delay flaked when a loaded test run starved the batch.
+    assert_eq!(
+        performance.tool_wall_us + performance.user_wait_us,
+        batch_us
+    );
+    assert!(performance.tool_work_us < performance.user_wait_us);
     assert_eq!(performance.harness_us(), 0);
 
     // The `Working` row clock and `Worked for` read this start: the wait is
