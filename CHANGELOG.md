@@ -1,3 +1,8 @@
+## [v0.102.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.102.0) - 2026-10-27
+
+### Features
+- Compaction keeps the goal, constraints, decisions and next steps through repeated passes without the summary growing each time. (#2486)
+- Experimental Smart UI (opt-in in Settings): the agent can reply with small interactive views that run in a sandbox with no network, file or app access. (#2487)
 ## [v0.101.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.101.0) - 2026-10-27
 
 ### Features
