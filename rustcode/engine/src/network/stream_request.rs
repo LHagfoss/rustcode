@@ -2327,6 +2327,7 @@ mod tests {
                 Duration::from_millis(100),
                 Duration::from_millis(100),
                 None,
+                false,
             )
             .await
         });
@@ -4749,6 +4750,7 @@ pub async fn stream_request(
         retry::FIRST_EVENT_TIMEOUT,
         retry::STREAM_IDLE_TIMEOUT,
         None,
+        false,
     )
     .await
 }
@@ -4791,6 +4793,7 @@ pub(crate) async fn stream_request_for_profile(
         retry::FIRST_EVENT_TIMEOUT,
         retry::STREAM_IDLE_TIMEOUT,
         profile_name,
+        true,
     )
     .await
 }
@@ -4837,6 +4840,7 @@ async fn stream_request_with_timeouts(
     first_event_timeout: std::time::Duration,
     stream_idle_timeout: std::time::Duration,
     selected_profile: Option<&str>,
+    subagent: bool,
 ) -> Result<Option<String>, StreamFailure> {
     let request_started = std::time::Instant::now();
     let (profile, profile_error, active_session_id) = {
@@ -6286,7 +6290,11 @@ async fn stream_request_with_timeouts(
                                     stream.performance.output_tokens = usage.get("completion_tokens").and_then(serde_json::Value::as_u64);
                                     stream.performance.cached_input_tokens = cache_usage_metrics(usage).0.map(u64::from);
                                 }
-                                if let Some(usage) = val.get("usage").filter(|_| !quiet)
+                                // A subagent request is quiet but still logs its
+                                // completion so its cost and cache use are visible
+                                // (#2504); only the session's own request updates
+                                // its token usage.
+                                if let Some(usage) = val.get("usage").filter(|_| !quiet || subagent)
                                     && let (Some(p), Some(c), Some(t)) = (
                                         usage.get("prompt_tokens").and_then(|v| v.as_u64()),
                                         usage.get("completion_tokens").and_then(|v| v.as_u64()),
@@ -6316,18 +6324,20 @@ async fn stream_request_with_timeouts(
                                         let observed_answer_tokens = observed_reasoning_tokens
                                             .map(|reasoning| c.saturating_sub(reasoning));
 
-                                        let mut s = state.lock().await;
-                                        if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
-                                            return Ok(None);
+                                        if !quiet {
+                                            let mut s = state.lock().await;
+                                            if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                return Ok(None);
+                                            }
+                                            s.current_token_usage = Some(TokenUsage {
+                                                prompt_tokens: p as u32,
+                                                completion_tokens: c as u32,
+                                                total_tokens: t as u32,
+                                                cached_tokens: cached,
+                                                cache_write_tokens,
+                                                cache_discount,
+                                            });
                                         }
-                                        s.current_token_usage = Some(TokenUsage {
-                                            prompt_tokens: p as u32,
-                                            completion_tokens: c as u32,
-                                            total_tokens: t as u32,
-                                            cached_tokens: cached,
-                                            cache_write_tokens,
-                                            cache_discount,
-                                        });
 
                                         let estimation_delta = if estimated_prompt_tokens > 0 {
                                             Some((p as i64) - (estimated_prompt_tokens as i64))
@@ -6341,6 +6351,7 @@ async fn stream_request_with_timeouts(
                                             "provider.completion",
                                             serde_json::json!({
                                                 "model": model,
+                                                "subagent": subagent,
                                                 "prompt_tokens": p,
                                                 "completion_tokens": c,
                                                 "total_tokens": t,
