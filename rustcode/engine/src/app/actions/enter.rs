@@ -96,7 +96,7 @@ async fn handle_enter_inner(
                 stage_prompt_command(&mut s, &input, &roots);
             }
             "/memory" => {
-                let root = s.effective_workspace_root();
+                let root = s.memory_root();
                 match tokens.get(1).copied() {
                     None => check_memory_usage(&mut s),
                     Some(_) => {

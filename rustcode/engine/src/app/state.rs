@@ -1461,6 +1461,14 @@ impl AppState {
         self.config.sandbox_mode.effective(self.auto_confirm)
     }
 
+    /// The root project memory resolves against for this session.
+    pub(crate) fn memory_root(&self) -> Option<std::path::PathBuf> {
+        crate::memory::scope_root(
+            self.task_working_directory.clone(),
+            self.effective_workspace_root(),
+        )
+    }
+
     pub(crate) fn effective_workspace_root(&self) -> Option<std::path::PathBuf> {
         self.workspace_root
             .clone()

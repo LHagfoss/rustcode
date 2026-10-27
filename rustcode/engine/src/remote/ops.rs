@@ -502,7 +502,7 @@ pub(crate) fn execute_command(
             ("Session", "Session saved.".into())
         }
         "/memory" => {
-            let root = state.effective_workspace_root();
+            let root = state.memory_root();
             let args: Vec<_> = arguments.split_whitespace().collect();
             (
                 "Project memory",
