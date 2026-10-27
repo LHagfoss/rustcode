@@ -56,6 +56,22 @@ pub fn repository_root(root: Option<&Path>) -> PathBuf {
         .unwrap_or(candidate)
 }
 
+/// The directory memory resolves against for a session: its task directory,
+/// else its workspace root. Every entry point (per-turn injection, the
+/// memory tools, `/memory`) goes through this so a fact saved in one is read
+/// by the others, also in ACP sessions and worktrees (#2495).
+pub fn scope_root(task: Option<PathBuf>, workspace: Option<PathBuf>) -> Option<PathBuf> {
+    task.or(workspace)
+}
+
+/// [`scope_root`] for the session whose tool call is running.
+pub(crate) fn tool_scope_root() -> Option<PathBuf> {
+    scope_root(
+        crate::tools::active_task_working_directory(),
+        crate::tools::active_workspace_root(),
+    )
+}
+
 pub fn location(root: Option<&Path>) -> MemoryLocation {
     let root = repository_root(root);
     let common = git_value(&root, &["rev-parse", "--git-common-dir"])
@@ -168,17 +184,26 @@ pub fn upsert(root: Option<&Path>, mut fact: MemoryFact) -> Result<(), String> {
     save_unlocked(root, &memory)
 }
 
-pub fn remove(root: Option<&Path>, key: &str) -> Result<usize, String> {
+/// Remove the facts `spec` names: `category/key` names one fact, a bare key
+/// every fact with that key. A category alone matches nothing, so a key that
+/// happens to equal a category name no longer empties that category.
+pub fn remove(root: Option<&Path>, spec: &str) -> Result<usize, String> {
     let _guard = memory_write_lock()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let mut memory = load(root)?;
     let before = memory.facts.len();
-    memory
-        .facts
-        .retain(|fact| fact.key != key && fact.category != key);
+    memory.facts.retain(|fact| !names_fact(spec, fact));
     save_unlocked(root, &memory)?;
     Ok(before.saturating_sub(memory.facts.len()))
+}
+
+fn names_fact(spec: &str, fact: &MemoryFact) -> bool {
+    let spec = spec.trim();
+    match spec.split_once('/') {
+        Some((category, key)) => fact.category == category.trim() && fact.key == key.trim(),
+        None => fact.key == spec,
+    }
 }
 
 pub fn reset(root: Option<&Path>) -> Result<(), String> {
@@ -244,7 +269,7 @@ pub fn command(root: Option<&Path>, args: &[&str]) -> Option<String> {
             Some(key) => {
                 remove(root, key).map(|count| format!("Removed {count} project-memory fact(s)."))
             }
-            None => Ok("Usage: /memory forget <key-or-category>".to_string()),
+            None => Ok("Usage: /memory forget <key|category/key>".to_string()),
         },
         Some("add") if args.len() >= 4 => upsert(
             root,
@@ -253,7 +278,7 @@ pub fn command(root: Option<&Path>, args: &[&str]) -> Option<String> {
         .map(|()| format!("Saved project-memory fact '{}'.", args[2])),
         Some("add") => Ok("Usage: /memory add <category> <key> <short fact>".to_string()),
         Some(_) => Ok(
-            "Usage: /memory [show|path|add <category> <key> <fact>|forget <key>|reset|reset-all]"
+            "Usage: /memory [show|path|add <category> <key> <fact>|forget <key|category/key>|reset|reset-all]"
                 .to_string(),
         ),
         None => return None,
@@ -371,49 +396,35 @@ pub fn remove_global(key: &str) -> Result<usize, String> {
         .unwrap_or_else(|e| e.into_inner());
     let mut memory = load_global()?;
     let before = memory.facts.len();
-    memory
-        .facts
-        .retain(|fact| fact.key != key && fact.category != key);
+    memory.facts.retain(|fact| !names_fact(key, fact));
     save_global_unlocked(&memory)?;
     Ok(before.saturating_sub(memory.facts.len()))
 }
 
 pub fn search_facts(root: Option<&Path>, query: &str, scope: &str) -> Vec<(String, MemoryFact)> {
-    let query_words = words(query);
+    let query_words = query_terms(query);
     let mut results = Vec::new();
-
-    if scope == "all" || scope == "global" {
-        if let Ok(global_mem) = load_global() {
-            for fact in global_mem.facts {
-                let haystack =
-                    format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
-                let score = if query_words.is_empty() {
-                    1
-                } else {
-                    query_words.iter().filter(|w| haystack.contains(*w)).count()
-                };
-                if score > 0 {
-                    results.push(("global".to_string(), score, fact));
-                }
+    let mut add = |scope_name: &str, facts: Vec<MemoryFact>| {
+        for fact in facts {
+            let score = if query_words.is_empty() {
+                1
+            } else {
+                relevance(&query_words, &fact)
+            };
+            if score > 0 {
+                results.push((scope_name.to_string(), score, fact));
             }
         }
+    };
+    if (scope == "all" || scope == "global")
+        && let Ok(global_mem) = load_global()
+    {
+        add("global", global_mem.facts);
     }
-
-    if scope == "all" || scope == "project" {
-        if let Ok(proj_mem) = load(root) {
-            for fact in proj_mem.facts {
-                let haystack =
-                    format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
-                let score = if query_words.is_empty() {
-                    1
-                } else {
-                    query_words.iter().filter(|w| haystack.contains(*w)).count()
-                };
-                if score > 0 {
-                    results.push(("project".to_string(), score, fact));
-                }
-            }
-        }
+    if (scope == "all" || scope == "project")
+        && let Ok(proj_mem) = load(root)
+    {
+        add("project", proj_mem.facts);
     }
 
     results.sort_by(|a, b| {
@@ -429,11 +440,64 @@ pub fn search_facts(root: Option<&Path>, query: &str, scope: &str) -> Vec<(Strin
         .collect()
 }
 
+#[cfg(test)]
 pub fn render_relevant(root: Option<&Path>, query: &str, max_tokens: usize) -> Option<String> {
-    if max_tokens == 0 {
-        return None;
+    select_relevant(root, query, max_tokens).text
+}
+
+/// What one memory selection injected, in counts only, for the
+/// `memory.select` event (#2498). Keys are hashed; no fact value or query
+/// text is kept.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemorySelectionStats {
+    pub facts: usize,
+    pub matched: usize,
+    pub injected: usize,
+    pub bytes: usize,
+    pub cut_by_budget: usize,
+    pub stale: usize,
+    pub conflicts: usize,
+    pub injected_key_hashes: Vec<String>,
+}
+
+impl MemorySelectionStats {
+    pub fn event_fields(&self) -> serde_json::Value {
+        serde_json::json!({
+            "facts": self.facts,
+            "matched": self.matched,
+            "injected": self.injected,
+            "bytes": self.bytes,
+            "cut_by_budget": self.cut_by_budget,
+            "stale": self.stale,
+            "conflicts": self.conflicts,
+            "injected_keys": self.injected_key_hashes,
+        })
     }
-    let query_words = words(query);
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MemorySelection {
+    pub text: Option<String>,
+    pub stats: MemorySelectionStats,
+}
+
+const RELEVANT_MEMORY_HEADER: &str =
+    "# Relevant memory (AGENTS.md/CLAUDE.md and the current task remain authoritative)\n";
+const CONFLICT_MARKER: &str = "Conflicting; verify before relying:\n";
+const STALE_FLAG: &str = " [stale; verify before relying]";
+
+/// Rank project and global facts against `query` and render the ones that
+/// fit `max_tokens`. Matching is by whole word, so "port" no longer matches
+/// "imports"; stopwords never match, a key word outweighs a value word, and a
+/// stale fact is flagged instead of dropped (#2496). Each line says who saved
+/// the fact and how old it is, facts that share a key are grouped under a
+/// conflict marker, and a closing note counts what the budget cut (#2497).
+pub fn select_relevant(root: Option<&Path>, query: &str, max_tokens: usize) -> MemorySelection {
+    let mut selection = MemorySelection::default();
+    if max_tokens == 0 {
+        return selection;
+    }
+    let query_words = query_terms(query);
     let mut all_facts = Vec::new();
     if let Ok(memory) = load(root) {
         all_facts.extend(memory.facts);
@@ -441,64 +505,167 @@ pub fn render_relevant(root: Option<&Path>, query: &str, max_tokens: usize) -> O
     if let Ok(global_memory) = load_global() {
         all_facts.extend(global_memory.facts);
     }
+    selection.stats.facts = all_facts.len();
     if all_facts.is_empty() {
-        return None;
+        return selection;
     }
+    let now = now();
     let mut ranked = all_facts
-        .into_iter()
+        .iter()
         .filter_map(|fact| {
-            let stale = now().saturating_sub(fact.updated_at) > STALE_AFTER_SECONDS;
-            let haystack = format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
-            let score = query_words
-                .iter()
-                .filter(|word| haystack.contains(*word))
-                .count() as i32
-                - i32::from(stale);
+            let score = relevance(&query_words, fact);
             (score > 0 || (query_words.is_empty() && fact.category == "global"))
-                .then_some((score, stale, fact))
+                .then_some((score, fact))
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|a, b| {
         b.0.cmp(&a.0)
-            .then_with(|| b.2.confidence.cmp(&a.2.confidence))
+            .then_with(|| b.1.confidence.cmp(&a.1.confidence))
+            .then_with(|| b.1.updated_at.cmp(&a.1.updated_at))
     });
-    let max_bytes = max_tokens.saturating_mul(4).min(8 * 1024);
-    let mut output = String::from(
-        "# Relevant memory (AGENTS.md/CLAUDE.md and the current task remain authoritative)\n",
-    );
-    for (_, stale, fact) in ranked {
-        let freshness = if stale {
-            " [stale; verify before relying]"
+    selection.stats.matched = ranked.len();
+    if ranked.is_empty() {
+        return selection;
+    }
+    // A matched key that another stored fact also uses is a conflict: show
+    // every fact under it together, so the model sees both values.
+    let mut key_counts = std::collections::HashMap::<&str, usize>::new();
+    for fact in &all_facts {
+        *key_counts.entry(fact.key.as_str()).or_default() += 1;
+    }
+    let mut plain = Vec::new();
+    let mut conflicting = Vec::new();
+    let mut conflict_keys = HashSet::new();
+    for (_, fact) in &ranked {
+        if key_counts.get(fact.key.as_str()).copied().unwrap_or(0) > 1 {
+            if conflict_keys.insert(fact.key.as_str()) {
+                conflicting.extend(all_facts.iter().filter(|other| other.key == fact.key));
+            }
         } else {
-            ""
-        };
-        let line = format!("- {}: {}{}\n", fact.key, fact.value, freshness);
-        let remaining = max_bytes.saturating_sub(output.len());
-        if remaining == 0 {
-            break;
+            plain.push(*fact);
         }
-        if line.len() <= remaining {
-            output.push_str(&line);
-        } else {
-            output.push_str(&truncate_utf8_bytes(&line, remaining));
+    }
+    selection.stats.conflicts = conflict_keys.len();
+
+    let max_bytes = max_tokens.saturating_mul(4).min(8 * 1024);
+    // Room kept for the closing note, so a cut is never silent.
+    const NOTE_RESERVE: usize = 64;
+    let mut output = String::from(RELEVANT_MEMORY_HEADER);
+    let candidates = plain.len() + conflicting.len();
+    let mut injected = 0;
+    let mut stale_injected = 0;
+    let mut add = |output: &mut String, fact: &MemoryFact, in_conflict: bool| -> bool {
+        let room = max_bytes.saturating_sub(output.len() + NOTE_RESERVE);
+        let (mut line, stale) = fact_line(fact, in_conflict, now, FACT_LINE_VALUE_BYTES);
+        let fits = line.len() <= room;
+        if !fits {
+            // Shorten the value rather than lose the fact, when a useful
+            // part of it still fits; nothing more is added after it.
+            let overhead = line.len() - fact_line_value_len(fact);
+            if room < overhead + 32 {
+                return false;
+            }
+            line = fact_line(fact, in_conflict, now, room - overhead).0;
+        }
+        output.push_str(&line);
+        injected += 1;
+        stale_injected += usize::from(stale);
+        selection
+            .stats
+            .injected_key_hashes
+            .push(stable_key(&format!("{}/{}", fact.category, fact.key)));
+        fits
+    };
+    let mut full = false;
+    for fact in &plain {
+        if !add(&mut output, fact, false) {
+            full = true;
             break;
         }
     }
-    (output.lines().count() > 1).then_some(output.trim_end().to_string())
+    if !full
+        && !conflicting.is_empty()
+        && output.len() + CONFLICT_MARKER.len() + NOTE_RESERVE < max_bytes
+    {
+        output.push_str(CONFLICT_MARKER);
+        for fact in &conflicting {
+            if !add(&mut output, fact, true) {
+                break;
+            }
+        }
+    }
+    let cut = candidates.saturating_sub(injected);
+    if cut > 0 {
+        output.push_str(&format!(
+            "({cut} more matching fact(s) cut by the memory budget; use recall_memory)\n"
+        ));
+    }
+    selection.stats.injected = injected;
+    selection.stats.stale = stale_injected;
+    selection.stats.cut_by_budget = cut;
+    if injected == 0 {
+        return selection;
+    }
+    let text = output.trim_end().to_string();
+    selection.stats.bytes = text.len();
+    selection.text = Some(text);
+    selection
+}
+
+/// One rendered fact: its value on a single line, who saved it, its age, and
+/// its category when it sits under the conflict marker.
+fn fact_line(
+    fact: &MemoryFact,
+    show_category: bool,
+    now: u64,
+    max_value_bytes: usize,
+) -> (String, bool) {
+    let age_seconds = now.saturating_sub(fact.updated_at);
+    let stale = age_seconds > STALE_AFTER_SECONDS;
+    let saved_by = if fact.source.to_lowercase().contains("user") {
+        "user"
+    } else {
+        "agent"
+    };
+    let days = age_seconds / (24 * 60 * 60);
+    let age = match days {
+        0 => "today".to_string(),
+        1 => "1 day ago".to_string(),
+        days => format!("{days} days ago"),
+    };
+    let category = if show_category {
+        format!("{}; ", fact.category)
+    } else {
+        String::new()
+    };
+    let value = truncate_utf8_bytes(&single_line(&fact.value), max_value_bytes);
+    let line = format!(
+        "- {}: {} ({category}saved by {saved_by}, {age}){}\n",
+        fact.key,
+        value,
+        if stale { STALE_FLAG } else { "" }
+    );
+    (line, stale)
+}
+
+/// The longest value one injected line carries.
+const FACT_LINE_VALUE_BYTES: usize = 320;
+
+fn fact_line_value_len(fact: &MemoryFact) -> usize {
+    truncate_utf8_bytes(&single_line(&fact.value), FACT_LINE_VALUE_BYTES).len()
 }
 
 /// Resolve memory without running repository discovery on the async executor.
 /// The synchronous form remains useful for commands and deterministic tests;
 /// turn preparation uses this wrapper because identity discovery invokes git.
-pub async fn render_relevant_async(
+pub async fn select_relevant_async(
     root: Option<PathBuf>,
     query: String,
     max_tokens: usize,
-) -> Option<String> {
-    tokio::task::spawn_blocking(move || render_relevant(root.as_deref(), &query, max_tokens))
+) -> MemorySelection {
+    tokio::task::spawn_blocking(move || select_relevant(root.as_deref(), &query, max_tokens))
         .await
-        .ok()
-        .flatten()
+        .unwrap_or_default()
 }
 
 /// Tentative facts (low confidence) older than 7 days are garbage-collected;
@@ -635,20 +802,73 @@ fn clean_field(value: &str, max: usize) -> Result<String, String> {
 }
 
 fn clean_value(value: &str) -> Result<String, String> {
-    let value = value.trim();
+    let value = single_line(value);
     if value.is_empty() || value.len() > MAX_FACT_VALUE_BYTES || value.contains('\0') {
         return Err("memory fact value is empty or too large".to_string());
     }
-    Ok(value.to_string())
+    Ok(value)
 }
 
-fn words(value: &str) -> Vec<String> {
-    let mut seen = HashSet::new();
+/// `value` with every run of whitespace, line breaks included, as one space,
+/// so a stored value can never start a line of the context tail.
+fn single_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Words too common to say what a request is about. They never match.
+const STOPWORDS: &[&str] = &[
+    "a", "about", "after", "again", "all", "also", "am", "an", "and", "any", "are", "as", "at",
+    "be", "been", "before", "but", "by", "can", "could", "did", "do", "does", "doing", "done",
+    "for", "from", "get", "got", "had", "has", "have", "help", "here", "hi", "how", "i", "if",
+    "in", "into", "is", "it", "its", "just", "let", "like", "make", "may", "me", "might", "my",
+    "need", "no", "not", "now", "of", "ok", "okay", "on", "one", "or", "our", "out", "please",
+    "run", "should", "so", "some", "than", "thank", "thanks", "that", "the", "their", "them",
+    "then", "there", "these", "they", "this", "those", "to", "too", "up", "us", "use", "very",
+    "want", "was", "we", "were", "what", "when", "where", "which", "while", "who", "why", "will",
+    "with", "would", "yes", "you", "your",
+];
+
+/// Lowercase words of `value`, split on anything that is not a letter or
+/// digit (so `test_runner` is `test` and `runner`), in any script.
+fn tokens(value: &str) -> impl Iterator<Item = String> + '_ {
     value
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-        .map(str::to_ascii_lowercase)
-        .filter(|word| word.len() >= 3 && seen.insert(word.clone()))
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+}
+
+/// The distinct non-stopword words of a query.
+fn query_terms(value: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    tokens(value)
+        .filter(|word| {
+            word.chars().count() >= 2
+                && !STOPWORDS.contains(&word.as_str())
+                && seen.insert(word.clone())
+        })
         .collect()
+}
+
+/// How well `fact` matches the query words: each word scores 3 when it is a
+/// word of the key, 2 of the category and 1 of the value, best place only.
+fn relevance(query_words: &[String], fact: &MemoryFact) -> usize {
+    let key = tokens(&fact.key).collect::<HashSet<_>>();
+    let category = tokens(&fact.category).collect::<HashSet<_>>();
+    let value = tokens(&fact.value).collect::<HashSet<_>>();
+    query_words
+        .iter()
+        .map(|word| {
+            if key.contains(word) {
+                3
+            } else if category.contains(word) {
+                2
+            } else if value.contains(word) {
+                1
+            } else {
+                0
+            }
+        })
+        .sum()
 }
 
 fn stable_key(value: &str) -> String {
@@ -788,6 +1008,90 @@ mod tests {
         .unwrap();
         let rendered = render_relevant(Some(root.path()), "agent loop", 128).unwrap();
         assert!(rendered.len() <= 8 * 1024);
+    }
+
+    /// The task directory differs from the process directory, as in an ACP
+    /// session or a worktree: a fact the tool saves is the fact the next
+    /// turn injects (#2495).
+    #[test]
+    fn memory_tools_resolve_against_the_session_task_directory() {
+        let task = tempfile::tempdir().unwrap();
+        let task_root = fs::canonicalize(task.path()).unwrap();
+        assert_ne!(Some(task_root.clone()), std::env::current_dir().ok());
+        crate::tools::set_active_workspace_context(
+            Some(task_root.clone()),
+            Some(task_root.clone()),
+            false,
+            None,
+        );
+        let saved = crate::tools::execute_with_metadata(
+            "remember",
+            &serde_json::json!({
+                "key": "staging_host",
+                "value": "Deploy previews go to staging-7",
+                "category": "deploy",
+            }),
+        );
+        assert!(saved.success, "{}", saved.content);
+        let recalled = crate::tools::execute_with_metadata(
+            "recall_memory",
+            &serde_json::json!({"query": "staging"}),
+        )
+        .content;
+        crate::tools::set_active_workspace_context(None, None, false, None);
+
+        assert!(recalled.contains("staging_host"), "{recalled}");
+        // The per-turn injection resolves the same root the request uses.
+        let injected = render_relevant(Some(&task_root), "staging host", 192).unwrap();
+        assert!(injected.contains("staging_host"));
+        assert!(
+            render_relevant(std::env::current_dir().ok().as_deref(), "staging host", 192).is_none()
+        );
+    }
+
+    #[test]
+    fn memory_select_event_carries_counts_and_hashed_keys_only() {
+        let root = tempfile::tempdir().unwrap();
+        upsert(
+            Some(root.path()),
+            fact(
+                "secretive",
+                "launch_codename",
+                "Project Bluebird ships in May",
+                "user",
+            ),
+        )
+        .unwrap();
+        let query = "when does bluebird launch codename ship";
+        let selection = select_relevant(Some(root.path()), query, 192);
+        assert_eq!(selection.stats.injected, 1);
+        let event = selection.stats.event_fields().to_string();
+        for private in [
+            "Bluebird",
+            "bluebird",
+            "launch_codename",
+            "secretive",
+            "May",
+            query,
+        ] {
+            assert!(!event.contains(private), "{private} leaked into {event}");
+        }
+        assert_eq!(
+            selection.stats.injected_key_hashes,
+            vec![stable_key("secretive/launch_codename")]
+        );
+        let fields = selection.stats.event_fields();
+        for count in [
+            "facts",
+            "matched",
+            "injected",
+            "bytes",
+            "cut_by_budget",
+            "stale",
+            "conflicts",
+        ] {
+            assert!(fields[count].is_u64(), "{count}");
+        }
     }
 
     #[test]

@@ -13,12 +13,7 @@ pub(crate) const CONTEXT_PREFLIGHT_STOP_PREFIX: &str = "context_budget_exceeded:
 fn request_context_roots(
     state: &AppState,
 ) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
-    let workspace_root = state.effective_workspace_root();
-    let task_working_directory = state
-        .task_working_directory
-        .clone()
-        .or_else(|| workspace_root.clone());
-    (workspace_root, task_working_directory)
+    (state.effective_workspace_root(), state.memory_root())
 }
 
 pub(crate) fn context_preflight_checkpoint_notice(
@@ -1806,12 +1801,17 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         .find(|message| message.role == "user")
         .map(|message| rustcode_core::paste::compact_for_context(&message.content))
         .unwrap_or_default();
-    let project_memory = crate::memory::render_relevant_async(
+    let memory_selection = crate::memory::select_relevant_async(
         task_working_directory.clone(),
         memory_query.clone(),
         (budget_token_limit / 16).min(192) as usize,
     )
     .await;
+    // Once per turn: later rounds select against the same user request.
+    if tool_rounds == 0 && memory_selection.stats.facts > 0 {
+        crate::logger::operational_event("memory.select", memory_selection.stats.event_fields());
+    }
+    let project_memory = memory_selection.text;
     let mut dynamic_context = build_dynamic_context_tail_with_checkpoint(
         context_section,
         &read_files,

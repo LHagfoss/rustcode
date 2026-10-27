@@ -614,7 +614,7 @@ fn remember_schema() -> Value {
         "type": "object",
         "properties": {
             "key": { "type": "string", "description": "Unique key, e.g. 'test_runner'" },
-            "value": { "type": "string", "description": "Max 512 characters" },
+            "value": { "type": "string", "description": "One line, max 768 bytes" },
             "category": { "type": "string", "description": "Tag, e.g. 'build', 'convention'", "default": "general" },
             "scope": { "type": "string", "enum": ["project", "global"], "description": "'project' is this repository; 'global' is every project", "default": "project" }
         },
@@ -684,7 +684,7 @@ fn forget_memory_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "key": { "type": "string", "description": "Exact key or category" },
+            "key": { "type": "string", "description": "Exact key, or category/key for one fact" },
             "scope": { "type": "string", "enum": ["project", "global", "all"], "default": "project" }
         },
         "required": ["key"]
@@ -1901,7 +1901,7 @@ pub fn remember(args: &Value) -> Result<String, String> {
         crate::memory::upsert_global(fact)?;
         Ok(format!("Remembered globally: [{category}] {key} = {value}"))
     } else {
-        crate::memory::upsert(None, fact)?;
+        crate::memory::upsert(crate::memory::tool_scope_root().as_deref(), fact)?;
         Ok(format!(
             "Remembered for this project: [{category}] {key} = {value}"
         ))
@@ -1915,7 +1915,8 @@ pub fn recall_memory(args: &Value) -> Result<String, String> {
         .ok_or("missing required argument 'query'")?;
     let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
 
-    let facts = crate::memory::search_facts(None, query, scope);
+    let facts =
+        crate::memory::search_facts(crate::memory::tool_scope_root().as_deref(), query, scope);
     if facts.is_empty() {
         return Ok(format!("No remembered facts found matching '{query}'."));
     }
@@ -1947,7 +1948,8 @@ pub fn forget_memory(args: &Value) -> Result<String, String> {
         }
     }
     if scope == "all" || scope == "project" {
-        if let Ok(removed) = crate::memory::remove(None, key) {
+        if let Ok(removed) = crate::memory::remove(crate::memory::tool_scope_root().as_deref(), key)
+        {
             total_removed += removed;
         }
     }
