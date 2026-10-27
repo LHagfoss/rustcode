@@ -84,9 +84,14 @@ public struct ChatScrollMap: Equatable, Sendable {
     public func laidOutHeight(of row: Int) -> Double? { heights[row] ?? standIns[row] }
 
     /// The guess for a row not yet laid out: the average measured row.
+    /// The median measured height: one very long reply among short rows
+    /// (#2481) made the mean so large that a turn opened at the top stood
+    /// in at hundreds of points a row.
     public var estimate: Double {
-        let known = rows.compactMap { heights[$0] }
-        return known.isEmpty ? Self.defaultEstimate : known.reduce(0, +) / Double(known.count)
+        let known = rows.compactMap { heights[$0] }.sorted()
+        guard !known.isEmpty else { return Self.defaultEstimate }
+        let middle = known.count / 2
+        return known.count.isMultiple(of: 2) ? (known[middle - 1] + known[middle]) / 2 : known[middle]
     }
 
     public mutating func contentHeight() -> Double {
@@ -235,6 +240,8 @@ public struct DrawnRows: Equatable, Sendable {
     public private(set) var ids: Set<Int> = []
     /// The part of the content drawn in full, from the top of the content.
     private var span: ClosedRange<Double>?
+    /// The map's revision `span` was worked out for.
+    private var revision: Int?
 
     public init() {}
 
@@ -242,10 +249,19 @@ public struct DrawnRows: Equatable, Sendable {
     /// `map`. Returns whether the rows drawn in full changed.
     public mutating func update(map: inout ChatScrollMap, offset: Double, visible: Double) -> Bool {
         let wanted = (offset - Self.slackScreens * visible)...(offset + visible + Self.slackScreens * visible)
-        if let span, span.contains(wanted.lowerBound), span.contains(wanted.upperBound) { return false }
+        if let span, span.contains(wanted.lowerBound), span.contains(wanted.upperBound) {
+            // Rows took other heights since (a turn opened, stand-ins were
+            // measured): rows moved into view that are not drawn would stay
+            // blank until the next scroll (#2481). Rows only leaving keep
+            // the set as it is, so scrolling does not redraw.
+            guard revision != map.revision else { return false }
+            revision = map.revision
+            if map.rows(within: wanted).allSatisfy(ids.contains) { return false }
+        }
         let drawn = (offset - Self.aheadScreens * visible)...(offset + visible + Self.aheadScreens * visible)
         let ids = Set(map.rows(within: drawn))
         span = drawn
+        revision = map.revision
         guard ids != self.ids else { return false }
         self.ids = ids
         return true
@@ -254,5 +270,6 @@ public struct DrawnRows: Equatable, Sendable {
     /// The rows changed, or their heights: work out what to draw afresh.
     public mutating func invalidate() {
         span = nil
+        revision = nil
     }
 }

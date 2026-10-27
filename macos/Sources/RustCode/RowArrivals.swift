@@ -66,3 +66,17 @@ private struct Arrival: ViewModifier {
             }
     }
 }
+
+extension Animation {
+    /// Opening or folding a turn or a run of tool calls.
+    static let rowReveal = Animation.snappy(duration: 0.3)
+}
+
+extension AnyTransition {
+    /// The steps of a turn or the calls of a run as it opens: they fade in
+    /// and drop a little into place, and fade out as it folds. Only a change
+    /// made with an animation uses it, so rows streaming in do not.
+    static var rowReveal: AnyTransition {
+        .asymmetric(insertion: .opacity.combined(with: .offset(y: -6)), removal: .opacity)
+    }
+}

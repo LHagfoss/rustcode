@@ -971,6 +971,7 @@ private struct ChatView: View {
                                           isNested: rows.folding.isNested(item.id), isExpanded: expanded.contains(item.id),
                                           agents: rows.agents[item.id])
                                 .equatable()
+                                .transition(.rowReveal)
                                 .arrives(arrivals.isNew(item.id, in: transcript.identity, last: lastId),
                                          from: item.isUser ? .trailing : .leading)
                                 .reportsChatRow(item.id, to: scroll)
@@ -1141,7 +1142,7 @@ private struct ChatView: View {
         .environment(\.findQuery, model.showsFind ? find.appliedQuery : "")
         .environment(\.projectRoot, model.chatProject.path)
         .environment(\.editsOpenByDefault, verbosity.editsOpen)
-        .environment(\.toggleToolRun, { [model] run in model.toggleToolRun(run) })
+        .environment(\.toggleToolRun, { [model] run in withAnimation(.rowReveal) { model.toggleToolRun(run) } })
         .environment(\.openAgent, { [model] id in model.openAgent(id: id) })
         .environment(\.toggleMessage, messageToggle)
         .environment(\.messageActions, model.messageActions)
@@ -1503,6 +1504,7 @@ private struct OlderRows: View {
                               isNested: folding.isNested(item.id), isExpanded: expanded.contains(item.id),
                               agents: agents[item.id])
                     .equatable()
+                    .transition(.rowReveal)
                     .reportsChatRow(item.id, to: scroll)
                     .id(item.id)
             } else {
