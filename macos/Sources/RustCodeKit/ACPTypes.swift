@@ -349,10 +349,11 @@ public enum ToolStatus: String, Equatable, Sendable {
 
 /// One `session/update` payload, reduced to what the transcript renders.
 public enum SessionUpdate: Equatable, Sendable {
-    case userText(String)
-    /// Reply text. `turn` is how long the turn took and when it ended, sent
-    /// on a replayed turn's reply.
-    case agentText(String, turn: TurnTiming? = nil)
+    /// A message the user sent; `at` is when, sent with replayed history.
+    case userText(String, at: Date? = nil)
+    /// Reply text. `turn` is how long the turn took and when it ended, and
+    /// `at` when this reply was written, both sent on replayed history.
+    case agentText(String, turn: TurnTiming? = nil, at: Date? = nil)
     /// The `/context` reply: its Markdown text and the breakdown it carries.
     case contextReport(text: String, context: ContextBreakdown)
     /// Reasoning text. `summary` says it is the provider's summary of
@@ -385,7 +386,8 @@ public enum SessionUpdate: Equatable, Sendable {
         let kind = update["sessionUpdate"]?.stringValue ?? ""
         switch kind {
         case "user_message_chunk":
-            self = .userText(Self.text(update["content"]))
+            self = .userText(Self.text(update["content"]),
+                             at: update["_meta"]?["rustcode"]?["at"]?.stringValue.flatMap(TurnTiming.date))
         case "agent_message_chunk":
             let meta = update["_meta"]?["rustcode"]
             if meta?["kind"]?.stringValue == "context",
@@ -395,7 +397,8 @@ public enum SessionUpdate: Equatable, Sendable {
                 self = meta?["resumable"]?.boolValue == true
                     ? .stopped(Self.text(update["content"])) : .notice(Self.text(update["content"]))
             } else {
-                self = .agentText(Self.text(update["content"]), turn: TurnTiming(json: meta?["turn"]))
+                self = .agentText(Self.text(update["content"]), turn: TurnTiming(json: meta?["turn"]),
+                                  at: meta?["at"]?.stringValue.flatMap(TurnTiming.date))
             }
         case "agent_thought_chunk":
             let meta = update["_meta"]?["rustcode"]

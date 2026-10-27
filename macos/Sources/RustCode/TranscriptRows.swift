@@ -68,10 +68,10 @@ struct TranscriptRow: View, Equatable {
             }
         case .user(let text):
             // Room between the question and the work that answers it.
-            UserMessage(id: item.id, text: text, isExpanded: isExpanded || isCurrentMatch)
+            UserMessage(id: item.id, text: text, isExpanded: isExpanded || isCurrentMatch, sentAt: item.at)
                 .padding(.bottom, 10)
         case .assistant(let text):
-            AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn,
+            AssistantMessage(id: item.id, text: text, isStreaming: isStreaming, turn: item.turn, writtenAt: item.at,
                              isExpanded: isExpanded || isCurrentMatch)
         case .thinking(let text) where isStep:
             ThoughtLine(text: text)
@@ -173,6 +173,7 @@ private struct UserMessage: View {
     let id: Int
     let text: String
     var isExpanded = false
+    var sentAt: Date?
     @Environment(\.messageActions) private var messageActions
 
     var body: some View {
@@ -194,7 +195,7 @@ private struct UserMessage: View {
                 .padding(.leading, 80)
             }
             if !message.text.isEmpty || message.images.isEmpty {
-                UserBubble(id: id, text: message.text, original: text, isExpanded: isExpanded)
+                UserBubble(id: id, text: message.text, original: text, isExpanded: isExpanded, sentAt: sentAt)
             }
         }
     }
@@ -206,17 +207,15 @@ private struct UserBubble: View {
     /// The message as sent, image markers included, for edit and resend.
     let original: String
     var isExpanded = false
+    var sentAt: Date?
     @Environment(\.messageActions) private var messageActions
     @Environment(\.findQuery) private var findQuery
-    @State private var isHovered = false
 
     var body: some View {
-        // The bubble and its Copy button share one hover region, so moving
-        // the pointer onto the button does not drop the bubble's hover and
-        // hide the button again, which flickered it in and out (#2415). The
-        // button sits below the bubble, clear of its text, in room kept for
-        // it so nothing moves as it shows (#2444).
-        VStack(alignment: .trailing, spacing: HoverCopy.gap) {
+        // When it was sent and Copy sit below the bubble, clear of its text,
+        // and always show, so nothing appears or moves under the pointer
+        // (#2444, #2461).
+        VStack(alignment: .trailing, spacing: MessageFooter.gap) {
             FoldingMessage(id: id, text: text, folds: true, isExpanded: isExpanded,
                            chrome: BubbleChrome(), chromeHeight: BubbleChrome.height) {
                 Group {
@@ -230,9 +229,9 @@ private struct UserBubble: View {
                 .textSelection(.enabled)
                 .lineSpacing(2)
             }
-            HoverCopy(help: "Copy message", isShown: isHovered) { Clipboard.copy(text) }
+            MessageFooter(edge: .trailing, label: sentAt.map { TurnTiming.time($0) }, date: sentAt,
+                          help: "Copy message") { Clipboard.copy(text) }
         }
-            .onHover { isHovered = $0 }
             .messageMenu { [text, original, id, messageActions] in
                 var items = [MessageMenuItem(title: "Copy", systemImage: "doc.on.doc") { Clipboard.copy(text) }]
                 if let actions = messageActions {
@@ -247,19 +246,36 @@ private struct UserBubble: View {
     }
 }
 
-/// Copy, shown below a message while the pointer is on it.
-private struct HoverCopy: View {
+/// Under a message: Copy at its outer edge, then when it was sent or written
+/// in quiet type, the full date on hover.
+private struct MessageFooter: View {
+    /// The side the message hugs: Copy sits on that edge.
+    let edge: HorizontalEdge
+    var label: String?
+    var date: Date?
     let help: String
-    let isShown: Bool
     let action: () -> Void
-    /// The room between a message and its Copy button.
+    /// The room between a message and its footer.
     static let gap: CGFloat = 4
 
     var body: some View {
-        CopyButton(help: help, height: 22, action: action)
-            .opacity(isShown ? 1 : 0)
-            .allowsHitTesting(isShown)
-            .animation(.easeOut(duration: 0.12), value: isShown)
+        HStack(spacing: 2) {
+            if edge == .leading { copy }
+            if let label {
+                Text(label)
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 4)
+                    .help(date?.formatted(date: .complete, time: .standard) ?? "")
+            }
+            if edge == .trailing { copy }
+        }
+    }
+
+    private var copy: some View {
+        CopyButton(help: help, height: 22, iconOnly: true, action: action)
     }
 }
 
@@ -283,9 +299,10 @@ private struct AssistantMessage: View {
     var isStreaming = false
     /// On a turn's last reply: how long the turn took and when it ended.
     var turn: TurnTiming?
+    /// When this reply was done being written, if known.
+    var writtenAt: Date?
     var isExpanded = false
     @Environment(\.messageActions) private var messageActions
-    @State private var isHovered = false
 
     private struct Parsed {
         var blocks: [AssistantBlock]
@@ -305,9 +322,6 @@ private struct AssistantMessage: View {
 
     var body: some View {
         let parsed = parsed
-        // The reply and its Copy button share one hover region, so moving the
-        // pointer onto the button does not drop the reply's hover and hide the
-        // button again, which flickered it in and out (#2415).
         VStack(alignment: .leading, spacing: 10) {
             FoldingMessage(id: id, text: text, folds: false,
                            isExpanded: isExpanded) {
@@ -325,11 +339,10 @@ private struct AssistantMessage: View {
                 }
             }
             // Never while the reply is written, so the footer cannot claim
-            // it is done. Copy waits below the reply, out of its text, in
-            // room kept for it so nothing moves as it shows (#2444).
-            if !isStreaming { footer(turn) }
+            // it is done. Copy sits below the reply, out of its text, and
+            // always shows (#2444).
+            if !isStreaming { footer }
         }
-        .onHover { isHovered = $0 }
         .messageMenu { [text, messageActions] in
             var items = [
                 MessageMenuItem(title: "Copy Reply", systemImage: "doc.on.doc") { Clipboard.copy(AssistantSummary.split(text).prose) },
@@ -344,21 +357,16 @@ private struct AssistantMessage: View {
         }
     }
 
-    /// Under a reply: how long the turn took and when it ended, on a turn's
-    /// last reply, then Copy while the pointer is on the reply.
-    private func footer(_ turn: TurnTiming?) -> some View {
-        HStack(spacing: 6) {
-            if let turn {
-                Text(turn.label())
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .help(turn.finished.formatted(date: .complete, time: .standard))
-            }
-            HoverCopy(help: "Copy reply", isShown: isHovered) { Clipboard.copy(AssistantSummary.split(text).prose) }
-                .padding(.leading, turn == nil ? -8 : 0)
+    /// Under a reply: Copy, then how long the turn took and when it ended on
+    /// a turn's last reply, or when this reply was written on any other
+    /// (#2463). A reply with no known time shows Copy alone.
+    private var footer: some View {
+        MessageFooter(edge: .leading, label: turn.map { $0.label() } ?? writtenAt.map { TurnTiming.time($0) },
+                      date: turn?.finished ?? writtenAt, help: "Copy reply") {
+            Clipboard.copy(AssistantSummary.split(text).prose)
         }
-        .padding(.top, HoverCopy.gap - 10)
+        .padding(.leading, -5)
+        .padding(.top, MessageFooter.gap - 10)
     }
 }
 

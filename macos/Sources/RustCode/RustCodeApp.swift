@@ -1868,7 +1868,7 @@ final class DesktopModel: ObservableObject {
             let shown = ([prompt.text] + markers).filter { !$0.isEmpty }.joined(separator: "\n")
             appendToTranscript(of: id) {
                 $0.beginTurn(at: Date())
-                $0.appendUser(shown)
+                $0.appendUser(shown, at: Date())
             }
         }
         // Ended exactly once below however the turn ends, so the chat cannot
@@ -1971,7 +1971,7 @@ final class DesktopModel: ObservableObject {
         guard let result = try? await connection.request(ACPMethod.steer, params: params, timeout: .seconds(10)),
               result["accepted"]?.boolValue == true else { return false }
         steered[prompt.sessionId, default: []].append(prompt)
-        appendToTranscript(of: prompt.sessionId) { $0.appendUser(prompt.text) }
+        appendToTranscript(of: prompt.sessionId) { $0.appendUser(prompt.text, at: Date()) }
         confirm("Steering: read after the current step", systemImage: "arrow.turn.down.right")
         return true
     }
@@ -2016,7 +2016,7 @@ final class DesktopModel: ObservableObject {
         switch update {
         case .contextReport(_, let context):
             if session == selectedSession { contextSheet = context }
-        case .agentText(let text, _):
+        case .agentText(let text, _, _):
             showCommandResult(CommandResult(input: input, output: text), in: session)
         default:
             break
@@ -2049,7 +2049,7 @@ final class DesktopModel: ObservableObject {
     private func captureCommandUpdate(_ update: SessionUpdate, in session: String) -> Bool {
         guard var command = runningCommands[session] else { return false }
         switch update {
-        case .agentText(let text, _):
+        case .agentText(let text, _, _):
             command.output += text
         case .contextReport(_, let context):
             command.answered = true
