@@ -193,6 +193,76 @@ pub fn bump_mcp_generation() {
     MCP_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Servers an ACP engine was configured with but has not started yet. The
+/// app attaches an engine for every chat it shows, often one that never
+/// runs a turn; starting every server there spawned them over and over
+/// (#2503). They start on the first turn instead.
+static DEFERRED_SERVERS: StdMutex<Option<Vec<crate::config::McpServerConfig>>> =
+    StdMutex::new(None);
+static DEFERRED_START: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Remember `servers` to start on first use instead of now.
+pub fn defer_enabled_servers(servers: &[crate::config::McpServerConfig]) {
+    let enabled = servers
+        .iter()
+        .filter(|server| server.enabled)
+        .cloned()
+        .collect::<Vec<_>>();
+    *DEFERRED_SERVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = (!enabled.is_empty()).then_some(enabled);
+}
+
+/// Start the deferred servers, once, concurrently, and log how long it
+/// took. Later and concurrent callers return when the first start is done;
+/// with nothing deferred this is a no-op.
+pub async fn start_deferred_servers() {
+    if DEFERRED_SERVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_none()
+    {
+        return;
+    }
+    let _starting = DEFERRED_START.lock().await;
+    let Some(servers) = DEFERRED_SERVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+    else {
+        return;
+    };
+    let started = std::time::Instant::now();
+    let warnings = futures_util::future::join_all(servers.iter().map(|server| {
+        start_enabled_servers(std::slice::from_ref(server), |name| async move {
+            start_server_by_name(&name).await
+        })
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    crate::logger::operational_event(
+        "mcp.lazy_start",
+        serde_json::json!({
+            "servers": servers.len(),
+            "failed": warnings.len(),
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+        }),
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn deferred_server_names() -> Vec<String> {
+    DEFERRED_SERVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .flatten()
+        .map(|server| server.name.clone())
+        .collect()
+}
+
 /// Start each enabled MCP server, keeping one server's failure from blocking
 /// the remaining configured servers. Returns any warning messages collected.
 pub async fn start_enabled_servers<F, Fut>(
@@ -3325,3 +3395,26 @@ mod tests {
 #[cfg(test)]
 #[path = "mcp/oauth_tests.rs"]
 mod oauth_tests;
+
+#[cfg(test)]
+mod deferred_start_tests {
+    fn server(name: &str, enabled: bool) -> crate::config::McpServerConfig {
+        serde_json::from_value(serde_json::json!({"name": name, "enabled": enabled}))
+            .expect("server config")
+    }
+
+    /// Attaching defers every enabled server and starts none; the first use
+    /// takes them once, and later uses find nothing left to start (#2503).
+    #[tokio::test]
+    async fn deferred_servers_start_once_on_first_use() {
+        super::defer_enabled_servers(&[server("lazy-a", true), server("lazy-off", false)]);
+        assert_eq!(super::deferred_server_names(), ["lazy-a"]);
+        assert!(super::get_mcp_registry().lock().unwrap().is_empty());
+
+        // `lazy-a` is in no config file, so the start finds nothing to run.
+        super::start_deferred_servers().await;
+        assert!(super::deferred_server_names().is_empty());
+        super::start_deferred_servers().await;
+        assert!(super::deferred_server_names().is_empty());
+    }
+}
