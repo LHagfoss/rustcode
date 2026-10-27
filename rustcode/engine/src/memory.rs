@@ -1051,3 +1051,7 @@ mod tests {
         assert_eq!(all_dropped, 2);
     }
 }
+
+#[cfg(test)]
+#[path = "memory_eval.rs"]
+mod memory_eval;
