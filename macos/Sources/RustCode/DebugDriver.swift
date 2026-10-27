@@ -496,6 +496,11 @@ enum DebugDriver {
                                              status: .completed,
                                              input: .object(["query": .string("lhagfoss"),
                                                              "summary": .string("Finding public profiles")])))
+            for (index, page) in ["https://github.com/LHagfoss", "https://docs.github.com/en/rest"].enumerated() {
+                model.transcript.apply(.toolCall(id: "drive-tool-page-\(index)", title: "read_url", kind: "fetch",
+                                                 status: .completed, input: nil, detail: page,
+                                                 summary: "Reading the page"))
+            }
             model.transcript.apply(.agentText("Found a profile; checking the build next."))
             for (index, kind) in "ttxett".enumerated() {
                 let id = "drive-tool-\(index)"

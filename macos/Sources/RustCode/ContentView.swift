@@ -868,6 +868,8 @@ private struct ChatView: View {
     /// Real row heights for the chat's own scroller. Held, not observed:
     /// measuring redraws only the scroller.
     @State private var scroll = ChatScrollState()
+    /// Which rows came in while the chat was open, so only those animate in.
+    @State private var arrivals = RowArrivals()
     /// How much of a long chat is laid out: its newest items, and older ones
     /// as the reader scrolls back (`TranscriptWindow`).
     @State private var window = TranscriptWindow()
@@ -969,6 +971,8 @@ private struct ChatView: View {
                                           isNested: rows.folding.isNested(item.id), isExpanded: expanded.contains(item.id),
                                           agents: rows.agents[item.id])
                                 .equatable()
+                                .arrives(arrivals.isNew(item.id, in: transcript.identity, last: lastId),
+                                         from: item.isUser ? .trailing : .leading)
                                 .reportsChatRow(item.id, to: scroll)
                                 .id(item.id)
                         }
@@ -976,6 +980,7 @@ private struct ChatView: View {
                         // model plans its next step, so a live turn always says so.
                         if isReplyStreaming {
                             WorkingIndicator(startedAt: chat.transcript.turnStartedAt, activity: rows.folding.activity)
+                                .transition(.opacity.combined(with: .offset(y: 6)))
                                 .reportsChatRow(Self.workingRow, to: scroll)
                         } else if let stoppedReason {
                             StoppedTurnRow(reason: stoppedReason) {
@@ -2014,7 +2019,10 @@ private struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !model.selectedQueue.isEmpty { QueuedPromptList(model: model) }
+            if !model.selectedQueue.isEmpty {
+                QueuedPromptList(model: model)
+                    .transition(.opacity.combined(with: .offset(y: 10)))
+            }
             if !model.images.isEmpty { imageChips }
             if !model.attachments.isEmpty { attachmentChips }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -2102,6 +2110,8 @@ private struct Composer: View {
                 modelMenu
                 trailingAction
             }
+            .animation(.spring(duration: 0.35, bounce: 0.3), value: model.busy)
+            .animation(.spring(duration: 0.3, bounce: 0.2), value: canSend)
         }
         .padding(10)
         .glassSurface(in: .rect(cornerRadius: 22))
@@ -2121,6 +2131,7 @@ private struct Composer: View {
                 .padding(.leading, 18)
         }
         .animation(.snappy(duration: 0.2), value: SubagentInfo.workingLabel(model.subagents))
+        .animation(.snappy(duration: 0.25), value: model.selectedQueue.isEmpty)
         .dropDestination(for: URL.self) { urls, _ in
             let files = urls.filter(\.isFileURL)
             model.attach(files)
@@ -2289,6 +2300,7 @@ private struct Composer: View {
             }
             .buttonStyle(.plain)
             .help(model.keybindings.help("Stop turn", .stopTurn))
+            .transition(.scale(scale: 0.5).combined(with: .opacity))
         } else {
             Button { Task { await model.submit() } } label: {
                 Image(systemName: "arrow.up")
@@ -2300,6 +2312,11 @@ private struct Composer: View {
             .buttonStyle(.plain)
             .disabled(!canSend)
             .help("Send (⏎)")
+            // The arrow lifts off as the message goes, and the button comes
+            // back from small once the turn is over.
+            .transition(.asymmetric(insertion: .scale(scale: 0.5).combined(with: .opacity),
+                                    removal: .offset(y: -14).combined(with: .opacity)))
+            .animation(.easeOut(duration: 0.15), value: canSend)
         }
     }
 
@@ -2379,6 +2396,8 @@ private struct QueuedPromptList: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
                 .background(.fill.tertiary, in: .rect(cornerRadius: 12))
+                .transition(.asymmetric(insertion: .offset(y: 12).combined(with: .opacity),
+                                        removal: .scale(scale: 0.95).combined(with: .opacity)))
             }
         }
         .animation(.snappy(duration: 0.2), value: queue)
