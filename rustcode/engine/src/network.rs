@@ -1897,8 +1897,9 @@ async fn prepare_turn_request_pass(
         (budget_token_limit / 16).min(192) as usize,
     )
     .await;
-    // Once per turn: later rounds select against the same user request.
-    if tool_rounds == 0 && memory_selection.stats.facts > 0 {
+    // Once per turn: later rounds select against the same user request, and
+    // a compact-first retry repeats this round.
+    if tool_rounds == 0 && compaction_shortfall.is_none() && memory_selection.stats.facts > 0 {
         crate::logger::operational_event("memory.select", memory_selection.stats.event_fields());
     }
     let project_memory = memory_selection.text;
