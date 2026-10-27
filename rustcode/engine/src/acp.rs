@@ -11,6 +11,7 @@ mod questions;
 mod remote;
 mod rewind;
 mod session;
+mod session_move;
 mod steer;
 mod streaming;
 pub(crate) mod usage;
@@ -92,6 +93,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "steer": steer::STEER_CAPABILITY_VERSION,
                 "agents": agents::AGENTS_CAPABILITY_VERSION,
                 "rewind": 1,
+                "sessionMove": 1,
             }),
         )]))
 }
@@ -978,6 +980,35 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let answer =
                         rewind::rewind(&mut *state.lock().await, request.user_index, &request.text);
                     match answer {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder.respond_with_error(error),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: session_move::MoveSessionRequest, responder, _connection| {
+                    if !valid_acp_session_id(&request.session_id) {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data("invalid session id"),
+                        );
+                    }
+                    let cwd = match canonical_acp_cwd(&request.cwd, "session/move") {
+                        Ok(cwd) => cwd,
+                        Err(error) => return responder.respond_with_error(error),
+                    };
+                    // An open chat has a turn, tools and tasks bound to its folder.
+                    if session_id_is_active(&*server.sessions.lock().await, &request.session_id) {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data("close the session before moving it"),
+                        );
+                    }
+                    match session_move::move_session(&request.session_id, cwd) {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder.respond_with_error(error),
                     }

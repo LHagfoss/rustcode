@@ -30,6 +30,7 @@ public enum ACPMethod {
     public static let agents = "_rustcode/agents"
     /// Takes a chat back to just before one of its messages.
     public static let rewind = "_rustcode/rewind"
+    public static let sessionMove = "_rustcode/session/move"
 }
 
 public struct AgentInfo: Equatable, Sendable {
@@ -47,6 +48,8 @@ public struct AgentInfo: Equatable, Sendable {
     public var agents: Bool
     /// The engine answers `_rustcode/rewind`.
     public var rewind: Bool
+    /// The engine moves a closed chat to another folder (`_rustcode/session/move`).
+    public var sessionMove: Bool
 
     public init(initializeResult result: JSONValue) throws {
         guard let version = result["protocolVersion"]?.intValue else {
@@ -65,6 +68,7 @@ public struct AgentInfo: Equatable, Sendable {
         steer = capabilities?["_meta"]?["rustcode"]?["steer"]?.intValue != nil
         agents = capabilities?["_meta"]?["rustcode"]?["agents"]?.intValue != nil
         rewind = capabilities?["_meta"]?["rustcode"]?["rewind"]?.intValue != nil
+        sessionMove = capabilities?["_meta"]?["rustcode"]?["sessionMove"]?.intValue != nil
     }
 }
 
@@ -130,6 +134,10 @@ public enum ACPRequests {
         var blocks: [JSONValue] = text.isEmpty && !images.isEmpty ? [] : [["type": "text", "text": .string(text)]]
         blocks += images.map(\.block)
         return ["sessionId": .string(sessionId), "prompt": .array(blocks)]
+    }
+
+    public static func moveSession(id: String, cwd: URL) -> JSONValue {
+        ["sessionId": .string(id), "cwd": .string(cwd.path)]
     }
 
     public static func rewind(sessionId: String, userIndex: Int, text: String) -> JSONValue {
