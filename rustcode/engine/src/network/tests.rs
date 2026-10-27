@@ -8886,3 +8886,90 @@ async fn reasoning_that_fills_the_cap_is_retried_with_more_room_then_named() {
         ctx.response.final_content
     );
 }
+
+/// History whose estimate sits just under compaction's budget (no overhead
+/// measured yet, as after a restart) while the rendered request with its
+/// system prompt and tail runs over the trim budget. Compaction used to
+/// report `below_budget` and the request dropped old turns; it now compacts
+/// first and nothing is hard trimmed (#2500).
+#[tokio::test]
+async fn near_full_history_compacts_before_the_request_trims_it() {
+    let mut app = AppState::new();
+    let profile = crate::config::ModelProfile {
+        name: "near-full".to_owned(),
+        url: "http://127.0.0.1:9/v1/chat/completions".to_owned(),
+        model: "near-full".to_owned(),
+        context_window: Some(32_768),
+        soft_context_target: Some(24_000),
+        hard_effective_limit: Some(30_000),
+        provider_overhead_margin: Some(0),
+        ..Default::default()
+    };
+    app.api_base_url = profile.url.clone();
+    app.model_name = profile.name.clone();
+    app.config.models = vec![profile];
+    app.record_function_calling_support("http://127.0.0.1:9/v1/chat/completions", false);
+    let budget = app.active_context_budget();
+    let compaction_budget = super::proactive_history_budget(&budget, 0) as usize;
+    let filler = |turn: usize, role: &str| {
+        (0..30)
+            .map(|word| format!("{role}{turn}w{word}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut turn = 0;
+    loop {
+        let user = ChatMessage::new("user", filler(turn, "u"));
+        let assistant = ChatMessage::new("assistant", filler(turn, "a"));
+        let next: usize = app
+            .history
+            .iter()
+            .chain([&user, &assistant])
+            .map(compaction::estimate_message_tokens)
+            .sum();
+        if next >= compaction_budget.saturating_sub(16) {
+            break;
+        }
+        app.history.push(user);
+        app.history.push(assistant);
+        turn += 1;
+    }
+    app.history
+        .push(ChatMessage::new("user", "Continue the task."));
+    let history_tokens: usize = app
+        .history
+        .iter()
+        .map(compaction::estimate_message_tokens)
+        .sum();
+    assert!(
+        history_tokens < compaction_budget,
+        "{history_tokens} {compaction_budget}"
+    );
+    let state = Arc::new(Mutex::new(app));
+
+    let prepared = super::prepare_turn_request_measured(
+        &reqwest::Client::new(),
+        &state,
+        1,
+        &tokio_util::sync::CancellationToken::new(),
+        ContextCheckpoint::default(),
+        None,
+    )
+    .await
+    .expect("request preparation");
+
+    assert_eq!(
+        prepared.hard_trimmed, 0,
+        "the request dropped history compaction kept"
+    );
+    let app = state.lock().await;
+    assert!(app.last_request_overhead_tokens > 0);
+    assert!(
+        app.history
+            .iter()
+            .map(compaction::estimate_message_tokens)
+            .sum::<usize>()
+            < history_tokens,
+        "compaction reduced the stored history"
+    );
+}

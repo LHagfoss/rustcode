@@ -1341,8 +1341,92 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     tool_rounds: usize,
     cancel_token: &tokio_util::sync::CancellationToken,
     checkpoint: ContextCheckpoint,
-    mut prefix_cache: Option<&mut RequestPrefixCache>,
+    prefix_cache: Option<&mut RequestPrefixCache>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    prepare_turn_request_measured(
+        client,
+        state,
+        tool_rounds,
+        cancel_token,
+        checkpoint,
+        prefix_cache,
+    )
+    .await
+    .map(|prepared| prepared.messages)
+}
+
+/// A prepared request and how many history messages its final trim dropped.
+pub(crate) struct PreparedTurnRequest {
+    pub(crate) messages: Vec<serde_json::Value>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) hard_trimmed: usize,
+}
+
+enum PreparationPass {
+    Ready(PreparedTurnRequest),
+    /// The request's final trim would drop history that compaction left in
+    /// place: compaction's estimate (history alone, against the last
+    /// request's overhead, which is 0 after a restart) sat below the budget
+    /// the request measures (rendered messages with the system prompt, tail
+    /// and schemas). Compact again with the measured shortfall first (#2500).
+    CompactFirst {
+        shortfall_tokens: usize,
+    },
+}
+
+pub(crate) async fn prepare_turn_request_measured(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    tool_rounds: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    checkpoint: ContextCheckpoint,
+    mut prefix_cache: Option<&mut RequestPrefixCache>,
+) -> Result<PreparedTurnRequest, String> {
+    let first = prepare_turn_request_pass(
+        client,
+        state,
+        tool_rounds,
+        cancel_token,
+        checkpoint.clone(),
+        prefix_cache.as_deref_mut(),
+        None,
+    )
+    .await?;
+    match first {
+        PreparationPass::Ready(prepared) => Ok(prepared),
+        PreparationPass::CompactFirst { shortfall_tokens } => {
+            match prepare_turn_request_pass(
+                client,
+                state,
+                tool_rounds,
+                cancel_token,
+                checkpoint,
+                prefix_cache,
+                Some(shortfall_tokens),
+            )
+            .await?
+            {
+                PreparationPass::Ready(prepared) => Ok(prepared),
+                PreparationPass::CompactFirst { .. } => {
+                    unreachable!("the second pass always finishes the request")
+                }
+            }
+        }
+    }
+}
+
+/// One pass of request preparation. `compaction_shortfall` is `None` on the
+/// first pass; on the retry it is how far the first pass's request ran over,
+/// taken off the compaction budget so compaction frees that room.
+async fn prepare_turn_request_pass(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    tool_rounds: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    checkpoint: ContextCheckpoint,
+    mut prefix_cache: Option<&mut RequestPrefixCache>,
+    compaction_shortfall: Option<usize>,
+) -> Result<PreparationPass, String> {
     // Phase clock for `context.prepare_phases`: the total alone could not say
     // which step made request preparation slow (#1775).
     let prepare_started = std::time::Instant::now();
@@ -1383,7 +1467,10 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
-                proactive_history_budget(&context_budget, s.last_request_overhead_tokens) as usize,
+                (proactive_history_budget(&context_budget, s.last_request_overhead_tokens)
+                    as usize)
+                    .saturating_sub(compaction_shortfall.unwrap_or(0))
+                    .max(1),
                 local_model,
                 deterministic_compaction,
                 s.active_session_id.clone(),
@@ -1931,6 +2018,32 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     let mut message_budget = prompt_budget
         .saturating_sub(initial_preflight.tool_schema_tokens)
         .saturating_sub(initial_preflight.continuation_overhead_tokens);
+    if compaction_shortfall.is_none() {
+        let projected: usize = msgs
+            .iter()
+            .map(|message| messages::estimate_msg_tokens(message) as usize)
+            .sum();
+        let shortfall_tokens = projected.saturating_sub(message_budget);
+        if shortfall_tokens > 0 && msgs_would_be_trimmed(&msgs, message_budget) {
+            dbg_log!(
+                "request projection is {shortfall_tokens} tokens over its message budget; compacting before trimming"
+            );
+            let mut s = state.lock().await;
+            // A retry compacts the active session's history, so only while
+            // that is still the session this request is for.
+            if s.active_session_id == request_session_id {
+                // Measured overhead for the retry's budget and later rounds.
+                s.last_request_overhead_tokens = u32::try_from(
+                    initial_preflight.system_tokens
+                        + initial_preflight.tool_schema_tokens
+                        + initial_preflight.dynamic_tail_tokens
+                        + initial_preflight.continuation_overhead_tokens,
+                )
+                .unwrap_or(u32::MAX);
+                return Ok(PreparationPass::CompactFirst { shortfall_tokens });
+            }
+        }
+    }
     let mut dropped = trim_msgs_to_budget(&mut msgs, message_budget.min(u32::MAX as usize) as u32);
 
     // History projection can affect relevance-based native schema selection.
@@ -2125,7 +2238,17 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
         ));
     }
 
-    Ok(msgs)
+    Ok(PreparationPass::Ready(PreparedTurnRequest {
+        messages: msgs,
+        hard_trimmed: dropped,
+    }))
+}
+
+/// Whether [`trim_msgs_to_budget`] would drop anything from `msgs`, without
+/// changing them.
+fn msgs_would_be_trimmed(msgs: &[serde_json::Value], budget: usize) -> bool {
+    let mut probe = msgs.to_vec();
+    trim_msgs_to_budget(&mut probe, budget.min(u32::MAX as usize) as u32) > 0
 }
 
 /// Execute a batch of tool calls and return `(name, result, diff)` per call.
