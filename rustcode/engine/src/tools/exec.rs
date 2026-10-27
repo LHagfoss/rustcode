@@ -2160,6 +2160,16 @@ pub fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
 mod tests {
 
     #[test]
+    fn notifying_background_start_is_pending_not_failed() {
+        let notifying = super::background_start_output("task-1", "sleep 5".into(), true, false);
+        assert!(notifying.pending);
+        assert!(!notifying.success);
+        let silent = super::background_start_output("task-2", "sleep 5".into(), false, false);
+        assert!(!silent.pending);
+        assert!(silent.success);
+    }
+
+    #[test]
     fn only_a_bare_trailing_search_counts_as_the_search_status() {
         assert!(super::ends_in_bare_search("rg -n foo src"));
         assert!(super::ends_in_bare_search("cd /repo && rg -n 'a|b' src"));

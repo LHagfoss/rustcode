@@ -583,6 +583,32 @@ fn bounded_malformed_tool_history(content: &str) -> String {
     format!("{}{}", &content[..preview_end], marker)
 }
 
+/// How a finished batch's results split for `tools.batch.finish`. A pending
+/// result (a background start that reports on completion) has not failed, so
+/// it is counted apart instead of inflating `failed` (#2501).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct BatchOutcomeCounts {
+    successes: usize,
+    failed: usize,
+    pending: usize,
+}
+
+impl BatchOutcomeCounts {
+    fn of(results: &[ToolResult]) -> Self {
+        let mut counts = Self::default();
+        for result in results {
+            if result.metadata.pending {
+                counts.pending += 1;
+            } else if result.metadata.success {
+                counts.successes += 1;
+            } else {
+                counts.failed += 1;
+            }
+        }
+        counts
+    }
+}
+
 fn incomplete_tool_result(metadata: &crate::network::events::ToolResultMetadata) -> bool {
     metadata.truncated
         || matches!(
@@ -1330,6 +1356,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
             }
 
+            let outcomes = BatchOutcomeCounts::of(&results);
             crate::logger::operational_event(
                 "tools.batch.finish",
                 serde_json::json!({
@@ -1341,8 +1368,9 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     // of the previously queued ones ran automatically (#1590).
                     "queued": queued_call_count,
                     "auto_executed": auto_executed_count,
-                    "successes": results.iter().filter(|result| result.metadata.success).count(),
-                    "failed": results.iter().filter(|result| !result.metadata.success).count(),
+                    "successes": outcomes.successes,
+                    "failed": outcomes.failed,
+                    "pending": outcomes.pending,
                     "changed_paths": results.iter().map(|result| result.metadata.changed_paths.len()).sum::<usize>(),
                 }),
             );
@@ -2784,13 +2812,13 @@ mod tests {
 
     use super::super::{GroundedArtifactEvidence, TurnContext};
     use super::{
-        REVERIFICATION_ACTION, append_finalized_tool_batch, apply_round_stagnation,
-        apply_stale_round, batch_invalidates_read_recovery, benign_shell_wrapper_failure,
-        bounded_malformed_tool_history, content_bearing_inspection_status,
-        grounded_artifact_recovery_message, incomplete_tool_result, loop_signal_event,
-        mutation_batch_guidance, scheduled_tool_calls, selected_tool_call_indices,
-        should_apply_loop_recovery, take_deferred_batch, targeted_no_progress_guidance,
-        tool_changes_workspace,
+        BatchOutcomeCounts, REVERIFICATION_ACTION, append_finalized_tool_batch,
+        apply_round_stagnation, apply_stale_round, batch_invalidates_read_recovery,
+        benign_shell_wrapper_failure, bounded_malformed_tool_history,
+        content_bearing_inspection_status, grounded_artifact_recovery_message,
+        incomplete_tool_result, loop_signal_event, mutation_batch_guidance, scheduled_tool_calls,
+        selected_tool_call_indices, should_apply_loop_recovery, take_deferred_batch,
+        targeted_no_progress_guidance, tool_changes_workspace,
     };
     use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;
@@ -2920,6 +2948,36 @@ mod tests {
                 error_kind: error_kind.map(str::to_owned),
                 ..Default::default()
             })
+    }
+
+    #[test]
+    fn batch_outcomes_count_background_starts_as_pending() {
+        let result = |success: bool, pending: bool| crate::network::events::ToolResult {
+            tool_name: "run_command".to_owned(),
+            content: String::new(),
+            diff: None,
+            file_preview: None,
+            metadata: crate::network::events::ToolResultMetadata {
+                success,
+                pending,
+                ..Default::default()
+            },
+        };
+        // A notifying background start reports `success: false, pending: true`.
+        let results = vec![
+            result(true, false),
+            result(false, true),
+            result(false, false),
+        ];
+
+        assert_eq!(
+            BatchOutcomeCounts::of(&results),
+            BatchOutcomeCounts {
+                successes: 1,
+                failed: 1,
+                pending: 1,
+            }
+        );
     }
 
     #[test]
