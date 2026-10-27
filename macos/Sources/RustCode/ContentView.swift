@@ -480,9 +480,7 @@ enum TextSelection {
     /// text (#2440): the blank space beside and between messages. Only when
     /// the keyboard is with selected text, not a field the reader types in.
     @MainActor static func endIfOutsideText(_ event: NSEvent) {
-        guard let window = event.window, let content = window.contentView,
-              let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
-              let field = editor.delegate as? NSTextField, !field.isEditable,
+        guard let window = event.window, let content = window.contentView, holdsSelection(window),
               let hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
         else { return }
         // Selectable text is a text field of its own; a click in it moves
@@ -493,6 +491,22 @@ enum TextSelection {
             view = current.superview
         }
         window.makeFirstResponder(nil)
+    }
+
+    /// Esc drops a selection in the chat, wherever the pointer is (#2440).
+    /// False when the keyboard is anywhere else, so Esc keeps its meaning there.
+    @MainActor static func endOnEscape(in window: NSWindow) -> Bool {
+        guard holdsSelection(window) else { return false }
+        window.makeFirstResponder(nil)
+        return true
+    }
+
+    /// The keyboard is with selectable text in the chat, not a field the
+    /// reader types in.
+    @MainActor private static func holdsSelection(_ window: NSWindow) -> Bool {
+        guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
+              let field = editor.delegate as? NSTextField else { return false }
+        return !field.isEditable
     }
 }
 
@@ -1650,6 +1664,10 @@ private final class TranscriptKeyInput {
 
     private func handle(_ event: NSEvent) -> Bool {
         let modified = !event.modifierFlags.intersection([.shift, .option, .control, .command]).isEmpty
+        if event.keyCode == KeyRecorderInput.escapeKeyCode, !modified, let window = event.window, window.attachedSheet == nil,
+           !isCovered(), TextSelection.endOnEscape(in: window) {
+            return true
+        }
         guard let window = event.window, window.attachedSheet == nil,
               let action = TranscriptKeys.action(keyCode: event.keyCode, modified: modified,
                                                  focus: focus(window.firstResponder)) else { return false }
