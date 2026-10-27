@@ -1,3 +1,10 @@
+## [v0.100.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.100.0) - 2026-10-27
+
+### Features
+- ↑ in an empty composer now edits the newest queued message first. (#2473)
+- Replies are written out at a steady pace instead of in bursts, and tables fade in as they are written. (#2474)
+- Tool calls show icons, including the site icon for pages read; sending a message and new chat rows animate into place. (#2477)
+- A long turn no longer stops with "context budget exceeded": old tool output in the turn is shortened so it can keep working. (#2476)
 ## [v0.99.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.99.0) - 2026-10-27
 
 ### Features
