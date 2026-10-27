@@ -321,10 +321,14 @@ private struct LinkHitArea: NSViewRepresentable {
         let view = LinkHitView()
         view.areas = areas
         areas.view = view
+        view.areasChanged()
         return view
     }
 
+    // The areas tell the view when they change; a redraw of the text that
+    // moved no link leaves its cursor rects and tooltips alone.
     func updateNSView(_ view: LinkHitView, context: Context) {
+        guard view.areas !== areas else { return }
         view.areas = areas
         areas.view = view
         view.areasChanged()
@@ -539,6 +543,12 @@ struct StreamingProse: View {
                     TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !arrivals.isAnimating)) { context in
                         faded(from: head > 0 ? head + 1 : 0, count: count)
                             .textRenderer(FadeInRenderer(now: context.date))
+                            // Selectable text is drawn by AppKit, which never
+                            // calls a renderer: inheriting the chat's selection,
+                            // the fade never ran while its clock redrew the
+                            // text every frame. The few lines still arriving
+                            // select once they settle.
+                            .textSelection(.disabled)
                             .linkCursor(AttributedString(text[index(head > 0 ? head + 1 : 0, count: count)...]), lineSpacing: 2)
                     }
                 } else {
