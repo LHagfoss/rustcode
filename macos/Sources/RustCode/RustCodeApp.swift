@@ -1249,12 +1249,17 @@ final class DesktopModel: ObservableObject {
     }
 
     /// ↑ on an empty composer: bring the last message the user sent back to
-    /// edit and resend, as the terminal does. False when there is nothing to
-    /// recall or the composer already holds something, so ↑ still moves the
-    /// cursor within the text.
+    /// edit and resend, as the terminal does. A message still waiting in the
+    /// queue comes back first, newest first, since it is what the user typed
+    /// last. False when there is nothing to recall or the composer already
+    /// holds something, so ↑ still moves the cursor within the text.
     @discardableResult
     func recallLastMessage() -> Bool {
         guard draftCommand == nil, draft.isEmpty, attachments.isEmpty, images.isEmpty else { return false }
+        if let queued = selectedQueue.last {
+            editQueued(queued)
+            return true
+        }
         guard let message = transcript.items.last(where: { item in
             if case .user(let text) = item.content { return !ToolAttachment.isAttachment(text) }
             return false

@@ -242,6 +242,25 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// ↑ takes a message still waiting in the queue back first, newest first,
+    /// and it leaves the queue.
+    func testUpArrowEditsTheNewestQueuedMessage() async throws {
+        let model = try await started()
+        await model.newSession()
+        await send("sent request", in: model)
+        try await until { !model.busy }
+        let session = try XCTUnwrap(model.selectedSession)
+        model.queuedPrompts = [
+            .init(sessionId: session, typed: "older queued", text: "older queued", images: []),
+            .init(sessionId: session, typed: "newer queued", text: "newer queued", images: []),
+        ]
+
+        XCTAssertTrue(model.recallLastMessage())
+        XCTAssertEqual(model.draft, "newer queued")
+        XCTAssertEqual(model.selectedQueue.map(\.typed), ["older queued"])
+        model.stop()
+    }
+
     /// Picking a chat back while its first load still runs shows it once it is in.
     func testReturningToALoadingChatShowsItWhenLoaded() async throws {
         let model = try await started()
