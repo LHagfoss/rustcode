@@ -4854,6 +4854,27 @@ fn a_harness_notice_does_not_unbind_a_discovery_result() {
 }
 
 #[test]
+fn smart_ui_hint_needs_the_capability_and_a_root_prompt() {
+    use super::schema::{SMART_UI_PROMPT_HINT, append_smart_ui_hint};
+    use crate::config::AgentMode;
+    assert!(crate::network::compaction::estimate_tokens(SMART_UI_PROMPT_HINT) < 180);
+    assert!(SMART_UI_PROMPT_HINT.contains("```rustcode-ui v1"));
+    let with = |policy: ToolSchemaPolicy, on: bool| {
+        let mut prompt = String::new();
+        append_smart_ui_hint(&mut prompt, policy, on);
+        prompt
+    };
+    let root = ToolSchemaPolicy::root_for_mode(false, AgentMode::Build);
+    assert_eq!(with(root, true), SMART_UI_PROMPT_HINT);
+    assert_eq!(with(root, false), "");
+    let compact = ToolSchemaPolicy {
+        compact_text_prompt: true,
+        ..root
+    };
+    assert_eq!(with(compact, true), "");
+}
+
+#[test]
 fn visualization_hint_needs_a_rendering_frontend_and_a_root_prompt() {
     use super::schema::{
         VISUALIZATION_PROMPT_HINT as HINT, VISUALIZATION_PROMPT_HINT_LEVEL_2 as HINT_2,

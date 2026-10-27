@@ -88,8 +88,16 @@ public enum ACPProtocolError: Error, Equatable, CustomStringConvertible {
 }
 
 public enum ACPRequests {
-    public static func initialize(appVersion: String) -> JSONValue {
-        [
+    /// `smartUI` advertises Smart UI blocks (docs/smart-ui.md); the app sends
+    /// it only while the setting is on.
+    public static func initialize(appVersion: String, smartUI: Bool = false) -> JSONValue {
+        var rustcode: [String: JSONValue] = [
+            "visualizations": .number(Double(Visualization.capabilityLevel)),
+            "preview": .number(Double(rustcodePreviewCapabilityVersion)),
+            "presence": .number(Double(rustcodePresenceCapabilityVersion)),
+        ]
+        if smartUI { rustcode["smartUi"] = .number(Double(SmartUI.capabilityVersion)) }
+        return [
             "protocolVersion": .number(Double(acpProtocolVersion)),
             // The app offers no client-side filesystem or terminal: the engine
             // uses its own tools, under its own sandbox and approval policy.
@@ -102,11 +110,9 @@ public enum ACPRequests {
                 // so the engine offers `localhost_preview` (docs/preview.md).
                 // Presence asks the engine for Discord Rich Presence, which
                 // it gives only clients that ask (docs/discord-rich-presence.md).
-                "_meta": ["rustcode": [
-                    "visualizations": .number(Double(Visualization.capabilityLevel)),
-                    "preview": .number(Double(rustcodePreviewCapabilityVersion)),
-                    "presence": .number(Double(rustcodePresenceCapabilityVersion)),
-                ]],
+                // Smart UI is advertised only while the user has it on
+                // (docs/smart-ui.md).
+                "_meta": ["rustcode": .object(rustcode)],
             ],
             "clientInfo": ["name": "rustcode-macos", "title": "RustCode", "version": .string(appVersion)],
         ]

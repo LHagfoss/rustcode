@@ -275,6 +275,9 @@ pub struct AppState {
     /// state, so the system prompt (and its cached prefix) stays the same for
     /// the whole session.
     pub visualization_level: u8,
+    /// The frontend runs `rustcode-ui v1` blocks (#2484) and the user turned
+    /// Smart UI on. Set once with the session state, like the level above.
+    pub smart_ui: bool,
     /// The client's localhost preview, when it advertised one (#2138). Set
     /// once with the session state, so the tool menu and system prompt stay
     /// the same for the whole session. `None` hides `localhost_preview`.
@@ -1605,6 +1608,7 @@ impl AppState {
             stats_usage_history: std::collections::BTreeMap::new(),
             session_title_tool_available: false,
             visualization_level: 0,
+            smart_ui: false,
             preview_client: None,
             pending_preview_images: Vec::new(),
             show_mcp_config: false,

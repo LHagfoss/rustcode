@@ -191,6 +191,7 @@ private struct GeneralSettings: View {
     @AppStorage(StreamingProse.revealKey) private var revealsText = true
     @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
     @AppStorage(ComposerPredictions.key) private var predictions = true
+    @AppStorage(SmartUI.enabledKey) private var smartUI = false
 
     private var verbositySubtitle: String {
         switch verbosity {
@@ -246,6 +247,22 @@ private struct GeneralSettings: View {
                     Toggle("Word predictions", isOn: $predictions)
                         .labelsHidden()
                         .toggleStyle(.switch)
+                }
+                RowDivider()
+                SettingsRow(title: "Smart UI (experimental)",
+                            subtitle: smartUI == model.engineSmartUI
+                                ? "Let the agent reply with small interactive views when you ask for one. They run sandboxed, with no network, file or app access"
+                                : "The agent learns this when the engine restarts; chats in progress keep running until then") {
+                    HStack(spacing: 8) {
+                        // The engine reads the setting at initialize.
+                        if smartUI != model.engineSmartUI, model.runningSessions.isEmpty {
+                            Button("Restart Engine") { Task { await model.restartEngine() } }
+                                .buttonStyle(PillButtonStyle())
+                        }
+                        Toggle("Smart UI", isOn: $smartUI)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
                 }
                 RowDivider()
                 SettingsRow(title: "Tool calls", subtitle: verbositySubtitle) {

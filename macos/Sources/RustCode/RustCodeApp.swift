@@ -550,6 +550,9 @@ final class DesktopModel: ObservableObject {
     private var handledInbound = 0
     private var inboundWaiters: [(count: Int, resume: CheckedContinuation<Void, Never>)] = []
     private var capabilities: AgentInfo?
+    /// Whether the running engine was told Smart UI is on; Settings offers a
+    /// restart while this differs from the setting.
+    @Published private(set) var engineSmartUI = false
     /// The engine can move a chat to another folder (#2459).
     var canMoveChat: Bool { capabilities?.sessionMove == true && capabilities?.closeSession == true }
 
@@ -822,7 +825,9 @@ final class DesktopModel: ObservableObject {
                     await self?.inboundHandled(from: process.connection)
                 }
             }
-            let result = try await process.connection.request(ACPMethod.initialize, params: ACPRequests.initialize(appVersion: "0.1.0"), timeout: .seconds(10))
+            let smartUI = SmartUI.isEnabled
+            let result = try await process.connection.request(ACPMethod.initialize, params: ACPRequests.initialize(appVersion: "0.1.0", smartUI: smartUI), timeout: .seconds(10))
+            engineSmartUI = smartUI
             capabilities = try AgentInfo(initializeResult: result)
             try await process.connection.notify("initialized", params: [:])
             await refreshSessions()
