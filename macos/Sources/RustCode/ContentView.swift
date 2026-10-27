@@ -939,6 +939,7 @@ private struct ChatView: View {
         let split = ChatLayout.split(count: transcript.items.count, firstShown: first)
         let rows = shownRows(transcript, first: first, split: split)
         let expanded = model.expandedInChat
+        let openTurns = Self.openTurns(rows)
         ScrollViewReader { proxy in
             ScrollView {
                 // The newest rows and the end of the chat sit below the lazy
@@ -1017,6 +1018,14 @@ private struct ChatView: View {
             .overlay(alignment: .topLeading) {
                 TimelineRail(state: scroll.rail) { id in jumpToTurn(id, proxy) }
             }
+            // An opened turn's header, kept in reach once it scrolls away
+            // (#2462). Over the chat, like Latest, not pinned inside it.
+            .overlay(alignment: .top) {
+                StickyTurnBar(state: scroll.stickyTurn) { foldTurn($0, proxy) }
+                    .frame(maxWidth: Self.columnMaxWidth)
+                    .padding(.horizontal, 28)
+            }
+            .onChange(of: openTurns, initial: true) { _, turns in scroll.setOpenTurns(turns) }
             // Over the chat rather than a pinned footer inside it: a pinned
             // view re-lays out its whole section on every scrolled frame.
             .overlay(alignment: .bottom) {
@@ -1334,6 +1343,37 @@ private struct ChatView: View {
         scroll.flash()
     }
 
+    /// The turns opened to their work, each from its header row to its last step.
+    private static func openTurns(_ rows: ShownRows) -> [OpenTurn] {
+        var turns: [OpenTurn] = []
+        var current: OpenTurn?
+        for item in rows.older + rows.newer {
+            if let fold = rows.folding.turn(for: item.id), fold.isOpen {
+                current.map { turns.append($0) }
+                current = OpenTurn(key: fold.key, first: item.id, last: item.id, title: fold.title)
+            } else if current != nil, rows.folding.isNested(item.id) {
+                current?.last = item.id
+            } else if let open = current {
+                turns.append(open)
+                current = nil
+            }
+        }
+        current.map { turns.append($0) }
+        return turns
+    }
+
+    /// Fold an opened turn from its sticky bar, and land on its header: the
+    /// reader was in its steps, which are gone.
+    private func foldTurn(_ turn: OpenTurn, _ proxy: ScrollViewProxy) {
+        follow.letGo()
+        scroll.willJump()
+        withAnimation(.snappy(duration: 0.2)) { model.toggleToolRun(turn.key) }
+        DispatchQueue.main.async { [scroll] in
+            proxy.scrollTo(turn.first, anchor: .top)
+            scroll.hold(turn.first, at: 0)
+        }
+    }
+
     private func jumpToLatest(_ proxy: ScrollViewProxy) {
         follow.jumpToLatest()
         scrollToEnd(proxy)
@@ -1488,6 +1528,42 @@ private struct EarlierMessages: View {
 }
 
 /// Jumps back to the newest message after the reader scrolled up.
+/// An opened turn whose header scrolled away: its title and a control that
+/// folds it again, floating at the top of the chat.
+private struct StickyTurnBar: View {
+    @ObservedObject var state: StickyTurnState
+    let fold: (OpenTurn) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack {
+            if let turn = state.turn {
+                Button { fold(turn) } label: {
+                    HStack(spacing: 6) {
+                        Text(turn.title).foregroundStyle(.secondary)
+                        Text("·").foregroundStyle(.tertiary)
+                        Text("Hide the work")
+                        Image(systemName: "chevron.up").font(.caption2.weight(.semibold))
+                    }
+                    .font(.callout)
+                    .padding(.horizontal, 12)
+                    .frame(height: 28)
+                    .contentShape(.capsule)
+                    .interactiveGlassSurface(in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help("Fold this turn's work and go back to where it starts")
+                .accessibilityLabel("\(turn.title). Hide the work")
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 8)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.18), value: state.turn?.key)
+    }
+}
+
 private struct LatestButton: View {
     let action: () -> Void
 

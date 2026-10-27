@@ -105,6 +105,36 @@ final class ChatScrollState: ObservableObject {
         setNeedsUpdate()
     }
 
+    // MARK: An opened turn's header kept in reach (#2462)
+
+    /// The opened turn whose header scrolled away while its steps fill the
+    /// view; only the sticky bar observes it.
+    let stickyTurn = StickyTurnState()
+    private var openTurns: [OpenTurn] = []
+
+    /// The turns opened to their work, oldest first.
+    func setOpenTurns(_ turns: [OpenTurn]) {
+        guard turns != openTurns else { return }
+        openTurns = turns
+        setNeedsUpdate()
+    }
+
+    /// The last opened turn whose header row is above the view while its
+    /// steps still reach well into it.
+    private func updateStickyTurn(offset: Double) {
+        let shown = openTurns.last { turn in
+            guard let top = map.top(of: turn.first), top + Self.headerHeight < offset else { return false }
+            let end = map.top(of: turn.last).flatMap { top in map.height(of: turn.last).map { top + $0 } }
+            return (end ?? .infinity) > offset + Self.stickyRoom
+        }
+        if stickyTurn.turn != shown { stickyTurn.turn = shown }
+    }
+
+    /// About the height of a turn's `Worked for…` row.
+    private static let headerHeight: Double = 24
+    /// How much of the turn must still be in view for the bar to show.
+    private static let stickyRoom: Double = 64
+
     // MARK: Older rows drawn in full or as stand-ins (`DrawnRows`)
 
     /// The older rows drawn in full; the rest stand in at their height.
@@ -469,6 +499,7 @@ final class ChatScrollState: ObservableObject {
         guard let (row, frame) = reference, distance(frame) <= visible, let top = map.top(of: row) else { return }
         let offset = top - frame.minY
         updateRail(offset: offset)
+        updateStickyTurn(offset: offset)
         if offset < visible * Self.nearTopScreens, !isAnchoring { nearTop() }
         let content = map.contentHeight()
         guard let target = ChatScrollerKnob(offset: offset, contentHeight: content, visible: visible, track: track) else {
@@ -658,4 +689,19 @@ struct EnclosingScrollView: NSViewRepresentable {
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
+}
+
+/// An opened turn, from the row its `Worked for…` header is on to its last step.
+struct OpenTurn: Equatable {
+    var key: Int
+    var first: Int
+    var last: Int
+    var title: String
+}
+
+/// The turn the sticky bar offers to fold. Published apart from the chat,
+/// so only the bar redraws as it changes.
+@MainActor
+final class StickyTurnState: ObservableObject {
+    @Published var turn: OpenTurn?
 }
