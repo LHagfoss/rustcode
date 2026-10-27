@@ -21,4 +21,15 @@ final class ToolIconTests: XCTestCase {
         XCTAssertNil(ToolIcon.siteIcon(for: call("read_url", detail: "file:///etc/passwd")))
         XCTAssertNil(ToolIcon.siteIcon(for: call("view_file", detail: "https://example.com")))
     }
+
+    /// A `github` call shows GitHub's icon and says what it read.
+    func testAGitHubCallShowsGitHubAndWhatItRead() {
+        XCTAssertEqual(ToolIcon.siteIcon(for: call("github"))?.absoluteString, "https://github.com/favicon.ico")
+        XCTAssertEqual(ToolPresentation.title("github"), "GitHub")
+        XCTAssertEqual(ToolPresentation.detail(input: ["action": "issue", "number": 7, "repo": "o/r"], output: nil), "Issue #7 · o/r")
+        XCTAssertEqual(ToolPresentation.detail(input: ["action": "list_prs", "query": "label:bug"], output: nil), "Pull requests · label:bug")
+        XCTAssertEqual(ToolPresentation.detail(input: ["action": "run_log", "number": 123], output: nil), "Run log #123")
+        // Another tool's `action` argument is not mistaken for a GitHub call.
+        XCTAssertEqual(ToolPresentation.detail(input: ["action": "start", "command": "npm test"], output: nil), "npm test")
+    }
 }

@@ -35,6 +35,7 @@ pub(crate) fn parallel_inspection(call: &crate::tools::ToolCall) -> bool {
             // Network lookups wait seconds each; a batch of them overlaps.
             | "search_web"
             | "read_url"
+            | "github"
     ) && crate::tools::is_read_only_call(call)
 }
 
