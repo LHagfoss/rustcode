@@ -2,6 +2,23 @@ import XCTest
 @testable import RustCodeKit
 
 final class SubagentTests: XCTestCase {
+    func testSidebarNestsWorkingAgentsAndTheOneOnScreen() {
+        let agents = SubagentInfo.list(from: [
+            "agents": [
+                ["id": 1, "name": "running", "status": "running"],
+                ["id": 2, "name": "queued", "status": "queued"],
+                ["id": 3, "name": "done", "status": "completed"],
+                ["id": 4, "name": "failed", "status": "failed"],
+                ["id": 5, "name": "follow-up", "status": "completed", "activeTurn": true],
+                ["id": 6, "name": "cancelled", "status": "cancelled"],
+            ],
+        ])
+        XCTAssertEqual(SubagentInfo.sidebarChildren(agents, viewing: nil).map(\.id), [1, 2, 5])
+        // A finished agent stays while its conversation is open, then leaves.
+        XCTAssertEqual(SubagentInfo.sidebarChildren(agents, viewing: 4).map(\.id), [1, 2, 4, 5])
+        XCTAssertEqual(SubagentInfo.sidebarChildren([], viewing: 4).map(\.id), [])
+    }
+
     func testParsesTheAgentsList() {
         let agents = SubagentInfo.list(from: [
             "agents": [

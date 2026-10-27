@@ -59,6 +59,12 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
         completion = json["completion"]?.stringValue
     }
 
+    /// The children the sidebar nests under their chat (#2492): those still
+    /// working, and the one open on screen, so its row stays while it is read.
+    public static func sidebarChildren(_ agents: [SubagentInfo], viewing: Int?) -> [SubagentInfo] {
+        agents.filter { $0.isActive || $0.id == viewing }
+    }
+
     /// The children in an `_rustcode/agents` list answer.
     public static func list(from result: JSONValue) -> [SubagentInfo] {
         (result["agents"]?.arrayValue ?? []).compactMap(SubagentInfo.init(json:))
