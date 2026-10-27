@@ -22,6 +22,7 @@ struct SettingsView: View {
     @ObservedObject var model: DesktopModel
     @Environment(\.closePanel) private var dismiss
     @StateObject private var capabilities = CapabilitiesStore()
+    @StateObject private var connections = ConnectionsStore()
     typealias Section = SettingsSection
 
     private var section: Section { model.settingsSection }
@@ -57,6 +58,7 @@ struct SettingsView: View {
                         switch section {
                         case .general: GeneralSettings(model: model)
                         case .keybinds: KeybindingsSettings(store: model.keybindings)
+                        case .connections: ConnectionsSettings(model: model, store: connections)
                         case .skills: SkillsSettings(model: model, store: capabilities)
                         case .mcp: MCPSettings(model: model, store: capabilities)
                         case .engine: EngineSettings(model: model)
@@ -75,6 +77,10 @@ struct SettingsView: View {
         .task(id: section) {
             if section == .general { await model.loadPresence() }
             if section == .skills || section == .mcp { await capabilities.load(model.engineConnection) }
+            if section == .connections {
+                await connections.load(model.engineConnection)
+                await connections.wait(model.engineConnection)
+            }
         }
     }
 }
@@ -854,7 +860,7 @@ private struct AboutSettings: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general = "General", keybinds = "Keybinds", skills = "Skills", mcp = "MCP Servers", engine = "Engine", about = "About"
+    case general = "General", keybinds = "Keybinds", connections = "Connections", skills = "Skills", mcp = "MCP Servers", engine = "Engine", about = "About"
 
     var id: Self { self }
 
@@ -862,6 +868,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general: "gearshape"
         case .keybinds: "keyboard"
+        case .connections: "person.2.badge.key"
         case .skills: "sparkles"
         case .mcp: "point.3.connected.trianglepath.dotted"
         case .engine: "terminal"

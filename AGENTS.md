@@ -103,6 +103,10 @@ instructions for work in this repository.
   window; `wheelstream`, `timescroll` and `stream` measure scrolling and
   streaming. Run a measurement under `sample <pid> 3` to see where the main
   thread goes.
+- To test an engine change in the app, build the engine binary with
+  `cargo build -p rustcode-tui --bin rustcode` and start the app with
+  `RUSTCODE_ENGINE=target/debug/rustcode`. A plain `cargo build` does not
+  rebuild that binary, and the app then talks to the old engine.
 - Synthesized wheel, drag and pinch events do not reach SwiftUI views from the
   driver. Say in the PR when real pointer input was not exercised.
 

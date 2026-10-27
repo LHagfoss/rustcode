@@ -2,6 +2,7 @@ mod agents;
 mod capabilities;
 mod commands;
 mod config;
+mod connections;
 mod edit_diff;
 mod permissions;
 mod presence;
@@ -1125,6 +1126,74 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     }
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        // Each runs gh or the account store, so none holds the dispatch loop.
+        .on_receive_request(
+            async move |_request: connections::ConnectionsRequest, responder, connection| {
+                connection.spawn(async move {
+                    match connections::snapshot_value().await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: connections::GitHubLoginRequest, responder, connection| {
+                connection.spawn(async move {
+                    match connections::github_login().await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: connections::GitHubWaitRequest, responder, connection| {
+                connection.spawn(async move {
+                    match connections::github_wait().await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: connections::GitHubLogoutRequest, responder, connection| {
+                connection.spawn(async move {
+                    match connections::github_logout(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: connections::AccountLogoutRequest, responder, connection| {
+                connection.spawn(async move {
+                    match connections::account_logout(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: connections::GitHubCancelRequest, responder, _connection| {
+                crate::connections::cancel_github_login();
+                responder.respond(serde_json::Value::Null)
             },
             agent_client_protocol::on_receive_request!(),
         )
