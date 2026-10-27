@@ -849,10 +849,9 @@ async fn unregister_acp_session(server: &AcpServer, session_id: &str) {
 
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
     let startup_state = crate::app::AppState::new();
-    crate::mcp::start_enabled_servers(&startup_state.config.mcp_servers, |name| async move {
-        crate::mcp::start_server_by_name(&name).await
-    })
-    .await;
+    // Servers start on the session's first turn, not here: the app attaches
+    // an engine for chats that may never run one (#2503).
+    crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
 
     let server = AcpServer::new(auto_approve)?;
     Agent

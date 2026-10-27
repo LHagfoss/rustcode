@@ -1382,6 +1382,9 @@ pub(crate) async fn prepare_turn_request_measured(
     checkpoint: ContextCheckpoint,
     mut prefix_cache: Option<&mut RequestPrefixCache>,
 ) -> Result<PreparedTurnRequest, String> {
+    // An ACP engine defers its MCP servers until a turn needs them; this is
+    // that first use. It returns at once when nothing is deferred.
+    crate::mcp::start_deferred_servers().await;
     let first = prepare_turn_request_pass(
         client,
         state,
