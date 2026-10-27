@@ -597,6 +597,10 @@ private struct ToolRow: View {
         if tool.changes.count == 1, let change = tool.changes.first {
             return change.displayPath(relativeTo: projectRoot)
         }
+        // A page reads as `github.com/…/rest`, as links in replies do.
+        if ToolIcon.siteIcon(for: tool) != nil, let detail = tool.detail, let url = URL(string: detail) {
+            return Linkify.label(for: url)
+        }
         return tool.detail.map { ProjectPath.relative($0, to: projectRoot) }
     }
 
@@ -625,7 +629,7 @@ private struct ToolRow: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .help(detail)
+                    .help(tool.changes.isEmpty ? tool.detail ?? detail : detail)
             }
             if !tool.changes.isEmpty {
                 DiffCount(
@@ -637,24 +641,54 @@ private struct ToolRow: View {
         .frame(minHeight: 24)
     }
 
+    /// What the call did, as an icon: the site's own icon for a page it
+    /// read, else a symbol for its kind. A spinner while it runs, and red
+    /// when it failed.
     @ViewBuilder
     private var statusIcon: some View {
-        switch tool.status {
-        case .completed:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .failed:
-            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-        case .pending, .inProgress:
-            ProgressView().controlSize(.mini)
-        case nil:
-            Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
+        Group {
+            switch tool.status {
+            case .failed:
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+            case .pending, .inProgress:
+                ProgressView().controlSize(.mini)
+            case .completed, nil:
+                if let site = ToolIcon.siteIcon(for: tool) {
+                    SiteIcon(url: site, fallback: ToolIcon.symbol(for: tool))
+                } else {
+                    Image(systemName: ToolIcon.symbol(for: tool)).foregroundStyle(.secondary)
+                }
+            }
         }
+        .transition(.scale(scale: 0.6).combined(with: .opacity))
+        .animation(.spring(duration: 0.3, bounce: 0.3), value: tool.status)
     }
 
     private func detail(_ title: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ToolTextBox(text: text)
+        }
+    }
+}
+
+/// A website's icon, with a symbol until it loads or when it has none.
+private struct SiteIcon: View {
+    let url: URL
+    let fallback: String
+
+    var body: some View {
+        AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.2))) { phase in
+            if let image = phase.image {
+                // On a light tile, as browsers show them: many site icons
+                // are dark and would vanish on the dark chat.
+                image.resizable().interpolation(.high).scaledToFit()
+                    .frame(width: 12, height: 12)
+                    .padding(2)
+                    .background(.white, in: .rect(cornerRadius: 4))
+            } else {
+                Image(systemName: fallback).foregroundStyle(.secondary)
+            }
         }
     }
 }
