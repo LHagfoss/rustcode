@@ -252,6 +252,12 @@ final class ChatScrollState: ObservableObject {
         let top = reference.map { "top row \($0.key) at \(Int($0.value.minY))" } ?? "no rows"
         return "\(top), rows \(map.rows.count) first \(map.rows.first.map(String.init) ?? "-")"
     }
+    /// The rows drawn in full, and the mapped rows that are not.
+    /// The rows drawn in full, and the mapped rows that are not.
+    var debugDrawn: String {
+        let missing = map.rows.filter { !drawn.ids.contains($0) }
+        return "drawn \(drawn.ids.count) of \(map.rows.count) missing \(missing.prefix(30))"
+    }
     /// Where `row` is drawn now: its top in the content, which layout
     /// reports, less the scroll view's own offset. Unlike its frame, never
     /// stale after the chat was scrolled outside a layout pass.

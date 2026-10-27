@@ -559,11 +559,15 @@ enum DebugDriver {
             if !parts.contains("live") {
                 model.transcript.apply(.agentText("Done. Unaffordable towers are disabled with the shortfall shown, the tutorial is gone, and sound and autoplay start on."))
             }
+        case "drawn":
+            // Which of the older rows are drawn in full, and which stand in.
+            report(ChatScrollState.current?.debugDrawn ?? "no chat")
         case "openturn":
             let folding = ToolFolding(items: model.transcript.items, verbosity: .low,
                                       open: model.openToolRuns, running: false)
             if let last = folding.turns.values.max(by: { $0.anchor < $1.anchor }) {
-                model.toggleToolRun(last.key)
+                // Animated, as a click on the turn's row is.
+                withAnimation(.rowReveal) { model.toggleToolRun(last.key) }
             }
         case "previewshot":
             // `previewshot <url> <file.png>`: the agent's navigate then

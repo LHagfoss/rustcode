@@ -37,6 +37,13 @@ final class ChatScrollMapTests: XCTestCase {
         XCTAssertEqual(map.top(of: 3), 20 + 100 + 10 + 75 + 10)
     }
 
+    /// #2481: one very long reply among short rows does not make every row
+    /// not measured yet stand in at hundreds of points.
+    func testOneLongReplyDoesNotInflateTheGuess() {
+        let map = map([0: 124, 1: 42, 2: 1_791], rows: [0, 1, 2, 3])
+        XCTAssertEqual(map.estimate, 124)
+    }
+
     func testMeasurementsOutliveRowsLeavingTheScreen() {
         var map = map([1: 100, 2: 400], rows: [1, 2])
         let height = map.contentHeight()
@@ -168,5 +175,28 @@ final class DrawnRowsTests: XCTestCase {
         XCTAssertTrue(drawn.ids.contains(39))
         drawn.invalidate()
         XCTAssertFalse(drawn.update(map: &map, offset: 4500, visible: 300), "same rows")
+    }
+
+    /// #2481: a turn opened with its rows guessed tall; once they measure
+    /// short, rows below move into view and are drawn without a scroll.
+    func testRowsMovedIntoViewByNewHeightsAreDrawn() {
+        var map = map(rows: 20)
+        var drawn = DrawnRows()
+        _ = drawn.update(map: &map, offset: 0, visible: 300)
+        XCTAssertEqual(drawn.ids, Set(0...9))
+        for row in 0..<10 { map.measured(row, height: 10) }
+        XCTAssertTrue(drawn.update(map: &map, offset: 0, visible: 300))
+        // Rows 10... now start at 100, 200, …: drawn to two screens below.
+        XCTAssertEqual(drawn.ids, Set(0...18))
+    }
+
+    /// Rows only leaving the view as heights change keep the set as it is.
+    func testRowsMovedAwayByNewHeightsKeepTheSet() {
+        var map = map(rows: 20)
+        var drawn = DrawnRows()
+        _ = drawn.update(map: &map, offset: 0, visible: 300)
+        map.measured(0, height: 300)
+        XCTAssertFalse(drawn.update(map: &map, offset: 0, visible: 300))
+        XCTAssertEqual(drawn.ids, Set(0...9))
     }
 }
