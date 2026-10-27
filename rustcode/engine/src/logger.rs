@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::path::Path;
 use std::sync::{
-    Mutex, OnceLock,
+    LazyLock, Mutex, OnceLock,
     atomic::{AtomicU64, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -509,10 +509,39 @@ pub(crate) fn append_line(line: &str) {
 fn append_line_with_session(line: &str, session_id: Option<&str>) {
     if let Some(log_dir) = crate::config::get_config_dir() {
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-        let formatted = format!("[{now}] {line}");
         let session_id = session_id.map(str::to_owned).or_else(log_session_id);
+        if let Some(header) = session_start_header(session_id.as_deref()) {
+            append_line_to_logs(
+                &log_dir,
+                session_id.as_deref(),
+                &format!("[{now}] {header}"),
+            );
+        }
+        let formatted = format!("[{now}] {line}");
         append_line_to_logs(&log_dir, session_id.as_deref(), &formatted);
     }
+}
+
+/// The line that opens this process's writes to a session's log, naming the
+/// engine version so a log can be tied to a release (#2504). It is returned
+/// once per session and process, and once for the unscoped log.
+fn session_start_header(session_id: Option<&str>) -> Option<String> {
+    static STARTED: LazyLock<Mutex<std::collections::HashSet<String>>> =
+        LazyLock::new(Default::default);
+    let key = session_id.unwrap_or_default().to_owned();
+    if !STARTED
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(key)
+    {
+        return None;
+    }
+    let mut fields = serde_json::json!({ "engine_version": env!("CARGO_PKG_VERSION") });
+    if let Some(session_id) = session_id {
+        fields["session_id"] = Value::String(session_id.to_owned());
+    }
+    let payload = serde_json::json!({"event": "log.session_start", "fields": fields});
+    Some(format!("[op] {payload}"))
 }
 
 /// Write every line to the bounded config-level log, and duplicate it under
@@ -964,6 +993,17 @@ pub(crate) fn append_line_for_session(session_id: &str, line: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_session_log_opens_once_with_the_engine_version() {
+        let session_id = "header-test-session";
+        let header = session_start_header(Some(session_id)).expect("first line gets a header");
+        assert!(header.contains("\"log.session_start\""));
+        assert!(header.contains(env!("CARGO_PKG_VERSION")));
+        assert!(header.contains(session_id));
+        assert_eq!(session_start_header(Some(session_id)), None);
+        assert!(session_start_header(Some("header-test-other")).is_some());
+    }
 
     #[test]
     fn rotation_triggers_when_log_exceeds_the_cap() {
