@@ -835,6 +835,7 @@ pub fn get_time(_args: &Value) -> Result<String, String> {
 
 pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
     let args = super::mcp_discovery::DiscoveryArgs::parse(args)?;
+    start_named_mcp_servers(&args);
     let mut clients = {
         let registry_handle = crate::mcp::get_mcp_registry();
         let registry = registry_handle
@@ -862,6 +863,53 @@ pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
         .collect::<Vec<_>>();
     let statuses = super::mcp_discovery::current_server_statuses();
     format_mcp_discovery(&tools, &statuses, &args)
+}
+
+/// Start the enabled, configured servers a discovery call names that are not
+/// running: its `server`, or the server part of a `select` name. They are
+/// in the user's config, so starting one is what a session start would have
+/// done; listing them as stopped only sent the model to another tool that
+/// asks for approval. A failure stays visible in the catalogue and results.
+fn start_named_mcp_servers(args: &super::mcp_discovery::DiscoveryArgs) {
+    use super::mcp_discovery::McpServerState;
+    let stopped = super::mcp_discovery::current_server_statuses()
+        .into_iter()
+        .filter(|status| {
+            matches!(
+                status.state,
+                McpServerState::NotRunning | McpServerState::Failed(_)
+            )
+        })
+        .map(|status| status.name)
+        .collect::<Vec<_>>();
+    if stopped.is_empty() {
+        return;
+    }
+    let workspace = mcp_workspace(None);
+    let configured = crate::config::get_config_dir()
+        .map(|dir| crate::config::workspace_mcp_servers_in(&dir, &workspace))
+        .unwrap_or_default();
+    for server in configured.iter().filter(|server| {
+        server.enabled
+            && stopped.contains(&server.name)
+            && discovery_names_server(args, &server.name)
+    }) {
+        if let Err(error) = start_mcp_server_in_session(server, &workspace) {
+            crate::mcp::record_mcp_startup_failure(&server.name, &error);
+        }
+    }
+}
+
+/// Whether a discovery call names `server`: as its `server`, or as the
+/// server part of a `server.tool` or `mcp__server__tool` select name.
+fn discovery_names_server(args: &super::mcp_discovery::DiscoveryArgs, server: &str) -> bool {
+    let canonical = format!("mcp__{}__", server.replace('-', "_"));
+    args.server.as_deref() == Some(server)
+        || args.select.iter().any(|name| {
+            name.strip_prefix(server)
+                .is_some_and(|rest| rest.starts_with('.'))
+                || name.starts_with(&canonical)
+        })
 }
 
 #[derive(Clone)]
@@ -1005,7 +1053,7 @@ fn format_mcp_discovery(
         .collect::<Vec<_>>();
     if !stopped.is_empty() && outcome.unknown_server.is_none() {
         result["not_running"] = serde_json::json!(stopped);
-        notes.push("Servers in not_running are configured but not started, so their tools are not listed. Start a relevant one with manage_mcp_servers {\"operation\":\"start\",\"name\":\"<server>\"}, then list its tools.".to_owned());
+        notes.push("Servers in not_running are configured but not started, so their tools are not listed. Name a relevant one in `server` and this call starts it.".to_owned());
     }
     if unbound_listed {
         notes.push("Results without input_schema are not bound; call list_mcp_tools with select:[callable_name] for the ones you need.".to_owned());
@@ -1035,9 +1083,7 @@ fn unknown_mcp_server_note(
             McpServerState::Failed(reason) => {
                 format!("MCP server '{server}' failed to start: {reason}.")
             }
-            _ => format!(
-                "MCP server '{server}' is configured but not running; start it with manage_mcp_servers {{\"operation\":\"start\",\"name\":\"{server}\"}}."
-            ),
+            _ => format!("MCP server '{server}' is configured but not running."),
         },
         None => {
             let names = statuses
@@ -2312,6 +2358,26 @@ mod tests {
     }
 
     #[test]
+    fn discovery_names_a_server_by_server_or_select_prefix() {
+        let parse = |value| super::super::mcp_discovery::DiscoveryArgs::parse(&value).unwrap();
+        let names = |value, server| super::discovery_names_server(&parse(value), server);
+        assert!(names(json!({"server": "dathost-ftp"}), "dathost-ftp"));
+        assert!(names(
+            json!({"select": ["dathost-ftp.list-directory"]}),
+            "dathost-ftp"
+        ));
+        assert!(names(
+            json!({"query": "select:mcp__dathost_ftp__list-directory"}),
+            "dathost-ftp"
+        ));
+        assert!(!names(
+            json!({"select": ["dathost-ftp-old.list"]}),
+            "dathost-ftp"
+        ));
+        assert!(!names(json!({"query": "ftp files"}), "dathost-ftp"));
+    }
+
+    #[test]
     fn disabled_failed_and_stopped_servers_are_reported_by_state() {
         let hint = discover(json!({"server": "github-old"}))["hint"]
             .as_str()
@@ -2327,7 +2393,10 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        assert!(hint.contains("manage_mcp_servers"), "{hint}");
+        assert!(
+            hint.contains("'daily-dev' is configured but not running"),
+            "{hint}"
+        );
 
         let result = discover(json!({"query": "daily dev feed"}));
         assert_eq!(result["total"], 0);
