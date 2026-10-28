@@ -1361,7 +1361,7 @@ fn mcp_always_include_reserves_a_complete_server_toolset_within_the_native_cap()
     for index in 0..110 {
         let server = format!("server_{}", index % 6);
         tools.push((
-            format!("{server}_tool_{index:03}"),
+            format!("{server}_discord_tool_{index:03}"),
             "Browse Discord channels and threads".to_string(),
             serde_json::json!({"type":"object","properties":{}}),
         ));
@@ -1616,10 +1616,11 @@ fn mcp_schema_selection_retains_sticky_tools_and_adds_newly_relevant_tools() {
         &messages,
         &["weather_forecast".to_string()],
     );
-    assert_eq!(selected, vec![0, 1]);
+    // The pinned tool keeps its seat; the new one is appended after it.
+    assert_eq!(selected, vec![1, 0]);
     assert_eq!(
         stats.selected_names,
-        vec!["search_issues", "weather_forecast"]
+        vec!["weather_forecast", "search_issues"]
     );
 }
 
@@ -5341,5 +5342,123 @@ fn a_tool_name_two_servers_share_is_not_tie_broken_by_server_name() {
         named
             .selected_names
             .contains(&"mcp__teams__get_chat_messages".to_string())
+    );
+}
+
+fn select_from_minecraft_catalog(
+    messages: &[Value],
+    sticky: &[String],
+) -> super::schema::McpSchemaSelectionStats {
+    let (tools, owners, raw_names) = minecraft_session_catalog();
+    super::schema::select_mcp_tools_for_context_with_raw_names(
+        &tools,
+        &owners,
+        &raw_names,
+        &[],
+        messages,
+        sticky,
+        super::schema::ToolSchemaPhase::Established,
+    )
+    .1
+}
+
+/// A `manage_mcp_servers` listing the request carried as a `<tool_result>`
+/// user row named every configured server, and each server's tools were
+/// admitted as if the user had asked for them: twelve unrelated schemas and a
+/// fully missed prompt cache.
+#[test]
+fn a_tool_result_row_naming_servers_does_not_request_their_tools() {
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"check what went wrong in this session and log a github issue"}),
+        serde_json::json!({"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"manage_mcp_servers","arguments":"{\"operation\":\"list\"}"}}]}),
+        serde_json::json!({"role":"user","content":"<tool_result>\nmanage_mcp_servers: ftp  stdio  [running]\nrcon  stdio  [running]\nsnapchat  stdio  [running]\nteams  stdio  [running]\nsolidtime  stdio  [running]\nnotes  stdio  [running]\n</tool_result>"}),
+    ];
+    for sticky in [Vec::new(), vec!["list_articles".to_string()]] {
+        let stats = select_from_minecraft_catalog(&messages, &sticky);
+        assert_eq!(stats.requested, 0, "{:?}", stats.admitted_by);
+        assert_eq!(stats.relevant, 0, "{:?}", stats.admitted_by);
+        assert_eq!(stats.selected_names, sticky);
+    }
+}
+
+/// A tool the menu admits mid-session goes after the pinned ones, in the
+/// order they were sent, so only the end of the `tools` block changes.
+#[test]
+fn a_newly_admitted_mcp_tool_is_appended_after_the_pinned_menu() {
+    let pinned = vec!["rcon_status".to_string(), "read_article".to_string()];
+    let first = vec![serde_json::json!({"role":"user","content":"how is the server"})];
+    let stats = select_from_minecraft_catalog(&first, &pinned);
+    assert_eq!(stats.selected_names, pinned);
+
+    // `list_articles` sorts before both pinned tools in the catalog.
+    let next = vec![
+        first[0].clone(),
+        serde_json::json!({"role":"assistant","content":"It is up."}),
+        serde_json::json!({"role":"user","content":"now use list_articles"}),
+    ];
+    let stats = select_from_minecraft_catalog(&next, &pinned);
+    assert_eq!(
+        stats.selected_names,
+        ["rcon_status", "read_article", "list_articles"]
+    );
+
+    // The next request pins that order and keeps it.
+    let stats = select_from_minecraft_catalog(&next, &stats.selected_names.clone());
+    assert_eq!(
+        stats.selected_names,
+        ["rcon_status", "read_article", "list_articles"]
+    );
+}
+
+/// Every built-in schema offers a call `summary`; dispatch drops it, but the
+/// binding of discovery results read it as an unknown argument and bound
+/// nothing, so the tools a search found were not callable next request.
+#[test]
+fn a_discovery_call_with_a_summary_binds_what_it_found() {
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"who is online"}),
+        serde_json::json!({"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_mcp_tools","arguments":"{\"query\":\"minecraft players\",\"summary\":\"Find the player list tool\"}"}}]}),
+        serde_json::json!({"role":"tool","tool_call_id":"call_1","content":"list_mcp_tools: {\"results\":[]}"}),
+    ];
+    let stats = select_from_minecraft_catalog(&messages, &[]);
+    assert!(
+        stats.admitted_by["requested"].contains(&"rcon_list_players".to_string()),
+        "{:?}",
+        stats.admitted_by
+    );
+}
+
+/// Description words alone do not admit a tool from a server the session
+/// has not used: "session" and "token" in a vault description matched a
+/// message about a RustCode session's token usage.
+#[test]
+fn description_words_alone_do_not_admit_a_tool_from_a_new_server() {
+    let tools = vec![(
+        "list_secrets".to_string(),
+        "List each stored token and session secret".to_string(),
+        serde_json::json!({}),
+    )];
+    let owners = vec!["vault".to_string()];
+    let raw_names = vec!["list_secrets".to_string()];
+    let select = |content: &str| {
+        let messages = vec![serde_json::json!({"role":"user","content":content})];
+        super::schema::select_mcp_tools_for_context_with_raw_names(
+            &tools,
+            &owners,
+            &raw_names,
+            &[],
+            &messages,
+            &[],
+            super::schema::ToolSchemaPhase::Established,
+        )
+        .1
+    };
+    assert_eq!(
+        select("why did this session use so many tokens").selected,
+        0
+    );
+    assert_eq!(
+        select("which secrets hold my session token").selected_names,
+        ["list_secrets"]
     );
 }
