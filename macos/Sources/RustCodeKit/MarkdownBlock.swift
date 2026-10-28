@@ -112,7 +112,20 @@ public enum MarkdownBlock: Sendable, Equatable {
                 blocks.append(item)
             } else if trimmed.hasPrefix(">") {
                 flushParagraph()
-                blocks.append(.quote(trimmed.dropFirst().trimmingCharacters(in: .whitespaces)))
+                // Consecutive `>` lines are one quote: lines joined, a bare
+                // `>` between paragraphs (#2525).
+                let text = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+                let continues = index >= 2 && lines[index - 2].trimmingCharacters(in: .whitespaces).hasPrefix(">")
+                if continues, case .quote(var quote)? = blocks.last {
+                    if text.isEmpty {
+                        if !quote.hasSuffix("\n\n") { quote += "\n\n" }
+                    } else {
+                        quote += quote.hasSuffix("\n\n") ? text : "\n" + text
+                    }
+                    blocks[blocks.count - 1] = .quote(quote)
+                } else if !text.isEmpty {
+                    blocks.append(.quote(text))
+                }
             } else {
                 paragraph.append(trimmed)
             }
@@ -122,7 +135,11 @@ public enum MarkdownBlock: Sendable, Equatable {
         if let open = code {
             blocks.append(fenced(open, closing: nil))
         }
-        return blocks
+        // A quote that ended on a bare `>` keeps no blank paragraph.
+        return blocks.map { block in
+            if case .quote(let text) = block { return .quote(text.trimmingCharacters(in: .newlines)) }
+            return block
+        }
     }
 
     private static func formattedJSON(in text: String) -> String? {

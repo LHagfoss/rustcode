@@ -495,7 +495,7 @@ enum DebugDriver {
                 try? await Task.sleep(for: .milliseconds(16))
             }
         case "big":
-            // `big <prose|code|line|tool|markdown> <size> [chunks]`: a large reply
+            // `big <prose|code|line|tool|markdown|links|quote> <size> [chunks]`: a large reply
             // streamed in `chunks` pieces at 30 ms each.
             let kind = parts.count > 1 ? parts[1] : "prose"
             let size = Int(parts.count > 2 ? parts[2] : "2000") ?? 2000
@@ -512,6 +512,7 @@ enum DebugDriver {
             case "line": String(repeating: "word ", count: size)
             case "markdown": DebugDriver.markdownSample
             case "links": DebugDriver.linksSample
+            case "quote": DebugDriver.quoteSample
             default: (0..<size).map { "Paragraph \($0) of a long reply, with `code` and **bold** text." }.joined(separator: "\n\n")
             }
             let step = max(text.count / chunks, 1)
@@ -914,6 +915,22 @@ extension DebugDriver {
     |---|---|
     | Docs | [docs](https://example.com/table) |
     | Bare | https://example.com/bare |
+    """
+
+    /// Short, long, multi-paragraph and linked `>` quotes (#2525).
+    static let quoteSample = """
+    A short quote:
+
+    > Ship it.
+
+    A handover prompt:
+
+    > You are taking over the **release** work in RustCode. Read [the release skill](https://github.com/LHagfoss/rustcode) first, then check `scripts/release.sh` for the steps. Every merged PR needs its `## Changelog` line filled in.
+    > Keep the checkout clean.
+    >
+    > When you are done, report the version and the tag.
+
+    And text after it.
     """
 
     static let markdownSample = """
