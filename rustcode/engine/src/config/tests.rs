@@ -1917,10 +1917,16 @@ fn loop_guard_config_defaults_and_toml_overrides() {
 evidence_recovery_streak = 5
 loop_detector_abort = 8
 evidence_recovery_enabled = false
+subagent_max_rounds = 12
 "#,
     )
     .unwrap();
     let guard = parsed.loop_guard.unwrap();
+    assert_eq!(guard.effective_subagent_max_rounds(), 12);
+    assert_eq!(
+        guard.effective_subagent_max_wall(),
+        std::time::Duration::from_secs(DEFAULT_SUBAGENT_MAX_WALL_SECS)
+    );
     assert_eq!(guard.effective_recovery_streak(), 5);
     assert_eq!(guard.effective_loop_abort(), 8);
     assert!(!guard.evidence_recovery_enabled);
@@ -1931,6 +1937,8 @@ evidence_recovery_enabled = false
         evidence_recovery_streak: 0,
         loop_detector_abort: 1,
         evidence_recovery_enabled: true,
+        subagent_max_rounds: 0,
+        subagent_max_wall_secs: 0,
     };
     assert_eq!(
         degenerate.effective_recovery_streak(),
@@ -1939,6 +1947,14 @@ evidence_recovery_enabled = false
     assert_eq!(
         degenerate.effective_loop_abort(),
         DEFAULT_LOOP_DETECTOR_ABORT
+    );
+    assert_eq!(
+        degenerate.effective_subagent_max_rounds(),
+        DEFAULT_SUBAGENT_MAX_ROUNDS
+    );
+    assert_eq!(
+        degenerate.effective_subagent_max_wall(),
+        std::time::Duration::from_secs(DEFAULT_SUBAGENT_MAX_WALL_SECS)
     );
 
     // The global file applies overrides; a project file must not touch them.
@@ -1950,6 +1966,7 @@ evidence_recovery_enabled = false
                 evidence_recovery_streak: 5,
                 loop_detector_abort: 8,
                 evidence_recovery_enabled: false,
+                ..LoopGuardConfig::default()
             }),
             ..Default::default()
         },
@@ -1965,6 +1982,7 @@ evidence_recovery_enabled = false
                 evidence_recovery_streak: 9,
                 loop_detector_abort: 9,
                 evidence_recovery_enabled: false,
+                ..LoopGuardConfig::default()
             }),
             ..Default::default()
         },

@@ -239,11 +239,10 @@ impl SubagentSupervisor {
                 },
             };
             if completion.output.len() > inner.max_result_bytes {
-                let mut end = inner.max_result_bytes;
-                while !completion.output.is_char_boundary(end) {
-                    end -= 1;
-                }
-                completion.output.truncate(end);
+                completion.output = crate::tools::truncate_bytes_head_tail(
+                    &completion.output,
+                    inner.max_result_bytes,
+                );
                 completion.truncated = true;
             }
             let _ = std::panic::AssertUnwindSafe(on_completion(completion.clone()))
@@ -276,11 +275,10 @@ impl SubagentSupervisor {
             return;
         }
         if completion.output.len() > self.inner.max_result_bytes {
-            let mut end = self.inner.max_result_bytes;
-            while !completion.output.is_char_boundary(end) {
-                end -= 1;
-            }
-            completion.output.truncate(end);
+            completion.output = crate::tools::truncate_bytes_head_tail(
+                &completion.output,
+                self.inner.max_result_bytes,
+            );
             completion.truncated = true;
         }
         state.results.insert(id, completion);
@@ -678,8 +676,42 @@ impl SubagentController {
         verification_command: Option<String>,
         workspace_root: Option<PathBuf>,
     ) -> SubagentId {
+        let id = self.reserve_id(state);
+        self.spawn_reserved(
+            state,
+            id,
+            task,
+            model,
+            parent_id,
+            write_access,
+            allowed_paths,
+            verification_command,
+            workspace_root,
+        )
+    }
+
+    /// Take the next agent id without adding the agent yet, so slow setup
+    /// such as creating its workspace can run without the state lock.
+    pub fn reserve_id(&self, state: &mut AppState) -> SubagentId {
         let id = SubagentId::from_raw(state.next_subagent_id);
         state.next_subagent_id = state.next_subagent_id.saturating_add(1);
+        id
+    }
+
+    /// Add the agent under an id from [`Self::reserve_id`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_reserved(
+        &self,
+        state: &mut AppState,
+        id: SubagentId,
+        task: impl Into<String>,
+        model: Option<String>,
+        parent_id: Option<SubagentId>,
+        write_access: bool,
+        allowed_paths: Vec<String>,
+        verification_command: Option<String>,
+        workspace_root: Option<PathBuf>,
+    ) -> SubagentId {
         let task = task.into();
         let (depth, root_id) = parent_id
             .and_then(|parent| {

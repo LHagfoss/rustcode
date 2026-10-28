@@ -334,6 +334,25 @@ impl ContextSnapshot {
     }
 }
 
+/// Where this session's logs are and where the others live, in one line, so
+/// a question about a session goes straight to its `history.json` and
+/// `logs/debug.log` instead of a search of the home directory.
+pub(crate) fn session_logs_line(session_id: &str) -> Option<String> {
+    if session_id.is_empty() {
+        return None;
+    }
+    let store = rustcode_session::SessionStore::new(crate::config::get_config_dir()?);
+    Some(session_logs_line_in(&store, session_id))
+}
+
+fn session_logs_line_in(store: &rustcode_session::SessionStore, session_id: &str) -> String {
+    format!(
+        "- RustCode sessions: {}/<yyyy>/<mm>/<dd>/<id>/ (history.json, logs/debug.log); this session: {}",
+        store.root().join(rustcode_session::SESSIONS_DIR).display(),
+        store.session_dir(session_id).display(),
+    )
+}
+
 const MAX_TREE_ENTRIES: usize = 30;
 const MAX_AGENTS_BYTES: usize = 8000;
 
@@ -665,6 +684,22 @@ mod tests {
         assert!(environment_context_at(dir.path()).contains("Current branch: first"));
         git(&["checkout", "-qb", "other"]);
         assert!(environment_context_at(dir.path()).contains("Current branch: other"));
+    }
+
+    #[test]
+    fn session_logs_line_names_the_sessions_root_and_this_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = rustcode_session::SessionStore::new(dir.path());
+        let id = "01a183fa80b3-7001-8eb6-c9cf-c9cfe6b67c49";
+        let line = super::session_logs_line_in(&store, id);
+        let root = dir.path().join("sessions");
+        assert!(line.starts_with(&format!("- RustCode sessions: {}/", root.display())));
+        assert!(line.ends_with(&format!(
+            "this session: {}",
+            store.session_dir(id).display()
+        )));
+        assert!(!line.contains('\n'));
+        assert!(super::session_logs_line("").is_none());
     }
 
     #[test]

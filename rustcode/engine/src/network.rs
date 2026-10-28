@@ -1680,6 +1680,13 @@ async fn prepare_turn_request_pass(
                 _ => crate::context::environment_context(),
             },
         };
+        // On every request, not only the first: the environment block is
+        // replaced by a one-line diff after it, and an agent asked about a
+        // session searched `~/Library` and walked `$HOME` for its logs.
+        let context_section = match crate::context::session_logs_line(&s.active_session_id) {
+            Some(line) => format!("{}\n{line}", context_section.trim_end()),
+            None => context_section,
+        };
         let protocol = s.active_tool_protocol();
         let agent_mode = s.agent_mode;
         let delegation_active = s.delegation_active;

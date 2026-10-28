@@ -1181,6 +1181,12 @@ fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
         if !matches!(role, "user" | "assistant") {
             continue;
         }
+        // A `user` row the harness wrote (a tool result rendered as text, a
+        // tool attachment, a runtime notice) is tool output, not the user's
+        // words: a `manage_mcp_servers` listing there named every server.
+        if role == "user" && !crate::network::messages::is_user_turn_boundary(message) {
+            continue;
+        }
         let content = message.get("content").and_then(Value::as_str).unwrap_or("");
         let content = content.split("<rustcode_context>").next().unwrap_or("");
         let mut message_terms = std::collections::HashSet::new();
@@ -1245,7 +1251,11 @@ fn tool_name_was_used(name: &str, messages: &[Value]) -> bool {
 fn user_message_mentions_name(messages: &[Value], name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     messages.iter().any(|message| {
-        if message.get("role").and_then(Value::as_str) != Some("user") {
+        // Only what the user typed. A tool result the request carries as a
+        // `user` row (`<tool_result>…`) is not: a `manage_mcp_servers` listing
+        // rendered that way named every configured server, and each server's
+        // tools were then admitted as if the user had asked for them.
+        if !crate::network::messages::is_user_turn_boundary(message) {
             return false;
         }
         let content = message
@@ -1410,6 +1420,7 @@ const GENERIC_RELEVANCE_TERMS: &[&str] = &[
     "check",
     "clear",
     "close",
+    "com",
     "conversation",
     "create",
     "data",
@@ -1423,6 +1434,8 @@ const GENERIC_RELEVANCE_TERMS: &[&str] = &[
     "find",
     "first",
     "get",
+    "http",
+    "https",
     "id",
     "info",
     "item",
@@ -1435,9 +1448,11 @@ const GENERIC_RELEVANCE_TERMS: &[&str] = &[
     "message",
     "msg",
     "name",
+    "net",
     "new",
     "next",
     "open",
+    "org",
     "page",
     "read",
     "recent",
@@ -1460,6 +1475,7 @@ const GENERIC_RELEVANCE_TERMS: &[&str] = &[
     "value",
     "view",
     "write",
+    "www",
 ];
 
 /// How strongly the user's words point at one MCP tool. Only the tool's name
@@ -1481,6 +1497,21 @@ fn mcp_tool_rank_within_server(
     terms: &std::collections::HashSet<String>,
 ) -> usize {
     mcp_tool_score(name, description, terms, true)
+}
+
+/// Whether one of `terms` (not a generic one) is a word of the tool's name.
+/// Description words alone are weak: "issue" in a sentence about "issue
+/// tracking" or "token" in an auth note matched tools nobody asked for.
+fn mcp_tool_name_matches(name: &str, terms: &std::collections::HashSet<String>) -> bool {
+    use super::mcp_discovery::{stem, tokens};
+    let name = name.strip_prefix("mcp__").unwrap_or(name);
+    let name_terms = tokens(name)
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    terms
+        .iter()
+        .map(|term| stem(term))
+        .any(|term| !GENERIC_RELEVANCE_TERMS.contains(&term.as_str()) && name_terms.contains(&term))
 }
 
 fn mcp_tool_score(
@@ -1736,8 +1767,12 @@ pub(super) fn select_mcp_tools_for_context_with_anchors(
         ranked.retain(|(index, _)| {
             mcp_tool_server(tools, owners, *index)
                 .is_some_and(|server| engaged_servers.contains(server))
-                || mcp_tool_relevance(&tools[*index].0, &tools[*index].1, &latest_terms)
+                || (mcp_tool_relevance(&tools[*index].0, &tools[*index].1, &latest_terms)
                     >= MCP_RELEVANCE_THRESHOLD
+                    // A server new to the session needs the message to name
+                    // what the tool is; description words alone added an
+                    // unrelated tool and rewrote the cached `tools` block.
+                    && mcp_tool_name_matches(&tools[*index].0, &latest_terms))
         });
         // Two servers offering the same tool name with the same score are an
         // ambiguous match: neither is admitted rather than the one whose
@@ -2006,8 +2041,19 @@ pub(super) fn select_mcp_tools_for_context_with_anchors(
         selected = within_budget;
     }
 
-    selected.sort_unstable();
-    selected.dedup();
+    // Emit in a stable order: the pinned menu keeps its seats in the order the
+    // previous request sent them, and a newly admitted tool goes after them.
+    // Sorting by catalog position put a new tool in the middle, which changed
+    // every byte after it and cost the provider's cached prefix.
+    let mut seen = std::collections::HashSet::with_capacity(selected.len());
+    selected.retain(|index| seen.insert(*index));
+    let pinned_seat = |index: usize| {
+        sticky_names
+            .iter()
+            .position(|name| name == &tools[index].0)
+            .unwrap_or(usize::MAX)
+    };
+    selected.sort_by_key(|index| (pinned_seat(*index), *index));
     debug_assert!(selected.len() <= MAX_MCP_NATIVE_SCHEMAS);
     let selected_set = selected
         .iter()
@@ -2169,6 +2215,19 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
         .filter(|tool| builtin_is_advertised(tool, policy))
         .count();
     let builtin_selected = tools.len();
+    let mut agent_tools = agent_native_tools_schema(policy.include_agent_tools);
+    if policy.profile != ToolSchemaProfile::Coding {
+        agent_tools.retain(|tool| {
+            !matches!(
+                tool["function"]["name"].as_str(),
+                Some("set_goal" | "todo_write")
+            )
+        });
+    }
+    let agent_selected = agent_tools.len();
+    // The fixed tools go first and the MCP menu last, so a tool the menu
+    // admits mid-session changes only the end of the `tools` block.
+    tools.extend(agent_tools);
     // MCP tools are selected from the current request context. The registry is
     // a HashMap, so collection is sorted before scoring and emission to keep
     // both selection and the provider-facing payload deterministic.
@@ -2207,17 +2266,6 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
     } else {
         McpSchemaSelectionStats::default()
     };
-    let mut agent_tools = agent_native_tools_schema(policy.include_agent_tools);
-    if policy.profile != ToolSchemaProfile::Coding {
-        agent_tools.retain(|tool| {
-            !matches!(
-                tool["function"]["name"].as_str(),
-                Some("set_goal" | "todo_write")
-            )
-        });
-    }
-    let agent_selected = agent_tools.len();
-    tools.extend(agent_tools);
     let mut stats = stats;
     stats.phase = phase;
     stats.builtin_available = builtin_available;
@@ -2230,6 +2278,7 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
 #[cfg(test)]
 pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     let mut tools = builtin_native_tools_schema(include_agent_tools);
+    tools.extend(agent_native_tools_schema(include_agent_tools));
     // MCP tools, emitted in a deterministic (name-sorted) order. The registry is
     // a HashMap, so iterating it directly yields a hash-dependent order that can
     // shift after a rehash and silently break the provider's prefix cache. A
@@ -2237,7 +2286,6 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     for (name, desc, schema) in collect_mcp_tools() {
         tools.push(mcp_schema_value(&name, &desc, &schema));
     }
-    tools.extend(agent_native_tools_schema(include_agent_tools));
     tools
 }
 
@@ -2456,6 +2504,52 @@ pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy)
     }
 }
 
+/// MCP lines of a textual tool contract, bounded like the native schema
+/// selection. Text protocols used to inline every connected MCP tool with its
+/// full schema; with a dozen servers that was 18k of a 20k-token prompt for a
+/// small model (#2587). Tools past the global or per-server byte budget are
+/// listed by name only, and `list_mcp_tools` `select` returns their schemas.
+fn textual_mcp_listing(
+    entries: &[(String, String, String, Value)],
+    compact: bool,
+    budget_bytes: usize,
+) -> String {
+    let mut listed = String::new();
+    let mut used = 0usize;
+    let mut per_server: HashMap<&str, usize> = HashMap::new();
+    let mut names_only: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for (name, server, desc, schema) in entries {
+        let args = serde_json::to_string(schema).unwrap_or_default();
+        let line = if compact {
+            format!("- {name} | Args: {args}\n")
+        } else {
+            format!("- {name} | Args: {args} | {desc}\n")
+        };
+        let server_used = per_server.entry(server.as_str()).or_default();
+        if used + line.len() <= budget_bytes
+            && *server_used + line.len() <= MAX_MCP_PER_SERVER_SCHEMA_BYTES
+        {
+            used += line.len();
+            *server_used += line.len();
+            listed.push_str(&line);
+        } else {
+            names_only
+                .entry(server.as_str())
+                .or_default()
+                .push(name.as_str());
+        }
+    }
+    if !names_only.is_empty() {
+        listed.push_str(
+            "- More MCP tools, listed by name without arguments; call `list_mcp_tools` with `select` to get a schema before using one:\n",
+        );
+        for (server, names) in names_only {
+            listed.push_str(&format!("  - {server}: {}\n", names.join(", ")));
+        }
+    }
+    listed
+}
+
 pub(crate) fn tool_system_prompt_for_policy(
     policy: ToolSchemaPolicy,
     protocol: crate::config::ToolProtocol,
@@ -2591,26 +2685,17 @@ Never guess MCP server names: see MCP Servers, then `list_mcp_tools` `select` fo
             ));
         }
     }
-    if policy.include_mcp_tools {
-        for (name, desc, schema) in collect_mcp_tools() {
-            if agent_mode == crate::config::AgentMode::Plan || !policy.offers_mcp_tool(&name) {
-                continue;
-            }
-            if policy.compact_text_prompt {
-                p.push_str(&format!(
-                    "- {} | Args: {}\n",
-                    name,
-                    serde_json::to_string(&schema).unwrap_or_default()
-                ));
-            } else {
-                p.push_str(&format!(
-                    "- {} | Args: {} | {}\n",
-                    name,
-                    serde_json::to_string(&schema).unwrap_or_default(),
-                    desc
-                ));
-            }
-        }
+    if policy.include_mcp_tools && agent_mode != crate::config::AgentMode::Plan {
+        let entries = collect_mcp_tools_with_servers()
+            .into_iter()
+            .filter(|(name, ..)| policy.offers_mcp_tool(name))
+            .map(|(name, server, _, desc, schema)| (name, server, desc, schema))
+            .collect::<Vec<_>>();
+        p.push_str(&textual_mcp_listing(
+            &entries,
+            policy.compact_text_prompt,
+            mcp_schema_budget_bytes(),
+        ));
     }
     if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
         p.push_str("- spawn_agent | Args: {\"task\":\"task description\",\"context_inheritance\":\"minimal|evidence|recent|fork\",\"evidence\":\"selected facts\"} | Start a fresh child; default minimal. Optional agent_type explorer|worker|default. Writes require explicit write_access or agent_type worker, plus allowed_paths and verification. Returns JSON with agent_id.\n");
@@ -2925,5 +3010,37 @@ mod mcp_read_classification_tests {
         ));
         let read_only = json!({"readOnlyHint": true});
         assert!(mcp_annotations_mark_read_only("whoami", Some(&read_only)));
+    }
+
+    // #2587: twelve servers inlined 101 MCP schemas into a small model's
+    // textual contract. Past the budget, tools are named and deferred to
+    // `list_mcp_tools`, and no server crowds out the others.
+    #[test]
+    fn textual_mcp_listing_defers_tools_past_the_schema_budget() {
+        let schema = json!({"type": "object", "properties": {"q": {"type": "string"}}});
+        let entries = (0..40)
+            .map(|i| {
+                let server = if i < 30 { "big" } else { "small" };
+                (
+                    format!("{server}_tool_{i:02}"),
+                    server.to_string(),
+                    "x".repeat(300),
+                    schema.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let budget = super::MAX_MCP_NATIVE_SCHEMA_BYTES;
+        let listing = super::textual_mcp_listing(&entries, false, budget);
+
+        assert!(listing.len() < budget + 1024, "{} bytes", listing.len());
+        assert!(listing.contains("- big_tool_00 | Args:"));
+        assert!(listing.contains("- small_tool_30 | Args:"), "{listing}");
+        assert!(listing.contains("`list_mcp_tools` with `select`"));
+        assert!(listing.contains("big_tool_29"));
+        assert!(!listing.contains("- big_tool_29 | Args:"));
+
+        let small = super::textual_mcp_listing(&entries[..2], false, 8 * 1024);
+        assert!(!small.contains("list_mcp_tools"));
     }
 }

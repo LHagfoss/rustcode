@@ -19,6 +19,14 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(SubagentInfo.sidebarChildren([], viewing: 4).map(\.id), [])
     }
 
+    /// A status a newer engine sends is shown as unknown, not as queued,
+    /// so the chat does not keep polling a child that may have ended.
+    func testUnknownStatusIsNotActive() {
+        let agents = SubagentInfo.list(from: ["agents": [["id": 1, "name": "new", "status": "paused"]]])
+        XCTAssertEqual(agents.first?.status, .unknown)
+        XCTAssertEqual(agents.first?.isActive, false)
+    }
+
     /// #2556: a chat's working agents stay listed after another chat is
     /// opened, take their final state, and go back once it is reopened.
     func testBackgroundAgentsOutliveTheChatSwitch() {
@@ -95,6 +103,8 @@ final class SubagentTests: XCTestCase {
     }
 
     func testCancelAnswerSaysWhetherTheAgentEnded() {
+        XCTAssertTrue(SubagentInfo.cancelSettled(["message": "subagent 1 cancelled", "settled": true]))
+        XCTAssertFalse(SubagentInfo.cancelSettled(["message": "subagent 1 stopping", "settled": false]))
         XCTAssertTrue(SubagentInfo.cancelSettled(["message": "subagent 1 cancelled"]))
         XCTAssertFalse(SubagentInfo.cancelSettled([
             "message": "cancellation requested for subagent 1; it is still cancelling after 3s. Use wait_agent for its terminal result",

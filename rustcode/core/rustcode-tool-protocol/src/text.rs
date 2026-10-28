@@ -12,6 +12,7 @@ pub fn has_intended_tool_call(content: &str) -> bool {
         || lower.contains("<tool_call ")
         || lower.contains("[tool_calls]")
         || lower.contains("<function_call>")
+        || lower.contains(crate::LFM_TOOL_CALL_START)
 }
 
 fn has_textual_write_call(content: &str) -> bool {
@@ -350,6 +351,11 @@ pub fn strip_tool_call_syntax(content: &str) -> String {
         }
     }
 
+    // Remove Liquid `<|tool_call_start|>...<|tool_call_end|>` envelopes.
+    for (start, end) in crate::pythonic::envelope_spans(&out).into_iter().rev() {
+        out.replace_range(start..end, "");
+    }
+
     // Remove Mistral-style `[TOOL_CALLS]name[ARGS]{...}` spans (drop to end of
     // the JSON object if we can find the matching brace, else to end of string).
     while let Some(start) = out.find("[TOOL_CALLS]") {
@@ -487,6 +493,25 @@ pub fn strip_leading_think(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #2587: a Liquid envelope is a tool call, so an unparsable one goes to
+    // malformed-call recovery instead of being accepted as the final answer,
+    // and the envelope never shows up as answer prose.
+    #[test]
+    fn liquid_envelopes_are_intended_calls_and_stripped_from_prose() {
+        let malformed = "Checking memory.<|tool_call_start|>[run_command('sysctl hw.memsize')]<|tool_call_end|>";
+        assert!(has_intended_tool_call(malformed));
+        assert!(has_incomplete_tool_arguments(malformed));
+        assert!(!is_cut_off(malformed, Some("stop")));
+        assert_eq!(strip_tool_call_syntax(malformed), "Checking memory.");
+
+        let truncated = "<|tool_call_start|>[write_to_file(path='a', content='partial";
+        assert!(is_cut_off(truncated, Some("length")));
+
+        assert!(!has_intended_tool_call(
+            "Call run_command(command='ls') to list the files."
+        ));
+    }
 
     // Regression: Gemini-family models return reasoning in the content channel
     // behind a bare `thought` marker, which used to be stored and displayed as

@@ -3,7 +3,10 @@ use rustcode_core::{ChatMessage, ToolProtocol};
 use serde_json::Value;
 use std::sync::LazyLock;
 
+mod pythonic;
 pub mod text;
+
+pub use pythonic::{END as LFM_TOOL_CALL_END, START as LFM_TOOL_CALL_START};
 
 /// A parsed tool request emitted by a model.
 #[derive(Debug, Clone, PartialEq)]
@@ -388,7 +391,14 @@ where
 fn parse_tool_calls_impl(text: &str, protocol: ToolProtocol) -> Vec<ToolCall> {
     let mut calls = Vec::new();
 
+    // Liquid AI models write their trained envelope whatever the contract
+    // says (#2587); a closed envelope is unambiguous under every protocol.
+    if text.contains(LFM_TOOL_CALL_START) {
+        pythonic::parse_envelopes(text, &mut calls);
+    }
+
     match protocol {
+        _ if !calls.is_empty() => {}
         ToolProtocol::Native => {
             parse_tool_calls_tags(text, &mut calls);
             if calls.is_empty() {
@@ -675,6 +685,7 @@ pub fn is_tool_call_start(text: &str) -> bool {
         || trimmed.contains("[TOOL_CALLS]")
         || trimmed.contains("<tool_call>")
         || trimmed.contains("<function_call>")
+        || trimmed.contains(LFM_TOOL_CALL_START)
         || trimmed.contains("\"tool_name\"")
         || trimmed.contains("\"tool_call\"")
         || (trimmed.contains('{')
@@ -732,6 +743,10 @@ pub fn has_incomplete_actionable_tool_call(text: &str) -> bool {
         }
     }
 
+    if pythonic::has_unclosed_envelope(text) {
+        return true;
+    }
+
     if let Some(start) = text.find("[TOOL_CALLS]") {
         let after = &text[start + "[TOOL_CALLS]".len()..];
         if after.contains('{') && !after.trim_end().ends_with('}') && actionable(after) {
@@ -753,6 +768,26 @@ mod tests {
         has_incomplete_actionable_tool_call, is_code_editing_tool, is_tool_call_start,
         parse_tool_calls, repair_json,
     };
+
+    // Session 01a183f4 (#2587): the full reply, reasoning included, under the
+    // native protocol the model was configured for.
+    #[test]
+    fn liquid_envelope_parses_under_every_textual_protocol() {
+        let text = "<think>\nLet me run these in parallel.\n</think>\n\nI'll check your MacBook's memory status.<|tool_call_start|>[run_command(command='sysctl hw.memsize', timeout_ms=5000), run_command(command='top -l 1', timeout_ms=5000)]<|tool_call_end|>";
+        for protocol in [ToolProtocol::Native, ToolProtocol::Json] {
+            let calls = parse_tool_calls(text, protocol);
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|c| c.arguments["command"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["sysctl hw.memsize", "top -l 1"]
+            );
+            assert!(calls.iter().all(|c| c.name == "run_command"));
+        }
+        assert!(is_tool_call_start(text));
+        assert!(!has_incomplete_actionable_tool_call(text));
+    }
 
     #[test]
     fn repair_json_closes_objects_and_escapes_literal_newlines() {

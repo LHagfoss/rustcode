@@ -137,6 +137,11 @@ pub const MAX_CONFIGURED_TOOL_CONTINUATIONS: usize = 4;
 pub const DEFAULT_EVIDENCE_RECOVERY_STREAK: usize = 3;
 /// Default call-repetition abort threshold for the loop detector.
 pub const DEFAULT_LOOP_DETECTOR_ABORT: usize = 6;
+/// Default number of model rounds one subagent turn may take before it ends
+/// as failed with its last partial answer.
+pub const DEFAULT_SUBAGENT_MAX_ROUNDS: usize = 200;
+/// Default wall-clock cap, in seconds, for one subagent turn.
+pub const DEFAULT_SUBAGENT_MAX_WALL_SECS: u64 = 3600;
 
 fn default_evidence_recovery_streak() -> usize {
     DEFAULT_EVIDENCE_RECOVERY_STREAK
@@ -144,6 +149,14 @@ fn default_evidence_recovery_streak() -> usize {
 
 fn default_loop_detector_abort() -> usize {
     DEFAULT_LOOP_DETECTOR_ABORT
+}
+
+fn default_subagent_max_rounds() -> usize {
+    DEFAULT_SUBAGENT_MAX_ROUNDS
+}
+
+fn default_subagent_max_wall_secs() -> u64 {
+    DEFAULT_SUBAGENT_MAX_WALL_SECS
 }
 
 /// Where `/remote` starts the remote gateway when none is running, under
@@ -181,9 +194,11 @@ pub struct RemoteConfig {
 /// corroborated (same tool or same failure class) no-progress observations;
 /// `loop_detector_abort` is the call-repetition abort threshold.
 /// `evidence_recovery_enabled = false` is the hatch that disables the
-/// evidence-recovery injection while keeping loop warnings. A checked-out
-/// project config must not change these safety budgets; only the user config
-/// may.
+/// evidence-recovery injection while keeping loop warnings.
+/// `subagent_max_rounds` and `subagent_max_wall_secs` bound one subagent
+/// turn; a child that reaches either ends as failed with its last partial
+/// answer. A checked-out project config must not change these safety budgets;
+/// only the user config may.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopGuardConfig {
     #[serde(default = "default_evidence_recovery_streak")]
@@ -192,6 +207,10 @@ pub struct LoopGuardConfig {
     pub loop_detector_abort: usize,
     #[serde(default = "default_true")]
     pub evidence_recovery_enabled: bool,
+    #[serde(default = "default_subagent_max_rounds")]
+    pub subagent_max_rounds: usize,
+    #[serde(default = "default_subagent_max_wall_secs")]
+    pub subagent_max_wall_secs: u64,
 }
 
 impl Default for LoopGuardConfig {
@@ -200,6 +219,8 @@ impl Default for LoopGuardConfig {
             evidence_recovery_streak: DEFAULT_EVIDENCE_RECOVERY_STREAK,
             loop_detector_abort: DEFAULT_LOOP_DETECTOR_ABORT,
             evidence_recovery_enabled: true,
+            subagent_max_rounds: DEFAULT_SUBAGENT_MAX_ROUNDS,
+            subagent_max_wall_secs: DEFAULT_SUBAGENT_MAX_WALL_SECS,
         }
     }
 }
@@ -223,6 +244,24 @@ impl LoopGuardConfig {
         } else {
             self.loop_detector_abort
         }
+    }
+
+    /// Zero means "not set": fall back to the default instead of ending a
+    /// child before its first round.
+    pub fn effective_subagent_max_rounds(self) -> usize {
+        if self.subagent_max_rounds == 0 {
+            DEFAULT_SUBAGENT_MAX_ROUNDS
+        } else {
+            self.subagent_max_rounds
+        }
+    }
+
+    pub fn effective_subagent_max_wall(self) -> std::time::Duration {
+        std::time::Duration::from_secs(if self.subagent_max_wall_secs == 0 {
+            DEFAULT_SUBAGENT_MAX_WALL_SECS
+        } else {
+            self.subagent_max_wall_secs
+        })
     }
 }
 
