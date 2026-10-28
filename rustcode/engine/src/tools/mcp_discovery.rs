@@ -565,10 +565,16 @@ pub(super) fn bound_by_discovery_calls(docs: &[McpToolDoc<'_>], messages: &[Valu
         .filter_map(|call| call.get("function"))
         .filter(|function| function.get("name").and_then(Value::as_str) == Some("list_mcp_tools"))
         .filter_map(|function| {
-            let args = match function.get("arguments")? {
+            let mut args = match function.get("arguments")? {
                 Value::String(text) => serde_json::from_str::<Value>(text).ok()?,
                 other => other.clone(),
             };
+            // Dispatch drops the call summary every built-in schema offers
+            // before the tool runs; reading it here as an unknown key failed
+            // the parse, so a discovery call with a summary bound nothing.
+            if let Some(object) = args.as_object_mut() {
+                object.remove(super::schema::CALL_SUMMARY_KEY);
+            }
             let args = DiscoveryArgs::parse(&args).ok()?;
             Some((discover(docs, &running, &args), args.limit))
         })
