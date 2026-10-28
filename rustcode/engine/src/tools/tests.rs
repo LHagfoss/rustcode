@@ -1362,14 +1362,14 @@ fn mcp_always_include_reserves_a_complete_server_toolset_within_the_native_cap()
         let server = format!("server_{}", index % 6);
         tools.push((
             format!("{server}_tool_{index:03}"),
-            "Search Discord messages and channels".to_string(),
+            "Browse Discord channels and threads".to_string(),
             serde_json::json!({"type":"object","properties":{}}),
         ));
         owners.push(server);
     }
     let messages = vec![serde_json::json!({
         "role":"user",
-        "content":"Search Discord messages"
+        "content":"Browse Discord channels and threads"
     })];
 
     let (selected, stats) =
@@ -5034,4 +5034,312 @@ fn bound_and_used_mcp_tools_stay_selected_on_later_turns() {
     assert!(names.contains(&"get_chat_messages"), "{names:?}");
     assert_eq!(stats.previously_used, 1);
     assert_eq!(selected.len(), MAX_MCP_NATIVE_SCHEMAS);
+}
+
+/// The MCP catalog of #2576 in miniature: the FTP and RCON servers a Minecraft
+/// task uses, two messaging servers offering the same `get_chat_messages`, a
+/// timer, and unrelated filler.
+fn minecraft_session_catalog() -> (Vec<(String, String, Value)>, Vec<String>, Vec<String>) {
+    let entries: &[(&str, &str, &str, Value)] = &[
+        (
+            "ftp",
+            "upload-file",
+            "Upload a file to the FTP server",
+            serde_json::json!({}),
+        ),
+        (
+            "ftp",
+            "upload-local-file",
+            "Upload a local file to the FTP server",
+            serde_json::json!({}),
+        ),
+        (
+            "ftp",
+            "download-file",
+            "Download a file from the FTP server",
+            serde_json::json!({}),
+        ),
+        (
+            "ftp",
+            "list-directory",
+            "List a directory on the FTP server",
+            serde_json::json!({}),
+        ),
+        (
+            "ftp",
+            "edit-file",
+            "Edit a file on the FTP server",
+            serde_json::json!({}),
+        ),
+        (
+            "rcon",
+            "rcon_command",
+            "Run a Minecraft console command over RCON",
+            serde_json::json!({}),
+        ),
+        (
+            "rcon",
+            "rcon_status",
+            "Minecraft server status over RCON",
+            serde_json::json!({}),
+        ),
+        (
+            "rcon",
+            "rcon_list_players",
+            "Players online on the Minecraft server",
+            serde_json::json!({}),
+        ),
+        (
+            "snapchat",
+            "get_chat_messages",
+            "Get the message transcript of a Snapchat chat, newest first",
+            serde_json::json!({"type":"object","properties":{"chat_id":{"type":"string"},"before":{"type":"string"}}}),
+        ),
+        (
+            "teams",
+            "get_chat_messages",
+            "Get the message transcript of a Teams chat, newest first",
+            serde_json::json!({"type":"object","properties":{"chat_id":{"type":"string"},"before":{"type":"string"}}}),
+        ),
+        (
+            "solidtime",
+            "solidtime_start_timer",
+            "Start a Solidtime timer for a project",
+            serde_json::json!({}),
+        ),
+        (
+            "notes",
+            "list_articles",
+            "List knowledge base articles",
+            serde_json::json!({}),
+        ),
+        (
+            "notes",
+            "read_article",
+            "Read a knowledge base article",
+            serde_json::json!({}),
+        ),
+    ];
+    let duplicated = |raw: &str| entries.iter().filter(|entry| entry.1 == raw).count() > 1;
+    let tools = entries
+        .iter()
+        .map(|(server, raw, description, schema)| {
+            let advertised = if duplicated(raw) {
+                format!("mcp__{server}__{raw}")
+            } else {
+                raw.to_string()
+            };
+            (advertised, description.to_string(), schema.clone())
+        })
+        .collect();
+    let owners = entries.iter().map(|entry| entry.0.to_string()).collect();
+    let raw_names = entries.iter().map(|entry| entry.1.to_string()).collect();
+    (tools, owners, raw_names)
+}
+
+fn assistant_call(name: &str, content: &str) -> Value {
+    serde_json::json!({
+        "role":"assistant",
+        "content": content,
+        "tool_calls":[{"function":{"name": name, "arguments":"{}"}}]
+    })
+}
+
+// Regression (#2576): a compaction archived the user messages that named the
+// FTP and RCON tools. Their slots went to keyword matches on "chat", "msg",
+// "reply" and "before", and the model called a Snapchat reader mid-task.
+#[test]
+fn a_compaction_that_archives_the_naming_messages_keeps_the_mcp_menu_stable() {
+    let (tools, owners, raw_names) = minecraft_session_catalog();
+    let before = vec![
+        serde_json::json!({"role":"user","content":
+            "give my agent FTP access: use upload-file, upload-local-file, download-file, \
+             list-directory, edit-file and rcon_command, rcon_list_players"}),
+        assistant_call("download-file", "Reading the LuckPerms config."),
+        serde_json::json!({"role":"tool","content":"permissions.yml"}),
+        assistant_call("rcon_status", "Checking the server is up."),
+        serde_json::json!({"role":"tool","content":"ok"}),
+    ];
+    let mut anchors = super::schema::McpSessionAnchors::default();
+    let (_, first) = super::schema::select_mcp_tools_for_context_with_anchors(
+        &tools,
+        &owners,
+        &raw_names,
+        &[],
+        &before,
+        &[],
+        &anchors,
+        ToolSchemaPhase::Established,
+    );
+    anchors.absorb(&first);
+    let ftp_and_rcon = tools[..8]
+        .iter()
+        .map(|(name, _, _)| name.clone())
+        .collect::<Vec<_>>();
+    for name in &ftp_and_rcon {
+        assert!(first.selected_names.contains(name), "{name}: {first:?}");
+    }
+
+    // The compaction keeps a record and the latest turn; the assistant prose
+    // is full of chat, msg, reply and before.
+    let after = vec![
+        serde_json::json!({"role":"system","content":
+            "[Deterministic context record]\nGoal: FTP access to my minecraft server"}),
+        serde_json::json!({"role":"user","content":
+            "its up and running again. give 07Lugas almost all admin permissions, \
+             fix the default permissions, talk with me first about stuff"}),
+        assistant_call(
+            "rcon_command",
+            "EssentialsChat is loaded. Before the chat format change I will grant \
+             /msg and /reply to default; check the chat messages before that.",
+        ),
+        serde_json::json!({"role":"tool","content":"ok"}),
+    ];
+    for sticky in [first.selected_names.clone(), Vec::new()] {
+        let (_, next) = super::schema::select_mcp_tools_for_context_with_anchors(
+            &tools,
+            &owners,
+            &raw_names,
+            &[],
+            &after,
+            &sticky,
+            &anchors,
+            ToolSchemaPhase::Established,
+        );
+        for name in &ftp_and_rcon {
+            assert!(next.selected_names.contains(name), "{name}: {next:?}");
+        }
+        for intruder in [
+            "mcp__snapchat__get_chat_messages",
+            "mcp__teams__get_chat_messages",
+            "solidtime_start_timer",
+        ] {
+            assert!(
+                !next.selected_names.contains(&intruder.to_string()),
+                "{intruder}: {next:?}"
+            );
+        }
+        // Every selected tool is reported under the bucket that admitted it.
+        let reported = next.admitted_by.values().map(Vec::len).sum::<usize>();
+        assert_eq!(reported, next.selected);
+        assert!(
+            next.admitted_by["previously_used"].contains(&"rcon_status".to_string()),
+            "{next:?}"
+        );
+        assert!(
+            next.admitted_by["requested"].contains(&"upload-file".to_string()),
+            "{next:?}"
+        );
+    }
+}
+
+#[test]
+fn generic_words_and_parameter_names_do_not_admit_an_mcp_tool() {
+    let (tools, owners, raw_names) = minecraft_session_catalog();
+    let messages = vec![serde_json::json!({"role":"user","content":
+        "list the latest chat messages before the reply, send a msg"})];
+    let (_, stats) = super::schema::select_mcp_tools_for_context_with_raw_names(
+        &tools,
+        &owners,
+        &raw_names,
+        &[],
+        &messages,
+        &[],
+        ToolSchemaPhase::Established,
+    );
+    assert!(
+        !stats
+            .selected_names
+            .iter()
+            .any(|name| name.ends_with("get_chat_messages")),
+        "{stats:?}"
+    );
+}
+
+#[test]
+fn transcript_relevance_does_not_introduce_a_server_the_session_never_engaged() {
+    let (tools, owners, raw_names) = minecraft_session_catalog();
+    // "timer" and "Solidtime" appear only in the assistant's prose.
+    let messages = vec![
+        serde_json::json!({"role":"user","content":"restart the minecraft server"}),
+        serde_json::json!({"role":"assistant","content":"I will start a Solidtime timer project."}),
+    ];
+    let (_, stats) = super::schema::select_mcp_tools_for_context_with_raw_names(
+        &tools,
+        &owners,
+        &raw_names,
+        &[],
+        &messages,
+        &[],
+        ToolSchemaPhase::Established,
+    );
+    assert!(
+        !stats
+            .selected_names
+            .contains(&"solidtime_start_timer".to_string()),
+        "{stats:?}"
+    );
+
+    // The user asking for it in their own words is enough.
+    let asked = vec![serde_json::json!({"role":"user","content":
+        "start a solidtime timer for this project"})];
+    let (_, stats) = super::schema::select_mcp_tools_for_context_with_raw_names(
+        &tools,
+        &owners,
+        &raw_names,
+        &[],
+        &asked,
+        &[],
+        ToolSchemaPhase::Established,
+    );
+    assert!(
+        stats
+            .selected_names
+            .contains(&"solidtime_start_timer".to_string()),
+        "{stats:?}"
+    );
+}
+
+#[test]
+fn a_tool_name_two_servers_share_is_not_tie_broken_by_server_name() {
+    let (tools, owners, raw_names) = minecraft_session_catalog();
+    // "newest" and "transcript" point at both readers equally.
+    let messages = vec![serde_json::json!({"role":"user","content":
+        "show the newest messages from snapchat or teams chat, newest first"})];
+    let (_, stats) = super::schema::select_mcp_tools_for_context_with_raw_names(
+        &tools,
+        &owners,
+        &raw_names,
+        &[],
+        &[serde_json::json!({"role":"user","content":"newest transcript"})],
+        &[],
+        ToolSchemaPhase::Established,
+    );
+    assert!(
+        !stats
+            .selected_names
+            .iter()
+            .any(|name| name.ends_with("get_chat_messages")),
+        "{stats:?}"
+    );
+    // Naming the servers makes the request explicit instead.
+    let (_, named) = super::schema::select_mcp_tools_for_context_with_raw_names(
+        &tools,
+        &owners,
+        &raw_names,
+        &[],
+        &messages,
+        &[],
+        ToolSchemaPhase::Established,
+    );
+    assert!(
+        named
+            .selected_names
+            .contains(&"mcp__snapchat__get_chat_messages".to_string())
+    );
+    assert!(
+        named
+            .selected_names
+            .contains(&"mcp__teams__get_chat_messages".to_string())
+    );
 }

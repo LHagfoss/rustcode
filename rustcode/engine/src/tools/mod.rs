@@ -44,11 +44,11 @@ pub(crate) use schema::native_tools_schema_for_context;
 #[cfg(test)]
 pub(crate) use schema::native_tools_schema_for_context_with_sticky_at;
 pub(crate) use schema::{
-    MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, ToolSchemaPhase, ToolSchemaPolicy,
-    ToolSurface, agent_tool_count, append_tool_response_limit, append_tool_response_policy,
-    mcp_tool_is_read_only, native_tools_schema_for_context_with_sticky_at_and_reserved_servers,
-    read_only_subagent_runs, textual_tool_surface, tool_schema_phase,
-    tool_system_prompt_for_policy, withheld_tools_notice,
+    MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, McpSessionAnchors, ToolSchemaPhase,
+    ToolSchemaPolicy, ToolSurface, agent_tool_count, append_tool_response_limit,
+    append_tool_response_policy, mcp_tool_is_read_only,
+    native_tools_schema_for_context_with_sticky_at_and_reserved_servers, read_only_subagent_runs,
+    textual_tool_surface, tool_schema_phase, tool_system_prompt_for_policy, withheld_tools_notice,
 };
 
 #[cfg(test)]
