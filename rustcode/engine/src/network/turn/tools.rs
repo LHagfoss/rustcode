@@ -218,6 +218,23 @@ fn apply_round_stagnation(
     }
 }
 
+/// Feed one result into output stagnation, counting each distinct output once
+/// per model round. Parallel calls in one round that return the same thing
+/// (four different searches that each find nothing) are one observation, not
+/// a streak; the streak builds only across rounds (#2563).
+fn record_round_output(
+    detector: &mut loop_detect::LoopDetector,
+    round_outputs: &mut std::collections::HashSet<u64>,
+    output: &str,
+) -> loop_detect::LoopStatus {
+    let key = loop_detect::stagnation_key(output);
+    if round_outputs.insert(loop_detect::stable_hash(key)) {
+        detector.record_output(key)
+    } else {
+        loop_detect::LoopStatus::Ok
+    }
+}
+
 /// Recovery action label for a sustained run of stale re-verification rounds.
 const REVERIFICATION_ACTION: &str = "re-verification of unchanged files";
 
@@ -1493,6 +1510,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // meaningful result in the batch clears the streak.
             let mut round_had_meaningful = false;
             let mut round_no_progress_hits = 0usize;
+            let mut round_outputs = std::collections::HashSet::new();
             let mut round_stale_rereads = 0usize;
             let mut round_assessed_results = 0usize;
             let mut round_workspace_changed = false;
@@ -2054,11 +2072,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     ));
                 }
                 if !assessment.suppress_stagnation && !benign_shell_failure && !boundary_failure {
-                    match ctx
-                        .recovery
-                        .loop_detector
-                        .record_output(loop_detect::stagnation_key(&content))
-                    {
+                    match record_round_output(
+                        &mut ctx.recovery.loop_detector,
+                        &mut round_outputs,
+                        &content,
+                    ) {
                         status @ (loop_detect::LoopStatus::Warning(n)
                         | loop_detect::LoopStatus::Abort(n)) => {
                             dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
@@ -2853,9 +2871,9 @@ mod tests {
         apply_round_stagnation, apply_stale_round, batch_invalidates_read_recovery,
         benign_shell_wrapper_failure, bounded_malformed_tool_history,
         content_bearing_inspection_status, grounded_artifact_recovery_message,
-        incomplete_tool_result, loop_signal_event, mutation_batch_guidance, scheduled_tool_calls,
-        selected_tool_call_indices, should_apply_loop_recovery, take_deferred_batch,
-        targeted_no_progress_guidance, tool_changes_workspace,
+        incomplete_tool_result, loop_signal_event, mutation_batch_guidance, record_round_output,
+        scheduled_tool_calls, selected_tool_call_indices, should_apply_loop_recovery,
+        take_deferred_batch, targeted_no_progress_guidance, tool_changes_workspace,
     };
     use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;
@@ -3951,6 +3969,27 @@ mod tests {
             )));
             assert!(guidance.contains("Read-only inspection never consumes the mutation budget"));
         }
+    }
+
+    #[test]
+    fn identical_outputs_in_one_round_count_once_toward_the_loop_warning() {
+        let mut detector = loop_detect::LoopDetector::new(6);
+        // Four different `gh issue list --search` calls in one parallel
+        // batch, each correctly returning `[]`.
+        let mut round = std::collections::HashSet::new();
+        for _ in 0..4 {
+            assert_eq!(
+                record_round_output(&mut detector, &mut round, "[]"),
+                loop_detect::LoopStatus::Ok
+            );
+        }
+        // The same empty answer over successive rounds still warns.
+        let mut status = loop_detect::LoopStatus::Ok;
+        for _ in 0..2 {
+            let mut round = std::collections::HashSet::new();
+            status = record_round_output(&mut detector, &mut round, "[]");
+        }
+        assert_eq!(status, loop_detect::LoopStatus::Warning(3));
     }
 
     #[test]
