@@ -59,7 +59,16 @@ struct ContentView: View {
         .background(Color.sidebarBackground)
         .ignoresSafeArea()
         .tint(.brand)
-        .clickAwayPanel(isPresented: $model.showsSettings) { SettingsView(model: model) }
+        // Settings is a page in the window's place, over the chats and the
+        // chat, which stay alive under it (#2553).
+        .overlay {
+            if model.showsSettings {
+                SettingsView(model: model)
+                    .environment(\.closePanel) { model.closeSettings() }
+                    .transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: model.showsSettings)
         .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0, planUsage: model.planUsage) }
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
@@ -133,7 +142,7 @@ struct SidebarResizeHandle: View {
 /// window's draggable region again on every frame, asking each hosting view
 /// whether it takes focus, which walked the whole chat. While a reply
 /// streamed that was a third of the main thread, and scrolling lagged (#2260).
-private struct WindowDragArea: NSViewRepresentable {
+struct WindowDragArea: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { DragView() }
 
     func updateNSView(_ view: NSView, context: Context) {}
@@ -384,7 +393,7 @@ private struct SessionSidebar: View {
                 .buttonStyle(ProjectButtonStyle())
                 .pointingHandCursor()
                 .help(model.keybindings.help("Choose the default project for new chats. Open chats keep their own folder", .chooseProject))
-                ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.showsSettings = true }
+                ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.openSettings() }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 10)

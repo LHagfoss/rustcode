@@ -63,14 +63,13 @@ struct RustCodeApp: App {
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
-                    model.settingsSection = .about
-                    model.showsSettings = true
+                    model.openSettings(.about)
                     Task { await model.updater.check() }
                 }
             }
-            // Settings open as a sheet in the main window, not a window of their own.
+            // Settings open as a page in the main window, not a window of their own.
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { model.settingsSection = .general; model.showsSettings = true }
+                Button("Settings…") { model.openSettings() }
                     .keyboardShortcut(model.keybindings.shortcut(for: .settings))
             }
             CommandGroup(after: .textEditing) {
@@ -269,6 +268,20 @@ final class DesktopModel: ObservableObject {
         retryMessage: { [weak self] id in Task { await self?.retryMessage(id) } })
     @Published var showsSidebar = true
     @Published var showsSettings = false
+
+    /// Settings in the window's place (#2553), at `section` or where it was
+    /// last left. The chat stays as it was under it.
+    func openSettings(_ section: SettingsSection? = nil) {
+        if let section { settingsSection = section }
+        composerPanel = nil
+        showsSwitcher = false
+        showsSettings = true
+    }
+
+    /// Back from Settings to the chat it covered.
+    func closeSettings() {
+        showsSettings = false
+    }
     /// `/remote`: the pairing panel over the chat.
     @Published var showsRemote = false
     /// `/visualize`, Help > Charts, Tables & Trees: the guide to in-chat
