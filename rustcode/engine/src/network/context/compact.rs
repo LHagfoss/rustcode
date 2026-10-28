@@ -7,10 +7,13 @@ use std::time::Duration;
 
 pub(super) const SUMMARY_INPUT_MAX_BYTES: usize = 64 * 1024;
 
-/// Provider output is requested at 2048 tokens; 16 KiB is a generous defensive
+/// Provider output is requested at 1536 tokens; 16 KiB is a generous defensive
 /// byte ceiling for providers that ignore that limit.
 pub(super) const SUMMARY_OUTPUT_MAX_BYTES: usize = 16 * 1024;
-const PRESERVED_USER_REQUEST_MAX_TOKENS: usize = 20_000;
+/// User requests pinned after a compaction, at most. A request is what the
+/// user said, so it is kept verbatim, but a pasted log or file must not turn
+/// the compacted history back into most of the window.
+const PRESERVED_USER_REQUEST_MAX_TOKENS: usize = 2_000;
 const PRESERVED_USER_REQUEST_BUDGET_DIVISOR: usize = 5;
 
 /// Recent tokens kept verbatim after a compaction.
@@ -28,7 +31,8 @@ const KEEP_RECENT_WINDOW_SHARE: f64 = 0.3;
 
 /// Index of the first message that compaction must leave untouched.
 ///
-/// One rule for both automatic compaction and manual `/compact`. The newest
+/// The automatic rule; manual `/compact` starts from the same allowance (see
+/// [`retention_tail_start_for_manual`]). The newest
 /// message is always retained even when it alone exceeds the allowance, and the
 /// cut is snapped back to a complete turn so a tool result is never replayed
 /// without the call that announced it. That floor is what keeps the turn in
@@ -73,36 +77,87 @@ pub(crate) fn shorten_old_tool_output(
         if tokens <= target {
             break;
         }
-        if message.role != "tool" || message.content.ends_with(SHORTENED_TOOL_RESULT_NOTE) {
-            continue;
-        }
-        let length = message.content.chars().count();
-        if length <= SHORTENED_TOOL_RESULT_CHARS * 2 {
-            continue;
-        }
         let before = estimate_message_tokens(message);
-        let kept: String = message
-            .content
-            .chars()
-            .take(SHORTENED_TOOL_RESULT_CHARS)
-            .collect();
-        message.content = format!(
-            "{kept}\n[… {} {SHORTENED_TOOL_RESULT_NOTE}",
-            length - SHORTENED_TOOL_RESULT_CHARS
-        );
-        tokens = tokens.saturating_sub(before.saturating_sub(estimate_message_tokens(message)));
-        changed = true;
+        if shorten_tool_result(message) {
+            tokens = tokens.saturating_sub(before.saturating_sub(estimate_message_tokens(message)));
+            changed = true;
+        }
     }
     changed
+}
+
+/// Shorten one long tool result in place to its first few hundred characters
+/// and a note saying how to get the rest. True when it changed.
+fn shorten_tool_result(message: &mut ChatMessage) -> bool {
+    if message.role != "tool" || message.content.ends_with(SHORTENED_TOOL_RESULT_NOTE) {
+        return false;
+    }
+    let length = message.content.chars().count();
+    if length <= SHORTENED_TOOL_RESULT_CHARS * 2 {
+        return false;
+    }
+    let kept: String = message
+        .content
+        .chars()
+        .take(SHORTENED_TOOL_RESULT_CHARS)
+        .collect();
+    message.content = format!(
+        "{kept}\n[… {} {SHORTENED_TOOL_RESULT_NOTE}",
+        length - SHORTENED_TOOL_RESULT_CHARS
+    );
+    true
+}
+
+/// Move a cut that falls inside a turn so it splits no tool transaction: a
+/// kept tool result always keeps the call that announced it. Unlike
+/// [`valid_compaction_boundary`] the cut is not snapped back to the user
+/// request, so a single turn that fills the window can still be compacted.
+/// The cut moves forward past orphaned results (they are summarized with
+/// their call); only when nothing but results follows does it move back to
+/// their call.
+pub(crate) fn within_turn_boundary(history: &[ChatMessage], boundary: usize) -> usize {
+    let start = boundary.min(history.len());
+    if start == 0 || start == history.len() {
+        return start;
+    }
+    let is_result = |message: &ChatMessage| message.role == "tool" || message.role == "function";
+    let mut forward = start;
+    while forward < history.len() && is_result(&history[forward]) {
+        forward += 1;
+    }
+    if forward < history.len() {
+        return forward;
+    }
+    history[start]
+        .tool_call_id
+        .as_deref()
+        .and_then(|call_id| {
+            history[..start].iter().rposition(|message| {
+                message.role == "assistant"
+                    && message.tool_calls.iter().any(|call| call.id == call_id)
+            })
+        })
+        .unwrap_or_else(|| valid_compaction_boundary(history, start))
+}
+
+/// The recent allowance cut inside the turn, for when one turn alone holds
+/// more than the window can keep.
+fn within_turn_tail_start(history: &[ChatMessage], budget: usize) -> usize {
+    within_turn_boundary(history, recent_tail_start(history, budget))
+}
+
+/// The raw tail's token allowance: the absolute figure, capped by the window.
+fn recent_tail_limit(budget: usize) -> usize {
+    ((budget as f64 * KEEP_RECENT_WINDOW_SHARE) as usize)
+        .min(KEEP_RECENT_TOKENS)
+        .max(1)
 }
 
 /// Index of the first message in the recent allowance, without snapping back
 /// to a user request: shortening a result in place never separates it from
 /// its call, so the cut may fall inside a turn.
 fn recent_tail_start(history: &[ChatMessage], budget: usize) -> usize {
-    let limit = ((budget as f64 * KEEP_RECENT_WINDOW_SHARE) as usize)
-        .min(KEEP_RECENT_TOKENS)
-        .max(1);
+    let limit = recent_tail_limit(budget);
     let mut tokens = 0usize;
     let mut start = history.len();
     for index in (0..history.len()).rev() {
@@ -122,10 +177,48 @@ fn recent_tail_start(history: &[ChatMessage], budget: usize) -> usize {
 /// inside the token allowance the automatic rule keeps everything, so the tail
 /// is also capped at the last [`KEEP_RECENT_TURNS`] messages, which is what
 /// `/compact` kept before the token allowance existed.
+///
+/// The allowance is strict. The cut moves back to the start of its turn only
+/// when the whole turn still fits; otherwise it falls inside the turn, so a
+/// long single turn no longer survives whole (a session with one turn of
+/// large tool output used to compact from 161k to 49k tokens and keep all of
+/// it).
 pub(crate) fn retention_tail_start_for_manual(history: &[ChatMessage], budget: usize) -> usize {
-    let by_tokens = retention_tail_start(history, budget);
+    let by_tokens = recent_tail_start(history, budget);
     let by_messages = history.len().saturating_sub(KEEP_RECENT_TURNS);
-    valid_compaction_boundary(history, by_tokens.max(by_messages))
+    let start = by_tokens.max(by_messages);
+    let turn_start = valid_compaction_boundary(history, start);
+    let turn_tokens: usize = history[turn_start..]
+        .iter()
+        .map(estimate_message_tokens)
+        .sum();
+    if turn_start > 0 && turn_tokens <= recent_tail_limit(budget) {
+        return turn_start;
+    }
+    within_turn_boundary(history, start)
+}
+
+/// Choose the manual `/compact` cut and shorten the old tool output the kept
+/// tail carries. Results before the latest tool round are shortened as
+/// [`shorten_old_tool_output`] shortens them, so the strict allowance keeps
+/// more of the conversation and less raw output; the newest round, which the
+/// model may still be working from, stays byte-identical. Only the kept tail
+/// is rewritten: the summarized head goes to the summarizer and the archive
+/// as it was.
+fn manual_compaction_cut(history: &mut [ChatMessage], budget: usize) -> usize {
+    let latest_round = history
+        .iter()
+        .rposition(|message| message.role == "assistant" && !message.tool_calls.is_empty())
+        .unwrap_or(history.len());
+    let mut projected = history.to_vec();
+    for message in projected[..latest_round].iter_mut() {
+        shorten_tool_result(message);
+    }
+    let cut = retention_tail_start_for_manual(&projected, budget);
+    for (index, message) in projected.into_iter().enumerate().skip(cut) {
+        history[index] = message;
+    }
+    cut
 }
 
 /// Total wall-clock budget for a non-streaming summary request, including
@@ -140,8 +233,10 @@ const COMPACTION_BOUNDARY_VERSION: u8 = 1;
 const SUMMARY_MESSAGE_MAX_CHARS: usize = 2_000;
 
 /// Output requested from the summarizer. A handoff covers goal, constraints,
-/// decisions, files, verification and next steps; 1024 tokens cut it short.
-const SUMMARY_MAX_TOKENS: u32 = 2_048;
+/// decisions, files, verification and next steps; 1024 tokens cut it short,
+/// and 2048 left a compacted history far above the couple of thousand tokens
+/// a handoff needs.
+const SUMMARY_MAX_TOKENS: u32 = 1_536;
 
 /// Size the carried handoff may reach before it is consolidated into one
 /// record. Roughly three thousand tokens: small next to the retained tail.
@@ -283,26 +378,34 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
 
     // Keep a bounded recent suffix verbatim, using the same allowance manual
     // `/compact` uses so both paths retain the same amount.
-    let summarize_count = retention_tail_start(history, budget);
-    let keep_count = history.len().saturating_sub(summarize_count);
+    let mut summarize_count = retention_tail_start(history, budget);
+    // Set when the cut falls inside the only turn: the boundary is then
+    // explicit, since every helper that snaps to a user request would move it
+    // back to the start of history.
+    let mut within_turn = false;
     if summarize_count < 4 {
         // One turn holds (nearly) the whole history, so there is no earlier
         // turn to cut at. Its own old tool output is what fills the window:
         // shorten that rather than let the turn run into the preflight stop
         // (#2475).
-        if shorten_old_tool_output(history, raw_tokens, budget) {
-            emit_compaction_metrics(
-                raw_tokens,
-                budget,
-                "turn_tool_output_shortened",
-                false,
-                history.len(),
-            );
-            return true;
+        let shortened = shorten_old_tool_output(history, raw_tokens, budget);
+        let remaining: usize = history.iter().map(estimate_message_tokens).sum();
+        let cut = within_turn_tail_start(history, budget);
+        if remaining < budget || cut < 4 {
+            let path = if shortened {
+                "turn_tool_output_shortened"
+            } else {
+                "too_few_messages"
+            };
+            emit_compaction_metrics(raw_tokens, budget, path, false, history.len());
+            return shortened;
         }
-        emit_compaction_metrics(raw_tokens, budget, "too_few_messages", false, history.len());
-        return false;
+        // Shortening was not enough: the turn alone still exceeds the
+        // budget, so its older part is compacted like an earlier turn.
+        summarize_count = cut;
+        within_turn = true;
     }
+    let keep_count = history.len().saturating_sub(summarize_count);
     // Tiered compaction. The deterministic record is the only relief that may
     // run between tool calls: it is local, costs no round-trip, and never waits
     // on the network mid-turn. The LLM summarizer additionally waits for a turn
@@ -314,12 +417,21 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         lower.contains("11434") || lower.contains("ollama")
     };
     if is_local_engine || deterministic_only || !turn_boundary {
-        let structured = super::memory::compact_with_structured_memory_from_archive(
-            history,
-            keep_count,
-            budget,
-            &archival_source,
-        );
+        let structured = if within_turn {
+            super::memory::compact_with_structured_memory_at(
+                history,
+                summarize_count,
+                budget,
+                &archival_source,
+            )
+        } else {
+            super::memory::compact_with_structured_memory_from_archive(
+                history,
+                keep_count,
+                budget,
+                &archival_source,
+            )
+        };
         emit_compaction_metrics(
             raw_tokens,
             budget,
@@ -347,7 +459,16 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         emit_compaction_metrics(raw_tokens, budget, "ai_summary", true, history.len());
         true
     } else {
-        let structured = compact_with_structured_memory(history, keep_count, budget);
+        let structured = if within_turn {
+            super::memory::compact_with_structured_memory_at(
+                history,
+                summarize_count,
+                budget,
+                &archival_source,
+            )
+        } else {
+            compact_with_structured_memory(history, keep_count, budget)
+        };
         emit_compaction_metrics(
             raw_tokens,
             budget,
@@ -371,19 +492,20 @@ pub async fn force_compact_with_budget_deterministic(
 
     // Same allowance as the summarizing path, so a plan-backed `/compact`
     // keeps as much recent history as any other compaction.
-    let summarize_count =
-        retention_tail_start_for_manual(history, budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD));
+    let budget = budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD);
+    let summarize_count = manual_compaction_cut(history, budget);
     if summarize_count < 1 {
+        *history = archival_source;
         return Err("Not enough messages to compact.".to_string());
     }
-    let keep_count = history.len().saturating_sub(summarize_count);
-    let compacted = super::memory::compact_with_structured_memory_from_archive(
+    let compacted = super::memory::compact_with_structured_memory_at(
         history,
-        keep_count,
-        budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD),
+        summarize_count,
+        budget,
         &archival_source,
     );
     if !compacted {
+        *history = archival_source;
         return Err("Deterministic local compaction could not reduce the history.".to_string());
     }
     let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
@@ -483,11 +605,12 @@ pub async fn force_compact_with_budget(
     let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     let archival_source = history.clone();
 
-    // Summarize everything before the shared retention tail, so manual
-    // `/compact` and automatic compaction retain the same recent history.
+    // Summarize everything before the manual retention tail, which may fall
+    // inside the current turn.
     let summarize_count =
-        retention_tail_start_for_manual(history, budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD));
+        manual_compaction_cut(history, budget.unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD));
     if summarize_count < 1 {
+        *history = archival_source;
         return Err("Not enough messages to compact.".to_string());
     }
 
@@ -502,6 +625,11 @@ pub async fn force_compact_with_budget(
         &archival_source,
     )
     .await;
+    if result.is_err() {
+        // The cut shortened tool output in the tail; a failed compaction
+        // leaves the history exactly as it was.
+        *history = archival_source;
+    }
     let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     result.map(|_| (before_tokens, after_tokens))
 }
@@ -516,9 +644,11 @@ async fn force_compact_internal(
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
     archival_source: &[ChatMessage],
 ) -> Result<(), String> {
-    // A caller may have selected a message-count cut point. Normalize it to a
-    // complete turn so a result is never sent without its announcing call.
-    let summarize_count = valid_compaction_boundary(history, summarize_count);
+    // A caller may have selected a message-count cut point. Normalize it so a
+    // result is never sent without its announcing call. Callers choose
+    // whether the cut may fall inside a turn; a cut at a user request is left
+    // as it is.
+    let summarize_count = within_turn_boundary(history, summarize_count);
     // Incremental compaction: if a prior summary already sits at the front of the
     // range, preserve its facts and only summarize the messages that came after.
     // Avoids re-compressing an already-compressed summary (which drifts and loses
@@ -618,8 +748,8 @@ async fn force_compact_internal(
     let mut evidence_memory =
         super::memory::StructuredSessionMemory::extract_from_history(archival_prefix);
     evidence_memory.attach_archive_to_unlinked_reads(&history_archive);
-    let read_evidence = evidence_memory.format_read_evidence(2_000);
-    let command_evidence = evidence_memory.format_command_evidence(1_500);
+    let read_evidence = evidence_memory.format_read_evidence(1_200);
+    let command_evidence = evidence_memory.format_command_evidence(800);
     if !read_evidence.is_empty() || !command_evidence.is_empty() {
         summary.push_str("\n\n");
         summary.push_str(&command_evidence);
@@ -834,6 +964,15 @@ fn collect_preserved_user_requests(
     for request in candidates.into_iter().rev() {
         let tokens = estimate_message_tokens(&ChatMessage::new("user", request.clone()));
         if used.saturating_add(tokens) > token_budget {
+            // The newest request is the task in progress: rather than lose it
+            // because it is long, keep its start.
+            if selected.is_empty() {
+                let kept = truncate_utf8(&request, token_budget.saturating_mul(3));
+                if !kept.is_empty() {
+                    used = token_budget;
+                    selected.push(format!("{kept}… [request shortened]"));
+                }
+            }
             continue;
         }
         used = used.saturating_add(tokens);
@@ -1510,6 +1649,181 @@ mod preserved_user_request_tests {
         let shortened = history.clone();
         shorten_old_tool_output(&mut history, after, budget);
         assert_eq!(history, shortened);
+    }
+
+    /// A session like the one this regression came from: one earlier turn,
+    /// then a single long turn of large tool output.
+    fn one_long_turn(rounds: usize, output: &str) -> Vec<ChatMessage> {
+        let mut history = vec![
+            ChatMessage::new("user", "original task"),
+            ChatMessage::new("assistant", "done"),
+            ChatMessage::new("user", "now research the release and fix it"),
+        ];
+        for index in 0..rounds {
+            history.push(
+                ChatMessage::new("assistant", format!("step {index}")).with_tool_calls(vec![
+                    crate::app::ToolCallRef {
+                        id: format!("call-{index}"),
+                        name: "web_fetch".into(),
+                        arguments: "{}".into(),
+                    },
+                ]),
+            );
+            history.push(
+                ChatMessage::new("tool", format!("web_fetch: page {index}\n{output}"))
+                    .answering(Some(format!("call-{index}"))),
+            );
+        }
+        history
+    }
+
+    fn assert_no_orphaned_results(history: &[ChatMessage]) {
+        for (index, message) in history.iter().enumerate() {
+            let Some(call_id) = message.tool_call_id.as_deref() else {
+                continue;
+            };
+            assert!(
+                history[..index]
+                    .iter()
+                    .any(|earlier| earlier.role == "assistant"
+                        && earlier.tool_calls.iter().any(|call| call.id == call_id)),
+                "result {index} ({call_id}) lost its call"
+            );
+        }
+    }
+
+    #[test]
+    fn manual_cut_falls_inside_a_turn_too_long_to_keep() {
+        // Even shortened, two hundred rounds exceed the allowance.
+        let mut history = one_long_turn(200, &"fetched text ".repeat(1_000));
+        let budget = 272_000;
+        let latest = history[history.len() - 2..].to_vec();
+
+        let cut = manual_compaction_cut(&mut history, budget);
+
+        assert!(cut > 3, "the cut must fall inside the turn, not before it");
+        assert_ne!(history[cut].role, "tool");
+        let kept: usize = history[cut..].iter().map(estimate_message_tokens).sum();
+        assert!(kept <= KEEP_RECENT_TOKENS, "kept {kept} tokens");
+        assert_no_orphaned_results(&history[cut..]);
+        // Older results in the tail are shortened; the latest round is not.
+        assert!(
+            history[cut..history.len() - 2]
+                .iter()
+                .any(|message| message.role == "tool"
+                    && message.content.ends_with(SHORTENED_TOOL_RESULT_NOTE))
+        );
+        assert_eq!(&history[history.len() - 2..], latest.as_slice());
+        // The head is untouched: the summarizer and the archive see it whole.
+        assert!(!history[4].content.ends_with(SHORTENED_TOOL_RESULT_NOTE));
+    }
+
+    #[test]
+    fn manual_cut_keeps_a_whole_turn_that_fits() {
+        let mut history = Vec::new();
+        for turn in 0..20 {
+            history.push(ChatMessage::new("user", format!("task {turn}")));
+            history.push(ChatMessage::new("assistant", format!("work {turn}")));
+        }
+        let cut = manual_compaction_cut(&mut history, 272_000);
+        assert!(history[cut].is_user_request(), "{cut}");
+    }
+
+    #[test]
+    fn a_long_request_is_preserved_shortened_rather_than_dropped() {
+        let long = "paste ".repeat(5_000);
+        let summarized = vec![ChatMessage::new("user", long.clone())];
+        let preserved = collect_preserved_user_requests(&summarized, &[], None, 2_000);
+        let [request] = preserved.as_slice() else {
+            panic!("expected one request, got {preserved:?}");
+        };
+        assert!(request.starts_with("paste paste"));
+        assert!(request.ends_with("[request shortened]"));
+        assert!(estimate_message_tokens(&ChatMessage::new("user", request.clone())) <= 2_100);
+    }
+
+    #[tokio::test]
+    async fn manual_ai_compaction_shrinks_a_single_long_turn() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let response = r#"{"choices":[{"message":{"content":"- Goal: fix the release"}}]}"#;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 128 * 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let mut history = one_long_turn(60, &"fetched text ".repeat(1_000));
+
+        let (before, after) = force_compact_with_budget(
+            &reqwest::Client::new(),
+            &endpoint,
+            "mock-model",
+            &mut history,
+            Some(272_000),
+            None,
+        )
+        .await
+        .expect("mock summary compaction");
+        server.await.unwrap();
+
+        assert!(before > 100_000, "{before}");
+        assert!(after < 25_000, "compacted to {after} tokens");
+        assert!(history[0].content.starts_with(SUMMARY_MARKER));
+        // Kept, or pinned when the cut fell after it.
+        assert!(history.iter().any(|message| {
+            message
+                .content
+                .ends_with("now research the release and fix it")
+        }));
+        assert_no_orphaned_results(&history);
+    }
+
+    /// A turn whose many small results cannot be shortened still compacts:
+    /// the cut falls inside it instead of giving up.
+    #[tokio::test]
+    async fn automatic_compaction_cuts_inside_a_turn_shortening_cannot_relieve() {
+        let mut history = one_long_turn(400, &"x".repeat(700));
+        let budget = 40_000;
+        let before: usize = history.iter().map(estimate_message_tokens).sum();
+        assert!(before > budget, "{before}");
+        assert!(retention_tail_start(&history, budget) < 4);
+
+        let compacted = maybe_compact_with_local_policy_and_usage_mode(
+            &reqwest::Client::new(),
+            "http://127.0.0.1:9/v1/chat/completions",
+            "model",
+            &mut history,
+            budget,
+            &tokio_util::sync::CancellationToken::new(),
+            false,
+            None,
+            false,
+            false,
+        )
+        .await;
+
+        assert!(compacted);
+        let after: usize = history.iter().map(estimate_message_tokens).sum();
+        assert!(after < budget, "{after}");
+        assert!(history[0].compaction_boundary.is_some());
+        assert_no_orphaned_results(&history);
     }
 
     #[test]

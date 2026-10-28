@@ -122,6 +122,45 @@ final class ContextBreakdownTests: XCTestCase {
         XCTAssertEqual(plain, .agentText("hi"))
     }
 
+    func testCompactionCardIsParsedAndJoinsTheChat() {
+        let update = SessionUpdate(notificationParams: ["sessionId": "s1", "update": [
+            "sessionUpdate": "agent_message_chunk",
+            "content": ["type": "text", "text": "**Compact**\n\nHistory compacted."],
+            "_meta": ["rustcode": [
+                "kind": "compaction", "version": 1, "trigger": "manual", "mode": "ai_summary",
+                "beforeTokens": 161_495, "afterTokens": 4_200, "reclaimedTokens": 157_295, "count": 2,
+                "summary": "- Goal: ship the fix",
+            ]],
+        ]])
+        guard case .compaction(let card) = update else { return XCTFail("expected a compaction card, got \(update)") }
+        XCTAssertEqual(card.headline, "Compacted 161k → 4k · #2")
+        XCTAssertEqual(card.detail, "Manual · AI summary")
+        XCTAssertEqual(card.summary, "- Goal: ship the fix")
+
+        // Older messages stay above the card.
+        var transcript = Transcript()
+        transcript.appendUser("research the release")
+        transcript.apply(.agentText("Found it."))
+        transcript.apply(update)
+        XCTAssertEqual(transcript.items.count, 3)
+        guard case .compaction(let shown) = transcript.items.last?.content else { return XCTFail("expected the card last") }
+        XCTAssertEqual(shown, card)
+        XCTAssertEqual(transcript.matches("ship the fix"), [transcript.items[2].id])
+    }
+
+    func testCompactionCardWithoutARecordStillShows() {
+        let card = CompactionCard(text: "History compacted.", meta: ["kind": "compaction", "version": 1, "summary": "  "])
+        XCTAssertEqual(card?.headline, "History compacted")
+        XCTAssertNil(card?.detail)
+        XCTAssertNil(card?.summary)
+        // An unknown version is plain reply text.
+        let future = SessionUpdate(notificationParams: ["sessionId": "s1", "update": [
+            "sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": "compacted"],
+            "_meta": ["rustcode": ["kind": "compaction", "version": 9]],
+        ]])
+        XCTAssertEqual(future, .agentText("compacted"))
+    }
+
     func testHarnessNoticesStayOutOfTheTranscript() {
         let update = SessionUpdate(notificationParams: ["sessionId": "s1", "update": [
             "sessionUpdate": "agent_message_chunk",

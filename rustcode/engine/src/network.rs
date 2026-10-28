@@ -1581,19 +1581,13 @@ async fn prepare_turn_request_pass(
                 } else {
                     crate::app::CompactionMode::AiSummary
                 };
-                let previous_count = s
-                    .last_compaction
-                    .as_ref()
-                    .map(|stats| stats.count)
-                    .unwrap_or(0);
-                s.last_compaction = Some(crate::app::CompactionStats::new(
+                s.record_compaction(
                     crate::app::CompactionTrigger::Auto,
                     mode,
                     before_tokens,
                     after_tokens,
                     pre_len,
-                    previous_count,
-                ));
+                );
             } else {
                 // Deterministic pruning can change the request history without
                 // invoking the summarizer. Persist that rewrite as well, but

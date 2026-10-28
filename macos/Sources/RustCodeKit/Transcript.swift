@@ -32,6 +32,9 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
         case tool(ToolItem)
         /// A host slash command the user ran and the engine's answer to it.
         case command(input: String, output: String)
+        /// The history was compacted here. What came before stays above it
+        /// in the chat; the model now works from the card's summary.
+        case compaction(CompactionCard)
     }
 
     public let id: Int
@@ -55,6 +58,7 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
         case .user(let text), .assistant(let text), .thinking(let text): text
         case .tool(let tool): [tool.title, tool.input, tool.output].compactMap { $0 }.joined(separator: "\n")
         case .command(let input, let output): input + "\n" + output
+        case .compaction(let card): [card.headline, card.summary].compactMap { $0 }.joined(separator: "\n")
         }
     }
 
@@ -221,6 +225,13 @@ public struct Transcript: Equatable, Sendable {
             }
         case .contextReport(let text, _):
             apply(.agentText(text), at: now)
+        case .compaction(let card):
+            // A `/compact` answers with the card: it takes the place of the
+            // command's empty answer rather than following it.
+            if case .command(_, "") = items.last?.content {
+                items.removeLast()
+            }
+            append(.compaction(card), at: now)
         case .usage(let usage):
             self.usage = usage
         case .notice, .stopped, .title, .configOptions, .availableCommands, .unknown:

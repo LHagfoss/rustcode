@@ -3,7 +3,8 @@ import XCTest
 
 final class ToolFoldingTests: XCTestCase {
     /// `t` a finished call, `x` a failed one, `e` an edit, `a` a spawned
-    /// agent, `s` some text, `r` a thought, `u` a message the user sent.
+    /// agent, `s` some text, `r` a thought, `u` a message the user sent,
+    /// `c` a compaction card.
     private func items(_ shape: String) -> [TranscriptItem] {
         var transcript = Transcript()
         for (index, kind) in shape.enumerated() {
@@ -15,6 +16,8 @@ final class ToolFoldingTests: XCTestCase {
                 transcript.apply(.thoughtText("thought \(index)", summary: true))
             case "u":
                 transcript.apply(.userText("ask \(index)"))
+            case "c":
+                transcript.apply(.compaction(CompactionCard(text: "compacted", beforeTokens: 100_000, afterTokens: 4_000)))
             default:
                 transcript.apply(.toolCall(id: id, title: kind == "a" ? "spawn_agent" : "run_command", kind: "execute",
                                            status: kind == "x" ? .failed : .completed, input: nil, detail: "cmd \(index)"))
@@ -114,6 +117,16 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertEqual(ToolFolding(items: one, verbosity: .low, open: [], running: false).turn(for: one[1].id)?.calls, 1)
         let thought = items("urtts")
         XCTAssertEqual(ToolFolding(items: thought, verbosity: .low, open: [], running: false).turn(for: thought[1].id)?.calls, 2)
+    }
+
+    /// A compaction mid-turn is where the context was folded, not a step:
+    /// the finished turn's row does not hide it.
+    func testAFoldedTurnKeepsItsCompactionCardInView() {
+        let list = items("usttcttss")
+        let folding = ToolFolding(items: list, verbosity: .low, open: [], running: false)
+        XCTAssertEqual(folding.turn(for: list[1].id)?.calls, 4)
+        XCTAssertTrue(folding.hidden.contains(list[3].id))
+        XCTAssertFalse(folding.hidden.contains(list[4].id), "the card shows")
     }
 
     // Opened, the work shows as it happened: what was said and thought

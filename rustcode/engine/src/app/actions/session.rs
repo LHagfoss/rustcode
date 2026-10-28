@@ -348,6 +348,8 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.current_thought_tokens = 0;
     s.current_thought_started_at = None;
     s.current_token_usage = None;
+    s.last_compaction = None;
+    s.pending_compaction_card = None;
     s.response_time = None;
     s.generation_start_time = None;
     s.history_index = None;
@@ -736,6 +738,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     s.history.replace(loaded);
     reset_active_session_state(s);
     s.restore_session_model();
+    s.restore_session_compaction();
     crate::app::subagent_persistence::restore(s);
     // Adopt the recorded workspace when resuming across directories, like
     // the desktop "Choose project folder" flow. An explicit `--resume <id>`

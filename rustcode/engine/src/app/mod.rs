@@ -1,5 +1,5 @@
 pub mod events;
-pub use compaction::{CompactionMode, CompactionStats, CompactionTrigger};
+pub use compaction::{CompactionMode, CompactionStats, CompactionTrigger, compaction_summary};
 pub use events::{ApprovalDecision, QuestionAnswer, SessionAction, UpdateDecision};
 pub mod actions;
 pub mod activity;

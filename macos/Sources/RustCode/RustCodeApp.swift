@@ -2382,6 +2382,11 @@ final class DesktopModel: ObservableObject {
         case .contextReport(_, let context):
             command.answered = true
             if session == selectedSession { contextSheet = context }
+        case .compaction:
+            // `/compact` answers with the chat's compaction card, which is
+            // the signal; the earlier messages stay above it.
+            command.answered = true
+            appendToTranscript(of: session) { $0.apply(update, at: Date()) }
         default:
             return false
         }
