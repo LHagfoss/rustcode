@@ -91,10 +91,12 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
 extension SubagentInfo {
     /// The child a `spawn_agent` result names: its JSON receipt
     /// (`{"agent_id":3,…}`, notes may follow it), or the `subagent 3 started`
-    /// line older sessions recorded.
+    /// line older sessions recorded. A replayed session sends the receipt as
+    /// history stored it, behind `spawn_agent: `.
     public static func spawnedId(in output: String?) -> Int? {
         guard let output else { return nil }
-        for pattern in [#"^\s*\{[^}]*"agent_id"\s*:\s*(\d+)"#, #"^\s*subagent (\d+) started"#] {
+        for pattern in [#"^\s*(?:spawn_agent:\s*)?\{[^}]*"agent_id"\s*:\s*(\d+)"#,
+                        #"^\s*(?:spawn_agent:\s*)?subagent (\d+) started"#] {
             if let match = output.firstMatch(of: try! Regex(pattern)),
                let range = match.output[1].range {
                 return Int(output[range])

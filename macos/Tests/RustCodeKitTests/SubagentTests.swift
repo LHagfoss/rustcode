@@ -66,6 +66,9 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(SubagentInfo.spawnedId(in: #"{"agent_id":3,"nickname":"agent-3","status":"queued"}"#), 3)
         XCTAssertEqual(SubagentInfo.spawnedId(in: "{\"agent_id\": 12}\n\n__BUILD_UNVERIFIED__: note"), 12)
         XCTAssertEqual(SubagentInfo.spawnedId(in: "subagent 6 started; use wait_agent to receive its terminal result"), 6)
+        // A session replay sends the receipt as history stored it.
+        XCTAssertEqual(SubagentInfo.spawnedId(in: #"spawn_agent: {"agent_id":3,"nickname":"agent-3"}"#), 3)
+        XCTAssertNil(SubagentInfo.spawnedId(in: #"read_file: {"agent_id":3}"#))
         XCTAssertNil(SubagentInfo.spawnedId(in: "error: unknown model 'x'"))
         XCTAssertNil(SubagentInfo.spawnedId(in: nil))
     }
