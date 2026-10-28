@@ -2456,6 +2456,52 @@ pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy)
     }
 }
 
+/// MCP lines of a textual tool contract, bounded like the native schema
+/// selection. Text protocols used to inline every connected MCP tool with its
+/// full schema; with a dozen servers that was 18k of a 20k-token prompt for a
+/// small model (#2587). Tools past the global or per-server byte budget are
+/// listed by name only, and `list_mcp_tools` `select` returns their schemas.
+fn textual_mcp_listing(
+    entries: &[(String, String, String, Value)],
+    compact: bool,
+    budget_bytes: usize,
+) -> String {
+    let mut listed = String::new();
+    let mut used = 0usize;
+    let mut per_server: HashMap<&str, usize> = HashMap::new();
+    let mut names_only: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for (name, server, desc, schema) in entries {
+        let args = serde_json::to_string(schema).unwrap_or_default();
+        let line = if compact {
+            format!("- {name} | Args: {args}\n")
+        } else {
+            format!("- {name} | Args: {args} | {desc}\n")
+        };
+        let server_used = per_server.entry(server.as_str()).or_default();
+        if used + line.len() <= budget_bytes
+            && *server_used + line.len() <= MAX_MCP_PER_SERVER_SCHEMA_BYTES
+        {
+            used += line.len();
+            *server_used += line.len();
+            listed.push_str(&line);
+        } else {
+            names_only
+                .entry(server.as_str())
+                .or_default()
+                .push(name.as_str());
+        }
+    }
+    if !names_only.is_empty() {
+        listed.push_str(
+            "- More MCP tools, listed by name without arguments; call `list_mcp_tools` with `select` to get a schema before using one:\n",
+        );
+        for (server, names) in names_only {
+            listed.push_str(&format!("  - {server}: {}\n", names.join(", ")));
+        }
+    }
+    listed
+}
+
 pub(crate) fn tool_system_prompt_for_policy(
     policy: ToolSchemaPolicy,
     protocol: crate::config::ToolProtocol,
@@ -2591,26 +2637,17 @@ Never guess MCP server names: see MCP Servers, then `list_mcp_tools` `select` fo
             ));
         }
     }
-    if policy.include_mcp_tools {
-        for (name, desc, schema) in collect_mcp_tools() {
-            if agent_mode == crate::config::AgentMode::Plan || !policy.offers_mcp_tool(&name) {
-                continue;
-            }
-            if policy.compact_text_prompt {
-                p.push_str(&format!(
-                    "- {} | Args: {}\n",
-                    name,
-                    serde_json::to_string(&schema).unwrap_or_default()
-                ));
-            } else {
-                p.push_str(&format!(
-                    "- {} | Args: {} | {}\n",
-                    name,
-                    serde_json::to_string(&schema).unwrap_or_default(),
-                    desc
-                ));
-            }
-        }
+    if policy.include_mcp_tools && agent_mode != crate::config::AgentMode::Plan {
+        let entries = collect_mcp_tools_with_servers()
+            .into_iter()
+            .filter(|(name, ..)| policy.offers_mcp_tool(name))
+            .map(|(name, server, _, desc, schema)| (name, server, desc, schema))
+            .collect::<Vec<_>>();
+        p.push_str(&textual_mcp_listing(
+            &entries,
+            policy.compact_text_prompt,
+            mcp_schema_budget_bytes(),
+        ));
     }
     if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
         p.push_str("- spawn_agent | Args: {\"task\":\"task description\",\"context_inheritance\":\"minimal|evidence|recent|fork\",\"evidence\":\"selected facts\"} | Start a fresh child; default minimal. Optional agent_type explorer|worker|default. Writes require explicit write_access or agent_type worker, plus allowed_paths and verification. Returns JSON with agent_id.\n");
@@ -2925,5 +2962,37 @@ mod mcp_read_classification_tests {
         ));
         let read_only = json!({"readOnlyHint": true});
         assert!(mcp_annotations_mark_read_only("whoami", Some(&read_only)));
+    }
+
+    // #2587: twelve servers inlined 101 MCP schemas into a small model's
+    // textual contract. Past the budget, tools are named and deferred to
+    // `list_mcp_tools`, and no server crowds out the others.
+    #[test]
+    fn textual_mcp_listing_defers_tools_past_the_schema_budget() {
+        let schema = json!({"type": "object", "properties": {"q": {"type": "string"}}});
+        let entries = (0..40)
+            .map(|i| {
+                let server = if i < 30 { "big" } else { "small" };
+                (
+                    format!("{server}_tool_{i:02}"),
+                    server.to_string(),
+                    "x".repeat(300),
+                    schema.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let budget = super::MAX_MCP_NATIVE_SCHEMA_BYTES;
+        let listing = super::textual_mcp_listing(&entries, false, budget);
+
+        assert!(listing.len() < budget + 1024, "{} bytes", listing.len());
+        assert!(listing.contains("- big_tool_00 | Args:"));
+        assert!(listing.contains("- small_tool_30 | Args:"), "{listing}");
+        assert!(listing.contains("`list_mcp_tools` with `select`"));
+        assert!(listing.contains("big_tool_29"));
+        assert!(!listing.contains("- big_tool_29 | Args:"));
+
+        let small = super::textual_mcp_listing(&entries[..2], false, 8 * 1024);
+        assert!(!small.contains("list_mcp_tools"));
     }
 }

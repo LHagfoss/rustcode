@@ -199,7 +199,9 @@ pub(crate) fn response_source(
     if content.contains("```tool") {
         return ResponseSource::Fenced;
     }
-    if content.contains("[TOOL_CALLS]") {
+    if content.contains("[TOOL_CALLS]")
+        || content.contains(rustcode_tool_protocol::LFM_TOOL_CALL_START)
+    {
         return ResponseSource::Tagged;
     }
     ResponseSource::RepairedJson
@@ -478,6 +480,45 @@ mod tests {
             FinishReason::Length
         );
         assert_eq!(FinishReason::from_provider(None), FinishReason::Stop);
+    }
+
+    // #2587: the Liquid reply that used to finish the turn as plain text.
+    #[test]
+    fn liquid_envelope_becomes_tool_calls_not_a_final_answer() {
+        let response = normalize_response(
+            "Let me check.<|tool_call_start|>[run_command(command='sysctl hw.memsize', timeout_ms=5000), run_command(command='top -l 1', timeout_ms=5000)]<|tool_call_end|>",
+            Some("stop"),
+            crate::config::ToolProtocol::Native,
+        );
+        assert_eq!(response.source, ResponseSource::Tagged);
+        let calls = response
+            .events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::ToolCall(_)))
+            .count();
+        assert_eq!(calls, 2);
+        assert!(
+            !response
+                .events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::TextDelta(_)))
+        );
+    }
+
+    // An envelope that does not parse yields no call and is left to the
+    // malformed-call retry gate rather than executed from marker matching.
+    #[test]
+    fn unparsable_liquid_envelope_routes_to_malformed_call_recovery() {
+        let content = "<|tool_call_start|>[run_command('top -l 1')]<|tool_call_end|>";
+        let events = classify_response(content, Some("stop"), crate::config::ToolProtocol::Native);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::ToolCall(_)))
+        );
+        assert!(rustcode_tool_protocol::text::has_intended_tool_call(
+            content
+        ));
     }
 
     #[test]
