@@ -1,3 +1,15 @@
+## [v0.105.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.105.0) - 2026-10-28
+
+### Features
+- The macOS app can send a message to another chat without switching to it (+ › Send Message to Another Chat…). (#2534)
+- The macOS app can add MCP servers (Settings → MCP Servers → Add Server) and remove them (right-click), and they start right away. (#2523)
+- MCP servers added or removed while a session runs now take effect on the next message, and MCP tool search no longer fails with "invalid argument 'summary'". (#2522)
+- MCP tool discovery shows each small server's tool names even next to large servers, accepts `select:` queries, and starts a configured server that isn't running when asked for its tools. (#2529)
+- The message box now scrolls through long drafts with the mouse wheel or trackpad and keeps the cursor in view. (#2532)
+- Quotes in replies now show as one tidy quoted block instead of a bar glyph on every line. (#2533)
+- The ⌘K chat switcher now opens closer to the middle of the window and fits compact windows. (#2531)
+- The What's New card now appears after updating from versions older than 0.104.0. (#2530)
+- Fixed chats sometimes opening with only their latest message visible. (#2524)
 ## [v0.104.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.104.0) - 2026-10-28
 
 ### Features
