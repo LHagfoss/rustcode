@@ -930,7 +930,8 @@ pub(crate) async fn compact_history(
         if s.history.len() < 2 {
             return "Not enough messages to compact.".to_owned();
         }
-        // Subscription-backed profiles have no plain summarizer endpoint.
+        // Subscription-backed profiles have no plain summarizer endpoint; their
+        // summary goes through the session's own transport (#2548).
         let chatgpt_plan_profile = s.active_model_profile().is_some_and(|profile| {
             profile
                 .credential
@@ -947,12 +948,54 @@ pub(crate) async fn compact_history(
         )
     };
     let mut history_to_compact = original_history.clone();
+    let started = std::time::Instant::now();
+    // What the compaction wrote: a summary, unless a plan profile's summary
+    // failed and the local record stood in.
+    let mut summarized = true;
     let compact_result = if chatgpt_plan_profile {
-        crate::network::compaction::force_compact_with_budget_deterministic(
-            history_to_compact.as_mut_vec(),
-            Some(budget),
+        let summary = crate::network::compaction::with_session_summarizer(
+            Arc::clone(state),
+            crate::network::compaction::force_compact_with_budget(
+                client,
+                &api_base_url,
+                &model_name,
+                history_to_compact.as_mut_vec(),
+                Some(budget),
+                Some(cancel_token),
+            ),
         )
-        .await
+        .await;
+        summarized = summary.is_ok();
+        let mode = if summarized {
+            "ai_summary"
+        } else {
+            "deterministic_record"
+        };
+        let result = match summary {
+            Ok(tokens) => Ok(tokens),
+            // A cancelled `/compact` stops; any other failure keeps the
+            // local record, as before the summary went through the plan.
+            Err(error) if cancel_token.is_cancelled() => Err(error),
+            Err(_) => {
+                history_to_compact = original_history.clone();
+                crate::network::compaction::force_compact_with_budget_deterministic(
+                    history_to_compact.as_mut_vec(),
+                    Some(budget),
+                )
+                .await
+            }
+        };
+        crate::logger::operational_event(
+            "context.compaction.manual",
+            serde_json::json!({
+                "session_id": active_session_id,
+                "mode": mode,
+                "model": model_name,
+                "duration_ms": started.elapsed().as_millis() as u64,
+                "tokens": result.as_ref().ok().map(|(before, after)| [before, after]),
+            }),
+        );
+        result
     } else {
         crate::network::compaction::force_compact_with_budget(
             client,
@@ -993,12 +1036,10 @@ pub(crate) async fn compact_history(
                 .unwrap_or(0);
             s.last_compaction = Some(crate::app::CompactionStats::new(
                 crate::app::CompactionTrigger::Manual,
-                // Plan-backed profiles compact into the reduced deterministic
-                // record; every other profile gets a written summary.
-                if chatgpt_plan_profile {
-                    crate::app::CompactionMode::DeterministicRecord
-                } else {
+                if summarized {
                     crate::app::CompactionMode::AiSummary
+                } else {
+                    crate::app::CompactionMode::DeterministicRecord
                 },
                 before,
                 after,

@@ -1075,6 +1075,100 @@ pub(super) fn carried_narrative(summary: &str) -> &str {
     summary[..end].trim_end()
 }
 
+tokio::task_local! {
+    /// The session a compaction summarizes for, when it must be asked through
+    /// the session's own transport: a ChatGPT or Claude CLI plan has no plain
+    /// chat-completions endpoint for the request below (#2548).
+    static SUMMARY_SESSION: std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>;
+}
+
+/// Run a compaction whose summaries go through `session`'s transport, as its
+/// turns do, instead of a plain request to its URL.
+pub(crate) async fn with_session_summarizer<F: Future>(
+    session: std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+    compaction: F,
+) -> F::Output {
+    SUMMARY_SESSION.scope(session, compaction).await
+}
+
+/// A plan model streams and may reason first; a summary gets longer than a
+/// plain request's 25 seconds.
+const SESSION_SUMMARY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The summary asked of the session's model on its own transport. A scratch
+/// state with a temporary id keeps the request out of the session's history,
+/// stream and usage, as a session title's request does.
+async fn request_session_summary(
+    client: &reqwest::Client,
+    session: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+    user_content: &str,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Option<String> {
+    let request_id = format!(
+        "compaction-summary-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let (scratch, url, model) = {
+        let live = session.lock().await;
+        let workspace = live
+            .effective_workspace_root()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let mut scratch =
+            crate::app::AppState::new_with_workspace_session(&workspace, Some(&request_id));
+        scratch.config = live.config.clone();
+        scratch.api_base_url = live.api_base_url.clone();
+        scratch.model_name = live.model_name.clone();
+        let (url, model) = (scratch.api_base_url.clone(), scratch.model_name.clone());
+        (
+            std::sync::Arc::new(tokio::sync::Mutex::new(scratch)),
+            url,
+            model,
+        )
+    };
+    let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(crate::network::StreamBuffer::new()));
+    let cancel = cancel_token.map_or_else(tokio_util::sync::CancellationToken::new, |token| {
+        token.child_token()
+    });
+    let messages = vec![
+        serde_json::json!({"role": "system", "content": HANDOFF_INSTRUCTIONS}),
+        serde_json::json!({"role": "user", "content": user_content}),
+    ];
+    let request = crate::network::stream_request(
+        client,
+        scratch,
+        cancel.clone(),
+        &url,
+        &model,
+        messages,
+        std::sync::Arc::clone(&buffer),
+        true,
+        false,
+        crate::network::stream_request::ThinkingMode::Disabled,
+        crate::tools::ToolSchemaPolicy::root(false),
+        Some(&request_id),
+        None,
+    );
+    let finished = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => false,
+        result = tokio::time::timeout(SESSION_SUMMARY_TIMEOUT, request) => {
+            matches!(result, Ok(Ok(_)))
+        }
+    };
+    if !finished {
+        cancel.cancel();
+        return None;
+    }
+    let content = buffer.lock().await.content.clone();
+    let content = rustcode_tool_protocol::text::strip_think_blocks(&content);
+    parse_summary_response(&serde_json::json!({
+        "choices": [{"message": {"content": content}}]
+    }))
+}
+
 async fn request_summary(
     client: &reqwest::Client,
     url: &str,
@@ -1082,6 +1176,9 @@ async fn request_summary(
     user_content: &str,
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Option<String> {
+    if let Ok(session) = SUMMARY_SESSION.try_with(std::sync::Arc::clone) {
+        return request_session_summary(client, &session, user_content, cancel_token).await;
+    }
     let payload = serde_json::json!({
         "model": model,
         "messages": [
