@@ -4,15 +4,17 @@ import Foundation
 /// terminal's agent picker shows for each child.
 public struct SubagentInfo: Identifiable, Equatable, Sendable {
     public enum Status: String, Equatable, Sendable {
-        case queued, running, interrupted, completed, failed, cancelled
+        /// `cancelling`: a stop was asked for and the child has not ended yet.
+        case queued, running, cancelling, interrupted, completed, failed, cancelled
 
         /// Still working or waiting to: the chat keeps polling for it.
-        public var isActive: Bool { self == .queued || self == .running }
+        public var isActive: Bool { self == .queued || self == .running || self == .cancelling }
 
         public var label: String {
             switch self {
             case .queued: "Queued"
             case .running: "Running"
+            case .cancelling: "Cancelling…"
             case .interrupted: "Interrupted"
             case .completed: "Done"
             case .failed: "Failed"
@@ -38,6 +40,10 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
     public var finishedAt: Date?
     /// The summary the child returned when it finished.
     public var completion: String?
+    /// When the child last made progress: a model answer, a finished tool
+    /// call or a status change.
+    public var lastActivity: Date?
+    public var toolCalls: Int
 
     public var isActive: Bool { status.isActive || activeTurn }
 
@@ -57,6 +63,27 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
         startedAt = json["startedAtMs"]?.doubleValue.map { Date(timeIntervalSince1970: $0 / 1000) }
         finishedAt = json["finishedAtMs"]?.doubleValue.map { Date(timeIntervalSince1970: $0 / 1000) }
         completion = json["completion"]?.stringValue
+        lastActivity = json["lastActivityMs"]?.doubleValue.map { Date(timeIntervalSince1970: $0 / 1000) }
+        toolCalls = json["toolCalls"]?.intValue ?? 0
+    }
+
+    /// How long a working child may go without progress before the chat says
+    /// so, instead of showing a plain spinner as if all were well (#2558).
+    public static let quietAfter: TimeInterval = 60
+
+    /// `No activity for 14m` while an active child has made no progress for
+    /// a minute or more; nil while it is moving or once it has ended.
+    public func quietLabel(now: Date = Date()) -> String? {
+        guard isActive, let last = lastActivity ?? startedAt else { return nil }
+        let seconds = Int(now.timeIntervalSince(last))
+        guard Double(seconds) >= Self.quietAfter else { return nil }
+        return seconds < 3600 ? "No activity for \(seconds / 60)m" : "No activity for \(seconds / 3600)h"
+    }
+
+    /// Whether an `agents` cancel answer says the child has ended, rather
+    /// than that it is still cancelling.
+    public static func cancelSettled(_ result: JSONValue) -> Bool {
+        !(result["message"]?.stringValue ?? "").contains("still cancelling")
     }
 
     /// The children the sidebar nests under their chat (#2492): those still

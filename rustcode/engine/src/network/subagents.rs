@@ -408,6 +408,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 agent.performance.input_tokens = request_performance.input_tokens;
                 agent.performance.output_tokens = request_performance.output_tokens;
                 agent.performance.cached_input_tokens = request_performance.cached_input_tokens;
+                agent.last_activity_ms = Some(crate::app::subagent_controller::now_ms());
             }
         }
         crate::logger::operational_event(
@@ -631,6 +632,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         agent
                             .performance
                             .record_tool_batch(elapsed, work, user_wait);
+                        agent.last_activity_ms = Some(crate::app::subagent_controller::now_ms());
                     }
                 }
                 let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content)
@@ -824,6 +826,29 @@ async fn project_subagent_completion(
     );
 }
 
+/// Messages waiting for the agent that called `wait_agent`: the root's
+/// mailbox, or the calling child's own.
+async fn waiter_mail_count(
+    state: &Arc<Mutex<AppState>>,
+    supervisor: &crate::app::SubagentSupervisor,
+    waiter: Option<u32>,
+) -> usize {
+    match waiter {
+        None => supervisor.root_agent_message_count(),
+        Some(waiter) => state
+            .lock()
+            .await
+            .subagents
+            .iter()
+            .find(|agent| agent.id == waiter)
+            .map_or(0, |agent| agent.mailbox.len()),
+    }
+}
+
+/// How long `cancel_agent` waits for the child to reach its terminal state,
+/// so a prompt stop is reported as done rather than only requested.
+const CANCEL_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Cancel the child `id` and its descendants, as `cancel_agent` and the
 /// macOS app's agent panel do. An interrupted child that is no longer running
 /// is marked cancelled at once.
@@ -864,14 +889,36 @@ pub(crate) async fn cancel_subagent_tree(
     for child in descendants.iter().skip(1) {
         let _ = supervisor.cancel(crate::app::SubagentId::from_raw(*child));
     }
+    let target = crate::app::SubagentId::from_raw(id);
     supervisor
-        .cancel(crate::app::SubagentId::from_raw(id))
-        .map(|()| {
-            format!(
-                "cancellation requested for subagent {id}; use wait_agent for its terminal result"
-            )
-        })
-        .map_err(|error| error.to_string())
+        .cancel(target)
+        .map_err(|error| error.to_string())?;
+    // Cancellation aborts the child's model request, tool call or pending
+    // approval, so it normally settles at once. Report what happened.
+    let settled = tokio::time::timeout(
+        CANCEL_SETTLE,
+        supervisor.wait_result(target, || async { false }),
+    )
+    .await;
+    Ok(match settled {
+        Ok(Ok(Some(completion))) => {
+            let status = match completion.status {
+                crate::app::SubAgentStatus::Cancelled => "cancelled",
+                crate::app::SubAgentStatus::Completed => "completed before the cancel took effect",
+                crate::app::SubAgentStatus::Failed => "failed",
+                crate::app::SubAgentStatus::Interrupted => "interrupted",
+                crate::app::SubAgentStatus::Queued | crate::app::SubAgentStatus::Running => {
+                    "stopped"
+                }
+            };
+            format!("subagent {id} {status}")
+        }
+        _ => format!(
+            "cancellation requested for subagent {id}; it is still cancelling after {}s. \
+             Use wait_agent for its terminal result",
+            CANCEL_SETTLE.as_secs()
+        ),
+    })
 }
 
 pub(crate) fn launch_subagent_turn(
@@ -1600,32 +1647,39 @@ async fn handle_agent_tool_for_parent(
                         .and_then(|agent| agent.parent_id);
                 }
             }
+            // Other children's activity wakes the wait; only the result, a
+            // new message for the waiter, the timeout or a cancel end it
+            // (#2559). Before, any wake-up returned without the result.
+            let mail_before = waiter_mail_count(state, &supervisor, parent_id).await;
             let wait = supervisor.yield_while_waiting(parent_id.map(crate::app::SubagentId::from_raw), async {
+                let result = supervisor.wait_result(crate::app::SubagentId::from_raw(id), || async {
+                    waiter_mail_count(state, &supervisor, parent_id).await > mail_before
+                });
                 tokio::select! {
-                    result = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), supervisor.wait_event(crate::app::SubagentId::from_raw(id))) => result,
+                    result = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), result) => result,
                     _ = cancel_token.cancelled() => Ok(Err(crate::app::SubagentError::WaitCancelled(crate::app::SubagentId::from_raw(id)))),
                 }
             }).await;
-            let completion =
-                match wait {
-                    Ok(result) => match result {
-                        Ok(Some(completion)) => completion,
-                        Ok(None) => return crate::tools::ToolExecutionOutput::success(
-                            "Agent activity received; inspect agents or continue the current task"
-                                .into(),
-                        ),
-                        Err(error) => {
-                            return crate::tools::ToolExecutionOutput::failure(format!(
-                                "error: {error}"
-                            ));
-                        }
-                    },
-                    Err(_) => {
+            let completion = match wait {
+                Ok(result) => match result {
+                    Ok(Some(completion)) => completion,
+                    Ok(None) => {
                         return crate::tools::ToolExecutionOutput::success(format!(
-                            "subagent {id} wait timed out; task remains available"
+                            "a message for you arrived while waiting; subagent {id} is still working. Read the message, then call wait_agent again for its result"
                         ));
                     }
-                };
+                    Err(error) => {
+                        return crate::tools::ToolExecutionOutput::failure(format!(
+                            "error: {error}"
+                        ));
+                    }
+                },
+                Err(_) => {
+                    return crate::tools::ToolExecutionOutput::success(format!(
+                        "subagent {id} wait timed out; task remains available"
+                    ));
+                }
+            };
             if parent_id.is_none() {
                 supervisor.mark_completion_delivered(id);
             }
@@ -2371,6 +2425,130 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["original", "older evidence", "followup"]
         );
+    }
+
+    fn spawn_test_child(s: &mut AppState, task: &str) -> crate::app::SubagentId {
+        crate::app::SubagentController.spawn(s, task, None, None, false, Vec::new(), None, None)
+    }
+
+    /// Another child's activity wakes the wait but does not end it: the
+    /// caller gets the result it asked for, not a bare "activity" (#2559).
+    #[tokio::test]
+    async fn wait_keeps_waiting_through_another_childs_activity() {
+        let mut s = AppState::new();
+        s.delegation_active = true;
+        let slow = spawn_test_child(&mut s, "slow");
+        let fast = spawn_test_child(&mut s, "fast");
+        let supervisor = s.subagent_supervisor.clone();
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        supervisor
+            .spawn(
+                slow,
+                tokio_util::sync::CancellationToken::new(),
+                async move {
+                    let _ = released.await;
+                    Ok("slow result".to_string())
+                },
+            )
+            .unwrap();
+        let state = Arc::new(Mutex::new(s));
+        let wait = {
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                handle_agent_tool(
+                    &reqwest::Client::new(),
+                    &state,
+                    &tokio_util::sync::CancellationToken::new(),
+                    "wait_agent",
+                    &serde_json::json!({"id": slow.raw(), "timeout_ms": 10_000}),
+                )
+                .await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // Unrelated activity: another child finishes and announces itself.
+        supervisor
+            .spawn(fast, tokio_util::sync::CancellationToken::new(), async {
+                Ok("fast result".to_string())
+            })
+            .unwrap();
+        supervisor.send_completion_notice(fast.raw(), "completed", "fast result");
+        supervisor.notify_activity();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(!wait.is_finished(), "the wait returned without the result");
+        release.send(()).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+            .await
+            .expect("the wait ends with the result")
+            .unwrap();
+        assert!(result.success, "{}", result.content);
+        assert!(result.content.contains("slow result"), "{}", result.content);
+    }
+
+    /// A message for the waiter does end the wait, so it can read it.
+    #[tokio::test]
+    async fn wait_returns_early_for_a_new_message_to_the_waiter() {
+        let mut s = AppState::new();
+        s.delegation_active = true;
+        let slow = spawn_test_child(&mut s, "slow");
+        let supervisor = s.subagent_supervisor.clone();
+        supervisor
+            .spawn(
+                slow,
+                tokio_util::sync::CancellationToken::new(),
+                std::future::pending(),
+            )
+            .unwrap();
+        let state = Arc::new(Mutex::new(s));
+        let wait = {
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                handle_agent_tool(
+                    &reqwest::Client::new(),
+                    &state,
+                    &tokio_util::sync::CancellationToken::new(),
+                    "wait_agent",
+                    &serde_json::json!({"id": slow.raw(), "timeout_ms": 10_000}),
+                )
+                .await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        supervisor
+            .send_root_message(slow.raw(), "halfway: found parse()".into())
+            .unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+            .await
+            .expect("a message ends the wait")
+            .unwrap();
+        assert!(
+            result.success && result.content.contains("still working"),
+            "{}",
+            result.content
+        );
+        supervisor.shutdown_and_wait().await;
+    }
+
+    /// `cancel_agent` reports the terminal state once the child stops,
+    /// instead of only saying cancellation was requested (#2558).
+    #[tokio::test]
+    async fn cancel_reports_the_terminal_state_once_the_child_stops() {
+        let mut s = AppState::new();
+        s.delegation_active = true;
+        let child = spawn_test_child(&mut s, "stuck");
+        let supervisor = s.subagent_supervisor.clone();
+        supervisor
+            .spawn(
+                child,
+                tokio_util::sync::CancellationToken::new(),
+                std::future::pending(),
+            )
+            .unwrap();
+        let state = Arc::new(Mutex::new(s));
+        let message = cancel_subagent_tree(&state, child.raw()).await.unwrap();
+        assert_eq!(message, format!("subagent {} cancelled", child.raw()));
+        assert!(!supervisor.is_active(child));
+        assert!(!supervisor.cancel_requested(child));
     }
 
     #[test]

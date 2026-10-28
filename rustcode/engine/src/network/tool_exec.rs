@@ -279,6 +279,14 @@ pub(crate) async fn ask_user_question(
     (out, user_wait)
 }
 
+/// Why a per-call confirmation ended without an answer.
+enum ConfirmationWaitEnd {
+    /// The prompt was dropped without an answer.
+    Closed,
+    /// The caller's cancellation token fired while it waited.
+    Cancelled,
+}
+
 pub(crate) async fn confirm_and_execute(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -787,44 +795,81 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 (preview, content.len())
             }
         };
-        let (tx, rx) = tokio::sync::oneshot::channel::<crate::app::ToolConfirmationResponse>();
         let start_wait = std::time::Instant::now();
-        {
-            let mut s = state.lock().await;
-            s.modal_scroll_row = 0;
-            s.tool_confirmation_selected = 0;
-            s.pending_tool_confirmation = Some(vec![ToolConfirmation {
-                request_id: Some(
-                    call_id
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("local:{}", stable_arguments_hash(args))),
-                ),
-                tool_name: display_name.to_string(),
-                path,
-                content_preview: preview,
-                content_bytes,
-                rememberable_prefix: (name == "run_command")
-                    .then(|| crate::tools::rememberable_command_prefix_for_call(args))
-                    .flatten(),
-                forbidden_prefix: (name == "run_command")
-                    .then(|| crate::tools::rememberable_command_forbid_prefix_for_call(args))
-                    .flatten(),
-            }]);
-            s.pending_approval_details = Some(vec![
-                mcp_approval
-                    .as_ref()
-                    .map_or(args, |approval| &approval.arguments)
-                    .to_string(),
-            ]);
-            s.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
-            s.tool_confirmation_response = Some(tx);
-            s.status = AppStatus::AwaitingToolConfirmation;
-            s.begin_user_wait(start_wait);
-            s.request_redraw();
-        }
-        let _ = crate::notifications::notify_pending_confirmation(name);
-        dbg_log!("Awaiting user confirmation for '{}'", name);
-        let rx_res = rx.await;
+        let request_id = call_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("local:{}", stable_arguments_hash(args)));
+        let external_approver = state.lock().await.external_tool_approver.clone();
+        let used_modal = external_approver.is_none();
+        let rx_res = if let Some(approver) = external_approver {
+            state.lock().await.begin_user_wait(start_wait);
+            dbg_log!("Asking the frontend to approve '{}'", name);
+            let request = crate::app::ExternalApprovalRequest {
+                call: crate::tools::ToolCall {
+                    name: name.to_string(),
+                    arguments: args.clone(),
+                    call_id: call_id.map(str::to_owned),
+                },
+                title: display_name.to_string(),
+            };
+            tokio::select! {
+                response = (approver.0)(request) => Ok(response),
+                _ = cancel_token.cancelled() => Err(ConfirmationWaitEnd::Cancelled),
+            }
+        } else {
+            let (tx, rx) = tokio::sync::oneshot::channel::<crate::app::ToolConfirmationResponse>();
+            {
+                let mut s = state.lock().await;
+                s.modal_scroll_row = 0;
+                s.tool_confirmation_selected = 0;
+                s.pending_tool_confirmation = Some(vec![ToolConfirmation {
+                    request_id: Some(request_id.clone()),
+                    tool_name: display_name.to_string(),
+                    path,
+                    content_preview: preview,
+                    content_bytes,
+                    rememberable_prefix: (name == "run_command")
+                        .then(|| crate::tools::rememberable_command_prefix_for_call(args))
+                        .flatten(),
+                    forbidden_prefix: (name == "run_command")
+                        .then(|| crate::tools::rememberable_command_forbid_prefix_for_call(args))
+                        .flatten(),
+                }]);
+                s.pending_approval_details = Some(vec![
+                    mcp_approval
+                        .as_ref()
+                        .map_or(args, |approval| &approval.arguments)
+                        .to_string(),
+                ]);
+                s.pending_approval_batch_id = Some(crate::controller::next_approval_batch_id());
+                s.tool_confirmation_response = Some(tx);
+                s.status = AppStatus::AwaitingToolConfirmation;
+                s.begin_user_wait(start_wait);
+                s.request_redraw();
+            }
+            let _ = crate::notifications::notify_pending_confirmation(name);
+            dbg_log!("Awaiting user confirmation for '{}'", name);
+            tokio::select! {
+                response = rx => response.map_err(|_| ConfirmationWaitEnd::Closed),
+                _ = cancel_token.cancelled() => {
+                    // A cancelled caller (a subagent stopped by `cancel_agent`)
+                    // withdraws its own prompt; another caller's stays.
+                    let mut s = state.lock().await;
+                    let ours = s.pending_tool_confirmation.as_ref().is_some_and(|pending| {
+                        pending.len() == 1
+                            && pending[0].request_id.as_deref() == Some(request_id.as_str())
+                    });
+                    if ours {
+                        s.pending_tool_confirmation = None;
+                        s.pending_approval_details = None;
+                        s.pending_approval_batch_id = None;
+                        s.tool_confirmation_response = None;
+                        s.request_redraw();
+                    }
+                    Err(ConfirmationWaitEnd::Cancelled)
+                }
+            }
+        };
         user_wait_dur = start_wait.elapsed();
         state.lock().await.exclude_user_wait(user_wait_dur);
 
@@ -859,8 +904,10 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
         let res = match rx_res {
             Ok(crate::app::ToolConfirmationResponse::ForbidAndRemember(_)) => {
                 let mut s = state.lock().await;
-                s.pending_tool_confirmation = None;
-                s.status = AppStatus::Streaming;
+                if used_modal {
+                    s.pending_tool_confirmation = None;
+                    s.status = AppStatus::Streaming;
+                }
                 s.request_redraw();
                 confirmation_transition_redrawn = true;
                 crate::tools::ToolExecutionOutput::failure_with_kind(
@@ -877,9 +924,11 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 let tool_name = name.to_string();
                 {
                     let mut s = state.lock().await;
-                    s.pending_tool_confirmation = None;
-                    s.status = AppStatus::Streaming;
-                    s.stream_tracker = Some(StreamTracker::new());
+                    if used_modal {
+                        s.pending_tool_confirmation = None;
+                        s.status = AppStatus::Streaming;
+                        s.stream_tracker = Some(StreamTracker::new());
+                    }
                     s.running_tools.push(tool_name.clone());
                     s.request_redraw();
                 }
@@ -914,7 +963,15 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                     false,
                 )
             }
-            Err(_) => {
+            Err(ConfirmationWaitEnd::Cancelled) => {
+                dbg_log!("Confirmation for '{}' withdrawn: caller cancelled", name);
+                crate::tools::ToolExecutionOutput::failure_with_kind(
+                    "error: tool call was not run because the caller was cancelled".to_string(),
+                    crate::tools::ToolErrorKind::Cancelled,
+                    false,
+                )
+            }
+            Err(ConfirmationWaitEnd::Closed) => {
                 dbg_log!("Confirmation channel closed for '{}'", name);
                 crate::tools::ToolExecutionOutput::failure_with_kind(
                     "error: confirmation channel closed".to_string(),
@@ -923,7 +980,7 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
                 )
             }
         };
-        {
+        if used_modal {
             let mut s = state.lock().await;
             let pending_changed = s.pending_tool_confirmation.take().is_some();
             let status_changed = s.status != AppStatus::Streaming;

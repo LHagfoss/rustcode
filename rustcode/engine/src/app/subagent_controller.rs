@@ -303,6 +303,18 @@ impl SubagentSupervisor {
             .contains_key(&id)
     }
 
+    /// Whether `cancel` was asked of the running child `id` that has not
+    /// finished yet: the child is cancelling, not working.
+    pub(crate) fn cancel_requested(&self, id: SubagentId) -> bool {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active
+            .get(&id)
+            .is_some_and(|child| child.cancel_token.is_cancelled())
+    }
+
     pub(crate) fn cancel(&self, id: SubagentId) -> Result<(), SubagentError> {
         let cancel_token = self
             .inner
@@ -388,6 +400,42 @@ impl SubagentSupervisor {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .completion_delivered
             .remove(&id);
+    }
+
+    /// Messages from agents waiting in the root mailbox, leaving out the
+    /// harness's completion notices: those repeat a result `wait_agent`
+    /// already returns, so they are no reason to stop waiting.
+    pub(crate) fn root_agent_message_count(&self) -> usize {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .root_mailbox
+            .iter()
+            .filter(|mail| !mail.message.starts_with(COMPLETION_NOTICE_PREFIX))
+            .count()
+    }
+
+    /// Wait for `id`'s result through unrelated activity. Ends early with
+    /// `None` only when `new_mail` reports a message for the waiter, which
+    /// it is asked after every wake-up.
+    pub(crate) async fn wait_result<F, Fut>(
+        &self,
+        id: SubagentId,
+        mut new_mail: F,
+    ) -> Result<Option<SubagentCompletion>, SubagentError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = bool>,
+    {
+        loop {
+            if let Some(result) = self.wait_event(id).await? {
+                return Ok(Some(result));
+            }
+            if new_mail().await {
+                return Ok(None);
+            }
+        }
     }
 
     pub(crate) fn root_messages(&self) -> Vec<RootAgentMessage> {
@@ -667,6 +715,7 @@ impl SubagentController {
             finished_at_ms: None,
             completion: None,
             performance: Default::default(),
+            last_activity_ms: Some(now_ms()),
         });
         state.request_redraw();
         id
@@ -739,6 +788,7 @@ impl SubagentController {
             return Err(SubagentError::MissingId(id));
         };
         agent.status = status;
+        agent.last_activity_ms = Some(now_ms());
         agent.active_turn = matches!(status, SubAgentStatus::Running | SubAgentStatus::Queued);
         if status == SubAgentStatus::Running && agent.started_at_ms.is_none() {
             agent.started_at_ms = Some(now_ms());
