@@ -1160,15 +1160,21 @@ private struct ChatView: View {
                 TranscriptKeyInput.shared.isCovered = { [model] in model.coversChat }
                 TranscriptKeyInput.shared.perform = { action in perform(action, proxy) }
             }
-            .onGeometryChange(for: CGRect.self) { proxy in
-                // Only the part of the chat between the title bar and the
-                // composer: scrolling the composer or a card above it is not
-                // the reader scrolling the chat.
+            .onGeometryChange(for: [CGRect].self) { proxy in
+                // Clicks: only the part of the chat between the title bar and
+                // the composer. Wheels: also the band beside and below the
+                // composer, which the scroll view reaches under and scrolls
+                // (#2554); the composer itself is left out where it is drawn.
                 let frame = proxy.frame(in: .global)
                 let insets = proxy.safeAreaInsets
-                return CGRect(x: frame.minX, y: frame.minY + insets.top, width: frame.width,
-                              height: max(frame.height - insets.top - insets.bottom, 0))
-            } action: { ChatScrollInput.shared.chatFrame = $0 }
+                return [CGRect(x: frame.minX, y: frame.minY + insets.top, width: frame.width,
+                               height: max(frame.height - insets.top - insets.bottom, 0)),
+                        CGRect(x: frame.minX, y: frame.minY + insets.top, width: frame.width,
+                               height: max(frame.height - insets.top, 0))]
+            } action: { frames in
+                ChatScrollInput.shared.chatFrame = frames[0]
+                ChatScrollInput.shared.wheelFrame = frames[1]
+            }
             .onChange(of: first) { _, _ in restoreTop(proxy) }
             .onChange(of: transcript.identity, initial: true) { _, identity in
                 scroll.chatChanged()
@@ -1248,6 +1254,10 @@ private struct ChatView: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             }
             .frame(maxWidth: Self.columnMaxWidth)
+            // The composer and the cards above it scroll their own text.
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                ChatScrollInput.shared.composerFrame = $0
+            }
             .padding(.horizontal, 28)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity)
@@ -1752,8 +1762,14 @@ private extension View {
 @MainActor
 final class ChatScrollInput {
     static let shared = ChatScrollInput()
-    /// The chat's scroll view in window coordinates, top-left origin.
+    /// The chat's scroll view in window coordinates, top-left origin,
+    /// between the title bar and the composer.
     var chatFrame: CGRect = .zero
+    /// The chat's scroll view below the title bar, with the band beside and
+    /// below the composer that a wheel over it scrolls.
+    var wheelFrame: CGRect = .zero
+    /// The composer and the cards above it.
+    var composerFrame: CGRect = .zero
     var onScrollUp: () -> Void = {}
     private var lastInput = Date.distantPast
     private var monitor: Any?
@@ -1769,6 +1785,15 @@ final class ChatScrollInput {
             let consumed = MainActor.assumeIsolated { ChatScrollInput.shared.observe(event) }
             return consumed ? nil : event
         }
+    }
+
+    /// Whether a wheel at `point` scrolls the chat: anywhere over its scroll
+    /// view, which reaches under the composer's band, except the composer and
+    /// the cards above it. A wheel beside the composer scrolled the chat
+    /// without counting as the reader's, so a streaming reply pulled the chat
+    /// back to its end on every token (#2554).
+    static func wheelScrollsChat(at point: CGPoint, chat: CGRect, composer: CGRect) -> Bool {
+        chat.contains(point) && !composer.contains(point)
     }
 
     #if DEBUG
@@ -1793,7 +1818,12 @@ final class ChatScrollInput {
         }
         guard let content = event.window?.contentView else { return false }
         let location = event.locationInWindow
-        guard chatFrame.contains(CGPoint(x: location.x, y: content.bounds.height - location.y)) else { return false }
+        let point = CGPoint(x: location.x, y: content.bounds.height - location.y)
+        if event.type == .scrollWheel {
+            guard Self.wheelScrollsChat(at: point, chat: wheelFrame, composer: composerFrame) else { return false }
+        } else {
+            guard chatFrame.contains(point) else { return false }
+        }
         if event.type == .leftMouseDown {
             if TextSelection.endIfOutsideText(event) {
                 GutterSelection.shared.begin(event, in: chatFrame)
@@ -2243,6 +2273,9 @@ private struct Composer: View {
                 }
             HStack(spacing: 8) {
                 addMenu
+                // In the composer's own row, so it covers neither the end of
+                // the chat nor the composer's text (#2555).
+                AgentPill(model: model)
                 Spacer(minLength: 0)
                 if let usage = model.planUsage {
                     PlanUsageMeter(usage: usage) { Task { await model.refreshPlanUsage() } }
@@ -2264,14 +2297,6 @@ private struct Composer: View {
             if isDropTarget {
                 RoundedRectangle(cornerRadius: 22).strokeBorder(Color.brand, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             }
-        }
-        // Above the top edge, so working agents take no room in the composer
-        // (#2327) and never cover its text or buttons (#2492); leading, clear
-        // of the Latest button on the right.
-        .overlay(alignment: .topLeading) {
-            AgentPill(model: model)
-                .alignmentGuide(.top) { $0[.bottom] + 8 }
-                .padding(.leading, 18)
         }
         .animation(.snappy(duration: 0.2), value: SubagentInfo.workingLabel(model.subagents))
         .animation(.snappy(duration: 0.25), value: model.selectedQueue.isEmpty)

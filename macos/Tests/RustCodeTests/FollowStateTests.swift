@@ -48,4 +48,20 @@ final class FollowStateTests: XCTestCase {
         XCTAssertEqual(SidebarResizeHandle.clamp(10_000), SidebarResizeHandle.range.upperBound)
         XCTAssertEqual(SidebarResizeHandle.clamp(-50), SidebarResizeHandle.range.lowerBound)
     }
+
+    /// #2554: a wheel beside or below the composer scrolls the chat, so it is
+    /// the reader's scroll and lets go of the end; one over the composer or a
+    /// card above it scrolls that, not the chat.
+    func testAWheelBesideTheComposerIsTheReaders() {
+        let chat = CGRect(x: 280, y: 52, width: 900, height: 700)
+        let composer = CGRect(x: 400, y: 620, width: 660, height: 110)
+        XCTAssertTrue(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 700, y: 300), chat: chat, composer: composer))
+        // Beside the composer, and in the gap under it.
+        XCTAssertTrue(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 320, y: 680), chat: chat, composer: composer))
+        XCTAssertTrue(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 700, y: 745), chat: chat, composer: composer))
+        XCTAssertFalse(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 700, y: 650), chat: chat, composer: composer))
+        // The title bar and the sidebar are not the chat.
+        XCTAssertFalse(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 700, y: 20), chat: chat, composer: composer))
+        XCTAssertFalse(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 100, y: 300), chat: chat, composer: composer))
+    }
 }

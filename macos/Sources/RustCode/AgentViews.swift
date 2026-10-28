@@ -1,10 +1,11 @@
 import RustCodeKit
 import SwiftUI
 
-/// While the shown chat's agents work, a small pill over the composer's top
-/// edge: `● 2 agents working ▾`. A click lists them as chips, and a chip
-/// opens that agent's panel. It takes no room in the composer and goes once
-/// every agent finished; their rows in the chat still open them (#2327).
+/// While the shown chat's agents work, a small pill in the composer's button
+/// row beside +: `● 2 agents working ▾`. A click lists them as chips, and a
+/// chip opens that agent's panel. Over the chat it covered the end of the
+/// transcript (#2555). It goes once every agent finished; their rows in the
+/// chat still open them (#2327).
 struct AgentPill: View {
     @ObservedObject var model: DesktopModel
     @State private var showsList = false
@@ -15,17 +16,17 @@ struct AgentPill: View {
                 HStack(spacing: 6) {
                     Circle().fill(Color.brand).frame(width: 6, height: 6)
                         .modifier(Pulse())
-                    Text(label).fontWeight(.medium).monospacedDigit()
-                    Image(systemName: "chevron.down")
+                    Text(label).fontWeight(.medium).monospacedDigit().lineLimit(1)
+                    Image(systemName: "chevron.up")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(showsList ? 180 : 0))
                 }
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .frame(height: 24)
+                .font(.callout)
+                .padding(.horizontal, 11)
+                .frame(height: 30)
+                .background(showsList ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.fill.tertiary), in: .capsule)
                 .contentShape(.capsule)
-                .interactiveGlassSurface(in: .capsule)
             }
             .buttonStyle(.plain)
             .pointingHandCursor()
@@ -35,7 +36,7 @@ struct AgentPill: View {
             .popover(isPresented: $showsList, arrowEdge: .top) {
                 AgentList(model: model) { showsList = false }
             }
-            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
         }
     }
 }
