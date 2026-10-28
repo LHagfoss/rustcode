@@ -1,7 +1,7 @@
 import RustCodeKit
 import SwiftUI
 
-/// ⌘K: a Liquid Glass panel at the top of the window for jumping to a chat
+/// ⌘K: a Liquid Glass panel in the upper middle of the window for jumping to a chat
 /// (`SessionSwitcher`). Type to search, ↑↓ to move, ⏎ to open, ⇥ to switch
 /// between All and Project, Esc to close.
 /// The open chat stays as it is until a row is picked.
@@ -9,25 +9,49 @@ struct SessionSwitcherOverlay: View {
     @ObservedObject var model: DesktopModel
 
     var body: some View {
-        ZStack(alignment: .top) {
-            if model.showsSwitcher {
-                Color.black.opacity(0.12)
-                    .ignoresSafeArea()
-                    .contentShape(.rect)
-                    .onTapGesture { model.showsSwitcher = false }
-                    .transition(.opacity)
-                SessionSwitcherPanel(model: model)
-                    .padding(.top, 72)
-                    .padding(.horizontal, 28)
-                    .transition(.scale(scale: 0.96, anchor: .top).combined(with: .opacity))
+        GeometryReader { window in
+            ZStack(alignment: .top) {
+                if model.showsSwitcher {
+                    Color.black.opacity(0.12)
+                        .ignoresSafeArea()
+                        .contentShape(.rect)
+                        .onTapGesture { model.showsSwitcher = false }
+                        .transition(.opacity)
+                    SessionSwitcherPanel(model: model, width: Self.panelWidth(windowWidth: window.size.width))
+                        .padding(.top, Self.topInset(windowHeight: window.size.height))
+                        .transition(.scale(scale: 0.96, anchor: .top).combined(with: .opacity))
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .animation(.snappy(duration: 0.18), value: model.showsSwitcher)
+    }
+
+    /// The panel at its tallest: field, a full list and the footer.
+    static let tallestPanel: Double = 52 + 420 + 34
+
+    /// A panel with a handful of results.
+    static let typicalPanel: Double = 360
+
+    /// Where the panel's top sits: a typical panel a little above the middle,
+    /// as a launcher is, while a full one still fits above the bottom edge,
+    /// and never under the title bar (#2528). The top stays put while results
+    /// change, so typing never moves the field.
+    static func topInset(windowHeight: Double) -> Double {
+        let centered = (windowHeight - typicalPanel) * 0.42
+        let highest = min(windowHeight * 0.3, windowHeight - 16 - tallestPanel)
+        return max(min(centered, highest), 72)
+    }
+
+    /// 600 pt, narrowed to fit a compact window with 28 pt each side.
+    static func panelWidth(windowWidth: Double) -> Double {
+        min(600, max(windowWidth - 56, 320))
     }
 }
 
 private struct SessionSwitcherPanel: View {
     @ObservedObject var model: DesktopModel
+    let width: Double
     @State private var query = ""
     /// The highlighted chat, kept by id so rows arriving under it do not
     /// move the highlight to another chat.
@@ -56,7 +80,7 @@ private struct SessionSwitcherPanel: View {
             list(results, selection: selection)
             footer
         }
-        .frame(width: 600)
+        .frame(width: width)
         // The rows and the footer's band are clipped to the panel's shape,
         // or their square bottom corners show past the glass's round ones.
         .clipShape(Self.shape)
