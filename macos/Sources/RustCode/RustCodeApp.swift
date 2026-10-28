@@ -420,6 +420,9 @@ final class DesktopModel: ObservableObject {
         didSet { TurnNotifier.shared.setBadge(permissionQueue.count) }
     }
     @Published var models = ModelOptions.empty
+    /// The plan's 5-hour and weekly windows for the shown chat's account, when
+    /// the engine knows them (#2545).
+    @Published var planUsage: PlanUsage?
     /// The model and effort new chats start with, shared with the terminal UI.
     @Published private(set) var modelDefaults: ModelDefaults?
     @Published var selectedModel: String?
@@ -1164,6 +1167,17 @@ final class DesktopModel: ObservableObject {
         let count = commandSuggestions.count
         guard count > 0 else { return }
         commandSelection = ((commandSelection + step) % count + count) % count
+    }
+
+    /// Ask the engine for the shown chat's plan usage. An engine without the
+    /// request, or an account with no windows, leaves the meter hidden.
+    func refreshPlanUsage() async {
+        guard let connection = engineConnection, let id = selectedSession else { return }
+        let answer = try? await connection.request(ACPMethod.usageLimits, params: ACPRequests.usageLimits(sessionId: id),
+                                                   timeout: .seconds(15))
+        guard id == selectedSession else { return }
+        let usage = PlanUsage(json: answer)
+        if usage != planUsage { planUsage = usage }
     }
 
     /// Open the context sheet on the chat's latest breakdown.
@@ -2121,6 +2135,7 @@ final class DesktopModel: ObservableObject {
         // engine listed every session.
         touchSession(id)
         Task { await refreshSessions() }
+        if id == selectedSession { Task { await refreshPlanUsage() } }
         if let turn { turnActivity.end(turn) }
         // A queued message starts at once, with no wait in between, so
         // "Working" stays up across the hand-off instead of blinking off.

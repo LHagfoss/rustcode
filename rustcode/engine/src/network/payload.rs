@@ -3,29 +3,46 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppState>>) {
-    let (url, model_name, api_key_opt, chatgpt_plan) = {
+    let (url, model_name, api_key_opt, chatgpt_plan, chatgpt_sign_in) = {
         let s = state.lock().await;
         let active_url = s.api_base_url.clone();
-        let chatgpt_plan = s.active_model_profile().is_some_and(|profile| {
-            profile
-                .credential
-                .as_ref()
-                .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli())
-        });
+        let binding = s
+            .active_model_profile()
+            .and_then(|profile| profile.credential.clone());
+        let chatgpt_plan = binding
+            .as_ref()
+            .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli());
+        let chatgpt_sign_in = binding.as_ref().is_some_and(|binding| binding.is_chatgpt());
         let key = s
             .config
             .models
             .iter()
             .find(|m| m.url == active_url || m.model == s.model_name)
             .and_then(|m| m.api_key.clone());
-        (active_url, s.model_name.clone(), key, chatgpt_plan)
+        (
+            active_url,
+            s.model_name.clone(),
+            key,
+            chatgpt_plan,
+            chatgpt_sign_in,
+        )
     };
 
     // Subscription flows (ChatGPT plan, Claude Code CLI) have no account quota
     // endpoint; quota windows arrive with their responses instead. Show the last reported short window
     // and never probe a proxy route.
     if chatgpt_plan {
+        // A ChatGPT sign-in's responses carry no windows; a signed-in Codex
+        // CLI reports them for the same plan (#2545).
+        let codex = if chatgpt_sign_in {
+            crate::provider_auth::codex_usage::rate_limits().await
+        } else {
+            None
+        };
         let mut state = state.lock().await;
+        if let Some(limits) = codex {
+            state.provider_rate_limits = Some(limits);
+        }
         state.model_quota_remaining = state
             .provider_rate_limits
             .as_ref()
