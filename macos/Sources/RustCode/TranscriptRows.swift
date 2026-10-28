@@ -362,7 +362,6 @@ private struct AssistantMessage: View {
     /// of steps. Copy is in its menu.
     var isStep = false
     @Environment(\.messageActions) private var messageActions
-    @AppStorage(SmartUI.enabledKey) private var smartUI = false
 
     private struct Parsed {
         var blocks: [AssistantBlock]
@@ -390,7 +389,7 @@ private struct AssistantMessage: View {
                         let isLast = index == parsed.blocks.count - 1
                         switch block {
                         case .markdown(let text):
-                            MarkdownText(text: text, visualizations: true, smartUI: smartUI, isStreaming: isStreaming && isLast)
+                            MarkdownText(text: text, visualizations: true, smartUI: true, isStreaming: isStreaming && isLast)
                         case .thinking(let text, let isComplete):
                             ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
                         }
