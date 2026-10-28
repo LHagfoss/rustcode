@@ -92,6 +92,7 @@ extension ACPMethod {
     public static let githubCancel = "_rustcode/connections/github/cancel"
     public static let githubLogout = "_rustcode/connections/github/logout"
     public static let accountLogout = "_rustcode/connections/account/logout"
+    public static let accountRefresh = "_rustcode/connections/account/refresh"
 }
 
 extension ACPRequests {
@@ -100,6 +101,10 @@ extension ACPRequests {
     }
 
     public static func accountLogout(provider: String, account: String) -> JSONValue {
+        .object(["provider": .string(provider), "account": .string(account)])
+    }
+
+    public static func accountRefresh(provider: String, account: String) -> JSONValue {
         .object(["provider": .string(provider), "account": .string(account)])
     }
 }

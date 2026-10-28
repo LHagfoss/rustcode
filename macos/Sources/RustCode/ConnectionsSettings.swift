@@ -85,6 +85,15 @@ final class ConnectionsStore: ObservableObject {
         }
     }
 
+    /// Refetches the account's model list, as `/account refresh` does.
+    func refresh(_ account: ConnectionsSnapshot.ModelAccount, _ connection: ACPConnection?) async {
+        await run(account.id, connection) {
+            try await $0.request(ACPMethod.accountRefresh,
+                                 params: ACPRequests.accountRefresh(provider: account.provider, account: account.account),
+                                 timeout: .seconds(120))
+        }
+    }
+
     func isPending(_ id: String) -> Bool { pending.contains(id) }
 
     private func run(_ id: String, _ connection: ACPConnection?, _ call: (ACPConnection) async throws -> JSONValue) async {
@@ -144,9 +153,9 @@ struct ConnectionsSettings: View {
                     }
                     ForEach(Array(snapshot.accounts.enumerated()), id: \.element.id) { index, account in
                         if index > 0 { RowDivider() }
-                        ModelAccountRow(account: account, pending: store.isPending(account.id)) {
-                            Task { await store.signOut(account, model.engineConnection) }
-                        }
+                        ModelAccountRow(account: account, pending: store.isPending(account.id),
+                                        refresh: { Task { await store.refresh(account, model.engineConnection) } },
+                                        signOut: { Task { await store.signOut(account, model.engineConnection) } })
                     }
                 }
             } else if store.error == nil {
@@ -282,6 +291,7 @@ private struct GitHubAccountRow: View {
 private struct ModelAccountRow: View {
     let account: ConnectionsSnapshot.ModelAccount
     let pending: Bool
+    let refresh: () -> Void
     let signOut: () -> Void
 
     var body: some View {
@@ -300,6 +310,8 @@ private struct ModelAccountRow: View {
             Spacer(minLength: 12)
             if pending { ProgressView().controlSize(.small) }
             if account.active {
+                Button("Refresh", action: refresh).buttonStyle(PillButtonStyle()).disabled(pending)
+                    .help("Fetch this account's current model list")
                 Button("Sign out", action: signOut).buttonStyle(PillButtonStyle()).disabled(pending)
             }
         }

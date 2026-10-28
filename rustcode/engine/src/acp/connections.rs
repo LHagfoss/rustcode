@@ -45,6 +45,15 @@ pub(crate) struct AccountLogoutRequest {
     pub account: String,
 }
 
+/// Refetch a saved model account's model list, as `/account refresh` does
+/// in the terminal; answers with the fresh snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[request(method = "_rustcode/connections/account/refresh", response = serde_json::Value)]
+pub(crate) struct AccountRefreshRequest {
+    pub provider: String,
+    pub account: String,
+}
+
 fn failed(message: impl Into<String>) -> agent_client_protocol::Error {
     agent_client_protocol::Error::invalid_params().data(message.into())
 }
@@ -87,6 +96,33 @@ pub(crate) async fn account_logout(
     snapshot_value().await
 }
 
+pub(crate) async fn account_refresh(
+    request: AccountRefreshRequest,
+) -> Result<serde_json::Value, agent_client_protocol::Error> {
+    let command = refresh_command(&request.provider, &request.account);
+    let (_, _, mut config) = crate::config::load_config();
+    let result = crate::provider_auth::execute_command(&command, &config)
+        .await
+        .map_err(|error| failed(format!("{error:#}")))?;
+    // Merged into the saved profiles, keeping their names and settings; new
+    // chats list the refreshed models, open ones when reopened.
+    if result.profile.is_some() || !result.profiles.is_empty() {
+        crate::provider_auth::apply_auth_result(&mut config, &result);
+        crate::config::save_entire_config(&config);
+    }
+    snapshot_value().await
+}
+
+/// The `/account refresh` words for an account. Claude CLI has one sign-in,
+/// so it is named by provider alone.
+fn refresh_command(provider: &str, account: &str) -> String {
+    if provider.eq_ignore_ascii_case(crate::provider_auth::claude_cli::PROVIDER) {
+        format!("account refresh {provider}")
+    } else {
+        format!("account refresh {provider} {account}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +147,19 @@ mod tests {
             serde_json::from_value(serde_json::json!({"provider": "openai", "account": "default"}))
                 .unwrap();
         assert_eq!(account.provider, "openai");
+        assert!(AccountRefreshRequest::matches_method(
+            "_rustcode/connections/account/refresh"
+        ));
+        assert_eq!(
+            refresh_command("openai", "abc"),
+            "account refresh openai abc"
+        );
+        assert_eq!(
+            refresh_command(crate::provider_auth::claude_cli::PROVIDER, "x"),
+            format!(
+                "account refresh {}",
+                crate::provider_auth::claude_cli::PROVIDER
+            )
+        );
     }
 }
