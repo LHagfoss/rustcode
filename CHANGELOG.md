@@ -1,3 +1,15 @@
+## [v0.106.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.106.0) - 2026-10-28
+
+### Features
+- Fix agent rows in a reopened chat staying on "Starting agent…" after the agent finished. (#2537)
+- Show an interactive view written while Smart UI is off as a card with a Turn On Smart UI button, instead of its HTML. (#2538)
+- Show What's New centered over the window, to be closed before going on, like Settings. (#2539)
+- Make a failing MCP tool discovery call say how to fix it, so the agent stops retrying and does not report the server's tools as missing. (#2541)
+- Smoother chat while a reply with links is streaming. (#2542)
+- Fix MCP tools with optional arguments failing on OpenAI/ChatGPT models, which retried a rejected value until the turn stopped. (#2544)
+- Refresh a signed-in model account's model list from Settings › Connections. (#2546)
+- Show your ChatGPT plan's 5-hour and weekly usage in the composer and the context panel, read from a signed-in Codex CLI. (#2547)
+- Compaction on ChatGPT and Claude plan models now writes a model handoff summary instead of a keyword record. (#2549)
 ## [v0.105.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.105.0) - 2026-10-28
 
 ### Features
