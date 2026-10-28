@@ -1047,6 +1047,21 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_receive_request(
             {
                 let server = server.clone();
+                async move |request: usage::UsageLimitsRequest, responder, connection| {
+                    let Some((state, _)) = server.session_handle(&request.session_id).await else {
+                        return responder.respond_with_error(unknown_session(&request.session_id));
+                    };
+                    connection.spawn(async move {
+                        responder.respond(usage::limits(&state).await)?;
+                        Ok(())
+                    })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
                 async move |request: agents::AgentsRequest, responder, _connection| {
                     let Some((state, cwd)) = server.session_handle(&request.session_id).await
                     else {

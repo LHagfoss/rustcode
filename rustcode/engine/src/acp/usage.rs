@@ -116,6 +116,70 @@ pub(crate) fn context_reply_meta(
     meta
 }
 
+/// `_rustcode/usage/limits`: the plan's short and long usage windows for the
+/// session's account, or null when none are known. The app asks when a turn
+/// ends and when its meter is hovered, so a slow source never holds a turn.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/usage/limits", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageLimitsRequest {
+    pub session_id: String,
+}
+
+/// Answer `_rustcode/usage/limits`. A ChatGPT sign-in reports no windows
+/// itself; the Codex CLI's are read then (cached a minute) and kept.
+pub(crate) async fn limits(
+    state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+) -> serde_json::Value {
+    let (known, chatgpt) = {
+        let state = state.lock().await;
+        let chatgpt = state.active_model_profile().is_some_and(|profile| {
+            profile
+                .credential
+                .as_ref()
+                .is_some_and(|binding| binding.is_chatgpt())
+        });
+        (state.provider_rate_limits.clone(), chatgpt)
+    };
+    let limits = if chatgpt {
+        match crate::provider_auth::codex_usage::rate_limits().await {
+            Some(limits) => {
+                state.lock().await.provider_rate_limits = Some(limits.clone());
+                Some(limits)
+            }
+            None => known,
+        }
+    } else {
+        known
+    };
+    limits_json(limits.as_ref(), if chatgpt { "codex" } else { "provider" })
+}
+
+fn limits_json(
+    limits: Option<&crate::provider_auth::ProviderRateLimits>,
+    source: &str,
+) -> serde_json::Value {
+    let Some(limits) = limits else {
+        return serde_json::Value::Null;
+    };
+    let window = |window: Option<&crate::provider_auth::RateLimitWindow>| {
+        window.map(|window| {
+            serde_json::json!({
+                "usedPercent": window.used_percent,
+                "windowMinutes": window.window_minutes,
+                "resetsAt": window.resets_at,
+            })
+        })
+    };
+    serde_json::json!({
+        "source": source,
+        "primary": window(limits.primary.as_ref()),
+        "secondary": window(limits.secondary.as_ref()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{USAGE_META_VERSION, context_reply_meta, usage_update};
@@ -131,6 +195,24 @@ mod tests {
             ..Default::default()
         });
         message
+    }
+
+    #[test]
+    fn limits_answer_names_both_windows() {
+        let limits = crate::provider_auth::ProviderRateLimits {
+            primary: Some(crate::provider_auth::RateLimitWindow {
+                used_percent: 42.0,
+                window_minutes: Some(300),
+                resets_at: Some(1_800_000_000),
+            }),
+            secondary: None,
+        };
+        let value = super::limits_json(Some(&limits), "codex");
+        assert_eq!(value["source"], "codex");
+        assert_eq!(value["primary"]["usedPercent"], 42.0);
+        assert_eq!(value["primary"]["windowMinutes"], 300);
+        assert!(value["secondary"].is_null());
+        assert!(super::limits_json(None, "codex").is_null());
     }
 
     #[test]

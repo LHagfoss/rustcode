@@ -61,7 +61,7 @@ struct ContentView: View {
         .tint(.brand)
         .clickAwayPanel(isPresented: $model.showsSettings) { SettingsView(model: model) }
         .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
-        .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0) }
+        .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0, planUsage: model.planUsage) }
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
         .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
         .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
@@ -2244,10 +2244,14 @@ private struct Composer: View {
             HStack(spacing: 8) {
                 addMenu
                 Spacer(minLength: 0)
+                if let usage = model.planUsage {
+                    PlanUsageMeter(usage: usage) { Task { await model.refreshPlanUsage() } }
+                }
                 effortMenu
                 modelMenu
                 trailingAction
             }
+            .task(id: model.selectedSession) { await model.refreshPlanUsage() }
             .animation(.spring(duration: 0.35, bounce: 0.3), value: model.busy)
             .animation(.spring(duration: 0.3, bounce: 0.2), value: canSend)
         }

@@ -2,6 +2,7 @@
 //! only non-secret account bindings in RustCode's owner-only config folder.
 
 pub(crate) mod claude_cli;
+pub(crate) mod codex_usage;
 pub(crate) mod github_copilot;
 mod openai;
 mod rate_limits;

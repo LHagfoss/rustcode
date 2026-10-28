@@ -6,6 +6,8 @@ import SwiftUI
 /// same breakdown the terminal's context panel shows.
 struct ContextSheet: View {
     let context: ContextBreakdown
+    /// The plan's usage windows, shown under the context when known.
+    var planUsage: PlanUsage?
     @Environment(\.closePanel) private var dismiss
 
     /// One colour per category, in the engine's legend order (user, agent,
@@ -27,6 +29,10 @@ struct ContextSheet: View {
             if let reserves = context.reserves {
                 Divider()
                 reservesView(reserves)
+            }
+            if let planUsage {
+                Divider()
+                PlanUsageRows(usage: planUsage)
             }
             HStack {
                 Text(context.estimated ? "Used is estimated from the saved history." : "Used is the provider's count of the latest request.")
