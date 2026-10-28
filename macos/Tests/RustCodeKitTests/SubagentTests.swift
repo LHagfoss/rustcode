@@ -19,6 +19,35 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(SubagentInfo.sidebarChildren([], viewing: 4).map(\.id), [])
     }
 
+    /// #2556: a chat's working agents stay listed after another chat is
+    /// opened, take their final state, and go back once it is reopened.
+    func testBackgroundAgentsOutliveTheChatSwitch() {
+        func list(_ agents: [JSONValue]) -> [SubagentInfo] { SubagentInfo.list(from: ["agents": .array(agents)]) }
+        var background = BackgroundAgents()
+        background.leave("a", agents: list([["id": 1, "name": "working", "status": "running"],
+                                            ["id": 2, "name": "done", "status": "completed"]]))
+        background.leave("b", agents: list([["id": 1, "name": "done", "status": "completed"]]))
+        XCTAssertEqual(background.agents(of: "a").map(\.id), [1])
+        XCTAssertEqual(background.agents(of: "b").map(\.id), [])
+        XCTAssertEqual(background.working, ["a"])
+
+        // A new child joins; the listed one finishes and keeps its row.
+        background.update("a", agents: list([["id": 1, "name": "working", "status": "completed"],
+                                             ["id": 2, "name": "done", "status": "completed"],
+                                             ["id": 3, "name": "new", "status": "queued"]]))
+        XCTAssertEqual(background.agents(of: "a").map(\.id), [1, 3])
+        XCTAssertEqual(background.agents(of: "a").first?.status, .completed)
+        XCTAssertEqual(background.working, ["a"])
+        background.update("a", agents: list([["id": 1, "name": "working", "status": "completed"],
+                                             ["id": 3, "name": "new", "status": "failed"]]))
+        XCTAssertEqual(background.agents(of: "a").map(\.status), [.completed, .failed])
+        XCTAssertEqual(background.working, [])
+
+        XCTAssertEqual(background.take("a").map(\.id), [1, 3])
+        XCTAssertEqual(background.agents(of: "a").map(\.id), [])
+        XCTAssertEqual(background, BackgroundAgents())
+    }
+
     func testParsesTheAgentsList() {
         let agents = SubagentInfo.list(from: [
             "agents": [

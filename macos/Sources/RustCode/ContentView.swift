@@ -331,8 +331,9 @@ private struct SessionSidebar: View {
                                     .onAppear {
                                         if session.id == prefetch { Task { await model.loadMoreSessions() } }
                                     }
-                                if session.id == model.selectedSession {
-                                    SubagentChildRows(model: model)
+                                if session.id == model.selectedSession
+                                    || !model.backgroundAgents.agents(of: session.id).isEmpty {
+                                    SubagentChildRows(model: model, session: session)
                                 }
                             }
                         }
@@ -452,8 +453,7 @@ extension SessionSidebar {
                    onHover: { inside in
                        if inside { hoveredSession = session.id } else if hoveredSession == session.id { hoveredSession = nil }
                    }) {
-            guard session.id != model.selectedSession else { return }
-            Task { await model.select(session) }
+            Task { await model.selectFromSidebar(session) }
         }
         }
         .contextMenu { SessionMenu(model: model, session: session) }

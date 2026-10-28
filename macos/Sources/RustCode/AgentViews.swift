@@ -205,20 +205,33 @@ struct AgentStatusMark: View {
     }
 }
 
-/// The open chat's working agents, nested under its row in the sidebar
-/// (#2492). A row opens the agent's conversation in the chat's place. A
-/// finished agent's row leaves; its result stays on its row in the chat.
+/// A chat's agents, nested under its row in the sidebar (#2492). For the
+/// open chat, its working agents: a row opens the agent's conversation in
+/// the chat's place, and a finished agent's row leaves; its result stays on
+/// its row in the chat. For a chat off screen, the agents that were working
+/// when it was left, until it is opened again, so they can be found and
+/// show how they ended (#2556); a row opens the chat and then the agent.
 struct SubagentChildRows: View {
     @ObservedObject var model: DesktopModel
+    let session: SessionSummary
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let viewing = model.viewedAgent?.id
-        let children = SubagentInfo.sidebarChildren(model.subagents, viewing: viewing)
+        let shown = session.id == model.selectedSession
+        let viewing = shown ? model.viewedAgent?.id : nil
+        let children = shown
+            ? SubagentInfo.sidebarChildren(model.subagents, viewing: viewing)
+            : model.backgroundAgents.agents(of: session.id)
         VStack(alignment: .leading, spacing: 1) {
             ForEach(children) { agent in
                 SubagentChildRow(agent: agent, isSelected: agent.id == viewing) {
-                    if agent.id == viewing { model.viewedAgent = nil } else { model.openAgent(agent) }
+                    if !shown {
+                        Task { await model.openAgent(agent, in: session) }
+                    } else if agent.id == viewing {
+                        model.viewedAgent = nil
+                    } else {
+                        model.openAgent(agent)
+                    }
                 }
                 .padding(.leading, CGFloat(max(agent.depth - 1, 0)) * 12)
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
@@ -232,7 +245,7 @@ struct SubagentChildRows: View {
         }
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: children.map(\.id))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Agents of this chat")
+        .accessibilityLabel("Agents of \(session.title ?? "New chat")")
     }
 }
 
@@ -275,13 +288,18 @@ private struct SubagentChildRow: View {
 
 /// One subagent's conversation in the chat's place, read as the terminal
 /// shows a selected child: which chat started it, what it was asked, what it
-/// did, and a field to send it more. Cancel stops it and the agents it
-/// started; Back (Esc) returns to the chat.
+/// did, and the chat's composer to send it more (#2557). Back (Esc) or the
+/// chat's row in the sidebar returns to the chat.
+///
+/// The composer keeps the main one's field, keys, send and stop, and leaves
+/// out what does not reach a child: files and images (the engine passes a
+/// child text only), the model and effort pickers (a child keeps the model it
+/// was started with), slash commands and the message queue (both act on the
+/// chat; a child reads a message sent mid-step at its next step).
 struct AgentPanel: View {
     @ObservedObject var model: DesktopModel
     let agent: DesktopModel.ViewedAgent
     @Environment(\.closePanel) private var close
-    @State private var message = ""
     @FocusState private var focused: Bool
 
     private var info: SubagentInfo { agent.info }
@@ -291,12 +309,16 @@ struct AgentPanel: View {
             header.padding(20)
             Divider()
             conversation
-            Divider()
-            composer.padding(14)
+            AgentComposer(model: model, info: info, focused: $focused)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 14)
+                .padding(.top, 6)
         }
         .frame(maxWidth: 980, maxHeight: .infinity) // The chat column's width.
         .frame(maxWidth: .infinity)
         .onAppear { focused = true }
+        // Another agent opened in place: its own draft, ready to type.
+        .onChange(of: info.id) { _, _ in focused = true }
     }
 
     private var parentTitle: String {
@@ -375,39 +397,99 @@ struct AgentPanel: View {
             }
         }
     }
+}
 
-    private var composer: some View {
-        HStack(spacing: 8) {
-            TextField(info.isActive ? "Tell \(info.name) more; it reads it at its next step"
-                      : "Give \(info.name) a follow-up task", text: $message, axis: .vertical)
+/// The subagent panel's composer: the main composer's field and keys (⏎
+/// sends, ⇧⏎ or ⌥⏎ start a new line), a draft kept per agent, send, and
+/// stop while the agent works.
+struct AgentComposer: View {
+    @ObservedObject var model: DesktopModel
+    let info: SubagentInfo
+    var focused: FocusState<Bool>.Binding
+
+    private var draft: Binding<String> {
+        let key = model.agentDraftKey(info.id)
+        return Binding(get: { model.agentDrafts[key] ?? "" },
+                       set: { model.agentDrafts[key] = $0.isEmpty ? nil : $0 })
+    }
+
+    private var canSend: Bool { !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Message \(info.name)…", text: draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .focused($focused)
-                .onSubmit(send)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 14))
-            Button(action: send) { Image(systemName: "arrow.up") }
-                .buttonStyle(PillButtonStyle(prominent: true))
-                .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .help("Send to \(info.name)")
-            if info.status == .cancelling {
-                Button("Cancelling…") {}
-                    .buttonStyle(PillButtonStyle(prominent: false))
-                    .disabled(true)
-                    .help("\(info.name) was asked to stop and has not ended yet")
-            } else if info.isActive {
-                Button("Cancel agent") { Task { await model.cancelViewedAgent() } }
-                    .buttonStyle(PillButtonStyle(prominent: false))
-                    .help("Stop \(info.name) and the agents it started")
+                .font(.body)
+                .lineLimit(1...10)
+                .focused(focused)
+                .padding(.horizontal, 6)
+                .padding(.top, 4)
+                .onKeyPress(.return, phases: .down) { press in
+                    MarkedText.commitInWindows()
+                    if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
+                        NSApp.sendAction(#selector(NSText.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
+                        return .handled
+                    }
+                    send()
+                    return .handled
+                }
+                .accessibilityLabel("Message to \(info.name)")
+            HStack(spacing: 8) {
+                Label(info.isActive ? "\(info.name) reads it at its next step" : "Starts \(info.name) on a follow-up",
+                      systemImage: "arrow.turn.down.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.leading, 6)
+                Spacer(minLength: 0)
+                stopButton
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 30, height: 30)
+                        .background(canSend ? Color.brandFill : Color.secondary.opacity(0.25), in: .circle)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .help("Send to \(info.name) (⏎)")
+                .accessibilityLabel("Send to \(info.name)")
             }
+            .animation(.spring(duration: 0.3, bounce: 0.2), value: info.isActive)
+        }
+        .padding(10)
+        .glassSurface(in: .rect(cornerRadius: 22))
+        // A click anywhere on the composer but its buttons puts the cursor in it.
+        .contentShape(.rect(cornerRadius: 22))
+        .onTapGesture { focused.wrappedValue = true }
+    }
+
+    @ViewBuilder
+    private var stopButton: some View {
+        if info.status == .cancelling {
+            ProgressView().controlSize(.small)
+                .frame(width: 30, height: 30)
+                .help("\(info.name) was asked to stop and has not ended yet")
+                .accessibilityLabel("Cancelling \(info.name)")
+        } else if info.isActive {
+            Button { Task { await model.cancelViewedAgent() } } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 30, height: 30)
+                    .background(Color.red.gradient, in: .circle)
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .help("Stop \(info.name) and the agents it started")
+            .accessibilityLabel("Stop \(info.name)")
+            .transition(.scale(scale: 0.5).combined(with: .opacity))
         }
     }
 
     private func send() {
-        let text = message
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        message = ""
+        let text = draft.wrappedValue
+        guard canSend else { return }
+        draft.wrappedValue = ""
         Task { await model.sendToViewedAgent(text) }
     }
 }

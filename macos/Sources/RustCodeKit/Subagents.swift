@@ -115,6 +115,50 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
     }
 }
 
+/// The agents of chats that are not on screen (#2556): a chat's working
+/// agents stay nested under its sidebar row after another chat is opened,
+/// and show how they end, until their chat is opened again.
+public struct BackgroundAgents: Equatable, Sendable {
+    public private(set) var bySession: [String: [SubagentInfo]] = [:]
+
+    public init() {}
+
+    /// `session` leaves the screen with `agents`: the working ones stay listed.
+    public mutating func leave(_ session: String, agents: [SubagentInfo]) {
+        let working = agents.filter(\.isActive)
+        bySession[session] = working.isEmpty ? nil : working
+    }
+
+    /// A fresh agents list for `session`, off screen: the agents already
+    /// listed take their new state, finished or not, and newly started
+    /// working ones join them.
+    public mutating func update(_ session: String, agents: [SubagentInfo]) {
+        let listed = Set((bySession[session] ?? []).map(\.id))
+        let shown = agents.filter { $0.isActive || listed.contains($0.id) }
+        bySession[session] = shown.isEmpty ? nil : shown
+    }
+
+    /// `session` is on screen again: its agents go back to the chat's list.
+    @discardableResult
+    public mutating func take(_ session: String) -> [SubagentInfo] {
+        bySession.removeValue(forKey: session) ?? []
+    }
+
+    /// `session` is gone, or its agents can no longer be read.
+    public mutating func forget(_ session: String) {
+        bySession[session] = nil
+    }
+
+    public func agents(of session: String) -> [SubagentInfo] {
+        bySession[session] ?? []
+    }
+
+    /// Chats off screen with an agent still working: the ones to keep reading.
+    public var working: Set<String> {
+        Set(bySession.filter { $0.value.contains(where: \.isActive) }.keys)
+    }
+}
+
 extension SubagentInfo {
     /// The child a `spawn_agent` result names: its JSON receipt
     /// (`{"agent_id":3,…}`, notes may follow it), or the `subagent 3 started`
