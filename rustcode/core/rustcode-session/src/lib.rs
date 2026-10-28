@@ -33,6 +33,21 @@ pub fn valid_session_id(session_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+/// Prefixes of the temporary ids a session-title or compaction-summary
+/// request runs under. Those requests never become sessions (#2562).
+const SCRATCH_SESSION_PREFIXES: [&str; 2] = ["session-title-", "compaction-summary-"];
+
+/// Whether `session_id` is a title or compaction request's temporary id
+/// (`session-title-<nanos>`, `compaction-summary-<nanos>`) rather than a
+/// session. Nothing is stored for it.
+pub fn is_scratch_session_id(session_id: &str) -> bool {
+    SCRATCH_SESSION_PREFIXES.iter().any(|prefix| {
+        session_id
+            .strip_prefix(prefix)
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
+    })
+}
+
 mod search;
 mod workspace;
 pub use search::SessionSearchHit;
@@ -736,8 +751,12 @@ impl SessionStore {
     }
 
     /// Create a new session directory and its compatibility subdirectories.
+    /// A scratch request's id gets its path but nothing on disk (#2562).
     pub fn ensure_session(&self, session_id: &str) -> PathBuf {
         let directory = self.session_dir(session_id);
+        if is_scratch_session_id(session_id) {
+            return directory;
+        }
         let _ = std::fs::create_dir_all(&directory);
         let _ = std::fs::create_dir_all(directory.join("sandbox"));
         let _ = std::fs::create_dir_all(directory.join("artifacts"));
@@ -975,7 +994,6 @@ impl SessionStore {
 
     pub fn save_session_title(&self, session_id: &str, title: &str) {
         let session_dir = self.ensure_session(session_id);
-        let _ = std::fs::create_dir_all(&session_dir);
         let _ = std::fs::write(session_dir.join("title.txt"), title);
     }
 
@@ -1013,7 +1031,6 @@ impl SessionStore {
             return;
         }
         let session_dir = self.ensure_session(session_id);
-        let _ = std::fs::create_dir_all(&session_dir);
         if let Ok(json) = serde_json::to_string_pretty(cache) {
             let _ = std::fs::write(session_dir.join(IMAGE_CACHE_FILE), json);
         }
@@ -1028,7 +1045,6 @@ impl SessionStore {
 
     pub fn save_segment_checkpoint<T: Serialize>(&self, session_id: &str, checkpoint: &T) {
         let session_dir = self.ensure_session(session_id);
-        let _ = std::fs::create_dir_all(&session_dir);
         if let Ok(json) = serde_json::to_string_pretty(checkpoint) {
             let _ = std::fs::write(session_dir.join(SEGMENT_CHECKPOINT_FILE), json);
         }
@@ -1146,6 +1162,34 @@ impl SessionStore {
                 let _ = std::fs::remove_file(old);
             }
         }
+    }
+
+    /// Remove the folders that title and compaction requests left in the
+    /// store before they stopped writing there (#2562). Only folders named
+    /// exactly like a scratch id and holding no transcript are removed.
+    /// Returns how many were removed.
+    pub fn prune_scratch_session_dirs(&self) -> usize {
+        let sessions = self.root.join(SESSIONS_DIR);
+        let mut removed = 0;
+        for year in read_directories(&sessions) {
+            for month in read_directories(&year) {
+                for day in read_directories(&month) {
+                    for session in read_directories(&day) {
+                        let scratch = session
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(is_scratch_session_id);
+                        if scratch
+                            && !session.join(HISTORY_FILE).exists()
+                            && std::fs::remove_dir_all(&session).is_ok()
+                        {
+                            removed += 1;
+                        }
+                    }
+                }
+            }
+        }
+        removed
     }
 
     pub fn sorted_session_paths(&self) -> Vec<PathBuf> {
@@ -2316,6 +2360,55 @@ mod tests {
         let history = serde_json::to_string(&saved_history()).expect("serialize history");
         std::fs::create_dir_all(path.parent().expect("history parent")).expect("parent");
         std::fs::write(path, history).expect("history");
+    }
+
+    #[test]
+    fn scratch_request_ids_create_no_folder_and_old_ones_are_pruned() {
+        assert!(is_scratch_session_id("session-title-1793186210375136000"));
+        assert!(is_scratch_session_id(
+            "compaction-summary-1793183363393325000"
+        ));
+        for id in [
+            "session-title-",
+            "session-title-test-rename-42",
+            "compaction-summary-x1",
+            "018d6b28-0000-7000-8000-000000000002",
+        ] {
+            assert!(!is_scratch_session_id(id), "{id}");
+        }
+
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let scratch = "session-title-1793186210375136000";
+        let directory = store.ensure_session(scratch);
+        assert!(!directory.exists());
+        store.save_session_title(scratch, "never stored");
+        assert!(!directory.exists());
+
+        // Folders leaked by older builds are removed; a real session, a
+        // scratch-named folder holding a transcript, and unrelated folders
+        // stay.
+        let day = root.path().join(SESSIONS_DIR).join("2026/10/28");
+        let leaked = [
+            day.join("session-title-1793186210375136000"),
+            day.join("compaction-summary-1793183363393325000"),
+        ];
+        for path in &leaked {
+            std::fs::create_dir_all(path.join("logs")).unwrap();
+            std::fs::write(path.join(SESSION_METADATA_FILE), b"{}").unwrap();
+        }
+        let with_history = day.join("compaction-summary-1793183363393325001");
+        std::fs::create_dir_all(&with_history).unwrap();
+        std::fs::write(with_history.join(HISTORY_FILE), b"[]").unwrap();
+        let unrelated = day.join("session-title-notes");
+        std::fs::create_dir_all(&unrelated).unwrap();
+        let real = store.ensure_session("018d6b28-0000-7000-8000-000000000002");
+
+        assert_eq!(store.prune_scratch_session_dirs(), 2);
+        assert!(leaked.iter().all(|path| !path.exists()));
+        assert!(with_history.exists());
+        assert!(unrelated.exists());
+        assert!(real.exists());
     }
 
     #[test]

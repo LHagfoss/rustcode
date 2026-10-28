@@ -576,7 +576,9 @@ fn append_line_to_logs_with_limit(
     let append_bytes = line.len().saturating_add(1) as u64;
     append_bounded_line(config_dir, &line, append_bytes, limit_bytes);
 
-    if let Some(session_id) = session_id {
+    // A title or compaction request's scratch id is not a session: its lines
+    // stay in the global log instead of creating a session folder (#2562).
+    if let Some(session_id) = session_id.filter(|id| !rustcode_session::is_scratch_session_id(id)) {
         let session_dir = rustcode_session::SessionStore::new(config_dir).session_dir(session_id);
         let logs_dir = session_dir.join("logs");
         append_bounded_line(&logs_dir, &line, append_bytes, limit_bytes);
@@ -1134,6 +1136,21 @@ mod tests {
         let contents = std::fs::read_to_string(dir.path().join("debug.log")).expect("global log");
         assert!(contents.contains("early startup"));
         assert!(!dir.path().join("sessions").exists());
+    }
+
+    #[test]
+    fn scratch_request_lines_stay_in_the_global_log() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = rustcode_session::SessionStore::new(dir.path());
+        for session_id in [
+            "session-title-1793186210375136000",
+            "compaction-summary-1793183363393325000",
+        ] {
+            append_line_to_logs(dir.path(), Some(session_id), "[time] [op] scratch request");
+            assert!(!store.session_dir(session_id).exists(), "{session_id}");
+        }
+        let global = std::fs::read_to_string(dir.path().join("debug.log")).expect("global log");
+        assert!(global.contains("scratch request"));
     }
 
     #[test]

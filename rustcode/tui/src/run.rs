@@ -416,6 +416,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // diagnostics. The logger also checks the cap before each append so long-
     // lived processes remain bounded.
     rustcode::logger::rotate_if_oversized();
+    // Title and compaction requests once left empty folders in the session
+    // store (#2562); clear them off the startup path.
+    tokio::task::spawn_blocking(rustcode::config::prune_scratch_session_dirs);
     // Issue #1226: silent mid-stream hangs left zero evidence. A panic hook
     // preserves the message + location in debug.log even when the process
     // dies without a crash report.
