@@ -2315,6 +2315,7 @@ private struct Composer: View {
                 if let usage = model.planUsage {
                     PlanUsageMeter(usage: usage, hovering: $model.showsPlanUsage) { Task { await model.refreshPlanUsage() } }
                 }
+                fastToggle
                 effortMenu
                 modelMenu
                 trailingAction
@@ -2464,6 +2465,29 @@ private struct Composer: View {
             }
             .buttonStyle(.plain)
             .help("Model: \(modelLabel)")
+        }
+    }
+
+    /// Fast mode, beside effort: a bolt that lights up when on. Shown only
+    /// when the engine offers it (a ChatGPT-plan model), and icon-only so it
+    /// fits every composer width.
+    @ViewBuilder
+    private var fastToggle: some View {
+        if let isOn = model.models.fast {
+            Button { Task { await model.setFast(!isOn) } } label: {
+                Image(systemName: isOn ? "bolt.fill" : "bolt")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isOn ? Color.brand : .secondary)
+                    .frame(width: 30, height: 30)
+                    .background(isOn ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.fill.tertiary), in: .circle)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .help(isOn
+                ? "Fast mode is on: faster responses, but it uses your plan's usage faster."
+                : "Fast mode: faster responses, but it uses your plan's usage faster.")
+            .accessibilityLabel("Fast mode")
+            .accessibilityValue(isOn ? "On" : "Off")
         }
     }
 

@@ -171,6 +171,12 @@ public enum ACPRequests {
         ["sessionId": .string(sessionId), "configId": .string(configId), "value": .string(value)]
     }
 
+    /// Sets a boolean option, such as `fast`: ACP tags its value `boolean`.
+    public static func setConfig(sessionId: String, configId: String, value: Bool) -> JSONValue {
+        ["sessionId": .string(sessionId), "configId": .string(configId),
+         "type": "boolean", "value": .bool(value)]
+    }
+
     public static func permissionSelected(optionId: String) -> JSONValue {
         ["outcome": ["outcome": "selected", "optionId": .string(optionId)]]
     }
@@ -333,6 +339,13 @@ public struct ModelOptions: Equatable, Sendable {
     public var effort: String?
     public var efforts: [ModelChoice] = []
 
+    /// Fast mode, when the engine offers it: only for a model on a ChatGPT
+    /// plan, whose faster tier also spends the plan's usage faster.
+    public var fast: Bool?
+
+    /// Whether the composer shows the fast-mode toggle.
+    public var offersFast: Bool { fast != nil }
+
     /// Reads the `model` and `effort` selects from a `configOptions` array.
     public init(configOptions: JSONValue?) {
         func select(_ id: String) -> (String?, [ModelChoice]) {
@@ -347,6 +360,8 @@ public struct ModelOptions: Equatable, Sendable {
         }
         (current, choices) = select("model")
         (effort, efforts) = select("effort")
+        let fastOption = configOptions?.arrayValue?.first { $0["id"]?.stringValue == "fast" }
+        fast = fastOption?["type"]?.stringValue == "boolean" ? fastOption?["currentValue"]?.boolValue : nil
     }
 
     public init(current: String?, choices: [ModelChoice]) {

@@ -463,6 +463,26 @@ async fn handle_enter_inner(
                     );
                 }
             }
+            "/fast" => {
+                let enabled = match tokens.get(1) {
+                    None | Some(&"toggle") => Some(!s.fast_mode),
+                    Some(&"on") => Some(true),
+                    Some(&"off") => Some(false),
+                    Some(&"status") => Some(s.fast_mode),
+                    _ => {
+                        s.show_command_panel(
+                            "Fast mode",
+                            "Invalid option. Use '/fast', '/fast on' or '/fast off'.",
+                        );
+                        None
+                    }
+                };
+                if let Some(enabled) = enabled {
+                    s.set_fast_mode(enabled);
+                    let notice = s.fast_mode_notice();
+                    s.show_command_panel("Fast mode", &notice);
+                }
+            }
             "/thinking" => {
                 let current = s.active_model_profile_mut().and_then(|p| p.enable_thinking);
                 let value = match tokens.get(1) {

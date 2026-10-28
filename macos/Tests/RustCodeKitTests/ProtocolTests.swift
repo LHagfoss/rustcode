@@ -202,6 +202,29 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(ACPRequests.setConfig(sessionId: "s", configId: "effort", value: "high")["configId"], "effort")
     }
 
+    // #2582: the fast toggle shows only when the engine offers the boolean
+    // `fast` option, which it does for ChatGPT-plan models alone.
+    func testFastToggleShowsOnlyWhenTheEngineOffersIt() {
+        let model: JSONValue = ["id": "model", "currentValue": "chatgpt/gpt-6-luna",
+                                "options": [["value": "chatgpt/gpt-6-luna", "name": "chatgpt/gpt-6-luna"]]]
+        let chatgpt = ModelOptions(configOptions: [
+            model, ["id": "fast", "type": "boolean", "name": "Fast", "currentValue": true],
+        ])
+        XCTAssertTrue(chatgpt.offersFast)
+        XCTAssertEqual(chatgpt.fast, true)
+
+        let apiKey = ModelOptions(configOptions: [model])
+        XCTAssertFalse(apiKey.offersFast)
+        XCTAssertNil(apiKey.fast)
+
+        // A `fast` that is not a boolean option is not this toggle.
+        XCTAssertFalse(ModelOptions(configOptions: [model, ["id": "fast", "currentValue": "on"]]).offersFast)
+
+        let request = ACPRequests.setConfig(sessionId: "s", configId: "fast", value: true)
+        XCTAssertEqual(request["type"], "boolean")
+        XCTAssertEqual(request["value"]?.boolValue, true)
+    }
+
     func testEngineLocatorPrefersBundledEngineBeforeCLI() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

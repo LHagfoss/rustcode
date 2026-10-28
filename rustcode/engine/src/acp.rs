@@ -1704,13 +1704,16 @@ mod tests {
         let missing = rustcode_session::SessionModel {
             profile: "gone".into(),
             reasoning_effort: Some("high".into()),
+            fast: false,
         };
         assert!(!state.apply_session_model(&missing));
         let saved = rustcode_session::SessionModel {
             profile: "deep".into(),
             reasoning_effort: Some("high".into()),
+            fast: true,
         };
         assert!(state.apply_session_model(&saved));
+        assert!(state.fast_mode, "fast mode is restored with the model");
         assert_eq!(state.model_name, "deep-1");
         assert_eq!(state.config.default.big(), "deep");
         assert_eq!(

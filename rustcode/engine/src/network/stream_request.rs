@@ -656,6 +656,25 @@ pub(crate) fn is_chatgpt_credential(profile: Option<&crate::config::ModelProfile
         .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
 }
 
+/// The service tier Codex's Fast mode asks for. Codex's model catalog lists
+/// it as `{"id": "priority", "name": "Fast"}` (#2582).
+pub(crate) const FAST_SERVICE_TIER: &str = "priority";
+
+/// Ask a ChatGPT-plan request for the fast (priority) tier when the session
+/// turned fast mode on. Only the session's own turns and its subagents ask
+/// for it: side requests (titles, recaps, summaries) are not worth the plan
+/// usage, and no other transport knows the tier.
+pub(crate) fn apply_fast_service_tier(
+    payload: &mut serde_json::Value,
+    chatgpt_plan: bool,
+    fast_mode: bool,
+    session_turn: bool,
+) {
+    if chatgpt_plan && fast_mode && session_turn {
+        payload["service_tier"] = serde_json::json!(FAST_SERVICE_TIER);
+    }
+}
+
 pub(crate) fn chatgpt_endpoint_is_supported(profile: &crate::config::ModelProfile) -> bool {
     profile.resolved_api_protocol() == crate::config::ApiProtocol::Responses
         && profile.endpoint_url() == "https://api.openai.com/v1/responses"
@@ -2837,6 +2856,21 @@ mod tests {
         assert_eq!(responses_tool_schemas(&schemas)[0]["strict"], false);
     }
 
+    // #2582: only a ChatGPT-plan request of the session's own turn (or a
+    // subagent's) with fast mode on asks for the priority tier.
+    #[test]
+    fn fast_mode_sets_the_priority_tier_only_on_chatgpt_session_turns() {
+        let tier = |chatgpt_plan, fast_mode, session_turn| {
+            let mut payload = serde_json::json!({"model": "gpt-6-luna"});
+            apply_fast_service_tier(&mut payload, chatgpt_plan, fast_mode, session_turn);
+            payload.get("service_tier").cloned()
+        };
+        assert_eq!(tier(true, true, true), Some(serde_json::json!("priority")));
+        assert_eq!(tier(true, false, true), None, "fast mode off");
+        assert_eq!(tier(false, true, true), None, "not a ChatGPT plan");
+        assert_eq!(tier(true, true, false), None, "a side request");
+    }
+
     #[test]
     fn chatgpt_plan_payload_is_stateless_and_roundtrips_tools() {
         let profile = crate::config::ModelProfile {
@@ -4864,7 +4898,7 @@ async fn stream_request_with_timeouts(
     subagent: bool,
 ) -> Result<Option<String>, StreamFailure> {
     let request_started = std::time::Instant::now();
-    let (profile, profile_error, active_session_id) = {
+    let (profile, profile_error, active_session_id, fast_mode) = {
         let app = state.lock().await;
         let selected_name = selected_profile.unwrap_or(app.config.default.big());
         let (profile, error) =
@@ -4872,7 +4906,7 @@ async fn stream_request_with_timeouts(
                 Ok(profile) => (profile, None),
                 Err(error) => (None, Some(error)),
             };
-        (profile, error, app.active_session_id.clone())
+        (profile, error, app.active_session_id.clone(), app.fast_mode)
     };
     if let Some(detail) = profile_error {
         return Err(StreamFailure {
@@ -5246,6 +5280,9 @@ async fn stream_request_with_timeouts(
     if chatgpt_plan {
         payload["prompt_cache_key"] = serde_json::json!(request_session_id);
     }
+    // Quiet requests are side requests unless a subagent makes them.
+    apply_fast_service_tier(&mut payload, chatgpt_plan, fast_mode, !quiet || subagent);
+    let requested_service_tier = payload.get("service_tier").cloned();
 
     // Count the schemas selected for the request, not one payload field: a
     // ChatGPT-plan request carries them in an input item, and reading
@@ -6009,6 +6046,17 @@ async fn stream_request_with_timeouts(
                                         .is_some_and(|kind| matches!(kind, "response.completed" | "response.incomplete"))
                                 {
                                     responses_completed = true;
+                                    // The tier the provider served, next to the one asked
+                                    // for, so fast mode can be checked from the log (#2582).
+                                    if let Some(served) = value.pointer("/response/service_tier").filter(|tier| !tier.is_null()) {
+                                        request_event!(
+                                            "provider.service_tier",
+                                            serde_json::json!({
+                                                "requested": requested_service_tier,
+                                                "served": served,
+                                            }),
+                                        );
+                                    }
                                 }
                                 if (chatgpt_plan || claude_cli)
                                     && let Some(limits) = value
