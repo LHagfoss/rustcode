@@ -207,7 +207,7 @@ final class DesktopModel: ObservableObject {
         didSet {
             if let selectedSession { unseenReplies.remove(selectedSession) }
             if oldValue != selectedSession {
-                showAgents(of: selectedSession)
+                showAgents(of: selectedSession, leaving: oldValue)
                 openToolRuns = []
                 turnsOpenedWhileRunning = []
                 syncTerminalProject()
@@ -407,11 +407,14 @@ final class DesktopModel: ObservableObject {
 
     /// The debug driver's stand-in for the agents list and an open agent.
     func debugAgents(_ agents: [SubagentInfo], viewing transcript: Transcript?) {
+        debugHoldsAgents = true
         subagents = agents
         viewedAgent = transcript.flatMap { transcript in
             agents.first.map { ViewedAgent(info: $0, transcript: transcript, loadedCount: $0.messageCount) }
         }
     }
+    /// The debug driver's agents stand in for the engine's, which has none.
+    private var debugHoldsAgents = false
     #endif
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
@@ -679,16 +682,89 @@ final class DesktopModel: ObservableObject {
     @Published private(set) var subagents: [SubagentInfo] = []
     /// The subagent open in the agent panel.
     @Published var viewedAgent: ViewedAgent?
+    /// What each subagent's composer holds, by chat and agent, so a message
+    /// half typed to one agent waits there while another is read (#2557).
+    @Published var agentDrafts: [String: String] = [:]
     private var agentPollTask: Task<Void, Never>?
+    /// The working agents of chats no longer on screen, nested under their
+    /// rows in the sidebar until those chats are opened again (#2556).
+    @Published private(set) var backgroundAgents = BackgroundAgents()
+    private var backgroundAgentPollTask: Task<Void, Never>?
 
-    /// Another chat is on screen: its agents replace the last one's.
-    private func showAgents(of session: String?) {
+    /// Another chat is on screen: its agents replace the last one's, whose
+    /// working agents stay listed under its row.
+    private func showAgents(of session: String?, leaving previous: String? = nil) {
         agentPollTask?.cancel()
         agentPollTask = nil
-        subagents = []
+        if let previous { backgroundAgents.leave(previous, agents: subagents) }
+        subagents = session.map { backgroundAgents.take($0) } ?? []
         viewedAgent = nil
         if session != nil { pollAgents() }
+        pollBackgroundAgents()
     }
+
+    /// Read the agents of chats off screen every two seconds while one of
+    /// them still works or runs a turn that may start more, so their rows
+    /// show how each ends.
+    func pollBackgroundAgents() {
+        guard backgroundAgentPollTask == nil, capabilities?.agents == true,
+              let connection = engine?.connection else { return }
+        backgroundAgentPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.engine?.connection === connection else { return }
+                let sessions = self.backgroundAgents.working
+                    .union(self.runningSessions)
+                    .subtracting([self.selectedSession].compactMap { $0 })
+                if sessions.isEmpty {
+                    self.backgroundAgentPollTask = nil
+                    return
+                }
+                for session in sessions.sorted() {
+                    await self.readBackgroundAgents(of: session, on: connection)
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func readBackgroundAgents(of session: String, on connection: ACPConnection) async {
+        #if DEBUG
+        if debugHoldsAgents { return }
+        #endif
+        let result = try? await connection.request(
+            ACPMethod.agents, params: ACPRequests.agents(sessionId: session), timeout: .seconds(10))
+        // Opened meanwhile: the chat's own poll has its agents now.
+        guard selectedSession != session else { return }
+        guard let result else {
+            // A chat that cannot answer, as one deleted, stops being read.
+            backgroundAgents.forget(session)
+            return
+        }
+        var next = backgroundAgents
+        next.update(session, agents: SubagentInfo.list(from: result))
+        if next != backgroundAgents { backgroundAgents = next }
+    }
+
+    /// Open `agent`, a working agent of `session`, from its row in the
+    /// sidebar: its chat comes on screen first (#2556).
+    func openAgent(_ agent: SubagentInfo, in session: SessionSummary) async {
+        if session.id != selectedSession { await select(session) }
+        guard selectedSession == session.id else { return }
+        openAgent(subagents.first { $0.id == agent.id } ?? agent)
+    }
+
+    /// A click on a chat's row in the sidebar. The open chat's row while one
+    /// of its agents is read goes straight back to the chat (#2556).
+    func selectFromSidebar(_ session: SessionSummary) async {
+        guard session.id != selectedSession else {
+            viewedAgent = nil
+            return
+        }
+        await select(session)
+    }
+
+    /// The key of `agent`'s draft in the shown chat.
+    func agentDraftKey(_ agent: Int) -> String { "\(selectedSession ?? "-")/\(agent)" }
 
     /// Read the shown chat's agents once a second while its turn runs, a child
     /// is still working, or a child's panel is open; then once more, so the
@@ -711,6 +787,9 @@ final class DesktopModel: ObservableObject {
     }
 
     private func readAgents(of session: String, on connection: ACPConnection) async {
+        #if DEBUG
+        if debugHoldsAgents { return }
+        #endif
         guard let result = try? await connection.request(
             ACPMethod.agents, params: ACPRequests.agents(sessionId: session), timeout: .seconds(10)),
               selectedSession == session else { return }
@@ -742,11 +821,13 @@ final class DesktopModel: ObservableObject {
     }
 
     /// More instructions for the open agent: an idle child starts on them, a
-    /// running one reads them at its next step.
+    /// running one reads them at its next step. A message the agent did not
+    /// take goes back into its composer.
     func sendToViewedAgent(_ text: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let agent = viewedAgent, let session = selectedSession,
               let connection = engine?.connection else { return }
+        let key = agentDraftKey(agent.id)
         do {
             let result = try await connection.request(
                 ACPMethod.agents, params: ACPRequests.agentSend(sessionId: session, id: agent.id, text: text),
@@ -756,6 +837,7 @@ final class DesktopModel: ObservableObject {
             }
             pollAgents()
         } catch {
+            if (agentDrafts[key] ?? "").isEmpty { agentDrafts[key] = text }
             self.error = "\(agent.info.name) did not take the message: \(error)"
         }
     }
@@ -2100,7 +2182,7 @@ final class DesktopModel: ObservableObject {
         // Ended exactly once below however the turn ends, so the chat cannot
         // keep spinning after its answer.
         let turn = isCommand ? nil : turnActivity.begin(id)
-        if turn != nil, id == selectedSession { pollAgents() }
+        if turn != nil { if id == selectedSession { pollAgents() } else { pollBackgroundAgents() } }
         // The chat in use moves to the top as its turn starts, not only once
         // a long turn ends (#2418); the end touches it again below.
         touchSession(id)

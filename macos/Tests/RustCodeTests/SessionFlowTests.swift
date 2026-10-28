@@ -448,6 +448,46 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2556 and #2557: a subagent is messaged from its composer, the parent's
+    /// row goes straight back to the chat, and the working agent stays listed
+    /// under its chat after another chat is opened, until it ends and the
+    /// chat is opened again from the agent's row.
+    func testSubagentStaysFindableAcrossChatsAndTakesMessages() async throws {
+        let model = try await started()
+        let slow = try XCTUnwrap(model.sessions.first { $0.id == "slow" })
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        await model.select(slow)
+        try await until { model.subagents.first?.isActive == true }
+        let agent = try XCTUnwrap(model.subagents.first)
+
+        model.openAgent(agent)
+        XCTAssertEqual(model.viewedAgent?.id, 1)
+        let key = model.agentDraftKey(1)
+        model.agentDrafts[key] = "half typed"
+        // The parent's row closes the agent and keeps the chat.
+        await model.selectFromSidebar(slow)
+        XCTAssertNil(model.viewedAgent)
+        XCTAssertEqual(model.selectedSession, "slow")
+        model.openAgent(agent)
+        XCTAssertEqual(model.agentDrafts[key], "half typed", "the draft waits with its agent")
+        model.agentDrafts[key] = nil
+        await model.sendToViewedAgent("then finish")
+        XCTAssertNil(model.error)
+
+        await model.selectFromSidebar(quick)
+        XCTAssertEqual(model.selectedSession, "quick")
+        XCTAssertNil(model.viewedAgent)
+        XCTAssertEqual(model.backgroundAgents.agents(of: "slow").map(\.id), [1])
+        // It ends off screen: its row stays and says so.
+        try await until { model.backgroundAgents.agents(of: "slow").first?.status == .completed }
+
+        await model.openAgent(model.backgroundAgents.agents(of: "slow")[0], in: slow)
+        XCTAssertEqual(model.selectedSession, "slow")
+        XCTAssertEqual(model.viewedAgent?.id, 1)
+        XCTAssertTrue(model.backgroundAgents.agents(of: "slow").isEmpty)
+        model.stop()
+    }
+
     /// An ACP engine with two stored chats of `replayed` messages, "slow" (its
     /// load takes a moment) and "quick", that answers each prompt with one
     /// short reply.
@@ -473,13 +513,30 @@ final class SessionFlowTests: XCTestCase {
     cwds = {"elsewhere": "/tmp/rustcode-elsewhere"}
     created = 0
     steers = {}
+    # One subagent of "slow", working until a message saying "finish" ends it.
+    agents = {"slow": [{"id": 1, "name": "agent-1", "task": "dig", "status": "running", "messageCount": 1}]}
+    agent_messages = []
+    def finish_agent():
+        time.sleep(0.5)
+        agents["slow"][0]["status"] = "completed"
     def handle(message):
         global created
         method, params, rid = message.get("method"), message.get("params", {}), message.get("id")
         result = {}
         if method == "initialize":
             result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True,
-                      "sessionCapabilities": {"list": {}, "close": {}}, "_meta": {"rustcode": {"steer": 1}}}}
+                      "sessionCapabilities": {"list": {}, "close": {}}, "_meta": {"rustcode": {"steer": 1, "agents": 1}}}}
+        elif method == "_rustcode/agents":
+            listed = agents.get(params["sessionId"], [])
+            if params["action"] == "list":
+                result = {"agents": listed}
+            elif params["action"] == "history":
+                result = {"updates": [{"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "dig"}}]}
+            elif params["action"] == "send":
+                agent_messages.append(params["text"])
+                if "finish" in params["text"]:
+                    threading.Thread(target=finish_agent, daemon=True).start()
+                result = {"queued": False}
         elif method == "_rustcode/steer":
             steers.setdefault(params["sessionId"], []).append(params["text"])
             result = {"accepted": True}
