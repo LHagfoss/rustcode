@@ -533,6 +533,14 @@ pub fn migrate_legacy_sessions(dry_run: bool) -> Option<SessionMigrationReport> 
     store().map(|session_store| session_store.migrate_legacy_sessions(dry_run))
 }
 
+/// Remove session-title and compaction-summary folders that older builds
+/// left in the session store (#2562). Returns how many were removed.
+pub fn prune_scratch_session_dirs() -> usize {
+    store()
+        .map(|session_store| session_store.prune_scratch_session_dirs())
+        .unwrap_or(0)
+}
+
 pub fn write_subagent_review_manifest(workspace: &Path, agent_id: u32) -> Option<PathBuf> {
     SessionStore::write_subagent_review_manifest(workspace, agent_id)
 }
