@@ -2476,7 +2476,9 @@ mod tests {
         assert!(
             list_mcp_tools(&json!({"unexpected": true}))
                 .unwrap_err()
-                .contains("invalid argument 'unexpected'")
+                .contains(
+                    "invalid argument 'unexpected': list_mcp_tools accepts only server, query, select, limit; remove 'unexpected' and retry"
+                )
         );
         assert!(
             list_mcp_tools(&json!({"limit": 0}))

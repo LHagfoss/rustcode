@@ -290,6 +290,18 @@ fn targeted_no_progress_guidance(
         .char_indices()
         .nth(160)
         .map_or(action, |(end, _)| &action[..end]);
+    // A discovery call that keeps failing never listed anything: point at its
+    // error, not at an inventory it did not return (#2540).
+    if action == "list_mcp_tools"
+        && matches!(
+            reason,
+            loop_detect::ProgressReason::Failure | loop_detect::ProgressReason::RepeatedFailure
+        )
+    {
+        return format!(
+            "list_mcp_tools failed {streak} time(s) in a row with the same error, so no tools were listed. Read the error in its result and fix what it names (for example remove an argument it rejects) before calling it again. A failed discovery call says nothing about which MCP tools exist; do not tell the user a server's tools are unavailable on that basis."
+        );
+    }
     if action == "list_mcp_tools" {
         return "MCP discovery is repeating already-known tools. Stop listing the inventory. Invoke the discovered callable_name using its bound argument schema (a listed tool without input_schema needs one list_mcp_tools call with select:[callable_name]); if invocation is unavailable, explain the concrete blocker or ask a useful task question. Do not claim a tool ran without its result.".to_string();
     }
@@ -3946,6 +3958,23 @@ mod tests {
         assert_eq!(apply_stale_round(2, 1, 5, false), 0);
         assert_eq!(apply_stale_round(2, 0, 4, false), 0);
         assert_eq!(apply_stale_round(2, 2, 4, false), 3);
+    }
+
+    #[test]
+    fn failing_discovery_guidance_points_at_the_error() {
+        let guidance = targeted_no_progress_guidance(
+            loop_detect::ProgressReason::RepeatedFailure,
+            3,
+            "list_mcp_tools",
+        );
+        assert!(guidance.contains("no tools were listed"), "{guidance}");
+        assert!(!guidance.contains("already-known tools"), "{guidance}");
+        let guidance = targeted_no_progress_guidance(
+            loop_detect::ProgressReason::NoNewInformation,
+            3,
+            "list_mcp_tools",
+        );
+        assert!(guidance.contains("already-known tools"), "{guidance}");
     }
 
     #[test]
