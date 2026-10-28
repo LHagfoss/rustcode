@@ -139,10 +139,16 @@ public enum WhatsNewGate {
     }
 
     /// `current` is the running app's version, nil for a development build;
-    /// `announced` the version last recorded.
-    public static func decide(current: AppVersion?, announced: String?) -> Decision {
+    /// `announced` the version last recorded. `launchedBefore` says the app
+    /// had saved state before this launch: with no version recorded, that is
+    /// an update from a release older than the card, not a fresh install,
+    /// and it is announced. Every update to 0.104.0 was taken for a fresh
+    /// install and recorded silently.
+    public static func decide(current: AppVersion?, announced: String?, launchedBefore: Bool = false) -> Decision {
         guard let current else { return .nothing }
-        guard let announced, let last = AppVersion(announced) else { return .record(current) }
+        guard let announced, let last = AppVersion(announced) else {
+            return launchedBefore ? .announce(current) : .record(current)
+        }
         return current > last ? .announce(current) : .nothing
     }
 }

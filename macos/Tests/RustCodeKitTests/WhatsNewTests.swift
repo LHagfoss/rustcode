@@ -9,6 +9,9 @@ final class WhatsNewTests: XCTestCase {
         XCTAssertEqual(WhatsNewGate.decide(current: v104, announced: "0.104.0"), .nothing, "shown once")
         XCTAssertEqual(WhatsNewGate.decide(current: v103, announced: "0.104.0"), .nothing, "a downgrade")
         XCTAssertEqual(WhatsNewGate.decide(current: v104, announced: nil), .record(v104), "a fresh install")
+        XCTAssertEqual(WhatsNewGate.decide(current: v104, announced: nil, launchedBefore: true), .announce(v104),
+                       "an update from a release older than the card")
+        XCTAssertEqual(WhatsNewGate.decide(current: v104, announced: "0.104.0", launchedBefore: true), .nothing)
         XCTAssertEqual(WhatsNewGate.decide(current: v104, announced: "garbage"), .record(v104))
         XCTAssertEqual(WhatsNewGate.decide(current: nil, announced: "0.103.0"), .nothing, "a development build")
     }
