@@ -1286,6 +1286,7 @@ mod tests {
             verification_command: None,
             workspace_root: None,
             review_manifest: None,
+            working_directory: None,
             depth: 0,
             root_id: None,
             context_inheritance: Default::default(),

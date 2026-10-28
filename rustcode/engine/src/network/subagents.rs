@@ -258,7 +258,7 @@ pub(crate) async fn run_subagent(
                 model_name,
                 budget,
                 max_mutating_calls,
-                subagent_context_workspace_root(&s, subagent.workspace_root.clone()),
+                subagent_context_workspace_root(&s, subagent_execution_root(subagent)),
                 crate::tools::ToolSchemaPolicy::for_subagent(subagent.write_access),
             )
         };
@@ -616,7 +616,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                             s.subagents
                                 .iter()
                                 .find(|agent| agent.id == agent_id)
-                                .and_then(|agent| agent.workspace_root.clone())
+                                .and_then(subagent_execution_root)
                         },
                         None,
                     )
@@ -1151,6 +1151,16 @@ async fn handle_agent_tool_for_parent(
                         .to_string(),
                 );
             }
+            let requested_cwd = args
+                .get("cwd")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if requested_cwd.is_some() && write_access && workspace_mode == "shared" {
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: cwd applies to read-only children and isolated workspaces; a write-enabled shared child works in its own copy of the session workspace".to_string(),
+                );
+            }
             let verification_label = verification_command
                 .as_deref()
                 .unwrap_or("none")
@@ -1209,6 +1219,21 @@ async fn handle_agent_tool_for_parent(
                     strategy,
                     evidence,
                 );
+                let working_directory = match requested_cwd {
+                    Some(cwd) => match resolve_subagent_cwd(
+                        &s,
+                        parent.and_then(subagent_execution_root),
+                        cwd,
+                    ) {
+                        Ok(path) => Some(path),
+                        Err(error) => {
+                            return crate::tools::ToolExecutionOutput::failure(format!(
+                                "error: invalid cwd: {error}"
+                            ));
+                        }
+                    },
+                    None => None,
+                };
                 let id = s.next_subagent_id;
                 let workspace_root = if workspace_mode == "isolated" {
                     let Some(base_sha) = args
@@ -1220,8 +1245,9 @@ async fn handle_agent_tool_for_parent(
                             "error: isolated workspaces require an explicit base_sha".to_string(),
                         );
                     };
-                    let source_cwd = s
-                        .effective_workspace_root()
+                    let source_cwd = working_directory
+                        .clone()
+                        .or_else(|| s.effective_workspace_root())
                         .ok_or_else(|| "cannot determine source workspace".to_string());
                     let Ok(source_cwd) = source_cwd else {
                         return crate::tools::ToolExecutionOutput::failure(
@@ -1292,6 +1318,9 @@ async fn handle_agent_tool_for_parent(
                     agent.history = Arc::new(inherited);
                     agent.context_inheritance = strategy;
                     agent.agent_type = agent_type;
+                    if agent.workspace_root.is_none() {
+                        agent.working_directory = working_directory;
+                    }
                     agent.status = crate::app::SubAgentStatus::Queued;
                 }
                 crate::app::subagent_persistence::save(&s);
@@ -2074,6 +2103,44 @@ fn bounded_completion_output(
         summary = crate::tools::truncate_bytes(&summary, summary.len() / 2);
         incomplete = true;
     }
+}
+
+/// Resolve and validate a `spawn_agent` `cwd` the way `run_command` checks its
+/// own: relative to where the caller works, inside the workspace boundary
+/// unless the sandbox is trusted, and an existing directory (#2560).
+fn resolve_subagent_cwd(
+    state: &crate::app::AppState,
+    caller_directory: Option<std::path::PathBuf>,
+    raw: &str,
+) -> Result<std::path::PathBuf, String> {
+    let session_root = state.effective_workspace_root();
+    let context = rustcode_tools::ToolContext {
+        workspace_root: if state.effective_sandbox_mode().is_trusted() {
+            None
+        } else {
+            session_root.clone()
+        },
+        task_working_directory: caller_directory
+            .or_else(|| state.task_working_directory.clone())
+            .or(session_root),
+        sandbox_dir: None,
+        artifacts_dir: None,
+        allow_task_scope_escape: true,
+    };
+    let path = rustcode_tools::validate_tool_path_with_context(raw, &context, false)?;
+    if !path.is_dir() {
+        return Err(format!("'{}' is not a directory", path.display()));
+    }
+    Ok(path.canonicalize().unwrap_or(path))
+}
+
+/// The directory a child's tools run in: its own workspace when it has one,
+/// else the `cwd` it was spawned with, else none (the session workspace).
+fn subagent_execution_root(agent: &crate::app::SubAgent) -> Option<std::path::PathBuf> {
+    agent
+        .workspace_root
+        .clone()
+        .or_else(|| agent.working_directory.clone())
 }
 
 fn subagent_context_workspace_root(
@@ -3033,6 +3100,71 @@ mod tests {
         assert!(!nested.success);
         assert!(nested.content.contains("nested delegation is read-only"));
         assert_eq!(state.lock().await.subagents.len(), 1);
+
+        let supervisor = state.lock().await.subagent_supervisor.clone();
+        supervisor.shutdown_and_wait().await;
+        let _ = release.send(());
+    }
+
+    #[tokio::test]
+    async fn spawn_cwd_becomes_the_shared_childs_working_directory() {
+        let (url, accepted, release) = gated_subagent_server().await;
+        let state = delegated_test_state(url).await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let directory = tempfile::tempdir().expect("cwd");
+        let spawn = |args: serde_json::Value| {
+            let state = Arc::clone(&state);
+            let cancel = cancel.clone();
+            async move {
+                handle_agent_tool_for_parent(
+                    &reqwest::Client::new(),
+                    &state,
+                    &cancel,
+                    "spawn_agent",
+                    &args,
+                    None,
+                )
+                .await
+            }
+        };
+
+        let missing = spawn(serde_json::json!({
+            "task": "look", "cwd": directory.path().join("missing")
+        }))
+        .await;
+        assert!(!missing.success);
+        assert!(
+            missing.content.contains("invalid cwd"),
+            "{}",
+            missing.content
+        );
+        let shared_writer = spawn(serde_json::json!({
+            "task": "edit", "write_access": true, "allowed_paths": ["src/"],
+            "cwd": directory.path()
+        }))
+        .await;
+        assert!(!shared_writer.success);
+        assert!(state.lock().await.subagents.is_empty());
+
+        let child = spawn(serde_json::json!({"task": "look", "cwd": directory.path()})).await;
+        assert!(child.success, "{}", child.content);
+        tokio::time::timeout(std::time::Duration::from_secs(5), accepted)
+            .await
+            .unwrap()
+            .unwrap();
+        {
+            let s = state.lock().await;
+            let expected = directory.path().canonicalize().unwrap();
+            assert_eq!(s.subagents[0].working_directory.as_ref(), Some(&expected));
+            assert_eq!(
+                subagent_execution_root(&s.subagents[0]),
+                Some(expected.clone())
+            );
+            assert_eq!(
+                subagent_context_workspace_root(&s, subagent_execution_root(&s.subagents[0])),
+                Some(expected)
+            );
+        }
 
         let supervisor = state.lock().await.subagent_supervisor.clone();
         supervisor.shutdown_and_wait().await;

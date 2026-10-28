@@ -21,10 +21,13 @@ fn truncate_output(text: &str) -> String {
 }
 
 fn run_git(args: &[&str]) -> Result<String, String> {
-    let cwd = working_directory();
+    run_git_in(&working_directory(), args)
+}
+
+fn run_git_in(cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(args)
-        .current_dir(&cwd)
+        .current_dir(cwd)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
     let mut combined = String::new();
@@ -41,8 +44,9 @@ fn run_git(args: &[&str]) -> Result<String, String> {
             combined.push_str(&stderr);
         }
         return Err(truncate_output(&format!(
-            "git {} failed (exit {}):\n{}",
+            "git {} failed in {} (exit {}):\n{}",
             args.join(" "),
+            cwd.display(),
             output.status.code().unwrap_or(-1),
             combined.trim()
         )));
@@ -59,15 +63,17 @@ fn run_git(args: &[&str]) -> Result<String, String> {
 fn git_status_schema() -> Value {
     serde_json::json!({
         "type": "object",
-        "properties": {},
+        "properties": {
+            "cwd": { "type": "string" }
+        },
         "additionalProperties": false
     })
 }
 
 pub const GIT_STATUS: Tool = Tool {
     name: "git_status",
-    description: "Show `git status --short --branch` for the workspace. Read-only.",
-    arguments: r#"{}"#,
+    description: "Show `git status --short --branch` for the workspace or `cwd`. Read-only.",
+    arguments: r#"{"cwd": "optional directory (default: workspace)"}"#,
     handler: git_status,
     requires_confirmation: false,
     schema: git_status_schema,
@@ -79,7 +85,27 @@ pub fn git_status(args: &Value) -> Result<String, String> {
     if !args.is_object() {
         return Err("arguments must be a JSON object".to_string());
     }
-    run_git(&["status", "--short", "--branch"])
+    let cwd = match args
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+    {
+        Some(raw) => {
+            let path = rustcode_tools::validate_tool_path_with_context(
+                raw,
+                &super::current_tool_context(),
+                false,
+            )
+            .map_err(|error| format!("invalid cwd: {error}"))?;
+            if !path.is_dir() {
+                return Err(format!("cwd '{}' is not a directory", path.display()));
+            }
+            path
+        }
+        None => working_directory(),
+    };
+    run_git_in(&cwd, &["status", "--short", "--branch"])
 }
 
 fn git_diff_schema() -> Value {
@@ -246,6 +272,29 @@ mod tests {
             git_diff(&serde_json::json!({"path": "a\0b"})),
             Err("invalid 'path'".to_string())
         );
+    }
+
+    #[test]
+    fn git_status_runs_in_the_given_cwd_and_names_it_on_failure() {
+        let plain = tempfile::tempdir().expect("plain dir");
+        let error = git_status(&serde_json::json!({"cwd": plain.path()})).unwrap_err();
+        assert!(
+            error.contains(&plain.path().display().to_string()),
+            "error should name the directory: {error}"
+        );
+
+        let repo = tempfile::tempdir().expect("repo dir");
+        let init = Command::new("git")
+            .args(["init", "-q", "-b", "trunk"])
+            .current_dir(repo.path())
+            .status()
+            .expect("git init");
+        assert!(init.success());
+        let status = git_status(&serde_json::json!({"cwd": repo.path()})).expect("status");
+        assert!(status.contains("trunk"), "status: {status}");
+
+        let missing = repo.path().join("missing");
+        assert!(git_status(&serde_json::json!({"cwd": missing})).is_err());
     }
 
     #[test]

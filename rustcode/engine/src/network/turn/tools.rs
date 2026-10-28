@@ -2195,6 +2195,31 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .map(|(_, message)| message)
                     .collect(),
             );
+            if let Some(workspace) = s.effective_workspace_root() {
+                let session_dirs = crate::config::get_active_session_dir(turn_session_id)
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                for index in &selected_call_indices {
+                    if let Some(call) = tool_calls.get(*index) {
+                        ctx.progress.outside_workspace.record(
+                            &call.arguments,
+                            &workspace,
+                            &session_dirs,
+                        );
+                    }
+                }
+                if let Some(note) = ctx
+                    .progress
+                    .outside_workspace
+                    .take_note(&workspace, &s.history)
+                {
+                    crate::logger::operational_event(
+                        "turn.outside_workspace_note",
+                        serde_json::json!({"session_id": turn_session_id}),
+                    );
+                    s.history.push(ChatMessage::new("system", note));
+                }
+            }
             if deferred_call_count > 0 {
                 let describe = |indices: &[usize]| {
                     indices

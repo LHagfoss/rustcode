@@ -151,6 +151,8 @@ pub struct ProgressState {
     /// Monotonic count of results that changed the workspace. Only these
     /// renew the turn token window, so a read-only loop cannot.
     pub workspace_change_events: usize,
+    /// Calls this turn whose `cwd` left the session workspace (#2565).
+    pub(crate) outside_workspace: super::workspace_note::OutsideWorkspaceTally,
 }
 
 impl ProgressState {
@@ -384,6 +386,7 @@ impl TurnContext {
                 phase_checkpoint: None,
                 meaningful_events: 0,
                 workspace_change_events: 0,
+                outside_workspace: Default::default(),
             },
             verification: VerificationState {
                 blocks: 0,
