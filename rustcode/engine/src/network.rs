@@ -1448,19 +1448,23 @@ async fn prepare_turn_request_pass(
             active_session_id,
             captured_history,
             provider_usage,
+            plan_profile,
         ) = {
             let s = state.lock().await;
             let local_model = s.active_model_is_local();
-            let deterministic_compaction = s
+            // A plan profile (ChatGPT, Claude CLI) is summarized through the
+            // session's own transport (#2548), like any other profile.
+            let plan_profile = s
                 .active_model_profile()
                 .as_ref()
                 .and_then(|profile| profile.credential.as_ref())
-                .is_some_and(crate::provider_auth::CredentialRef::is_chatgpt)
+                .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli());
+            let deterministic_compaction =
                 // An automatic compaction that barely shrank the history means
                 // the retained tail itself fills the window. Another summarizer
                 // round-trip would cost a request and reclaim as little, every
                 // turn; the local record is enough until a pass frees room.
-                || s.last_compaction
+                s.last_compaction
                     .as_ref()
                     .is_some_and(crate::app::CompactionStats::was_ineffective_auto);
             let context_budget = s.active_context_budget();
@@ -1476,6 +1480,7 @@ async fn prepare_turn_request_pass(
                 s.active_session_id.clone(),
                 s.history.clone(),
                 s.current_token_usage.clone(),
+                plan_profile,
             )
         };
         let pre_len = captured_history.len();
@@ -1483,7 +1488,7 @@ async fn prepare_turn_request_pass(
         let mut working_history = captured_history.snapshot();
 
         // Lock released here: this await performs I/O.
-        let summarized_or_pruned = compaction::maybe_compact_with_local_policy_and_usage_mode(
+        let compaction = compaction::maybe_compact_with_local_policy_and_usage_mode(
             client,
             &api_url,
             &model_name,
@@ -1497,8 +1502,12 @@ async fn prepare_turn_request_pass(
             // Run it only at a turn boundary: firing it between two tool calls
             // can summarize away results the model is still working from.
             tool_rounds == 0,
-        )
-        .await;
+        );
+        let summarized_or_pruned = if plan_profile {
+            compaction::with_session_summarizer(Arc::clone(state), compaction).await
+        } else {
+            compaction.await
+        };
         // Run the deterministic safety reduction in the same canonical
         // pipeline and persist it. Request assembly should consume history,
         // not silently rewrite a second throwaway copy on every tool round.
