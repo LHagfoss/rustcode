@@ -1,3 +1,21 @@
+## [v0.107.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.107.0) - 2026-10-28
+
+### Features
+- Subagents in the app no longer hang on approvals you could not see. Stopping one now reports when it has ended, and a child that has stopped making progress is flagged. (#2566)
+- Subagents and git status can work in another directory, and the agent suggests moving a session that keeps working outside its workspace. (#2567)
+- Title and compaction requests no longer leave empty folders in the session store, and existing ones are cleaned up. (#2568)
+- No more false loop warning when several different parallel calls return the same empty result. (#2569)
+- Binary MCP tool results are saved to the session's artifacts folder and shown as a path with a short preview instead of base64. (#2570)
+- Recap requests no longer leave empty folders in the session store, and existing ones are cleaned up. (#2572)
+- Working subagents stay in the sidebar under their chat when you switch chats, the chat's row takes you straight back from a subagent, and the subagent view has a full composer. (#2573)
+- Scrolling up while a reply streams no longer jumps back to the end when the pointer is beside the composer, and the agents-working pill sits in the composer instead of over the chat. (#2574)
+- The plan-usage hover panel now shows above the composer, and the composer has no border and animates as one piece. (#2575)
+- The chat, composer and timeline adapt to narrow windows: the timeline stays visible in a slimmer form and the composer's controls stay on one line. (#2578)
+- Settings now opens as a full page with its own sidebar instead of a popup over the chat, and Esc or Back returns to the chat as you left it. (#2579)
+- MCP tools you named or used stay available after a long chat is compacted, and unrelated tools no longer slip in on common words like "chat" or "message". (#2580)
+- Compacted chats no longer carry stray code fragments as modified files or status messages as project rules, and the session log no longer reports skipped compactions as compactions. (#2581)
+- New fast mode for ChatGPT-plan models: `/fast` or the bolt beside the effort pill asks for faster responses, which use your plan's usage faster. (#2583)
+- Provider errors now show the provider's own message with its HTTP status and profile instead of raw stream diagnostics. (#2585)
 ## [v0.106.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.106.0) - 2026-10-28
 
 ### Features
