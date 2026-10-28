@@ -36,7 +36,7 @@ struct AgentPill: View {
             .popover(isPresented: $showsList, arrowEdge: .top) {
                 AgentList(model: model) { showsList = false }
             }
-            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
+            .transition(.opacity)
         }
     }
 }
@@ -459,7 +459,7 @@ struct AgentComposer: View {
             .animation(.spring(duration: 0.3, bounce: 0.2), value: info.isActive)
         }
         .padding(10)
-        .glassSurface(in: .rect(cornerRadius: 22))
+        .floatingSurface(in: .rect(cornerRadius: 22))
         // A click anywhere on the composer but its buttons puts the cursor in it.
         .contentShape(.rect(cornerRadius: 22))
         .onTapGesture { focused.wrappedValue = true }

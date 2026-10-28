@@ -426,6 +426,8 @@ final class DesktopModel: ObservableObject {
     /// The plan's 5-hour and weekly windows for the shown chat's account, when
     /// the engine knows them (#2545).
     @Published var planUsage: PlanUsage?
+    /// The pointer is on the usage meter, so its panel shows.
+    @Published var showsPlanUsage = false
     /// The model and effort new chats start with, shared with the terminal UI.
     @Published private(set) var modelDefaults: ModelDefaults?
     @Published var selectedModel: String?
