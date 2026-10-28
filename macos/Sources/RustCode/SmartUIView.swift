@@ -5,13 +5,15 @@ import WebKit
 
 /// A `rustcode-ui v1` block in an assistant reply (#2484): a card that runs
 /// the block's page in the shared Smart UI web view, a placeholder with a Run
-/// button when another block holds it, and the source with a reason when the
-/// block is malformed or its page was stopped.
+/// button when another block holds it, an offer to turn Smart UI on while it
+/// is off (#2536), and the source with a reason when the block is malformed or
+/// its page was stopped.
 struct SmartUIView: View {
     let block: SmartUIBlock
     /// The reply is still arriving, so an open fence may yet close.
     var isStreaming = false
     @ObservedObject private var host = SmartUIHost.shared
+    @AppStorage(SmartUI.enabledKey) private var isEnabled = false
     /// The block was written while on screen, so it runs once complete.
     @State private var wasBuilding = false
     @State private var showsSource = false
@@ -22,6 +24,8 @@ struct SmartUIView: View {
             case .ready(let title, let summary):
                 if let reason = host.failures[block.id] {
                     fallback(reason)
+                } else if !isEnabled {
+                    offCard(title: title, summary: summary)
                 } else {
                     card(title: title, summary: summary)
                 }
@@ -43,7 +47,7 @@ struct SmartUIView: View {
             }
         }
         .onChange(of: block.state) { _, state in
-            if wasBuilding, case .ready = state { host.activate(block) }
+            if wasBuilding, isEnabled, case .ready = state { host.activate(block) }
         }
     }
 
@@ -96,6 +100,47 @@ struct SmartUIView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
         .accessibilityHint(summary ?? "Interactive view")
+    }
+
+    /// A block written while Smart UI is off, as when the agent learned the
+    /// format from the docs: its title and an offer to turn it on, not a page
+    /// of HTML. Turning it on only lets blocks run here; the agent is told at
+    /// the next engine start.
+    private func offCard(title: String, summary: String?) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles.rectangle.stack").foregroundStyle(.secondary)
+                Text(title).font(.headline)
+                Spacer(minLength: 8)
+                Button { showsSource.toggle() } label: {
+                    Image(systemName: "chevron.left.forwardslash.chevron.right")
+                }
+                .buttonStyle(.borderless)
+                .help(showsSource ? "Hide the block's source" : "Show the block's source")
+                CopyButton(help: "Copy the block's source", action: copy)
+                    .padding(.trailing, -6)
+            }
+            if let summary {
+                Text(summary).font(.callout).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 10) {
+                Text("Smart UI is off, so this interactive view can't run.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Turn On Smart UI") { isEnabled = true }
+                    .buttonStyle(PillButtonStyle())
+                    .help("Lets interactive views run, sandboxed with no network, file or app access")
+            }
+            if showsSource {
+                CodeBlock(language: "html", text: block.body)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.fill.quaternary, in: .rect(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+        .accessibilityHint("Smart UI is off")
     }
 
     private func fallback(_ reason: String) -> some View {

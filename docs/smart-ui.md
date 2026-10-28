@@ -79,7 +79,7 @@ Generated code is treated as untrusted, even when the assistant wrote it.
 | Windows and panels | `window.open` returns nothing. `alert`, `confirm` and `prompt` return at once without showing UI. File pickers return nothing, and camera, microphone and screen capture are denied. Fullscreen, AirPlay and media autoplay are off. |
 | Native bridge | None. No script message handler is installed. The app reads the page's height and element count by evaluating one fixed expression every 0.5 s. |
 | Runaway pages | The page is stopped and its source shown when it does not finish loading in 5 s, when the height poll goes 3 s without an answer (a busy loop), when it builds more than 5,000 elements, or when its WebContent process exits (WebKit's memory limit or a crash). |
-| Provenance | Blocks run only from assistant replies, with the explicit versioned info string, and only while the setting is on. |
+| Provenance | Blocks run only from assistant replies, with the explicit versioned info string, and only while the setting is on. While it is off, a block shows as a card with its title and a **Turn On Smart UI** button instead of its source (#2536). |
 
 The rules were checked against real WebKit (see Measurements). From a page,
 `fetch`, an external `<img>`, a `WebSocket` and `window.open` were all

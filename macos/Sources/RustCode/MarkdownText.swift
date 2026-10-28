@@ -9,8 +9,8 @@ struct MarkdownText: View {
     let text: String
     /// Draw `rustcode-viz` blocks as widgets. Only assistant replies set it.
     var visualizations = false
-    /// Run `rustcode-ui` blocks. Only assistant replies set it, and only while
-    /// Smart UI is on.
+    /// Draw `rustcode-ui` blocks as cards. Only assistant replies set it; the
+    /// card itself offers to turn Smart UI on when it is off.
     var smartUI = false
     /// The reply is still streaming, so an unclosed visualization shows a placeholder.
     var isStreaming = false
