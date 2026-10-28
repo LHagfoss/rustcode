@@ -1,3 +1,10 @@
+## [v0.108.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.108.0) - 2026-10-28
+
+### Fixes
+- Local Liquid AI (LFM) models' tool calls now run instead of being dropped, and textual tool prompts no longer inline every MCP schema. (#2588)
+- Fix a subagent hang when cancelling during a tool call; subagents now stop at configurable round and time limits and return their partial findings when they fail. (#2590)
+- MCP tools no longer churn in the request mid-session, which keeps the provider prompt cache warm. Tool output that names MCP servers no longer pulls their tools in, and the agent is told where session logs live. (#2589)
+- Compacting a chat now actually shrinks a long single turn, updates the context meter, and shows a compaction card with the summary in the macOS chat. (#2591)
 ## [v0.107.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.107.0) - 2026-10-28
 
 ### Features
