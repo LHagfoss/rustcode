@@ -7,7 +7,7 @@ import SwiftUI
 /// release; this describes the version already running.
 @MainActor
 final class WhatsNew: ObservableObject {
-    /// The compact card, bottom right of the window.
+    /// The compact card, over the dimmed window until it is closed.
     @Published var card: ReleaseNotes?
     /// The full changelog, over the window as Settings is.
     @Published var full: ReleaseNotes?
@@ -97,7 +97,9 @@ final class WhatsNew: ObservableObject {
     }
 }
 
-/// The compact card: artwork over the top half, then a few highlights.
+/// The compact card: artwork over the top half, then a few highlights. It is
+/// shown as a panel over the dimmed window, as Settings is, so it is closed
+/// before anything else in the window is used.
 struct WhatsNewCard: View {
     let notes: ReleaseNotes
     let readMore: () -> Void
@@ -160,11 +162,7 @@ struct WhatsNewCard: View {
             }
             .padding(16)
         }
-        .frame(maxWidth: 340)
-        .background(Color.chatBackground)
-        .clipShape(.rect(cornerRadius: 16))
-        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1) }
-        .shadow(color: .black.opacity(0.22), radius: 24, y: 10)
+        .frame(width: 360)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("What's new in RustCode")
     }
@@ -272,21 +270,15 @@ struct ReleaseArt: View {
     }
 }
 
-/// The card at the window's bottom right, and the changelog as a panel.
+/// The card and the changelog, each as a panel over the window.
 /// Observes only `WhatsNew`, so the rest of the window does not redraw.
 struct WhatsNewPresenter: ViewModifier {
     @ObservedObject var whatsNew: WhatsNew
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .bottomTrailing) {
-                if let notes = whatsNew.card {
-                    WhatsNewCard(notes: notes, readMore: whatsNew.readMore, dismiss: whatsNew.dismissCard)
-                        .padding(.trailing, 20)
-                        // Above the composer and its send button.
-                        .padding(.bottom, 112)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+            .clickAwayPanel(item: $whatsNew.card) { notes in
+                WhatsNewCard(notes: notes, readMore: whatsNew.readMore, dismiss: whatsNew.dismissCard)
             }
             .clickAwayPanel(item: $whatsNew.full) { WhatsNewPanel(notes: $0) }
     }
