@@ -331,9 +331,15 @@ impl DiscoveryArgs {
         let Some(object) = args.as_object() else {
             return Err("arguments must be a JSON object".to_owned());
         };
+        const KEYS: [&str; 4] = ["server", "query", "select", "limit"];
         for key in object.keys() {
-            if !["server", "query", "select", "limit"].contains(&key.as_str()) {
-                return Err(format!("invalid argument '{key}'"));
+            if !KEYS.contains(&key.as_str()) {
+                // Name the accepted keys, so a retry drops the bad one
+                // instead of varying the others (#2540).
+                return Err(format!(
+                    "invalid argument '{key}': list_mcp_tools accepts only {}; remove '{key}' and retry",
+                    KEYS.join(", ")
+                ));
             }
         }
         let server = match object.get("server") {
