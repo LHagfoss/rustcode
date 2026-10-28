@@ -140,6 +140,80 @@ fn record_approval_wait(state: &mut crate::app::AppState, wait: std::time::Durat
     state.exclude_user_wait(wait);
 }
 
+/// The confirmation a per-call ACP answer gives `confirm_and_execute`.
+/// "Always allow" carries the prefix so the call path remembers it the same
+/// way the terminal's remember choice does.
+fn confirmation_response(
+    choice: PermissionChoice,
+    call: &crate::tools::ToolCall,
+) -> crate::app::ToolConfirmationResponse {
+    match choice {
+        PermissionChoice::AllowOnce => crate::app::ToolConfirmationResponse::Approve,
+        PermissionChoice::AllowAlways => rememberable_prefix(call).map_or(
+            crate::app::ToolConfirmationResponse::Approve,
+            crate::app::ToolConfirmationResponse::ApproveAndRemember,
+        ),
+        PermissionChoice::Reject => crate::app::ToolConfirmationResponse::Deny,
+    }
+}
+
+/// Asks the client to approve a call that runs outside the turn policy, such
+/// as a subagent's tool call, through `session/request_permission`. The
+/// terminal shows these in its approval modal; an ACP client never sees that
+/// modal, so without this the subagent waited forever (#2558). A failed
+/// request counts as a rejection, so the child never hangs on it.
+pub(crate) fn external_tool_approver(
+    connection: ConnectionTo<Client>,
+    session_id: String,
+) -> crate::app::ExternalToolApprover {
+    crate::app::ExternalToolApprover(Arc::new(move |request| {
+        let connection = connection.clone();
+        let session_id = session_id.clone();
+        Box::pin(async move {
+            let crate::app::ExternalApprovalRequest { call, title } = request;
+            let call_id = call
+                .call_id
+                .clone()
+                .unwrap_or_else(|| format!("acp-external-{}", call.name));
+            let mcp_approval =
+                crate::tools::mcp_servers_approval(&call.name, &call.arguments, None);
+            let tool_call = ToolCallUpdate::new(
+                call_id,
+                ToolCallUpdateFields::new()
+                    .title(mcp_approval.as_ref().map_or_else(
+                        || title.clone(),
+                        |approval| format!("{title} {}", approval.label),
+                    ))
+                    .raw_input(
+                        mcp_approval
+                            .map_or_else(|| call.arguments.clone(), |approval| approval.arguments),
+                    ),
+            );
+            let request =
+                RequestPermissionRequest::new(session_id, tool_call, permission_options(&call));
+            let started = std::time::Instant::now();
+            let response = connection.send_request(request).block_task().await;
+            let choice = response
+                .as_ref()
+                .map_or(PermissionChoice::Reject, |response| {
+                    permission_choice(&response.outcome)
+                });
+            crate::dbg_log!(
+                "ACP approval for {} answered after {} ms: {:?}{}",
+                title,
+                started.elapsed().as_millis(),
+                choice,
+                if response.is_err() {
+                    " (request failed)"
+                } else {
+                    ""
+                }
+            );
+            confirmation_response(choice, &call)
+        })
+    }))
+}
+
 impl crate::network::policy::TurnPolicy for AcpPolicy {
     fn should_approve(
         &self,
@@ -296,6 +370,33 @@ mod tests {
             ..run_command("")
         };
         assert_eq!(option_ids(&networked), [ALLOW_ONCE, REJECT_ONCE]);
+    }
+
+    #[test]
+    fn external_answers_map_to_confirmations() {
+        use crate::app::ToolConfirmationResponse as Response;
+        let command = run_command("cargo test --workspace");
+        let read = crate::tools::ToolCall {
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "a.rs"}),
+            call_id: None,
+        };
+        assert!(matches!(
+            confirmation_response(PermissionChoice::AllowOnce, &command),
+            Response::Approve
+        ));
+        assert!(matches!(
+            confirmation_response(PermissionChoice::AllowAlways, &command),
+            Response::ApproveAndRemember(prefix) if !prefix.is_empty()
+        ));
+        assert!(matches!(
+            confirmation_response(PermissionChoice::AllowAlways, &read),
+            Response::Approve
+        ));
+        assert!(matches!(
+            confirmation_response(PermissionChoice::Reject, &read),
+            Response::Deny
+        ));
     }
 
     #[test]

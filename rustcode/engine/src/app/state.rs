@@ -22,6 +22,30 @@ pub enum ToolConfirmationResponse {
     Deny,
 }
 
+/// A per-call tool approval asked of a frontend out of band, for calls that
+/// do not run under a turn policy (a subagent's tools). `title` names the
+/// caller, for example `agent-1 · read_file`.
+pub struct ExternalApprovalRequest {
+    pub call: crate::tools::ToolCall,
+    pub title: String,
+}
+
+/// Asks the frontend that owns the session to approve one tool call. Set by
+/// hosts that cannot show the terminal's approval modal (ACP clients such as
+/// the macOS app); without it a subagent's approval waited on a modal that
+/// nobody saw, and the child stayed `running` forever (#2558).
+#[derive(Clone)]
+pub struct ExternalToolApprover(
+    pub  Arc<
+        dyn Fn(
+                ExternalApprovalRequest,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = ToolConfirmationResponse> + Send>,
+            > + Send
+            + Sync,
+    >,
+);
+
 /// A single-flight claim for the queue orchestrator.  The session and
 /// generation are both part of the claim so a task that is unwinding after a
 /// cancellation or session switch cannot release a newer orchestrator.
@@ -315,6 +339,9 @@ pub struct AppState {
     pub tool_confirmation_selected: usize,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<ToolConfirmationResponse>>,
+    /// Out-of-band approver for per-call confirmations; see
+    /// [`ExternalToolApprover`].
+    pub external_tool_approver: Option<ExternalToolApprover>,
     /// A paired device asks this terminal to share the session it announced
     /// as reachable. Answer with y/n while it is set; the bridge clears it
     /// once the decision is sent.
@@ -1634,6 +1661,7 @@ impl AppState {
             modal_scroll_row: 0,
             tool_confirmation_selected: 0,
             tool_confirmation_response: None,
+            external_tool_approver: None,
             pending_share_prompt: None,
             share_decision: None,
             approval_wait: std::time::Duration::ZERO,

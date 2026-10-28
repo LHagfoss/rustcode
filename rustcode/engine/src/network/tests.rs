@@ -8978,3 +8978,100 @@ async fn near_full_history_compacts_before_the_request_trims_it() {
         "compaction reduced the stored history"
     );
 }
+
+/// A caller cancelled while its approval is pending (a subagent stopped by
+/// `cancel_agent`) stops waiting at once and withdraws its prompt (#2558).
+#[tokio::test]
+async fn a_cancelled_caller_withdraws_its_pending_confirmation() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let state = Arc::new(Mutex::new(AppState::new_with_workspace_session(
+        workspace.path(),
+        Some("confirm-cancel-test"),
+    )));
+    state.lock().await.agent_mode = crate::config::AgentMode::Build;
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let task = {
+        let state = Arc::clone(&state);
+        let cancel_token = cancel_token.clone();
+        tokio::spawn(async move {
+            confirm_and_execute(
+                &reqwest::Client::new(),
+                &state,
+                &cancel_token,
+                "write_to_file",
+                &serde_json::json!({"path": "cancelled.txt", "content": "x"}),
+                "agent-1 · write_to_file",
+                false,
+                None,
+                None,
+            )
+            .await
+        })
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while state.lock().await.pending_tool_confirmation.is_none() {
+        assert!(std::time::Instant::now() < deadline, "no prompt shown");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    cancel_token.cancel();
+    let (result, _, _) = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("the wait ends on cancel")
+        .unwrap();
+    assert_eq!(
+        result.error_kind,
+        Some(crate::tools::ToolErrorKind::Cancelled)
+    );
+    let s = state.lock().await;
+    assert!(s.pending_tool_confirmation.is_none());
+    assert!(s.tool_confirmation_response.is_none());
+    assert!(!workspace.path().join("cancelled.txt").exists());
+}
+
+/// A host that cannot show the approval modal (an ACP client) answers the
+/// call through its approver; the modal is never left waiting (#2558).
+#[tokio::test]
+async fn an_external_approver_answers_instead_of_the_modal() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let state = Arc::new(Mutex::new(AppState::new_with_workspace_session(
+        workspace.path(),
+        Some("confirm-external-test"),
+    )));
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    {
+        let mut s = state.lock().await;
+        s.agent_mode = crate::config::AgentMode::Build;
+        let asked = Arc::clone(&asked);
+        s.external_tool_approver = Some(crate::app::ExternalToolApprover(Arc::new(
+            move |request: crate::app::ExternalApprovalRequest| {
+                asked.lock().unwrap().push(request.title);
+                Box::pin(async { crate::app::ToolConfirmationResponse::Deny })
+            },
+        )));
+    }
+    let (result, _, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        confirm_and_execute(
+            &reqwest::Client::new(),
+            &state,
+            &tokio_util::sync::CancellationToken::new(),
+            "write_to_file",
+            &serde_json::json!({"path": "denied.txt", "content": "x"}),
+            "agent-1 · write_to_file",
+            false,
+            None,
+            None,
+        ),
+    )
+    .await
+    .expect("the approver answers");
+    assert_eq!(
+        result.error_kind,
+        Some(crate::tools::ToolErrorKind::PermissionDenied)
+    );
+    assert_eq!(*asked.lock().unwrap(), ["agent-1 · write_to_file"]);
+    let s = state.lock().await;
+    assert!(s.pending_tool_confirmation.is_none());
+    assert!(s.tool_confirmation_response.is_none());
+    assert!(!workspace.path().join("denied.txt").exists());
+}

@@ -42,6 +42,36 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(agents[1].completion, "Fixed parse().")
     }
 
+    func testLifecycleStatesAndQuietAgents() {
+        let agents = SubagentInfo.list(from: [
+            "agents": [
+                ["id": 1, "name": "stopping", "status": "cancelling", "startedAtMs": 1_000, "lastActivityMs": 2_000],
+                ["id": 2, "name": "stuck", "status": "running", "startedAtMs": 1_000, "lastActivityMs": 2_000,
+                 "toolCalls": 0],
+                ["id": 3, "name": "busy", "status": "running", "startedAtMs": 1_000, "lastActivityMs": 890_000,
+                 "toolCalls": 7],
+                ["id": 4, "name": "stopped", "status": "cancelled", "startedAtMs": 1_000, "lastActivityMs": 2_000],
+            ],
+        ])
+        let now = Date(timeIntervalSince1970: 902)
+        XCTAssertEqual(agents[0].status, .cancelling)
+        XCTAssertTrue(agents[0].isActive, "a cancelling agent is still polled until it ends")
+        XCTAssertEqual(agents[0].status.label, "Cancelling…")
+        XCTAssertEqual(agents[1].quietLabel(now: now), "No activity for 15m")
+        XCTAssertEqual(agents[1].toolCalls, 0)
+        XCTAssertNil(agents[2].quietLabel(now: now), "recent progress is not called quiet")
+        XCTAssertEqual(agents[2].toolCalls, 7)
+        XCTAssertNil(agents[3].quietLabel(now: now), "an ended agent is not quiet, it is done")
+        XCTAssertFalse(agents[3].isActive)
+    }
+
+    func testCancelAnswerSaysWhetherTheAgentEnded() {
+        XCTAssertTrue(SubagentInfo.cancelSettled(["message": "subagent 1 cancelled"]))
+        XCTAssertFalse(SubagentInfo.cancelSettled([
+            "message": "cancellation requested for subagent 1; it is still cancelling after 3s. Use wait_agent for its terminal result",
+        ]))
+    }
+
     func testHistoryBecomesATranscript() {
         let transcript = SubagentInfo.transcript(from: [
             "updates": [

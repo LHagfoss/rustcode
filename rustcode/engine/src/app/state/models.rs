@@ -414,6 +414,11 @@ pub struct SubAgent {
     pub completion: Option<String>,
     #[serde(default)]
     pub performance: crate::benchmark::TurnPerformance,
+    /// When the child last made progress: a status change, a finished model
+    /// request or a finished tool call. Lets a frontend tell a working child
+    /// from one that is stuck (#2558).
+    #[serde(default)]
+    pub last_activity_ms: Option<u64>,
 }
 
 /// One entry of the agent's persistent task plan, managed via the `todo_write` tool.

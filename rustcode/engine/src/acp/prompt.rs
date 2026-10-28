@@ -309,6 +309,12 @@ pub(crate) async fn run_prompt(
         let (workspace_root, sandbox_mode) = {
             let mut state = state.lock().await;
             state.auto_confirm = auto_approve;
+            // Subagents outlive this turn and do not run under its policy;
+            // their approvals still have to reach the client.
+            state.external_tool_approver = Some(super::permissions::external_tool_approver(
+                connection.clone(),
+                session_id.clone(),
+            ));
             (
                 state
                     .workspace_root

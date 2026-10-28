@@ -86,14 +86,31 @@ fn bounded(text: &str) -> String {
     format!("{}…", &text[..end])
 }
 
-fn agent_json(agent: &SubAgent) -> Value {
+/// The child's lifecycle as the client shows it: a running child whose
+/// cancellation was requested but has not finished cleaning up is
+/// `cancelling`, so a stop is never shown as still working or as done.
+fn lifecycle_name(agent: &SubAgent, cancel_requested: bool) -> &'static str {
+    if cancel_requested
+        && matches!(
+            agent.status,
+            SubAgentStatus::Queued | SubAgentStatus::Running
+        )
+    {
+        "cancelling"
+    } else {
+        status_name(agent.status)
+    }
+}
+
+fn agent_json(agent: &SubAgent, supervisor: &crate::app::SubagentSupervisor) -> Value {
+    let cancel_requested = supervisor.cancel_requested(SubagentId::from_raw(agent.id));
     json!({
         "id": agent.id,
         "name": agent.name,
         "task": bounded(&agent.task),
         "model": agent.model,
         "agentType": role_name(agent.agent_type),
-        "status": status_name(agent.status),
+        "status": lifecycle_name(agent, cancel_requested),
         "activeTurn": agent.active_turn,
         "parentId": agent.parent_id,
         "depth": agent.depth,
@@ -101,13 +118,19 @@ fn agent_json(agent: &SubAgent) -> Value {
         "messageCount": agent.history.len(),
         "startedAtMs": agent.started_at_ms,
         "finishedAtMs": agent.finished_at_ms,
+        "lastActivityMs": agent.last_activity_ms.or(agent.started_at_ms),
+        "toolCalls": agent.performance.tool_calls,
         "completion": agent.completion.as_deref().map(bounded),
     })
 }
 
 /// Answer `_rustcode/agents`: every child of the session, oldest first.
 pub(crate) fn list(state: &AppState) -> Value {
-    json!({ "agents": state.subagents.iter().map(agent_json).collect::<Vec<_>>() })
+    json!({ "agents": state
+        .subagents
+        .iter()
+        .map(|agent| agent_json(agent, &state.subagent_supervisor))
+        .collect::<Vec<_>>() })
 }
 
 /// The child `id`'s conversation, replayed as the session updates a loaded
@@ -124,7 +147,7 @@ pub(crate) fn history(
         .ok_or_else(|| unknown_agent(id))?;
     let updates = super::replay_history_updates(&agent.history, Some(cwd));
     Ok(json!({
-        "agent": agent_json(agent),
+        "agent": agent_json(agent, &state.subagent_supervisor),
         "updates": serde_json::to_value(updates).unwrap_or_else(|_| json!([])),
     }))
 }
@@ -244,6 +267,23 @@ mod tests {
         assert_eq!(agents[0]["agentType"], "default");
         assert_eq!(agents[0]["messageCount"], 2);
         assert_eq!(agents[1]["status"], "completed");
+    }
+
+    #[test]
+    fn a_child_whose_cancel_was_requested_lists_as_cancelling() {
+        let mut state = AppState::new();
+        let mut running = child(1, SubAgentStatus::Running);
+        running.last_activity_ms = Some(42);
+        assert_eq!(lifecycle_name(&running, true), "cancelling");
+        assert_eq!(lifecycle_name(&running, false), "running");
+        // A finished child reports its terminal state even if a cancel
+        // request raced its completion.
+        let cancelled = child(2, SubAgentStatus::Cancelled);
+        assert_eq!(lifecycle_name(&cancelled, true), "cancelled");
+        state.subagents.push(running);
+        let listed = list(&state);
+        assert_eq!(listed["agents"][0]["lastActivityMs"], 42);
+        assert_eq!(listed["agents"][0]["toolCalls"], 0);
     }
 
     #[test]

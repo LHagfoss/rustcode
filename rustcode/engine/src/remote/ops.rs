@@ -1297,6 +1297,7 @@ mod tests {
             finished_at_ms: None,
             completion: None,
             performance: Default::default(),
+            last_activity_ms: None,
         });
         let agents = output(execute_command(&mut state, "/agents"));
         assert!(

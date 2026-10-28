@@ -198,7 +198,7 @@ struct AgentStatusMark: View {
             case .completed: ("checkmark.circle.fill", .green)
             case .failed: ("xmark.circle.fill", .red)
             case .cancelled, .interrupted: ("stop.circle.fill", .secondary)
-            case .queued, .running: ("circle", .secondary)
+            case .queued, .running, .cancelling: ("circle", .secondary)
             }
             Image(systemName: symbol).foregroundStyle(color)
         }
@@ -328,10 +328,11 @@ struct AgentPanel: View {
                 }
                 Spacer()
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text([info.status.label, info.model, info.elapsed(now: context.date)]
+                    let quiet = info.quietLabel(now: context.date)
+                    Text([info.status.label, info.model, info.elapsed(now: context.date), quiet]
                         .compactMap { $0 }.joined(separator: " · "))
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(quiet == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                         .monospacedDigit()
                         .lineLimit(1)
                 }
@@ -390,7 +391,12 @@ struct AgentPanel: View {
                 .buttonStyle(PillButtonStyle(prominent: true))
                 .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help("Send to \(info.name)")
-            if info.isActive {
+            if info.status == .cancelling {
+                Button("Cancelling…") {}
+                    .buttonStyle(PillButtonStyle(prominent: false))
+                    .disabled(true)
+                    .help("\(info.name) was asked to stop and has not ended yet")
+            } else if info.isActive {
                 Button("Cancel agent") { Task { await model.cancelViewedAgent() } }
                     .buttonStyle(PillButtonStyle(prominent: false))
                     .help("Stop \(info.name) and the agents it started")

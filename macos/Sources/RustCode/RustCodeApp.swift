@@ -764,9 +764,10 @@ final class DesktopModel: ObservableObject {
     func cancelViewedAgent() async {
         guard let agent = viewedAgent, let session = selectedSession, let connection = engine?.connection else { return }
         do {
-            _ = try await connection.request(
+            let result = try await connection.request(
                 ACPMethod.agents, params: ACPRequests.agentCancel(sessionId: session, id: agent.id), timeout: .seconds(10))
-            confirm("Stopping \(agent.info.name)", systemImage: "stop.circle")
+            confirm(SubagentInfo.cancelSettled(result) ? "\(agent.info.name) stopped" : "Stopping \(agent.info.name)…",
+                    systemImage: "stop.circle")
             pollAgents()
         } catch {
             self.error = "\(agent.info.name) could not be stopped: \(error)"
