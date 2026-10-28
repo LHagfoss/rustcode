@@ -33,13 +33,14 @@ pub fn valid_session_id(session_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-/// Prefixes of the temporary ids a session-title or compaction-summary
-/// request runs under. Those requests never become sessions (#2562).
-const SCRATCH_SESSION_PREFIXES: [&str; 2] = ["session-title-", "compaction-summary-"];
+/// Prefixes of the temporary ids a session-title, compaction-summary or
+/// recap request runs under. Those requests never become sessions (#2562,
+/// #2571).
+const SCRATCH_SESSION_PREFIXES: [&str; 3] = ["session-title-", "compaction-summary-", "recap-"];
 
-/// Whether `session_id` is a title or compaction request's temporary id
-/// (`session-title-<nanos>`, `compaction-summary-<nanos>`) rather than a
-/// session. Nothing is stored for it.
+/// Whether `session_id` is a title, compaction or recap request's temporary
+/// id (`session-title-<nanos>`, `compaction-summary-<nanos>`,
+/// `recap-<nanos>`) rather than a session. Nothing is stored for it.
 pub fn is_scratch_session_id(session_id: &str) -> bool {
     SCRATCH_SESSION_PREFIXES.iter().any(|prefix| {
         session_id
@@ -2368,8 +2369,11 @@ mod tests {
         assert!(is_scratch_session_id(
             "compaction-summary-1793183363393325000"
         ));
+        assert!(is_scratch_session_id("recap-1791014520757450000"));
         for id in [
             "session-title-",
+            "recap-",
+            "recap-test",
             "session-title-test-rename-42",
             "compaction-summary-x1",
             "018d6b28-0000-7000-8000-000000000002",
@@ -2392,6 +2396,7 @@ mod tests {
         let leaked = [
             day.join("session-title-1793186210375136000"),
             day.join("compaction-summary-1793183363393325000"),
+            day.join("recap-1791014520757450000"),
         ];
         for path in &leaked {
             std::fs::create_dir_all(path.join("logs")).unwrap();
@@ -2404,7 +2409,7 @@ mod tests {
         std::fs::create_dir_all(&unrelated).unwrap();
         let real = store.ensure_session("018d6b28-0000-7000-8000-000000000002");
 
-        assert_eq!(store.prune_scratch_session_dirs(), 2);
+        assert_eq!(store.prune_scratch_session_dirs(), 3);
         assert!(leaked.iter().all(|path| !path.exists()));
         assert!(with_history.exists());
         assert!(unrelated.exists());

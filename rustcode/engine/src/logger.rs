@@ -576,7 +576,7 @@ fn append_line_to_logs_with_limit(
     let append_bytes = line.len().saturating_add(1) as u64;
     append_bounded_line(config_dir, &line, append_bytes, limit_bytes);
 
-    // A title or compaction request's scratch id is not a session: its lines
+    // A title, compaction or recap request's scratch id is not a session: its lines
     // stay in the global log instead of creating a session folder (#2562).
     if let Some(session_id) = session_id.filter(|id| !rustcode_session::is_scratch_session_id(id)) {
         let session_dir = rustcode_session::SessionStore::new(config_dir).session_dir(session_id);
@@ -1145,6 +1145,7 @@ mod tests {
         for session_id in [
             "session-title-1793186210375136000",
             "compaction-summary-1793183363393325000",
+            "recap-1791014520757450000",
         ] {
             append_line_to_logs(dir.path(), Some(session_id), "[time] [op] scratch request");
             assert!(!store.session_dir(session_id).exists(), "{session_id}");
