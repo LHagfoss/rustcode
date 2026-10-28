@@ -39,4 +39,12 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertNil(snapshot.github.active)
         XCTAssertFalse(snapshot.github.cliInstalled)
     }
+
+    /// Refresh names the account the way sign-out does, on the engine's method.
+    func testRefreshNamesItsAccount() {
+        XCTAssertEqual(ACPMethod.accountRefresh, "_rustcode/connections/account/refresh")
+        let params = ACPRequests.accountRefresh(provider: "openai", account: "me@example.com")
+        XCTAssertEqual(params["provider"], "openai")
+        XCTAssertEqual(params["account"], "me@example.com")
+    }
 }

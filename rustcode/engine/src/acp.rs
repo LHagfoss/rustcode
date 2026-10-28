@@ -1230,6 +1230,18 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: connections::AccountRefreshRequest, responder, connection| {
+                connection.spawn(async move {
+                    match connections::account_refresh(request).await {
+                        Ok(value) => responder.respond(value)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: connections::AccountLogoutRequest, responder, connection| {
                 connection.spawn(async move {
                     match connections::account_logout(request).await {
