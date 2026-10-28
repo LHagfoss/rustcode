@@ -282,8 +282,16 @@ final class DesktopModel: ObservableObject {
     private var remoteSessionID: String?
     /// ⌘K: the chat switcher over the window.
     @Published var showsSwitcher = false {
-        didSet { if !showsSwitcher { stopPanelTypeahead() } }
+        didSet {
+            if !showsSwitcher {
+                stopPanelTypeahead()
+                switcherSendsDraft = false
+            }
+        }
     }
+    /// The switcher picks a chat to send the composer's message to, instead
+    /// of one to open (#2527).
+    @Published private(set) var switcherSendsDraft = false
     /// Text typed between ⌘K or the model picker opening and its field
     /// taking the keyboard, which SwiftUI gives it a frame later. Without
     /// this, a fast typist's first letters went to whatever had focus, such
@@ -1053,9 +1061,64 @@ final class DesktopModel: ObservableObject {
 
     /// Open the chat picked in the switcher.
     func switchTo(_ session: SessionSummary) {
+        let sends = switcherSendsDraft
         showsSwitcher = false
+        if sends {
+            Task { await sendDraft(to: session) }
+            return
+        }
         guard session.id != selectedSession else { return }
         Task { await select(session) }
+    }
+
+    /// The composer's + menu: pick a chat in the switcher, and the message
+    /// goes there while this chat stays open (#2527).
+    func chooseChatForDraft() {
+        guard canSendDraftElsewhere else { return }
+        composerPanel = nil
+        showsSwitcher = true
+        switcherSendsDraft = true
+        startPanelTypeahead()
+    }
+
+    /// There is a typed message, with nothing the other chat could not take.
+    var canSendDraftElsewhere: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draftCommand == nil && images.isEmpty
+            && engine?.connection != nil && capabilities?.loadSession == true
+    }
+
+    /// Send the composer's message to `session` without opening it: a one-way
+    /// handoff. The chat runs it as a turn of its own, in its own folder,
+    /// after any turn it is running; its answer arrives as for any chat in
+    /// the background, a toast that opens it and a dot in the sidebar.
+    func sendDraft(to session: SessionSummary) async {
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty else { return }
+        // The open chat is an ordinary send.
+        if session.id == selectedSession {
+            await submit()
+            return
+        }
+        let title = chatTitle(session.id)
+        let folder = URL(fileURLWithPath: session.cwd.isEmpty ? chatProject.path : session.cwd)
+        let prompt = QueuedPrompt(sessionId: session.id, typed: typed, text: Self.prompt(typed, attaching: attachments, in: folder), images: [])
+        draft = ""
+        attachments = []
+        guard await load(session) else {
+            // Not delivered: the message comes back to be sent again.
+            draft = typed
+            error = "Could not open “\(title)” to send it the message."
+            return
+        }
+        if runningSessions.contains(session.id) {
+            queuedPrompts.append(prompt)
+            showToast(Toast(style: .info, systemImage: "tray.and.arrow.down", title: "Queued for \(title)",
+                            message: "It runs when that chat's turn ends.", session: session.id))
+            return
+        }
+        showToast(Toast(style: .info, systemImage: "paperplane", title: "Sent to \(title)",
+                        message: "Working there; this chat stays open.", session: session.id))
+        await run(prompt)
     }
 
     /// Commands matching the draft while its first word is being typed.
@@ -1788,10 +1851,33 @@ final class DesktopModel: ObservableObject {
         // Picked again while its first load is still running: that load
         // shows it when it is in.
         guard !loadingSessions.contains(session.id) else { return }
-        // `session/load` replays the transcript as `session/update`
-        // notifications before it answers. The replay builds off screen and
-        // shows at once: applied line by line, every replayed chunk redrew
-        // the whole chat.
+        guard let result = await loadInEngine(session, on: connection) else { return }
+        // Another chat may have been picked while this one loaded.
+        guard selectedSession == session.id, let loaded = openSessions[session.id] else { return }
+        transcript = loaded.transcript
+        applyConfig(result["configOptions"])
+    }
+
+    /// Make sure the engine has `session` open, without showing it: a chat
+    /// sent a message from another one (#2527). True once it is open.
+    private func load(_ session: SessionSummary) async -> Bool {
+        if session.id == selectedSession || openSessions[session.id] != nil { return true }
+        guard let connection = engine?.connection else { return false }
+        if loadingSessions.contains(session.id) {
+            // Another load of it is running; wait for that one.
+            for _ in 0..<300 where loadingSessions.contains(session.id) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            return openSessions[session.id] != nil || session.id == selectedSession
+        }
+        return await loadInEngine(session, on: connection) != nil
+    }
+
+    /// `session/load`, kept in `openSessions`. It replays the transcript as
+    /// `session/update` notifications before it answers. The replay builds
+    /// off screen and shows at once: applied line by line, every replayed
+    /// chunk redrew the whole chat. Nil when it failed.
+    private func loadInEngine(_ session: SessionSummary, on connection: ACPConnection) async -> JSONValue? {
         loadingSessions.insert(session.id)
         replays[session.id] = Transcript()
         defer {
@@ -1806,16 +1892,13 @@ final class DesktopModel: ObservableObject {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
             await catchUpInbound(on: connection)
             // The engine replaced while this loaded has not opened it.
-            guard engine?.connection === connection else { return }
+            guard engine?.connection === connection else { return nil }
             let options = result["configOptions"].map(ModelOptions.init(configOptions:)) ?? .empty
-            let loaded = OpenSession(transcript: replays[session.id] ?? Transcript(), models: options, selectedModel: options.current)
-            openSessions[session.id] = loaded
-            // Another chat may have been picked while this one loaded.
-            guard selectedSession == session.id else { return }
-            transcript = loaded.transcript
-            applyConfig(result["configOptions"])
+            openSessions[session.id] = OpenSession(transcript: replays[session.id] ?? Transcript(), models: options, selectedModel: options.current)
+            return result
         } catch {
             self.error = String(describing: error)
+            return nil
         }
     }
 

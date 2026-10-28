@@ -306,6 +306,58 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2527: the composer's message goes to another chat, which runs it in
+    /// its own context while the open chat stays as it was.
+    func testSendingToAnotherChatRunsItThereAndKeepsThisOne() async throws {
+        let model = try await started()
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        let slow = try XCTUnwrap(model.sessions.first { $0.id == "slow" })
+        await model.select(quick)
+        model.draft = "check the logs"
+        XCTAssertTrue(model.canSendDraftElsewhere)
+        model.chooseChatForDraft()
+        XCTAssertTrue(model.showsSwitcher && model.switcherSendsDraft)
+        model.switchTo(slow)
+        XCTAssertFalse(model.showsSwitcher)
+        XCTAssertFalse(model.switcherSendsDraft, "the next ⌘K switches again")
+        // Sent once the chat is open in the engine, then run to its end.
+        try await until { model.toasts.contains { $0.session == "slow" && $0.title.hasPrefix("Sent to") } }
+        try await until { model.runningSessions.isEmpty }
+        XCTAssertEqual(model.draft, "")
+        XCTAssertEqual(model.selectedSession, "quick", "this chat stays open")
+        XCTAssertEqual(model.transcript.items.count, Self.replayed, "and gets nothing")
+        await model.select(slow)
+        XCTAssertTrue(model.transcript.items.contains { item in
+            if case .assistant(let text) = item.content { text == "reply to check the logs" } else { false }
+        })
+        model.stop()
+    }
+
+    /// A busy chat gets the message after its turn, and one that cannot be
+    /// opened gives it back to the composer.
+    func testSendingToABusyChatQueuesAndAFailedOneKeepsTheDraft() async throws {
+        let model = try await started()
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        let slow = try XCTUnwrap(model.sessions.first { $0.id == "slow" })
+        await model.select(slow)
+        model.draft = "long task"
+        let running = Task { await model.submit() }
+        try await until { model.runningSessions.contains("slow") }
+        await model.select(quick)
+        model.draft = "after that"
+        await model.sendDraft(to: slow)
+        XCTAssertEqual(model.queuedPrompts.map(\.typed), ["after that"])
+        XCTAssertEqual(model.queuedPrompts.first?.sessionId, "slow")
+        await running.value
+        try await until { model.queuedPrompts.isEmpty && model.runningSessions.isEmpty }
+
+        model.draft = "lost?"
+        await model.sendDraft(to: SessionSummary(id: "elsewhere", cwd: "/tmp/not-its-folder"))
+        XCTAssertEqual(model.draft, "lost?", "not delivered, so nothing is lost")
+        XCTAssertNotNil(model.error)
+        model.stop()
+    }
+
     /// #2210: ⌘P pins and unpins the chat shown at once, and never moves what
     /// is typed, or the follow-up sent next, to another chat.
     func testPinActsOnTheShownChatAndKeepsTheDraft() async throws {
