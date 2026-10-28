@@ -677,6 +677,43 @@ pub(crate) struct McpSchemaSelectionStats {
     pub mcp_schema_bytes: usize,
     pub mcp_schema_budget_bytes: usize,
     pub schema_budget_exhausted: bool,
+    /// Each selected tool under the bucket that admitted it: `reserved`,
+    /// `requested`, `previously_used`, `relevant`, `retained` or `fallback`.
+    /// Counting alone left a newly admitted tool unexplained (#2576).
+    pub admitted_by: std::collections::BTreeMap<&'static str, Vec<String>>,
+}
+
+/// MCP tools this session has already committed to, kept outside the
+/// transcript so a compaction that archives the messages naming or calling
+/// them does not hand their slots to something else (#2576).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct McpSessionAnchors {
+    /// Tools the user named, or whose server the user named, or that a
+    /// discovery call bound.
+    pub requested: Vec<String>,
+    /// Tools the model has called.
+    pub used: Vec<String>,
+}
+
+impl McpSessionAnchors {
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.requested.is_empty() && self.used.is_empty()
+    }
+
+    /// Fold one request's admissions into the session's anchors.
+    pub(crate) fn absorb(&mut self, stats: &McpSchemaSelectionStats) {
+        for (bucket, into) in [
+            ("requested", &mut self.requested),
+            ("previously_used", &mut self.used),
+        ] {
+            for name in stats.admitted_by.get(bucket).into_iter().flatten() {
+                if !into.contains(name) {
+                    into.push(name.clone());
+                }
+            }
+        }
+    }
 }
 
 const CORE_CODING_TOOLS: &[&str] = &[
@@ -1360,11 +1397,97 @@ fn explicitly_requested_mcp_tool_names(
     (named, requested)
 }
 
+/// Words that say what to do or name a kind of thing nearly every messaging,
+/// file or task server offers. They say nothing about *which* tool is meant:
+/// "chat", "msg", "reply" and "before" in a Minecraft permissions transcript
+/// pulled a Snapchat reader into the menu (#2576). Compared after stemming.
+const GENERIC_RELEVANCE_TERMS: &[&str] = &[
+    "add",
+    "after",
+    "all",
+    "before",
+    "chat",
+    "check",
+    "clear",
+    "close",
+    "conversation",
+    "create",
+    "data",
+    "default",
+    "delete",
+    "detail",
+    "dm",
+    "entry",
+    "fetch",
+    "fill",
+    "find",
+    "first",
+    "get",
+    "id",
+    "info",
+    "item",
+    "last",
+    "latest",
+    "limit",
+    "list",
+    "load",
+    "member",
+    "message",
+    "msg",
+    "name",
+    "new",
+    "next",
+    "open",
+    "page",
+    "read",
+    "recent",
+    "remove",
+    "reply",
+    "result",
+    "run",
+    "save",
+    "search",
+    "send",
+    "set",
+    "show",
+    "start",
+    "status",
+    "stop",
+    "take",
+    "text",
+    "update",
+    "user",
+    "value",
+    "view",
+    "write",
+];
+
+/// How strongly the user's words point at one MCP tool. Only the tool's name
+/// and description count: its schema's parameter names (`before`, `limit`,
+/// `chat_id`) are shared by unrelated tools and are not what a user asks for.
 fn mcp_tool_relevance(
     name: &str,
     description: &str,
-    schema: &Value,
     terms: &std::collections::HashSet<String>,
+) -> usize {
+    mcp_tool_score(name, description, terms, false)
+}
+
+/// Rank tools of a server the user already named. There the generic verbs
+/// are what tells `send_chat_message` from `list_chats`, so they count.
+fn mcp_tool_rank_within_server(
+    name: &str,
+    description: &str,
+    terms: &std::collections::HashSet<String>,
+) -> usize {
+    mcp_tool_score(name, description, terms, true)
+}
+
+fn mcp_tool_score(
+    name: &str,
+    description: &str,
+    terms: &std::collections::HashSet<String>,
+    count_generic: bool,
 ) -> usize {
     use super::mcp_discovery::{stem, tokens};
     // `mcp__` is a transport prefix, not evidence that every MCP tool is
@@ -1377,35 +1500,19 @@ fn mcp_tool_relevance(
     let description_terms = tokens(description)
         .into_iter()
         .collect::<std::collections::HashSet<_>>();
-    let schema_terms = tokens(&serde_json::to_string(schema).unwrap_or_default())
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>();
-    // A verb shared by most tool names says what to do, not what to do it to.
-    // On its own it must not clear the threshold: "check ... clear ... read"
-    // in an unrelated prompt otherwise filled the whole menu.
-    const GENERIC_NAME_TERMS: &[&str] = &[
-        "add", "check", "clear", "close", "create", "delete", "fill", "get", "list", "new", "open",
-        "read", "remove", "reply", "run", "search", "send", "set", "start", "stop", "take",
-        "update", "write",
-    ];
     let mut score = 0;
     let mut seen = std::collections::HashSet::new();
     for term in terms {
         // The prompt may carry the verb inflected ("takes" for `take_…`).
         let term = stem(term);
-        if !seen.insert(term.clone()) {
+        let generic = GENERIC_RELEVANCE_TERMS.contains(&term.as_str());
+        if (generic && !count_generic) || !seen.insert(term.clone()) {
             continue;
         }
         if name_terms.contains(&term) {
-            score += if GENERIC_NAME_TERMS.contains(&term.as_str()) {
-                3
-            } else {
-                8
-            };
+            score += if generic { 3 } else { 8 };
         } else if description_terms.contains(&term) {
             score += 3;
-        } else if schema_terms.contains(&term) {
-            score += 1;
         }
     }
     score
@@ -1466,6 +1573,7 @@ pub(crate) fn select_mcp_tools_for_context_with_sticky_and_reservations_in_phase
     )
 }
 
+#[cfg(test)]
 pub(super) fn select_mcp_tools_for_context_with_raw_names(
     tools: &[(String, String, Value)],
     owners: &[String],
@@ -1473,6 +1581,43 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
     always_include_servers: &[String],
     messages: &[Value],
     sticky_names: &[String],
+    phase: ToolSchemaPhase,
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    select_mcp_tools_for_context_with_anchors(
+        tools,
+        owners,
+        raw_names,
+        always_include_servers,
+        messages,
+        sticky_names,
+        &McpSessionAnchors::default(),
+        phase,
+    )
+}
+
+/// The server a tool belongs to: its registry owner, else the server in its
+/// canonical `mcp__server__tool` name.
+fn mcp_tool_server<'a>(
+    tools: &'a [(String, String, Value)],
+    owners: &'a [String],
+    index: usize,
+) -> Option<&'a str> {
+    owners
+        .get(index)
+        .map(String::as_str)
+        .filter(|owner| !owner.is_empty())
+        .or_else(|| canonical_mcp_server(&tools[index].0))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn select_mcp_tools_for_context_with_anchors(
+    tools: &[(String, String, Value)],
+    owners: &[String],
+    raw_names: &[String],
+    always_include_servers: &[String],
+    messages: &[Value],
+    sticky_names: &[String],
+    anchors: &McpSessionAnchors,
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
     // Once a menu is pinned, only what the user wrote may add to it. Assistant
@@ -1496,8 +1641,15 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
         Some(latest) if !sticky_names.is_empty() => context_terms(std::slice::from_ref(latest)),
         _ => std::collections::HashSet::new(),
     };
-    let (named, server_wide) =
+    let (mut named, server_wide) =
         explicitly_requested_mcp_tool_names(tools, owners, raw_names, messages);
+    // What the user asked for earlier in the session stays asked for after a
+    // compaction archived the message that said so (#2576).
+    for wanted in &anchors.requested {
+        if tools.iter().any(|(name, _, _)| name == wanted) && !named.contains(wanted) {
+            named.push(wanted.clone());
+        }
+    }
     let mut requested = named
         .iter()
         .filter_map(|wanted| tools.iter().position(|(name, _, _)| name == wanted))
@@ -1506,12 +1658,12 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
     let mut previous = Vec::new();
     let mut relevant = Vec::new();
     let mut fresh = Vec::new();
-    for (index, (name, description, schema)) in tools.iter().enumerate() {
+    for (index, (name, description, _)) in tools.iter().enumerate() {
         if named.contains(name) {
             continue;
         }
         if !fresh_terms.is_empty() {
-            let score = mcp_tool_relevance(name, description, schema, &fresh_terms);
+            let score = mcp_tool_relevance(name, description, &fresh_terms);
             if score >= MCP_RELEVANCE_THRESHOLD {
                 fresh.push((index, score));
             }
@@ -1519,31 +1671,95 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
         // The model may call a tool by its advertised or its canonical
         // `mcp__server__tool` name; either is a use (#2502). A bare raw name
         // that is not the advertised one could be a built-in's, so it is not.
+        // A call a compaction archived still counts (#2576).
         let raw = raw_names.get(index).map(String::as_str).unwrap_or(name);
         let canonical = owners
             .get(index)
             .map(|owner| mcp_canonical_name(owner, raw))
             .unwrap_or_else(|| name.clone());
-        let was_used =
-            tool_name_was_used(name, messages) || tool_name_was_used(&canonical, messages);
+        let was_used = anchors.used.contains(name)
+            || tool_name_was_used(name, messages)
+            || tool_name_was_used(&canonical, messages);
         if server_wide.contains(name) {
             server_requested.push((
                 index,
                 was_used,
-                mcp_tool_relevance(name, description, schema, &terms),
+                mcp_tool_rank_within_server(name, description, &terms),
             ));
         } else if was_used {
             previous.push(index);
         } else {
-            let score = mcp_tool_relevance(name, description, schema, &terms);
-            // A single generic description/schema word such as "result",
-            // "file", or "project" must not pull a large MCP suite into an
-            // unrelated request. Exact name terms score eight; two strong
-            // description matches score six.
+            let score = mcp_tool_relevance(name, description, &terms);
+            // A single generic description word such as "result", "file", or
+            // "project" must not pull a large MCP suite into an unrelated
+            // request. Exact name terms score eight; two strong description
+            // matches score six.
             if score >= MCP_RELEVANCE_THRESHOLD {
                 relevant.push((index, score));
             }
         }
+    }
+
+    // Relevance from the transcript may only widen the menu within servers the
+    // session has already engaged: one it used, one the user or a discovery
+    // call named, or a reserved one. A server new to the session is admitted
+    // only by what the user just wrote ("check my latest mails"), never by
+    // words older turns, assistant prose or a compaction left behind; the
+    // model can find anything else with `list_mcp_tools` (#2576).
+    let latest_terms = authored
+        .last()
+        .map(|latest| context_terms(std::slice::from_ref(latest)))
+        .unwrap_or_default();
+    let mut engaged_servers = std::collections::HashSet::new();
+    for index in requested
+        .iter()
+        .chain(server_requested.iter().map(|(index, _, _)| index))
+        .chain(previous.iter())
+        .copied()
+    {
+        if let Some(server) = mcp_tool_server(tools, owners, index) {
+            engaged_servers.insert(server);
+        }
+    }
+    for index in 0..tools.len() {
+        if let Some(server) = mcp_tool_server(tools, owners, index) {
+            if always_include_servers
+                .iter()
+                .any(|reserved| reserved == server)
+                || user_mentions_mcp_server(messages, server)
+            {
+                engaged_servers.insert(server);
+            }
+        }
+    }
+    for ranked in [&mut relevant, &mut fresh] {
+        ranked.retain(|(index, _)| {
+            mcp_tool_server(tools, owners, *index)
+                .is_some_and(|server| engaged_servers.contains(server))
+                || mcp_tool_relevance(&tools[*index].0, &tools[*index].1, &latest_terms)
+                    >= MCP_RELEVANCE_THRESHOLD
+        });
+        // Two servers offering the same tool name with the same score are an
+        // ambiguous match: neither is admitted rather than the one whose
+        // server sorts first (#2576).
+        let snapshot = ranked.clone();
+        ranked.retain(|(index, score)| {
+            let raw = raw_names
+                .get(*index)
+                .map(String::as_str)
+                .unwrap_or(&tools[*index].0);
+            !snapshot.iter().any(|(other, other_score)| {
+                other != index
+                    && other_score == score
+                    && raw_names
+                        .get(*other)
+                        .map(String::as_str)
+                        .unwrap_or(&tools[*other].0)
+                        == raw
+                    && mcp_tool_server(tools, owners, *other)
+                        != mcp_tool_server(tools, owners, *index)
+            })
+        });
     }
     // A named server can have more tools than the request may carry. The ones
     // already in use and the ones the request's words point at go first;
@@ -1558,6 +1774,8 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
     requested.extend(server_requested.into_iter().map(|(index, _, _)| index));
     previous.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
     for ranked in [&mut relevant, &mut fresh] {
+        // Tied duplicates across servers were dropped above, so the name order
+        // here only seats two different tools, never picks a server.
         ranked.sort_by(|(left_index, left_score), (right_index, right_score)| {
             right_score
                 .cmp(left_score)
@@ -1660,13 +1878,9 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
             .iter()
             .copied()
             .filter(|index| !rejected_indices.contains(index))
-            .map(|index| {
-                if sticky_names.contains(&tools[index].0) {
-                    (index, Admitted::Retained)
-                } else {
-                    (index, Admitted::Previous)
-                }
-            }),
+            // A used tool is admitted for being used, pinned or not, so the
+            // log says why it is there (#2576).
+            .map(|index| (index, Admitted::Previous)),
     );
     candidates.extend(
         sticky_names
@@ -1719,15 +1933,6 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
             per_server_bytes.insert(owner, server_bytes.saturating_add(bytes));
         }
     }
-
-    let relevant_count = selected
-        .iter()
-        .filter(|index| admitted.get(index) == Some(&Admitted::Relevant))
-        .count();
-    let previously_used_count = selected
-        .iter()
-        .filter(|index| previous.contains(index))
-        .count();
 
     let mut fallback_count = 0;
     if selected.is_empty() && phase == ToolSchemaPhase::Established {
@@ -1819,15 +2024,39 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
             (!selected_set.contains(&index)).then_some(name.clone())
         })
         .collect::<Vec<_>>();
+    // Each selected tool under the one bucket that admitted it; the counts
+    // are the sizes of these lists, so they always add up to `selected`.
+    let mut admitted_by: std::collections::BTreeMap<&'static str, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for index in &selected {
+        // Having been called is the strongest reason a tool is offered, so a
+        // used tool is reported as such unless the user asked for it by name.
+        let used = previous.contains(index) && admitted.get(index) != Some(&Admitted::Requested);
+        let bucket = match admitted.get(index) {
+            _ if used => "previously_used",
+            Some(Admitted::Requested) => "requested",
+            Some(Admitted::Previous) => "previously_used",
+            Some(Admitted::Relevant) => "relevant",
+            Some(Admitted::Retained) => "retained",
+            None if mcp_tool_server(tools, owners, *index)
+                .is_some_and(|server| reserved_servers.iter().any(|name| name == server)) =>
+            {
+                "reserved"
+            }
+            None => "fallback",
+        };
+        admitted_by
+            .entry(bucket)
+            .or_default()
+            .push(tools[*index].0.clone());
+    }
+    let bucket_len = |bucket: &str| admitted_by.get(bucket).map_or(0, Vec::len);
     let stats = McpSchemaSelectionStats {
         available: tools.len(),
         selected: selected.len(),
-        requested: selected
-            .iter()
-            .filter(|index| admitted.get(index) == Some(&Admitted::Requested))
-            .count(),
-        relevant: relevant_count,
-        previously_used: previously_used_count,
+        requested: bucket_len("requested"),
+        relevant: bucket_len("relevant"),
+        previously_used: bucket_len("previously_used"),
         fallback: fallback_count.min(selected.len()),
         omitted: tools.len().saturating_sub(selected.len()),
         selected_names,
@@ -1838,6 +2067,7 @@ pub(super) fn select_mcp_tools_for_context_with_raw_names(
         mcp_schema_bytes: selected_schema_bytes,
         mcp_schema_budget_bytes: budget_bytes,
         schema_budget_exhausted,
+        admitted_by,
         ..Default::default()
     };
     (selected, stats)
@@ -1912,6 +2142,7 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at(
         sticky_names,
         workspace_root,
         &[],
+        &McpSessionAnchors::default(),
     )
 }
 
@@ -1921,6 +2152,7 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
     sticky_names: &[String],
     workspace_root: Option<&Path>,
     always_include_servers: &[String],
+    anchors: &McpSessionAnchors,
 ) -> (Vec<Value>, McpSchemaSelectionStats) {
     #[cfg(test)]
     maybe_pause_native_schema_test_gate(messages);
@@ -1957,13 +2189,14 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at_and_reserved_server
             .iter()
             .map(|(_, _, raw_name, _, _)| raw_name.clone())
             .collect::<Vec<_>>();
-        let (selected, stats) = select_mcp_tools_for_context_with_raw_names(
+        let (selected, stats) = select_mcp_tools_for_context_with_anchors(
             &mcp_tools,
             &owners,
             &raw_names,
             always_include_servers,
             messages,
             sticky_names,
+            anchors,
             phase,
         );
         for index in selected {

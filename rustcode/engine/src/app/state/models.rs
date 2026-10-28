@@ -502,6 +502,8 @@ pub(crate) struct NativeToolSchemaSnapshot {
     pub(crate) turn_user_message_count: usize,
     pub(crate) selection_revision: u64,
     pub(crate) sticky_names: Vec<String>,
+    /// Tools this session asked for or used, kept across compactions.
+    pub(crate) anchors: crate::tools::McpSessionAnchors,
 }
 
 /// Number of real user turns in the projected request. The runtime context tail
@@ -550,6 +552,10 @@ struct McpPin {
     /// Invalidates schema computations that started from an older snapshot,
     /// including concurrent requests with the same session inputs.
     revision: u64,
+    /// What the user named and what the model called during the session.
+    /// Unlike the transcript, a compaction does not archive it, so the tools
+    /// a task depends on keep their seats afterwards (#2576).
+    anchors: crate::tools::McpSessionAnchors,
 }
 
 impl PromptCache {
@@ -631,6 +637,7 @@ impl PromptCache {
                     user_count: 0,
                     names: Vec::new(),
                     revision: 0,
+                    anchors: Default::default(),
                 });
                 self.mcp_pins.len() - 1
             }
@@ -646,14 +653,28 @@ impl PromptCache {
             turn_user_message_count,
             selection_revision: pin.revision,
             sticky_names: pin.names.clone(),
+            anchors: pin.anchors.clone(),
         }
     }
 
     pub(crate) fn commit_native_tool_schema_selection(
         &mut self,
         snapshot: &NativeToolSchemaSnapshot,
-        selected_names: &[String],
+        stats: &crate::tools::McpSchemaSelectionStats,
     ) -> bool {
+        // Anchors record facts about the session (what was asked for, what was
+        // called), so they are kept even when the menu itself is stale.
+        if self.mcp_selection_session_id.as_deref() == Some(snapshot.session_id.as_str()) {
+            let pin_policy = mcp_pin_policy(snapshot.policy);
+            if let Some(pin) = self
+                .mcp_pins
+                .iter_mut()
+                .find(|pin| pin.policy == pin_policy)
+            {
+                pin.anchors.absorb(stats);
+            }
+        }
+        let selected_names = stats.selected_names.as_slice();
         // Only a catalog change while this selection was being computed makes it
         // stale. Comparing against the generation recorded when the turn began
         // rejected every commit after the first lazy server start, so the menu
@@ -748,6 +769,13 @@ mod prompt_cache_snapshot_tests {
     /// concurrently: a bump from one would make another's commit look stale.
     static GENERATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    fn selection(names: &[String]) -> crate::tools::McpSchemaSelectionStats {
+        crate::tools::McpSchemaSelectionStats {
+            selected_names: names.to_vec(),
+            ..Default::default()
+        }
+    }
+
     fn messages(user_count: usize) -> Vec<serde_json::Value> {
         (0..user_count)
             .map(|index| json!({"role": "user", "content": format!("prompt {index}")}))
@@ -764,8 +792,12 @@ mod prompt_cache_snapshot_tests {
         let old = cache.native_tool_schema_snapshot(policy, &messages(1), "old-session");
         let new = cache.native_tool_schema_snapshot(policy, &messages(1), "new-session");
 
-        assert!(!cache.commit_native_tool_schema_selection(&old, &["old-tool".to_string()]));
-        assert!(cache.commit_native_tool_schema_selection(&new, &["new-tool".to_string()]));
+        assert!(
+            !cache.commit_native_tool_schema_selection(&old, &selection(&["old-tool".to_string()]))
+        );
+        assert!(
+            cache.commit_native_tool_schema_selection(&new, &selection(&["new-tool".to_string()]))
+        );
         assert_eq!(cache.pinned_names(policy), ["new-tool"]);
     }
 
@@ -779,7 +811,10 @@ mod prompt_cache_snapshot_tests {
         let snapshot = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
         crate::mcp::bump_mcp_generation();
 
-        assert!(!cache.commit_native_tool_schema_selection(&snapshot, &["stale-tool".to_string()]));
+        assert!(!cache.commit_native_tool_schema_selection(
+            &snapshot,
+            &selection(&["stale-tool".to_string()])
+        ));
         assert!(cache.pinned_names(policy).is_empty());
     }
 
@@ -794,7 +829,7 @@ mod prompt_cache_snapshot_tests {
             .map(str::to_string)
             .to_vec();
         let first = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
-        assert!(cache.commit_native_tool_schema_selection(&first, &pinned));
+        assert!(cache.commit_native_tool_schema_selection(&first, &selection(&pinned)));
 
         // Servers keep finishing their lazy startup mid-turn, and each one bumps
         // the generation. `available` grew 118 → 268 → 337 → 485 that way.
@@ -810,7 +845,7 @@ mod prompt_cache_snapshot_tests {
         // The menu chosen after that startup must still be pinned for the next
         // round, or every later round re-scores it from the transcript. (#1796)
         let repinned = ["alpha_read", "beta_read"].map(str::to_string).to_vec();
-        assert!(cache.commit_native_tool_schema_selection(&after, &repinned));
+        assert!(cache.commit_native_tool_schema_selection(&after, &selection(&repinned)));
         let next = cache.native_tool_schema_snapshot(policy, &transcript, "session");
         assert_eq!(next.sticky_names, repinned);
     }
@@ -828,10 +863,10 @@ mod prompt_cache_snapshot_tests {
         let pinned = vec!["alpha_read".to_string()];
 
         let first = cache.native_tool_schema_snapshot(preflight, &messages(1), "session");
-        assert!(cache.commit_native_tool_schema_selection(&first, &pinned));
+        assert!(cache.commit_native_tool_schema_selection(&first, &selection(&pinned)));
         let sent = cache.native_tool_schema_snapshot(request, &messages(1), "session");
         assert_eq!(sent.sticky_names, pinned);
-        assert!(cache.commit_native_tool_schema_selection(&sent, &pinned));
+        assert!(cache.commit_native_tool_schema_selection(&sent, &selection(&pinned)));
         let next_round = cache.native_tool_schema_snapshot(preflight, &messages(1), "session");
         assert_eq!(next_round.sticky_names, pinned);
     }
@@ -848,16 +883,21 @@ mod prompt_cache_snapshot_tests {
         let side = ToolSchemaPolicy::root(false);
         let pinned = vec!["alpha_read".to_string()];
         let first = cache.native_tool_schema_snapshot(main, &messages(1), "session");
-        assert!(cache.commit_native_tool_schema_selection(&first, &pinned));
+        assert!(cache.commit_native_tool_schema_selection(&first, &selection(&pinned)));
 
         let in_flight = cache.native_tool_schema_snapshot(main, &messages(1), "session");
         let recap = cache.native_tool_schema_snapshot(side, &messages(1), "session");
         assert!(recap.sticky_names.is_empty());
-        assert!(cache.commit_native_tool_schema_selection(&recap, &["beta_read".to_string()]));
+        assert!(
+            cache.commit_native_tool_schema_selection(
+                &recap,
+                &selection(&["beta_read".to_string()])
+            )
+        );
 
         // The side request neither took the main pin nor made a main request
         // that was already being prepared stale.
-        assert!(cache.commit_native_tool_schema_selection(&in_flight, &pinned));
+        assert!(cache.commit_native_tool_schema_selection(&in_flight, &selection(&pinned)));
         let next = cache.native_tool_schema_snapshot(main, &messages(2), "session");
         assert_eq!(next.sticky_names, pinned);
         let recap = cache.native_tool_schema_snapshot(side, &messages(2), "session");
@@ -872,7 +912,12 @@ mod prompt_cache_snapshot_tests {
         let mut cache = PromptCache::default();
         let policy = ToolSchemaPolicy::root(false);
         let first = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
-        assert!(cache.commit_native_tool_schema_selection(&first, &["alpha_read".to_string()]));
+        assert!(
+            cache.commit_native_tool_schema_selection(
+                &first,
+                &selection(&["alpha_read".to_string()])
+            )
+        );
 
         // The runtime context tail and harness notices are projected as `user`
         // messages and appear or disappear between rounds. (#1591)
@@ -890,6 +935,34 @@ mod prompt_cache_snapshot_tests {
 
         let other = cache.native_tool_schema_snapshot(policy, &messages(2), "other-session");
         assert!(other.sticky_names.is_empty());
+    }
+
+    // Regression (#2576): the tools a session asked for or called must
+    // outlive the compaction that archives the messages showing it.
+    #[test]
+    fn requested_and_used_tools_stay_anchored_for_the_session() {
+        let _guard = GENERATION_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut cache = PromptCache::default();
+        let policy = ToolSchemaPolicy::root(false);
+        let first = cache.native_tool_schema_snapshot(policy, &messages(3), "session");
+        let mut stats = selection(&["rcon_command".to_string(), "upload-file".to_string()]);
+        stats
+            .admitted_by
+            .insert("requested", vec!["upload-file".to_string()]);
+        stats
+            .admitted_by
+            .insert("previously_used", vec!["rcon_command".to_string()]);
+        assert!(cache.commit_native_tool_schema_selection(&first, &stats));
+
+        // A compaction left one user message.
+        let after = cache.native_tool_schema_snapshot(policy, &messages(1), "session");
+        assert_eq!(after.anchors.requested, ["upload-file"]);
+        assert_eq!(after.anchors.used, ["rcon_command"]);
+
+        let other = cache.native_tool_schema_snapshot(policy, &messages(1), "other-session");
+        assert!(other.anchors.is_empty());
     }
 }
 

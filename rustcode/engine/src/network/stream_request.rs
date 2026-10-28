@@ -5219,6 +5219,7 @@ async fn stream_request_with_timeouts(
                 "requested": mcp_selection.requested,
                 "relevant": mcp_selection.relevant,
                 "previously_used": mcp_selection.previously_used,
+                "admitted_by": mcp_selection.admitted_by,
                 "fallback": mcp_selection.fallback,
                 "omitted": mcp_selection.omitted,
                 "omitted_names": mcp_selection.omitted_names,

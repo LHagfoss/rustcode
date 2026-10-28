@@ -242,12 +242,13 @@ pub(crate) async fn prepare_native_tool_schemas(
         &snapshot.sticky_names,
         workspace_root,
         &always_include_servers,
+        &snapshot.anchors,
     );
     {
         let mut s = state.lock().await;
         let _ = s
             .prompt_cache
-            .commit_native_tool_schema_selection(&snapshot, &result.1.selected_names);
+            .commit_native_tool_schema_selection(&snapshot, &result.1);
     }
     result
 }
