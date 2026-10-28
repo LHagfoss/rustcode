@@ -5,7 +5,9 @@ import Foundation
 public struct SubagentInfo: Identifiable, Equatable, Sendable {
     public enum Status: String, Equatable, Sendable {
         /// `cancelling`: a stop was asked for and the child has not ended yet.
-        case queued, running, cancelling, interrupted, completed, failed, cancelled
+        /// `unknown`: a status this app does not know, from a newer engine;
+        /// it is not counted as working, so the chat does not poll it forever.
+        case queued, running, cancelling, interrupted, completed, failed, cancelled, unknown
 
         /// Still working or waiting to: the chat keeps polling for it.
         public var isActive: Bool { self == .queued || self == .running || self == .cancelling }
@@ -19,6 +21,7 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
             case .completed: "Done"
             case .failed: "Failed"
             case .cancelled: "Cancelled"
+            case .unknown: "Unknown"
             }
         }
     }
@@ -54,7 +57,7 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
         task = json["task"]?.stringValue ?? ""
         model = json["model"]?.stringValue
         agentType = json["agentType"]?.stringValue ?? "default"
-        status = json["status"]?.stringValue.flatMap(Status.init(rawValue:)) ?? .queued
+        status = json["status"]?.stringValue.flatMap(Status.init(rawValue:)) ?? .unknown
         activeTurn = json["activeTurn"]?.boolValue ?? false
         parentId = json["parentId"]?.intValue
         depth = json["depth"]?.intValue ?? 1
@@ -81,9 +84,10 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
     }
 
     /// Whether an `agents` cancel answer says the child has ended, rather
-    /// than that it is still cancelling.
+    /// than that it is still cancelling. Engines before `settled` was sent
+    /// are read from the message.
     public static func cancelSettled(_ result: JSONValue) -> Bool {
-        !(result["message"]?.stringValue ?? "").contains("still cancelling")
+        result["settled"]?.boolValue ?? !(result["message"]?.stringValue ?? "").contains("still cancelling")
     }
 
     /// The children the sidebar nests under their chat (#2492): those still

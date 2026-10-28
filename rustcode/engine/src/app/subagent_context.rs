@@ -115,22 +115,27 @@ pub(crate) fn inherit_context(
         }
         ContextInheritance::Fork => parent.to_vec(),
     };
-    // Parent control instructions and reminders are not the child's policy.
-    history.retain(|m| m.role != "system");
+    // Parent control instructions and reminders are not the child's policy,
+    // but a compaction summary is the only record of the turns it replaced.
+    history.retain(|m| m.role != "system" || m.compaction_boundary.is_some());
     // A spawn may occur inside a parent native tool batch before its outputs exist.
-    // Never fork that incomplete assistant/tool group into a provider request.
-    if let Some(index) = history.iter().enumerate().find_map(|(index, message)| {
-        (!message.tool_calls.is_empty()
-            && message.tool_calls.iter().any(|call| {
-                !history[index + 1..].iter().any(|result| {
-                    result.role == "tool"
-                        && result.tool_call_id.as_deref() == Some(call.id.as_str())
-                })
-            }))
-        .then_some(index)
-    }) {
-        history.truncate(index);
-    }
+    // Never fork that incomplete assistant/tool group into a provider request:
+    // drop the calls that have no result (and the call message once none is
+    // left), keeping everything around them.
+    let answered = history
+        .iter()
+        .filter(|message| message.role == "tool")
+        .filter_map(|message| message.tool_call_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    history.retain_mut(|message| {
+        if message.tool_calls.is_empty() {
+            return true;
+        }
+        message
+            .tool_calls
+            .retain(|call| answered.contains(&call.id));
+        !message.tool_calls.is_empty() || !message.content.trim().is_empty()
+    });
     if strategy != ContextInheritance::Minimal
         && let Some(evidence) = evidence.filter(|text| !text.trim().is_empty())
     {
@@ -194,6 +199,58 @@ mod tests {
         assert_eq!(
             inherit_context(&paired, "child", ContextInheritance::Fork, None).len(),
             4
+        );
+    }
+
+    #[test]
+    fn fork_keeps_the_compaction_summary_and_work_after_an_unanswered_call() {
+        let summary = ChatMessage::new("system", "[Session History Summary]\nEarlier work")
+            .with_compaction_boundary(crate::app::CompactionBoundary {
+                version: 1,
+                summary: "Earlier work".into(),
+                first_retained_entry: None,
+                history_archive: None,
+            });
+        let mut assistant = ChatMessage::new("assistant", "checking both");
+        assistant.tool_calls = vec![
+            super::super::ToolCallRef {
+                id: "read-1".into(),
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+            super::super::ToolCallRef {
+                id: "lost-1".into(),
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        ];
+        let parent = vec![
+            summary,
+            ChatMessage::new("system", "parent policy"),
+            ChatMessage::new("user", "parent"),
+            assistant,
+            ChatMessage::new("tool", "contents").answering(Some("read-1".into())),
+            ChatMessage::new("assistant", "found it"),
+        ];
+        let fork = inherit_context(&parent, "child", ContextInheritance::Fork, None);
+        assert_eq!(
+            fork.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
+            [
+                "[Session History Summary]\nEarlier work",
+                "parent",
+                "checking both",
+                "contents",
+                "found it",
+                "child"
+            ]
+        );
+        assert_eq!(
+            fork[2]
+                .tool_calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            ["read-1"]
         );
     }
 

@@ -202,6 +202,7 @@ struct AgentStatusMark: View {
             case .completed: ("checkmark.circle.fill", .green)
             case .failed: ("xmark.circle.fill", .red)
             case .cancelled, .interrupted: ("stop.circle.fill", .secondary)
+            case .unknown: ("questionmark.circle", .secondary)
             case .queued, .running, .cancelling: ("circle", .secondary)
             }
             Image(systemName: symbol).foregroundStyle(color)

@@ -1024,6 +1024,38 @@ pub(crate) fn truncate_bytes(text: &str, max_bytes: usize) -> String {
     format!("{}…\n[output truncated to {max_bytes} bytes]", &text[..end])
 }
 
+/// Byte-bounded truncation that keeps the start and the end of `text`, with
+/// an omission marker between them, so a final conclusion at the end of a
+/// long answer survives. The result is at most `max_bytes` long.
+pub(crate) fn truncate_bytes_head_tail(text: &str, max_bytes: usize) -> String {
+    // Room for the marker below with a 20-digit count.
+    const MARKER_BYTES: usize = 48;
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let floor = |mut index: usize| {
+        while !text.is_char_boundary(index) {
+            index -= 1;
+        }
+        index
+    };
+    if max_bytes < MARKER_BYTES * 2 {
+        return text[..floor(max_bytes)].to_string();
+    }
+    let keep = max_bytes - MARKER_BYTES;
+    let head = floor(keep / 2);
+    let mut tail = text.len() - (keep - keep / 2);
+    while !text.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!(
+        "{}\n…[{} bytes omitted]…\n{}",
+        &text[..head],
+        tail - head,
+        &text[tail..]
+    )
+}
+
 pub fn has_background_tasks(session_id: &str) -> bool {
     background_task_manager().has_running(session_id)
 }

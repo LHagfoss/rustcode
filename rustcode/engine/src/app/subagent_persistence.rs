@@ -60,6 +60,36 @@ pub(crate) fn save(state: &AppState) {
     }
 }
 
+/// The agent tree as it stands, to be written once the state lock is
+/// released: histories are shared, so taking it is cheap.
+pub(crate) struct PendingSnapshot {
+    session_id: String,
+    agents: Vec<SubAgent>,
+    root_messages: Vec<super::subagent_controller::RootAgentMessage>,
+}
+
+pub(crate) fn snapshot(state: &AppState) -> PendingSnapshot {
+    PendingSnapshot {
+        session_id: state.active_session_id.clone(),
+        agents: state.subagents.clone(),
+        root_messages: state.subagent_supervisor.root_messages(),
+    }
+}
+
+impl PendingSnapshot {
+    pub(crate) fn write(self) {
+        let Some(path) = snapshot_path(&self.session_id) else {
+            return;
+        };
+        if let Err(error) = save_at(&path, &self.agents, &self.root_messages) {
+            crate::logger::operational_event(
+                "subagent.persistence_error",
+                serde_json::json!({"session_id": self.session_id, "error": error.to_string()}),
+            );
+        }
+    }
+}
+
 fn save_at(
     path: &Path,
     agents: &[SubAgent],
