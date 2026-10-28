@@ -217,14 +217,22 @@ final class ChatScrollState: ObservableObject {
     private func updateDrawn() {
         guard visible > 0 else { return }
         var offset: Double?
-        if !keptPlace, let (row, frame) = reference, distance(frame) <= visible, let top = map.top(of: row) {
+        let movedRows = keptPlace
+        keptPlace = false
+        if !movedRows, let (row, frame) = reference, distance(frame) <= visible, let top = map.top(of: row) {
             offset = top - frame.minY
             if let clip = clipOffset { clipShift = top - frame.minY - clip }
         } else if let clip = clipOffset, let clipShift {
             offset = clip + clipShift
         }
-        keptPlace = false
-        guard let offset else { return }
+        guard let offset else {
+            // Rows were just scrolled back, so their frames are stale, and a
+            // chat that just opened has no clip shift yet to fall back on.
+            // Without another pass nothing redraws until the reader scrolls,
+            // and the older rows stay blank stand-ins (#2508).
+            if movedRows { setNeedsUpdate() }
+            return
+        }
         if drawnRows.update(map: &map, offset: offset, visible: visible) {
             drawn.ids = drawnRows.ids
         }
