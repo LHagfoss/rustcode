@@ -609,9 +609,14 @@ fn responses_tool_schemas(schemas: &[serde_json::Value]) -> Vec<serde_json::Valu
                     "properties": {},
                 })),
             });
-            if let Some(strict) = function.get("strict") {
-                response_schema["strict"] = strict.clone();
-            }
+            // The Responses API treats a function with no `strict` as strict,
+            // which makes every property required: a model could not leave out
+            // an optional MCP argument and sent `0` for it, which the server
+            // rejected on every retry. Only a tool that asks for it is strict.
+            response_schema["strict"] = function
+                .get("strict")
+                .cloned()
+                .unwrap_or(serde_json::Value::Bool(false));
             Some(response_schema)
         })
         .collect()
@@ -2814,6 +2819,22 @@ mod tests {
                 "strict": true
             })]
         );
+    }
+
+    #[test]
+    fn responses_tools_are_not_strict_unless_asked() {
+        // An MCP tool's optional fields stay optional: the Responses default
+        // would require them all.
+        let schemas = vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "get_competency_goals",
+                "parameters": {"type": "object", "properties": {
+                    "goal_number": {"type": "integer"}
+                }}
+            }
+        })];
+        assert_eq!(responses_tool_schemas(&schemas)[0]["strict"], false);
     }
 
     #[test]
