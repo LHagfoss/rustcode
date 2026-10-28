@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -2255,6 +2255,138 @@ pub(crate) async fn start_configured_server(
     Ok(())
 }
 
+/// The config files and modification times the last reconcile saw, and the
+/// server list it applied. A turn reconciles only when a file changed.
+type ConfigStamp = Vec<(std::path::PathBuf, Option<std::time::SystemTime>)>;
+static APPLIED_CONFIG: StdMutex<Option<(ConfigStamp, Vec<crate::config::McpServerConfig>)>> =
+    StdMutex::new(None);
+
+fn config_stamp(workspace: &std::path::Path) -> ConfigStamp {
+    crate::config::config_files_for_workspace(workspace)
+        .into_iter()
+        .map(|path| {
+            let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            (path, modified)
+        })
+        .collect()
+}
+
+/// What bringing the running servers in line with the config takes: the
+/// servers to (re)start and the names to stop. Only differences from the
+/// last applied list act: a server that failed to start is not retried every
+/// turn, and a new one the app already started is not started again.
+pub(crate) fn plan_reconcile(
+    previous: &[crate::config::McpServerConfig],
+    current: &[crate::config::McpServerConfig],
+    running: &HashSet<String>,
+) -> (Vec<crate::config::McpServerConfig>, Vec<String>) {
+    let start = current
+        .iter()
+        .filter(|server| server.enabled)
+        .filter(
+            |server| match previous.iter().find(|p| p.name == server.name) {
+                Some(before) => before != *server,
+                None => !running.contains(&server.name),
+            },
+        )
+        .cloned()
+        .collect();
+    let stop = running
+        .iter()
+        .filter(|name| {
+            !current
+                .iter()
+                .any(|server| server.enabled && &server.name == *name)
+        })
+        .filter(|name| previous.iter().any(|server| &server.name == *name))
+        .cloned()
+        .collect();
+    (start, stop)
+}
+
+/// Start servers added to the config since the session began and stop ones
+/// removed or turned off, wherever the edit came from: `rustcode mcp add`,
+/// `/mcp`, the app, or a hand-edited file. Cheap when nothing changed: one
+/// `stat` per config file. Turns with their own registry (scheduled jobs)
+/// keep theirs.
+pub(crate) async fn reconcile_configured_servers(
+    state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+) {
+    if DIRECT_MCP_REGISTRY.try_with(|_| ()).is_ok() {
+        return;
+    }
+    let (workspace, session_servers) = {
+        let s = state.lock().await;
+        let workspace = s
+            .effective_workspace_root()
+            .or_else(|| std::env::current_dir().ok());
+        (workspace, s.config.mcp_servers.clone())
+    };
+    let Some(workspace) = workspace else {
+        return;
+    };
+    let stamp = config_stamp(&workspace);
+    let previous = {
+        let applied = APPLIED_CONFIG
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match applied.as_ref() {
+            Some((last, _)) if *last == stamp => return,
+            Some((_, servers)) => servers.clone(),
+            None => session_servers.clone(),
+        }
+    };
+    let current = crate::config::load_config_for_workspace(&workspace)
+        .2
+        .mcp_servers;
+    *APPLIED_CONFIG
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some((stamp, current.clone()));
+    if session_servers != current {
+        let mut s = state.lock().await;
+        s.config.mcp_servers = current.clone();
+        s.request_redraw();
+    }
+    let running = get_mcp_registry()
+        .lock()
+        .map(|registry| registry.keys().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let (start, stop) = plan_reconcile(&previous, &current, &running);
+    if start.is_empty() && stop.is_empty() {
+        return;
+    }
+    for name in &stop {
+        shutdown_server(name).await;
+    }
+    let started_at = std::time::Instant::now();
+    let results = futures_util::future::join_all(start.iter().map(|server| {
+        let workspace = workspace.clone();
+        async move {
+            let name = server.name.clone();
+            let result = tokio::time::timeout(
+                Duration::from_secs(10),
+                start_configured_server(server.clone(), &workspace),
+            )
+            .await
+            .unwrap_or_else(|_| Err(format!("MCP server '{name}' startup timed out")));
+            if let Err(error) = &result {
+                record_mcp_startup_failure(&name, error);
+            }
+            (name, result.is_ok())
+        }
+    }))
+    .await;
+    crate::logger::operational_event(
+        "mcp.config_reconcile",
+        serde_json::json!({
+            "started": results.iter().filter(|(_, ok)| *ok).map(|(name, _)| name).collect::<Vec<_>>(),
+            "failed": results.iter().filter(|(_, ok)| !*ok).map(|(name, _)| name).collect::<Vec<_>>(),
+            "stopped": stop,
+            "elapsed_ms": started_at.elapsed().as_millis() as u64,
+        }),
+    );
+}
+
 pub async fn shutdown_server(name: &str) {
     let client = {
         if let Ok(mut reg) = get_mcp_registry().lock() {
@@ -2272,6 +2404,64 @@ pub async fn shutdown_server(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stdio(name: &str, command: &str, enabled: bool) -> crate::config::McpServerConfig {
+        serde_json::from_value(json!({"name": name, "command": command, "enabled": enabled}))
+            .expect("server config")
+    }
+
+    #[test]
+    fn reconcile_starts_a_server_added_after_the_session_began() {
+        // A shell `rustcode mcp add` wrote the config; the running session
+        // never started it, so its tools could not be listed.
+        let previous = [stdio("mail", "mail_mcp", true)];
+        let current = [stdio("mail", "mail_mcp", true), stdio("ftp", "npx", true)];
+        let running = HashSet::from(["mail".to_owned()]);
+        let (start, stop) = plan_reconcile(&previous, &current, &running);
+        assert_eq!(
+            start.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            ["ftp"]
+        );
+        assert!(stop.is_empty());
+    }
+
+    #[test]
+    fn reconcile_restarts_changed_and_stops_removed_or_disabled_servers() {
+        let previous = [
+            stdio("a", "old", true),
+            stdio("b", "b", true),
+            stdio("c", "c", true),
+        ];
+        let current = [stdio("a", "new", true), stdio("c", "c", false)];
+        let running = HashSet::from(["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+        let (start, mut stop) = plan_reconcile(&previous, &current, &running);
+        stop.sort();
+        assert_eq!(
+            start.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(),
+            ["new"]
+        );
+        assert_eq!(stop, ["b", "c"]);
+    }
+
+    #[test]
+    fn reconcile_leaves_unchanged_failed_and_already_started_servers_alone() {
+        // `broken` failed at startup and is unchanged: no retry every turn.
+        // `app` was added and started by the app before the turn reconciled.
+        let previous = [stdio("broken", "x", true)];
+        let current = [stdio("broken", "x", true), stdio("app", "y", true)];
+        let running = HashSet::from(["app".to_owned()]);
+        let (start, stop) = plan_reconcile(&previous, &current, &running);
+        assert!(start.is_empty(), "{start:?}");
+        assert!(stop.is_empty());
+    }
+
+    #[test]
+    fn reconcile_never_stops_a_server_it_did_not_configure() {
+        // A server started outside the config (e.g. a job) is not ours to stop.
+        let running = HashSet::from(["other".to_owned()]);
+        let (_, stop) = plan_reconcile(&[], &[], &running);
+        assert!(stop.is_empty());
+    }
 
     /// Metadata captured verbatim from the live Vercel MCP OAuth endpoints on
     /// 2026-09-30 (see #1536):
