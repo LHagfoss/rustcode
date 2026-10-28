@@ -127,20 +127,4 @@ public struct TimelineLayout: Equatable, Sendable {
         guard current == other.current, markers.count == other.markers.count else { return true }
         return zip(markers, other.markers).contains { $0.id != $1.id || abs($0.y - $1.y) >= 0.25 || $0.isInView != $1.isInView }
     }
-
-    /// The width of the gutter beside the chat's column below which the
-    /// rail is not drawn.
-    public static let minimumGutter: Double = 44
-
-    /// Whether the rail shows beside a chat column of `column` points
-    /// centred in `width`, with at least `padding` either side, for `turns`
-    /// turns. One turn has nowhere to go.
-    public static func shows(width: Double, column: Double, padding: Double, turns: Int) -> Bool {
-        turns >= 2 && gutter(width: width, column: column, padding: padding) >= minimumGutter
-    }
-
-    /// The empty width left of the chat's centred column.
-    public static func gutter(width: Double, column: Double, padding: Double) -> Double {
-        max(padding, (width - column) / 2)
-    }
 }
