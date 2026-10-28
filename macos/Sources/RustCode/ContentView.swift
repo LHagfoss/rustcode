@@ -1262,6 +1262,17 @@ private struct ChatView: View {
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity)
         }
+        // Over the chat, not inside the composer, so its glass has the chat
+        // to sample (#2551).
+        .overlayPreferenceValue(PlanUsageAnchor.self) { anchor in
+            GeometryReader { proxy in
+                if model.showsPlanUsage, let anchor, let usage = model.planUsage {
+                    PlanUsagePanel(usage: usage, meter: proxy[anchor], bounds: proxy.size)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                }
+            }
+            .ignoresSafeArea()
+        }
         .overlay { composerPanel }
         .overlay { CommandSuggestions(model: model, composer: model.composer, composerHeight: composerHeight) }
         .animation(.snappy(duration: 0.18), value: model.composerPanel)
@@ -2278,7 +2289,7 @@ private struct Composer: View {
                 AgentPill(model: model)
                 Spacer(minLength: 0)
                 if let usage = model.planUsage {
-                    PlanUsageMeter(usage: usage) { Task { await model.refreshPlanUsage() } }
+                    PlanUsageMeter(usage: usage, hovering: $model.showsPlanUsage) { Task { await model.refreshPlanUsage() } }
                 }
                 effortMenu
                 modelMenu

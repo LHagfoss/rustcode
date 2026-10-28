@@ -717,6 +717,17 @@ enum DebugDriver {
                  "rawInput": ["pattern": "begin_task_delegation"]],
             ]])
             model.debugAgents(agents, viewing: flags.contains("open") ? transcript : nil)
+        case "usage":
+            // `usage [hover]`: plan usage as a provider reports it, with a
+            // 5-hour window at 82% used and a weekly one at 40%; `hover`
+            // shows the meter's panel as the pointer would.
+            let now = Date().timeIntervalSince1970
+            model.planUsage = PlanUsage(json: [
+                "source": "provider",
+                "primary": ["usedPercent": 82, "windowMinutes": 300, "resetsAt": .number(now + 3 * 3600)],
+                "secondary": ["usedPercent": 40, "windowMinutes": 10080, "resetsAt": .number(now + 4 * 86400)],
+            ])
+            withAnimation(.snappy(duration: 0.15)) { model.showsPlanUsage = parts.contains("hover") }
         case "panel":
             // `panel model|effort|add|none`: open a composer panel as its chip does.
             model.composerPanel = ["model": .model, "effort": .effort, "add": .add][parts[1]]
