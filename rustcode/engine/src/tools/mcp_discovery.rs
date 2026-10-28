@@ -355,7 +355,24 @@ impl DiscoveryArgs {
                     .to_owned(),
             ),
         };
-        let select = match object.get("select") {
+        // `select:a,b` in the query names tools, as Claude Code's tool search
+        // takes it; models trained there send it.
+        let (query, query_names) = match query {
+            Some(query) => match query.strip_prefix("select:") {
+                Some(names) => (
+                    None,
+                    names
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+                None => (Some(query), Vec::new()),
+            },
+            None => (None, Vec::new()),
+        };
+        let mut select = match object.get("select") {
             None => Vec::new(),
             Some(Value::String(name)) => vec![name.trim().to_owned()],
             Some(Value::Array(names)) => names
@@ -370,6 +387,7 @@ impl DiscoveryArgs {
                 .collect::<Result<Vec<_>, _>>()?,
             Some(_) => return Err("'select' must be an array of tool names".to_owned()),
         };
+        select.extend(query_names);
         if select.len() > MAX_SELECT_NAMES {
             return Err(format!(
                 "'select' accepts at most {MAX_SELECT_NAMES} names per call"
@@ -704,7 +722,7 @@ pub(super) fn render_catalogue(statuses: &[McpServerStatus]) -> Option<String> {
     let header = "# MCP Servers\n\
 MCP tools exist only on these servers; never guess a server name. \
 Call `list_mcp_tools` only for a listed server matching the task; with no match use built-ins/shell. \
-`select` returns schemas, `query` searches; `manage_mcp_servers` starts a stopped server.\n";
+`select` returns schemas, `query` searches; naming a stopped server in `server` starts it.\n";
     let line = |status: &McpServerStatus, with_names: bool| {
         let mut line = format!("- {}: {}", status.name, status.label());
         if let McpServerState::Running { tools } = &status.state
@@ -717,19 +735,31 @@ Call `list_mcp_tools` only for a listed server matching the task; with no match 
         line.push('\n');
         line
     };
-    let named = statuses
+    // Over budget, the servers with the longest name lists fall back to a
+    // count one at a time, so one large server no longer hides the tool
+    // names of every small one. Ties go by order, so the text is stable.
+    let mut lines = statuses
         .iter()
         .map(|status| line(status, true))
-        .collect::<String>();
-    let body = if named.len() <= CATALOGUE_NAME_BYTES {
-        named
-    } else {
-        statuses
-            .iter()
-            .map(|status| line(status, false))
-            .collect::<String>()
-    };
-    Some(format!("{header}{body}"))
+        .collect::<Vec<_>>();
+    let mut total = lines.iter().map(String::len).sum::<usize>();
+    while total > CATALOGUE_NAME_BYTES {
+        let short = statuses.iter().map(|status| line(status, false));
+        let Some((index, shorter)) = short
+            .enumerate()
+            .filter(|(index, shorter)| shorter.len() < lines[*index].len())
+            .max_by(|(left, left_line), (right, right_line)| {
+                (lines[*left].len() - left_line.len())
+                    .cmp(&(lines[*right].len() - right_line.len()))
+                    .then_with(|| right.cmp(left))
+            })
+        else {
+            break;
+        };
+        total -= lines[index].len() - shorter.len();
+        lines[index] = shorter;
+    }
+    Some(format!("{header}{}", lines.concat()))
 }
 
 /// The catalogue for the current session, or `None` without MCP servers.
@@ -842,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn a_large_catalogue_lists_counts_instead_of_tool_names() {
+    fn a_large_catalogue_lists_counts_for_the_servers_over_budget() {
         let running = (0..20)
             .map(|server| {
                 (
@@ -858,8 +888,33 @@ mod tests {
             catalogue.contains("- server_00: running (40 tools)\n"),
             "{catalogue}"
         );
-        assert!(!catalogue.contains("a_long_descriptive_tool_name"));
-        assert!(catalogue.len() < CATALOGUE_NAME_BYTES);
+        // Only as many servers keep their names as the budget holds.
+        let named = catalogue
+            .lines()
+            .filter(|line| line.contains("a_long_descriptive_tool_name"))
+            .count();
+        assert!((1..20).contains(&named), "{catalogue}");
+        let body = catalogue.split_once("\n- ").unwrap().1;
+        assert!(body.len() < CATALOGUE_NAME_BYTES);
+    }
+
+    #[test]
+    fn one_large_server_keeps_the_small_servers_tool_names() {
+        let mut running = HashMap::from([(
+            "huge".to_owned(),
+            (0..300)
+                .map(|tool| format!("a_long_descriptive_tool_name_{tool:03}"))
+                .collect::<Vec<_>>(),
+        )]);
+        running.insert("ftp".to_owned(), vec!["list-directory".to_owned()]);
+        running.insert("mail".to_owned(), vec!["send_mail".to_owned()]);
+        let catalogue = render_catalogue(&server_statuses(&[], &running, &HashMap::new())).unwrap();
+        assert!(
+            catalogue.contains("- huge: running (300 tools)\n"),
+            "{catalogue}"
+        );
+        assert!(catalogue.contains("- ftp: running (1 tools): list-directory\n"));
+        assert!(catalogue.contains("- mail: running (1 tools): send_mail\n"));
     }
 
     #[test]
@@ -870,5 +925,20 @@ mod tests {
         }
         let args = DiscoveryArgs::parse(&serde_json::json!({"select": "mail.send"})).unwrap();
         assert_eq!(args.select, ["mail.send"]);
+    }
+
+    #[test]
+    fn a_select_query_names_tools_like_claude_code_tool_search() {
+        let args = DiscoveryArgs::parse(
+            &serde_json::json!({"query": "select:mail.send, ftp.list-directory,"}),
+        )
+        .unwrap();
+        assert_eq!(args.query, None);
+        assert_eq!(args.select, ["mail.send", "ftp.list-directory"]);
+        let args = DiscoveryArgs::parse(
+            &serde_json::json!({"query": "select:mail.send", "select": ["mail.send", "a.b"]}),
+        )
+        .unwrap();
+        assert_eq!(args.select, ["mail.send", "a.b"]);
     }
 }
