@@ -2196,11 +2196,18 @@ private struct Composer: View {
             || !model.attachments.isEmpty || !model.images.isEmpty || model.draftCommand != nil
     }
 
+    /// What changes the composer's contents or size; the whole composer
+    /// animates when it does.
+    private var animationState: [String] {
+        [String(model.busy), String(canSend), String(model.selectedQueue.count), model.draftCommand?.name ?? "",
+         SubagentInfo.workingLabel(model.subagents) ?? "", String(model.images.count), String(model.attachments.count)]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !model.selectedQueue.isEmpty {
                 QueuedPromptList(model: model)
-                    .transition(.opacity.combined(with: .offset(y: 10)))
+                    .transition(.opacity)
             }
             if !model.images.isEmpty { imageChips }
             if !model.attachments.isEmpty { attachmentChips }
@@ -2213,11 +2220,10 @@ private struct Composer: View {
                         .padding(.vertical, 2)
                         .background(Color.brand.opacity(0.15), in: .capsule)
                         .help(chip.description)
-                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                        .transition(.opacity)
                 }
                 messageField
             }
-            .animation(.snappy(duration: 0.15), value: model.draftCommand)
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
                 .onKeyPress(.return, phases: .down) { press in
@@ -2296,11 +2302,13 @@ private struct Composer: View {
                 trailingAction
             }
             .task(id: model.selectedSession) { await model.refreshPlanUsage() }
-            .animation(.spring(duration: 0.35, bounce: 0.3), value: model.busy)
-            .animation(.spring(duration: 0.3, bounce: 0.2), value: canSend)
         }
         .padding(10)
-        .glassSurface(in: .rect(cornerRadius: 22))
+        // The composer changes as one: what it holds and its height move
+        // together in one subtle animation, not each part on its own.
+        .animation(.snappy(duration: 0.2), value: animationState)
+        // A plain material without the glass's rim: the field has no border.
+        .floatingSurface(in: .rect(cornerRadius: 22))
         // A click anywhere on the composer but its buttons puts the cursor in it.
         .contentShape(.rect(cornerRadius: 22))
         .onTapGesture { focused = true }
@@ -2309,8 +2317,6 @@ private struct Composer: View {
                 RoundedRectangle(cornerRadius: 22).strokeBorder(Color.brand, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             }
         }
-        .animation(.snappy(duration: 0.2), value: SubagentInfo.workingLabel(model.subagents))
-        .animation(.snappy(duration: 0.25), value: model.selectedQueue.isEmpty)
         .dropDestination(for: URL.self) { urls, _ in
             let files = urls.filter(\.isFileURL)
             model.attach(files)
@@ -2485,7 +2491,7 @@ private struct Composer: View {
                 }
                 .buttonStyle(.plain)
                 .help("Queue for when this turn ends (⏎)")
-                .transition(.scale.combined(with: .opacity))
+                .transition(.opacity)
             }
             Button { Task { await model.cancel() } } label: {
                 Image(systemName: "stop.fill")
@@ -2496,7 +2502,7 @@ private struct Composer: View {
             }
             .buttonStyle(.plain)
             .help(model.keybindings.help("Stop turn", .stopTurn))
-            .transition(.scale(scale: 0.5).combined(with: .opacity))
+            .transition(.opacity)
         } else {
             Button { Task { await model.submit() } } label: {
                 Image(systemName: "arrow.up")
@@ -2508,11 +2514,7 @@ private struct Composer: View {
             .buttonStyle(.plain)
             .disabled(!canSend)
             .help("Send (⏎)")
-            // The arrow lifts off as the message goes, and the button comes
-            // back from small once the turn is over.
-            .transition(.asymmetric(insertion: .scale(scale: 0.5).combined(with: .opacity),
-                                    removal: .offset(y: -14).combined(with: .opacity)))
-            .animation(.easeOut(duration: 0.15), value: canSend)
+            .transition(.opacity)
         }
     }
 
