@@ -182,8 +182,17 @@ pub(crate) async fn run_subagent(
     }
     let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
     let mut rounds = 0usize;
-    let loop_abort = { state.lock().await.config.loop_guard.effective_loop_abort() };
+    let (loop_abort, max_rounds, max_wall) = {
+        let guard = state.lock().await.config.loop_guard;
+        (
+            guard.effective_loop_abort(),
+            guard.effective_subagent_max_rounds(),
+            guard.effective_subagent_max_wall(),
+        )
+    };
     let mut loop_detector = loop_detect::LoopDetector::new(loop_abort);
+    let mut model_rounds = 0usize;
+    let mut saved_history_len = None;
     loop {
         if cancel_token.is_cancelled() {
             crate::logger::operational_event(
@@ -192,29 +201,61 @@ pub(crate) async fn run_subagent(
             );
             return Err("error: cancelled".to_string());
         }
-        let mut history_snapshot: Vec<ChatMessage> = {
+        let over_limit = if model_rounds >= max_rounds {
+            Some(format!("reached its limit of {max_rounds} model rounds"))
+        } else if child_started.elapsed() >= max_wall {
+            Some(format!("ran past its {}s time limit", max_wall.as_secs()))
+        } else {
+            None
+        };
+        if let Some(reason) = over_limit {
+            crate::logger::operational_event(
+                "subagent.finish",
+                serde_json::json!({"agent_id": agent_id, "status": "failed", "reason": "limit", "rounds": model_rounds, "session_id": owner_session_id}),
+            );
+            return Err(failure_with_partial_answer(
+                state,
+                agent_id,
+                format!("error: subagent {agent_id} {reason}"),
+            )
+            .await);
+        }
+        model_rounds += 1;
+        let (base_history, pending_save) = {
             let mut s = state.lock().await;
             if s.active_session_id != owner_session_id {
                 return Err("error: agent owner session changed".into());
             }
             if let Some(agent) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 let pending = agent.mailbox.drain(..).collect::<Vec<_>>();
-                Arc::make_mut(&mut agent.history).extend(
-                    pending
-                        .into_iter()
-                        .map(|message| ChatMessage::new("user", message)),
-                );
+                if !pending.is_empty() {
+                    Arc::make_mut(&mut agent.history).extend(
+                        pending
+                            .into_iter()
+                            .map(|message| ChatMessage::new("user", message)),
+                    );
+                }
             }
-            crate::app::subagent_persistence::save(&s);
-            s.subagents
+            let base_history = s
+                .subagents
                 .iter()
                 .find(|a| a.id == agent_id)
-                .map(|a| a.history.as_ref().clone())
-                .unwrap_or_default()
+                .map(|a| Arc::clone(&a.history))
+                .unwrap_or_default();
+            // Snapshot only when this child's history moved since the last
+            // write; the file is written after the lock is released.
+            let pending_save = (saved_history_len != Some(base_history.len()))
+                .then(|| crate::app::subagent_persistence::snapshot(&s));
+            (base_history, pending_save)
         };
-        if history_snapshot.is_empty() {
+        if let Some(pending_save) = pending_save {
+            pending_save.write();
+            saved_history_len = Some(base_history.len());
+        }
+        if base_history.is_empty() {
             return Err(format!("error: no subagent with id {agent_id}"));
         }
+        let mut history_snapshot = base_history.as_ref().clone();
 
         let (
             profile_name,
@@ -224,6 +265,7 @@ pub(crate) async fn run_subagent(
             max_mutating_calls,
             workspace_root,
             schema_policy,
+            protocol,
         ) = {
             let s = state.lock().await;
             let subagent = s
@@ -252,6 +294,8 @@ pub(crate) async fn run_subagent(
                 .as_ref()
                 .map(|profile| profile.max_mutating_calls_per_response())
                 .unwrap_or(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE);
+            // The child's own endpoint decides its protocol, not the parent's.
+            let protocol = s.tool_protocol_for(&api_base_url);
             (
                 profile.map(|profile| profile.name),
                 api_base_url,
@@ -260,11 +304,22 @@ pub(crate) async fn run_subagent(
                 max_mutating_calls,
                 subagent_context_workspace_root(&s, subagent_execution_root(subagent)),
                 crate::tools::ToolSchemaPolicy::for_subagent(subagent.write_access),
+                protocol,
             )
         };
-        compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
+        if compact_history_to_budget(&mut history_snapshot, budget_token_limit).await {
+            // Keep the compacted history, so later rounds start under budget
+            // instead of compacting (and logging it) again every round. A
+            // history changed meanwhile is left alone.
+            let mut s = state.lock().await;
+            if let Some(agent) = s.subagents.iter_mut().find(|a| a.id == agent_id)
+                && Arc::ptr_eq(&agent.history, &base_history)
+            {
+                agent.history = Arc::new(history_snapshot.clone());
+            }
+        }
+        drop(base_history);
 
-        let protocol = { state.lock().await.active_tool_protocol() };
         let agent_mode = { state.lock().await.agent_mode };
         let delegation_contract = {
             let s = state.lock().await;
@@ -330,8 +385,10 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             .sum::<usize>();
         let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let request_counter = Arc::clone(&requests);
-        let collected =
-            match runner::collect_response(runner::ContinuationPolicy::default(), move |request| {
+        let remaining = max_wall.saturating_sub(child_started.elapsed());
+        let collected = match tokio::time::timeout(
+            remaining,
+            runner::collect_response(runner::ContinuationPolicy::default(), move |request| {
                 request_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut current_msgs = Vec::with_capacity(
                     request_msgs.len() + if request.previous.is_empty() { 0 } else { 2 },
@@ -390,12 +447,35 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         token_usage: None,
                     })
                 }
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(e) => return Err(format!("error: subagent request failed: {e}")),
-            };
+            }),
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                return Err(failure_with_partial_answer(
+                    state,
+                    agent_id,
+                    format!("error: subagent request failed: {e}"),
+                )
+                .await);
+            }
+            Err(_) => {
+                crate::logger::operational_event(
+                    "subagent.finish",
+                    serde_json::json!({"agent_id": agent_id, "status": "failed", "reason": "limit", "rounds": model_rounds, "session_id": owner_session_id}),
+                );
+                return Err(failure_with_partial_answer(
+                    state,
+                    agent_id,
+                    format!(
+                        "error: subagent {agent_id} ran past its {}s time limit",
+                        max_wall.as_secs()
+                    ),
+                )
+                .await);
+            }
+        };
         let request_performance = stream_buffer.lock().await.performance.clone();
         {
             let mut s = state.lock().await;
@@ -419,10 +499,14 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let native_tool_calls = stream_buffer.lock().await.native_tool_calls.clone();
 
         if content.is_empty() && native_tool_calls.is_empty() {
-            return Err("error: subagent returned an empty reply".to_string());
+            return Err(failure_with_partial_answer(
+                state,
+                agent_id,
+                "error: subagent returned an empty reply".to_string(),
+            )
+            .await);
         }
 
-        let protocol = { state.lock().await.active_tool_protocol() };
         let mut parsed_calls = parse_subagent_tool_calls(&content, protocol, native_tool_calls);
 
         if !parsed_calls.is_empty() {
@@ -538,28 +622,33 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                             ));
                         }
                     }
-                    return Err(format!(
-                        "error: subagent {agent_id} stopped after {repeats} repeated '{name}' actions"
-                    ));
+                    drop(s);
+                    return Err(failure_with_partial_answer(
+                        state,
+                        agent_id,
+                        format!(
+                            "error: subagent {agent_id} stopped after {repeats} repeated '{name}' actions"
+                        ),
+                    )
+                    .await);
                 }
                 rounds += 1;
-                let (write_access, allowed_paths) = {
+                let (write_access, allowed_paths, execution_root) = {
                     let s = state.lock().await;
                     s.subagents
                         .iter()
                         .find(|agent| agent.id == agent_id)
-                        .map(|agent| (agent.write_access, agent.allowed_paths.clone()))
-                        .unwrap_or((false, Vec::new()))
-                };
-                let path_outside_contract = args
-                    .get("path")
-                    .and_then(|value| value.as_str())
-                    .is_some_and(|path| {
-                        !allowed_paths.iter().any(|allowed| {
-                            path == allowed
-                                || path.starts_with(&format!("{}/", allowed.trim_end_matches('/')))
+                        .map(|agent| {
+                            (
+                                agent.write_access,
+                                agent.allowed_paths.clone(),
+                                subagent_execution_root(agent),
+                            )
                         })
-                    });
+                        .unwrap_or((false, Vec::new(), None))
+                };
+                let path_outside_contract =
+                    call_paths_outside_contract(args, execution_root.as_deref(), &allowed_paths);
                 let tool_started = std::time::Instant::now();
                 let (execution, diff_opt, user_wait) = if crate::tools::is_agent_tool(name) {
                     let execution = Box::pin(handle_agent_tool_for_parent(
@@ -649,13 +738,12 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     final_diff,
                     call_id.clone(),
                 );
+                // One guard for both appends: the state mutex is not reentrant.
+                let cancelled = cancel_token.is_cancelled();
                 let mut s = state.lock().await;
                 if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                     Arc::make_mut(&mut a.history).push(message);
-                }
-                if cancel_token.is_cancelled() {
-                    let mut s = state.lock().await;
-                    if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
+                    if cancelled {
                         for (remaining_call, remaining_id) in parsed_calls.iter().skip(index + 1) {
                             let cancelled = crate::tools::ToolExecutionOutput::failure_with_kind(
                                 "error: tool call was not run because the subagent was cancelled"
@@ -672,6 +760,9 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                             ));
                         }
                     }
+                }
+                drop(s);
+                if cancelled {
                     return Err("error: cancelled".to_string());
                 }
             }
@@ -852,10 +943,17 @@ const CANCEL_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 /// Cancel the child `id` and its descendants, as `cancel_agent` and the
 /// macOS app's agent panel do. An interrupted child that is no longer running
 /// is marked cancelled at once.
+/// What a cancel did: the reply text, and whether the child has reached its
+/// terminal state (false while it is still cancelling).
+pub(crate) struct CancelOutcome {
+    pub(crate) message: String,
+    pub(crate) settled: bool,
+}
+
 pub(crate) async fn cancel_subagent_tree(
     state: &Arc<Mutex<AppState>>,
     id: u32,
-) -> Result<String, String> {
+) -> Result<CancelOutcome, String> {
     let supervisor = state.lock().await.subagent_supervisor.clone();
     if !supervisor.is_active(crate::app::SubagentId::from_raw(id)) {
         let mut s = state.lock().await;
@@ -869,7 +967,10 @@ pub(crate) async fn cancel_subagent_tree(
                 crate::app::SubAgentStatus::Cancelled,
             );
             crate::app::subagent_persistence::save(&s);
-            return Ok(format!("subagent {id} cancelled"));
+            return Ok(CancelOutcome {
+                message: format!("subagent {id} cancelled"),
+                settled: true,
+            });
         }
     }
     let descendants = {
@@ -911,13 +1012,19 @@ pub(crate) async fn cancel_subagent_tree(
                     "stopped"
                 }
             };
-            format!("subagent {id} {status}")
+            CancelOutcome {
+                message: format!("subagent {id} {status}"),
+                settled: true,
+            }
         }
-        _ => format!(
-            "cancellation requested for subagent {id}; it is still cancelling after {}s. \
-             Use wait_agent for its terminal result",
-            CANCEL_SETTLE.as_secs()
-        ),
+        _ => CancelOutcome {
+            message: format!(
+                "cancellation requested for subagent {id}; it is still cancelling after {}s. \
+                 Use wait_agent for its terminal result",
+                CANCEL_SETTLE.as_secs()
+            ),
+            settled: false,
+        },
     })
 }
 
@@ -929,22 +1036,6 @@ pub(crate) fn launch_subagent_turn(
     agent_id: u32,
     owner_session_id: String,
 ) -> Result<(), crate::app::SubagentError> {
-    let workspace_path = state.try_lock().ok().and_then(|state| {
-        state
-            .subagents
-            .iter()
-            .find(|agent| agent.id == agent_id)
-            .and_then(|agent| agent.workspace_root.clone())
-    });
-    if let Some(path) = workspace_path
-        && let Some(manager) = crate::config::workspace_manager()
-        && let Ok(Some(descriptor)) = manager.find_by_workspace_path(&path)
-    {
-        let _ = manager.set_lifecycle(
-            &descriptor.id,
-            rustcode_session::WorkspaceLifecycle::Running,
-        );
-    }
     let client = client.clone();
     let child_state = Arc::clone(state);
     let completion_state = Arc::downgrade(state);
@@ -955,6 +1046,24 @@ pub(crate) fn launch_subagent_turn(
         crate::app::SubagentId::from_raw(agent_id),
         parent_cancel.clone(),
         move |child_cancel| async move {
+            // Marked from the child task, which may wait for the state lock;
+            // the caller can hold it, so it is not taken here.
+            let workspace_path = child_state
+                .lock()
+                .await
+                .subagents
+                .iter()
+                .find(|agent| agent.id == agent_id)
+                .and_then(|agent| agent.workspace_root.clone());
+            if let Some(path) = workspace_path
+                && let Some(manager) = crate::config::workspace_manager()
+                && let Ok(Some(descriptor)) = manager.find_by_workspace_path(&path)
+            {
+                let _ = manager.set_lifecycle(
+                    &descriptor.id,
+                    rustcode_session::WorkspaceLifecycle::Running,
+                );
+            }
             crate::mcp::DIRECT_MCP_REGISTRY
                 .scope(
                     mcp_registry,
@@ -1165,10 +1274,24 @@ async fn handle_agent_tool_for_parent(
                 .as_deref()
                 .unwrap_or("none")
                 .to_string();
-            let (agent_id, supervisor, owner_session_id, child_model) = {
+            let (reserved_id, owner_session_id, inherited, strategy, working_directory, plan) = {
                 let mut s = state.lock().await;
                 let owner_session_id = s.active_session_id.clone();
-                if s.subagents.len() >= 64 {
+                // Finished agents stay listed for inspection; only live ones
+                // count toward the limit.
+                let live_agents = s
+                    .subagents
+                    .iter()
+                    .filter(|agent| {
+                        agent.active_turn
+                            || matches!(
+                                agent.status,
+                                crate::app::SubAgentStatus::Queued
+                                    | crate::app::SubAgentStatus::Running
+                            )
+                    })
+                    .count();
+                if live_agents >= 64 {
                     return crate::tools::ToolExecutionOutput::failure(
                         "error: session agent limit is 64".into(),
                     );
@@ -1235,7 +1358,7 @@ async fn handle_agent_tool_for_parent(
                     None => None,
                 };
                 let id = s.next_subagent_id;
-                let workspace_root = if workspace_mode == "isolated" {
+                let plan = if workspace_mode == "isolated" {
                     let Some(base_sha) = args
                         .get("base_sha")
                         .and_then(|value| value.as_str())
@@ -1278,20 +1401,42 @@ async fn handle_agent_tool_for_parent(
                         .get("branch")
                         .and_then(|value| value.as_str())
                         .map(str::to_string);
-                    match crate::config::workspace_manager()
-                        .ok_or_else(|| "workspace persistence unavailable".to_string())
-                        .and_then(|manager| {
-                            manager.create(&request).map_err(|error| error.to_string())
-                        }) {
-                        Ok(descriptor) => Some(descriptor.workspace_path),
-                        Err(error) => {
-                            return crate::tools::ToolExecutionOutput::failure(format!(
-                                "error: unable to create named isolated workspace: {error}"
-                            ));
-                        }
-                    }
+                    Some(Some(request))
                 } else if write_access {
-                    match crate::config::create_subagent_workspace(&s.active_session_id, id) {
+                    Some(None)
+                } else {
+                    None
+                };
+                let reserved_id = crate::app::SubagentController.reserve_id(&mut s);
+                debug_assert_eq!(reserved_id.raw(), id);
+                (
+                    reserved_id,
+                    owner_session_id,
+                    inherited,
+                    strategy,
+                    working_directory,
+                    plan,
+                )
+            };
+            // Creating a workspace runs git and copies files; do it without
+            // the state lock so the session stays responsive meanwhile.
+            let workspace_root = match plan {
+                Some(Some(request)) => match crate::config::workspace_manager()
+                    .ok_or_else(|| "workspace persistence unavailable".to_string())
+                    .and_then(|manager| manager.create(&request).map_err(|error| error.to_string()))
+                {
+                    Ok(descriptor) => Some(descriptor.workspace_path),
+                    Err(error) => {
+                        return crate::tools::ToolExecutionOutput::failure(format!(
+                            "error: unable to create named isolated workspace: {error}"
+                        ));
+                    }
+                },
+                Some(None) => {
+                    match crate::config::create_subagent_workspace(
+                        &owner_session_id,
+                        reserved_id.raw(),
+                    ) {
                         Ok(path) => Some(path),
                         Err(error) => {
                             return crate::tools::ToolExecutionOutput::failure(format!(
@@ -1299,12 +1444,20 @@ async fn handle_agent_tool_for_parent(
                             ));
                         }
                     }
-                } else {
-                    None
-                };
+                }
+                None => None,
+            };
+            let (agent_id, supervisor, owner_session_id, child_model) = {
+                let mut s = state.lock().await;
+                if s.active_session_id != owner_session_id {
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: the session changed while the agent was being set up".into(),
+                    );
+                }
                 let id = crate::app::SubagentController
-                    .spawn(
+                    .spawn_reserved(
                         &mut s,
+                        reserved_id,
                         task,
                         model,
                         parent_id.map(crate::app::SubagentId::from_raw),
@@ -1779,7 +1932,7 @@ async fn handle_agent_tool_for_parent(
                 );
             }
             match cancel_subagent_tree(state, id).await {
-                Ok(message) => crate::tools::ToolExecutionOutput::success(message),
+                Ok(outcome) => crate::tools::ToolExecutionOutput::success(outcome.message),
                 Err(error) => crate::tools::ToolExecutionOutput::failure(format!("error: {error}")),
             }
         }
@@ -2092,6 +2245,7 @@ fn bounded_completion_output(
     let mut summary = output.to_owned();
     let handoff = crate::tools::truncate_bytes(handoff, 1024);
     let mut incomplete = truncated;
+    let mut budget = output.len();
     loop {
         let result = format!(
             "subagent {id} {status}\n{}",
@@ -2100,7 +2254,9 @@ fn bounded_completion_output(
         if result.len() <= 8192 {
             return (result, incomplete);
         }
-        summary = crate::tools::truncate_bytes(&summary, summary.len() / 2);
+        // Keep the head and the tail: a child's conclusion is usually last.
+        budget /= 2;
+        summary = crate::tools::truncate_bytes_head_tail(output, budget);
         incomplete = true;
     }
 }
@@ -2136,6 +2292,104 @@ fn resolve_subagent_cwd(
 
 /// The directory a child's tools run in: its own workspace when it has one,
 /// else the `cwd` it was spawned with, else none (the session workspace).
+/// The latest non-empty assistant text in `history`: what a child that
+/// failed had worked out so far.
+fn last_partial_answer(history: &[ChatMessage]) -> Option<String> {
+    history
+        .iter()
+        .rev()
+        .filter(|message| message.role == "assistant")
+        .map(|message| strip_leading_think(&message.content).trim())
+        .find(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn with_partial_answer(error: String, partial: Option<String>) -> String {
+    match partial {
+        Some(partial) => format!("{error}\nLast partial answer:\n{partial}"),
+        None => error,
+    }
+}
+
+/// `error` with the child's last partial answer, so a failed child still
+/// hands its parent what it found.
+async fn failure_with_partial_answer(
+    state: &Arc<Mutex<AppState>>,
+    agent_id: u32,
+    error: String,
+) -> String {
+    let partial = state
+        .lock()
+        .await
+        .subagents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .and_then(|agent| last_partial_answer(&agent.history));
+    with_partial_answer(error, partial)
+}
+
+/// Argument keys that name a file or directory a tool reads or writes.
+const CONTRACT_PATH_KEYS: &[&str] = &["path", "src", "dest", "file_path", "filesystem_write_path"];
+
+/// `raw` as an absolute-or-root-relative path with `.` and `..` resolved
+/// lexically; `None` when `..` climbs out of where it starts.
+fn normalize_contract_path(
+    root: Option<&std::path::Path>,
+    raw: &str,
+) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    let raw = std::path::Path::new(raw.trim());
+    let joined = match root {
+        Some(root) if raw.is_relative() => root.join(raw),
+        _ => raw.to_path_buf(),
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    return None;
+                }
+                normalized.pop();
+            }
+            other => normalized.push(other),
+        }
+    }
+    Some(normalized)
+}
+
+/// Whether any path-like argument of a call falls outside `allowed`. Paths
+/// are resolved against the child's working root, so `src/../x`, absolute
+/// paths and `move_file`'s `src`/`dest` are all judged by where they land.
+fn call_paths_outside_contract(
+    args: &serde_json::Value,
+    root: Option<&std::path::Path>,
+    allowed: &[String],
+) -> bool {
+    let allowed = allowed
+        .iter()
+        .filter_map(|path| normalize_contract_path(root, path))
+        .collect::<Vec<_>>();
+    let paths = CONTRACT_PATH_KEYS
+        .iter()
+        .filter_map(|key| args.get(*key).and_then(serde_json::Value::as_str))
+        .chain(
+            args.get("paths")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str),
+        );
+    paths.into_iter().any(|path| {
+        normalize_contract_path(root, path)
+            .is_none_or(|path| !allowed.iter().any(|allowed| path.starts_with(allowed)))
+    })
+}
+
 fn subagent_execution_root(agent: &crate::app::SubAgent) -> Option<std::path::PathBuf> {
     agent
         .workspace_root
@@ -2612,8 +2866,12 @@ mod tests {
             )
             .unwrap();
         let state = Arc::new(Mutex::new(s));
-        let message = cancel_subagent_tree(&state, child.raw()).await.unwrap();
-        assert_eq!(message, format!("subagent {} cancelled", child.raw()));
+        let outcome = cancel_subagent_tree(&state, child.raw()).await.unwrap();
+        assert_eq!(
+            outcome.message,
+            format!("subagent {} cancelled", child.raw())
+        );
+        assert!(outcome.settled);
         assert!(!supervisor.is_active(child));
         assert!(!supervisor.cancel_requested(child));
     }
@@ -2704,6 +2962,262 @@ mod tests {
             let _ = socket.write_all(response.as_bytes()).await;
         });
         (format!("http://{address}"), accepted_rx, release_tx)
+    }
+
+    /// A provider that answers each request with the next of `answers`
+    /// (SSE bodies), then holds any further request open.
+    async fn scripted_subagent_server(answers: Vec<String>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for body in answers {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    let Some(header_end) =
+                        request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= header_end + 4 + content_length {
+                        break;
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+            let _held = listener.accept().await;
+            std::future::pending::<()>().await;
+        });
+        format!("http://{address}")
+    }
+
+    /// An SSE body with `content` and one native call of `name`.
+    fn native_tool_call_answer(content: &str, name: &str, arguments: serde_json::Value) -> String {
+        let call = serde_json::json!({
+            "choices": [{"delta": {
+                "content": content,
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments.to_string()},
+                }],
+            }}]
+        });
+        let finish = serde_json::json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]});
+        format!("data: {call}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
+    }
+
+    async fn native_test_state(url: String) -> Arc<Mutex<AppState>> {
+        let state = delegated_test_state(url.clone()).await;
+        state
+            .lock()
+            .await
+            .record_function_calling_support(&url, true);
+        state
+    }
+
+    /// Cancelling a child while its tool call runs ends it: the child used to
+    /// lock the state twice on that path and hang holding it, so the cancel
+    /// never settled and the whole session froze.
+    #[tokio::test]
+    async fn cancel_during_a_tool_call_settles_and_releases_the_state() {
+        let url = scripted_subagent_server(vec![native_tool_call_answer(
+            "",
+            "wait_agent",
+            serde_json::json!({"id": 1, "timeout_ms": 30_000}),
+        )])
+        .await;
+        let state = native_test_state(url).await;
+        let (sibling, supervisor) = {
+            let mut s = state.lock().await;
+            (
+                spawn_test_child(&mut s, "stuck"),
+                s.subagent_supervisor.clone(),
+            )
+        };
+        supervisor
+            .spawn(
+                sibling,
+                tokio_util::sync::CancellationToken::new(),
+                std::future::pending(),
+            )
+            .unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let spawned = handle_agent_tool(
+            &reqwest::Client::new(),
+            &state,
+            &cancel,
+            "spawn_agent",
+            &serde_json::json!({"task": "wait for the sibling"}),
+        )
+        .await;
+        assert!(spawned.success, "{}", spawned.content);
+        let child = 2;
+        // The call is recorded before it runs; the child is then in the wait.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if state.lock().await.subagents.iter().any(|agent| {
+                    agent.id == child
+                        && agent
+                            .history
+                            .iter()
+                            .any(|message| !message.tool_calls.is_empty())
+                }) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the child reaches its tool call");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            cancel_subagent_tree(&state, child),
+        )
+        .await
+        .expect("cancel returns")
+        .unwrap();
+        assert!(outcome.settled, "{}", outcome.message);
+        assert_eq!(outcome.message, format!("subagent {child} cancelled"));
+        let s = tokio::time::timeout(std::time::Duration::from_secs(5), state.lock())
+            .await
+            .expect("the child released the state lock");
+        let agent = s.subagents.iter().find(|agent| agent.id == child).unwrap();
+        assert_eq!(agent.status, crate::app::SubAgentStatus::Cancelled);
+        assert!(
+            agent
+                .history
+                .iter()
+                .any(|message| message.tool_call_id.as_deref() == Some("call-1")),
+            "the interrupted call keeps its result"
+        );
+        drop(s);
+        supervisor.shutdown_and_wait().await;
+    }
+
+    /// A child that reaches its round limit ends as failed and still hands
+    /// back what it had found.
+    #[tokio::test]
+    async fn round_limit_fails_the_child_with_its_last_partial_answer() {
+        let url = scripted_subagent_server(vec![native_tool_call_answer(
+            "The parser drops the last token.",
+            "list_agents",
+            serde_json::json!({}),
+        )])
+        .await;
+        let state = native_test_state(url).await;
+        state.lock().await.config.loop_guard.subagent_max_rounds = 1;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let spawned = handle_agent_tool(
+            &reqwest::Client::new(),
+            &state,
+            &cancel,
+            "spawn_agent",
+            &serde_json::json!({"task": "find the bug"}),
+        )
+        .await;
+        assert!(spawned.success, "{}", spawned.content);
+        let waited = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            handle_agent_tool(
+                &reqwest::Client::new(),
+                &state,
+                &cancel,
+                "wait_agent",
+                &serde_json::json!({"id": 1}),
+            ),
+        )
+        .await
+        .expect("the child ends at its limit");
+        assert!(
+            waited.content.contains("limit of 1 model rounds"),
+            "{}",
+            waited.content
+        );
+        assert!(
+            waited.content.contains("The parser drops the last token."),
+            "{}",
+            waited.content
+        );
+        assert_eq!(
+            state.lock().await.subagents[0].status,
+            crate::app::SubAgentStatus::Failed
+        );
+    }
+
+    #[test]
+    fn contract_paths_cover_every_path_argument_and_resolve_dot_dot() {
+        let root = std::path::Path::new("/work/agent-1");
+        let allowed = vec!["src/".to_string()];
+        let outside =
+            |args: serde_json::Value| call_paths_outside_contract(&args, Some(root), &allowed);
+        assert!(!outside(serde_json::json!({"path": "src/lib.rs"})));
+        assert!(!outside(serde_json::json!({"path": "./src/a/../b.rs"})));
+        assert!(!outside(
+            serde_json::json!({"path": "/work/agent-1/src/lib.rs"})
+        ));
+        assert!(outside(serde_json::json!({"path": "src/../Cargo.toml"})));
+        assert!(outside(serde_json::json!({"path": "../../etc/passwd"})));
+        assert!(outside(serde_json::json!({"path": "srcx/lib.rs"})));
+        assert!(outside(
+            serde_json::json!({"path": "/work/agent-1/Cargo.toml"})
+        ));
+        assert!(outside(
+            serde_json::json!({"src": "src/a.rs", "dest": "build.rs"})
+        ));
+        assert!(!outside(
+            serde_json::json!({"src": "src/a.rs", "dest": "src/b.rs"})
+        ));
+        assert!(outside(
+            serde_json::json!({"paths": ["src/a.rs", "README.md"]})
+        ));
+        assert!(!outside(serde_json::json!({"command": "cargo test"})));
+    }
+
+    #[test]
+    fn bounded_completion_keeps_the_conclusion_at_the_end() {
+        let output = format!("{}FINAL: the fix is in parse()", "detail ".repeat(4000));
+        let (result, truncated) = bounded_completion_output(1, "completed", &output, false, "");
+        assert!(truncated);
+        assert!(result.len() <= 8192);
+        assert!(result.contains("FINAL: the fix is in parse()"), "{result}");
+        assert!(result.contains("bytes omitted"));
+    }
+
+    #[test]
+    fn head_tail_truncation_stays_within_the_limit_on_char_boundaries() {
+        let text = "é".repeat(5000);
+        for max in [0, 7, 95, 96, 97, 200, 1001] {
+            let truncated = crate::tools::truncate_bytes_head_tail(&text, max);
+            assert!(truncated.len() <= max, "{max}: {}", truncated.len());
+        }
+        assert_eq!(crate::tools::truncate_bytes_head_tail("short", 96), "short");
     }
 
     async fn delegated_test_state(url: String) -> Arc<Mutex<AppState>> {

@@ -219,7 +219,7 @@ pub(crate) async fn cancel(
         return Err(unknown_agent(id));
     }
     match crate::network::subagents::cancel_subagent_tree(state, id).await {
-        Ok(message) => Ok(json!({ "message": message })),
+        Ok(outcome) => Ok(json!({ "message": outcome.message, "settled": outcome.settled })),
         Err(error) => Err(agent_client_protocol::Error::invalid_params().data(error)),
     }
 }
