@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Assistant text. Blocks come from `MarkdownBlock`; inline styling from
 /// `AttributedString(markdown:)`. Consecutive prose blocks (paragraphs, headings,
-/// list items, quotes) render as one selectable text, so a drag can select across
-/// them; code blocks, tables and rules stand on their own.
+/// list items) render as one selectable text, so a drag can select across them;
+/// quotes, code blocks, tables and rules stand on their own.
 struct MarkdownText: View {
     let text: String
     /// Draw `rustcode-viz` blocks as widgets. Only assistant replies set it.
@@ -37,7 +37,7 @@ struct MarkdownText: View {
             }
             for block in MarkdownBlock.parse(text, visualizations: visualizations, smartUI: smartUI) {
                 switch block {
-                case .paragraph, .heading, .listItem, .quote:
+                case .paragraph, .heading, .listItem:
                     run.append(block)
                 default:
                     flush()
@@ -99,15 +99,6 @@ struct MarkdownText: View {
                 var bullet = AttributedString(marker + " ")
                 bullet.foregroundColor = .secondary
                 result += bullet + inline(text)
-            case .quote(let text):
-                var bar = AttributedString("▍ ")
-                bar.foregroundColor = Color.secondary.opacity(0.5)
-                var quote = inline(text)
-                // Links keep their colour, so they read as links here too.
-                for run in quote.runs where run.link == nil {
-                    quote[run.range].foregroundColor = .secondary
-                }
-                result += bar + quote
             default:
                 break
             }
@@ -150,6 +141,8 @@ struct MarkdownText: View {
             }
             .padding(.vertical, 6)
             .background(.fill.quaternary, in: .rect(cornerRadius: 12))
+        case .quote(let text):
+            QuoteBlock(text: highlighted(text), isWriting: isWriting)
         case .rule:
             Divider().padding(.vertical, 4)
         case .image(let alt, let url):
@@ -174,6 +167,37 @@ struct MarkdownText: View {
             ChatLinks.style(&styled)
             return styled
         }
+    }
+}
+
+/// A `>` quote: a rounded bar beside the text on a faint panel, so it reads
+/// as a quoted block rather than a glyph before dimmed lines (#2525). The
+/// bar is drawn, not typed, so copying the quote copies only its text.
+private struct QuoteBlock: View {
+    let text: AttributedString
+    let isWriting: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.45))
+                .frame(width: 3)
+            Group {
+                if isWriting {
+                    StreamingProse(text: text)
+                } else {
+                    Text(text).linkCursor(text, lineSpacing: 2)
+                }
+            }
+            .lineSpacing(2)
+            .foregroundStyle(.primary.opacity(0.82))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.vertical, 8)
+        .padding(.leading, 8)
+        .padding(.trailing, 12)
+        .background(.fill.quinary, in: .rect(cornerRadius: 8))
     }
 }
 
