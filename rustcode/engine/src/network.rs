@@ -1380,6 +1380,8 @@ pub(crate) async fn prepare_turn_request_measured(
     // An ACP engine defers its MCP servers until a turn needs them; this is
     // that first use. It returns at once when nothing is deferred.
     crate::mcp::start_deferred_servers().await;
+    // A server added or removed since the session began takes effect now.
+    crate::mcp::reconcile_configured_servers(state).await;
     let first = prepare_turn_request_pass(
         client,
         state,

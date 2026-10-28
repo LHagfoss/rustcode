@@ -82,6 +82,18 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
     // the `mcp__` prefix and `mcp_raw_name_is_unique` rejects built-in names.
     // Skip the catalogue scan for them; it clones every server's tool list.
     let is_builtin = TOOLS.iter().any(|tool| tool.name == name);
+    // Every built-in schema offers the display-only `summary`; drop it here so
+    // handlers that reject unknown keys never see it.
+    let without_summary;
+    let args = match args.as_object() {
+        Some(object) if is_builtin && object.contains_key(super::schema::CALL_SUMMARY_KEY) => {
+            let mut object = object.clone();
+            object.remove(super::schema::CALL_SUMMARY_KEY);
+            without_summary = Value::Object(object);
+            &without_summary
+        }
+        _ => args,
+    };
     // Snapshot the clients and release the registry before the call: the UI
     // locks the same registry to label tool rows, so holding it across a slow
     // `tools/call` freezes rendering and serializes calls to other servers.

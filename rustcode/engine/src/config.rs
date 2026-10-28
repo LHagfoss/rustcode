@@ -1875,6 +1875,16 @@ fn overlay_project_config(mut config: AppConfig, workspace: &Path) -> (String, S
     (url, model, config)
 }
 
+/// Every file [`load_config_for_workspace`] reads, existing or not: the user
+/// config, then the project files in precedence order.
+pub(crate) fn config_files_for_workspace(workspace: &Path) -> Vec<PathBuf> {
+    get_config_dir()
+        .map(|dir| dir.join(CONFIG_TOML_FILE))
+        .into_iter()
+        .chain(project_config_paths(workspace))
+        .collect()
+}
+
 fn project_config_paths(workspace: &Path) -> Vec<PathBuf> {
     let workspace = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
     let mut ancestors: Vec<PathBuf> = workspace.ancestors().map(Path::to_path_buf).collect();

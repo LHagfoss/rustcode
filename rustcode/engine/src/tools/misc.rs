@@ -2382,6 +2382,27 @@ mod tests {
     }
 
     #[test]
+    fn strict_handlers_accept_the_call_summary_every_schema_offers() {
+        // Every built-in schema advertises `summary`; rejecting it failed
+        // each discovery call a model made with one.
+        for (name, args) in [
+            (
+                "list_mcp_tools",
+                json!({"query": "files", "summary": "Find file tools"}),
+            ),
+            ("zoom_context", json!({"summary": "Open the archive"})),
+        ] {
+            let output = super::super::execute_with_metadata(name, &args);
+            assert!(
+                !output.content.contains("invalid argument")
+                    && !output.content.contains("Unknown zoom_context argument"),
+                "{name}: {}",
+                output.content
+            );
+        }
+    }
+
+    #[test]
     fn mcp_discovery_rejects_invalid_arguments_explicitly() {
         assert!(
             list_mcp_tools(&json!({"unexpected": true}))
