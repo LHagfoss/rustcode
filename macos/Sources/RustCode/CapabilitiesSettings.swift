@@ -46,6 +46,37 @@ final class CapabilitiesStore: ObservableObject {
         }
     }
 
+    /// Save and start a new server. Returns the engine's error message, or
+    /// nil once it is in the config; a server that fails to start is still
+    /// added and shows its error on its row.
+    func addServer(_ params: JSONValue, connection: ACPConnection?) async -> String? {
+        guard let connection else { return "The RustCode engine is not running." }
+        do {
+            // Starting the server can take up to its 10 s handshake limit.
+            let result = try await connection.request(ACPMethod.addMCPServer, params: params, timeout: .seconds(30))
+            snapshot = try CapabilitySnapshot(json: result)
+            error = nil
+            return nil
+        } catch {
+            return Self.message(for: error)
+        }
+    }
+
+    func removeServer(_ name: String, connection: ACPConnection?) async {
+        guard let connection else { return }
+        let key = "\(CapabilityKind.mcp.rawValue):\(name)"
+        pending.insert(key)
+        defer { pending.remove(key) }
+        do {
+            let result = try await connection.request(
+                ACPMethod.removeMCPServer, params: ACPRequests.removeMCPServer(name: name), timeout: .seconds(15))
+            snapshot = try CapabilitySnapshot(json: result)
+            error = nil
+        } catch {
+            self.error = Self.message(for: error)
+        }
+    }
+
     func isPending(_ kind: CapabilityKind, _ name: String) -> Bool {
         pending.contains("\(kind.rawValue):\(name)")
     }
@@ -186,6 +217,8 @@ struct MCPSettings: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var store: CapabilitiesStore
     @State private var query = ""
+    @State private var adding = false
+    @State private var removing: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -198,11 +231,15 @@ struct MCPSettings: View {
                     }
                     .buttonStyle(PillButtonStyle())
                     .padding(.bottom, 14)
+                    Button { adding = true } label: { Label("Add Server", systemImage: "plus") }
+                        .buttonStyle(PillButtonStyle())
+                        .padding(.bottom, 14)
+                        .help("Add an MCP server; it starts right away")
                 }
                 let servers = snapshot.mcpServers(matching: query)
                 let connected = snapshot.mcpServers.filter { $0.connection == .connected }.count
                 SettingsGroup(title: "\(connected) of \(snapshot.mcpServers.count) connected",
-                              footer: "A server that is off stays configured but is not started. Header and environment values are never shown. Changes are saved to the user config and take effect right away in this app; a terminal running RustCode picks them up when it restarts. Add servers with rustcode mcp add, or /mcp in the terminal.") {
+                              footer: "A server that is off stays configured but is not started. Header and environment values are never shown. Changes are saved to the user config and take effect right away in this app; a terminal running RustCode picks them up on its next message. Right-click a server to remove it.") {
                     if servers.isEmpty {
                         Text(snapshot.mcpServers.isEmpty ? "No MCP servers configured." : "No servers match “\(query)”.")
                             .font(.callout).foregroundStyle(.secondary)
@@ -214,10 +251,118 @@ struct MCPSettings: View {
                         MCPServerRow(server: server, pending: store.isPending(.mcp, server.name)) { on in
                             Task { await store.set(.mcp, name: server.name, enabled: on, connection: model.engineConnection) }
                         }
+                        .contextMenu {
+                            if server.canToggle {
+                                Button("Remove “\(server.name)”…", role: .destructive) { removing = server.name }
+                            }
+                        }
                     }
                 }
             }
         }
+        .sheet(isPresented: $adding) {
+            AddMCPServerSheet(existing: Set(store.snapshot?.mcpServers.map(\.name) ?? [])) { params in
+                await store.addServer(params, connection: model.engineConnection)
+            }
+        }
+        .confirmationDialog("Remove “\(removing ?? "")”?", isPresented: Binding(
+            get: { removing != nil }, set: { if !$0 { removing = nil } })
+        ) {
+            Button("Remove", role: .destructive) {
+                if let name = removing { Task { await store.removeServer(name, connection: model.engineConnection) } }
+                removing = nil
+            }
+        } message: {
+            Text("The server is stopped and deleted from the user config, with its environment values and headers.")
+        }
+    }
+}
+
+/// Collects a new server; the engine validates it like `rustcode mcp add`
+/// and starts it before the sheet closes.
+private struct AddMCPServerSheet: View {
+    let existing: Set<String>
+    let add: (JSONValue) async -> String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft = MCPServerDraft()
+    @State private var saving = false
+    @State private var error: String?
+
+    private var problem: String? {
+        if existing.contains(draft.trimmedName) { return "A server named “\(draft.trimmedName)” already exists." }
+        return draft.problem
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add MCP Server").font(.headline)
+            Form {
+                TextField("Name", text: $draft.name, prompt: Text("files"))
+                Picker("Type", selection: $draft.transport) {
+                    Text("Local command").tag(MCPServerDraft.Transport.stdio)
+                    Text("Remote URL").tag(MCPServerDraft.Transport.http)
+                }
+                .pickerStyle(.segmented)
+                switch draft.transport {
+                case .stdio:
+                    TextField("Command", text: $draft.command, prompt: Text("npx -y @example/files-mcp"))
+                        .font(.body.monospaced())
+                    LabeledContent("Environment") {
+                        TextEditor(text: $draft.environment)
+                            .font(.callout.monospaced())
+                            .frame(height: 64)
+                            .overlay(alignment: .topLeading) {
+                                if draft.environment.isEmpty {
+                                    Text("API_KEY=… (one per line)").foregroundStyle(.tertiary)
+                                        .font(.callout.monospaced()).padding(.leading, 5).allowsHitTesting(false)
+                                }
+                            }
+                    }
+                case .http:
+                    TextField("URL", text: $draft.url, prompt: Text("https://mcp.example.com/mcp"))
+                        .font(.body.monospaced())
+                    LabeledContent("Headers") {
+                        TextEditor(text: $draft.headers)
+                            .font(.callout.monospaced())
+                            .frame(height: 64)
+                            .overlay(alignment: .topLeading) {
+                                if draft.headers.isEmpty {
+                                    Text("Authorization: Bearer … (one per line)").foregroundStyle(.tertiary)
+                                        .font(.callout.monospaced()).padding(.leading, 5).allowsHitTesting(false)
+                                }
+                            }
+                    }
+                }
+            }
+            Text("Saved to the user config. Environment and header values are stored there and never shown again.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let error {
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button {
+                    Task { await save() }
+                } label: {
+                    if saving { ProgressView().controlSize(.small) } else { Text("Add") }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(saving || problem != nil)
+                .help(problem ?? "")
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+
+    private func save() async {
+        guard problem == nil, case .success(let params) = draft.request() else { return }
+        saving = true
+        defer { saving = false }
+        error = await add(params)
+        if error == nil { dismiss() }
     }
 }
 

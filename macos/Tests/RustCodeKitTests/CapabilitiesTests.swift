@@ -50,4 +50,37 @@ final class CapabilitiesTests: XCTestCase {
                        ["kind": "mcp", "name": "github", "enabled": false])
         XCTAssertEqual(ACPMethod.setCapability, "_rustcode/capabilities/set")
     }
+
+    func testCommandLineSplitsLikeAShell() throws {
+        XCTAssertEqual(try MCPServerDraft.splitCommandLine("npx -y  @x/files-mcp").get(), ["npx", "-y", "@x/files-mcp"])
+        XCTAssertEqual(try MCPServerDraft.splitCommandLine(#"zsh -c 'source "$HOME/.zshrc" && exec npx'"#).get(),
+                       ["zsh", "-c", #"source "$HOME/.zshrc" && exec npx"#])
+        XCTAssertEqual(try MCPServerDraft.splitCommandLine(#"a\ b "c d" ''"#).get(), ["a b", "c d", ""])
+        XCTAssertThrowsError(try MCPServerDraft.splitCommandLine("echo 'open").get())
+    }
+
+    func testDraftBuildsTheAddRequestForEachTransport() throws {
+        var draft = MCPServerDraft()
+        XCTAssertEqual(draft.problem, "Enter a name.")
+        draft.name = " files "
+        XCTAssertEqual(draft.problem, "Enter the command that starts the server.")
+        draft.command = "npx -y files-mcp"
+        draft.environment = "API_KEY=1\n\n  DEBUG=0 "
+        XCTAssertNil(draft.problem)
+        XCTAssertEqual(try draft.request().get(), [
+            "name": "files", "transport": "stdio", "target": ["npx", "-y", "files-mcp"], "env": ["API_KEY=1", "DEBUG=0"],
+        ])
+
+        draft.transport = .http
+        draft.url = "mcp.example.com"
+        XCTAssertEqual(draft.problem, "The URL must start with http:// or https://.")
+        draft.url = "https://mcp.example.com/mcp"
+        draft.headers = "Authorization: Bearer t"
+        XCTAssertEqual(try draft.request().get(), [
+            "name": "files", "transport": "http", "target": ["https://mcp.example.com/mcp"],
+            "headers": ["Authorization: Bearer t"],
+        ])
+        draft.name = "my files"
+        XCTAssertEqual(draft.problem, "A name cannot contain spaces.")
+    }
 }

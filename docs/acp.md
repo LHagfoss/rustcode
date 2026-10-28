@@ -100,7 +100,7 @@ approval and origin rules, and the limits are in [preview.md](preview.md).
 
 ## Skills and MCP servers
 
-Two extension requests back the app's Settings pages:
+These extension requests back the app's Settings pages:
 
 - `_rustcode/capabilities` (`{}`) answers with `{"skills": [...],
   "mcpServers": [...], "configPath"}`. A skill has `name`, `description`,
@@ -114,6 +114,14 @@ Two extension requests back the app's Settings pages:
   engine, and answers with the fresh snapshot. An unknown skill or a server the
   user config does not declare is an `invalid_params` error; a server that
   fails to start is reported as `failed` in the snapshot.
+- `_rustcode/capabilities/mcp/add` (`{"name", "target": [...], "transport"?:
+  "stdio" | "http", "env"?: ["KEY=value"], "headers"?: ["Name: value"]}`)
+  validates the server like `rustcode mcp add`, saves it to the user config,
+  starts it in this engine and answers with the fresh snapshot. A duplicate
+  name or a target that does not fit the transport is an `invalid_params`
+  error; a server that fails to start is still saved and reported as `failed`.
+- `_rustcode/capabilities/mcp/remove` (`{"name"}`) deletes a server from the
+  user config, stops it, and answers with the fresh snapshot.
 
 Semantics and scope are described in
 [configuration.md](configuration.md#turning-skills-and-mcp-servers-on-and-off).

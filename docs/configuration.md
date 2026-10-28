@@ -279,11 +279,14 @@ same place:
 A toggle applies from the next message of every open session in the process
 that made it: the terminal you toggled in, or the macOS app's engine for all of
 its chats. A turn already running is not changed. Another RustCode process
-reads `disabled_skills` the next time it scans skills, but keeps its MCP
-servers as they are until it restarts or toggles them itself.
+reads `disabled_skills` the next time it scans skills, and brings its MCP
+servers in line with the config on its next message: added or turned-on
+servers start, removed or turned-off ones stop.
 
-The app reads and writes these through the ACP extension requests
-`_rustcode/capabilities` and `_rustcode/capabilities/set` (see
+The app's MCP Settings page also adds servers (**Add Server**) and removes them
+(right-click a server). It reads and writes these through the ACP extension
+requests `_rustcode/capabilities`, `_rustcode/capabilities/set` and
+`_rustcode/capabilities/mcp/{add,remove}` (see
 [acp.md](acp.md#skills-and-mcp-servers)).
 
 ## YOLO by default

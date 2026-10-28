@@ -264,6 +264,32 @@ pub async fn set_mcp_server_enabled(name: &str, enabled: bool) -> Result<McpEntr
         .ok_or_else(|| format!("MCP server '{name}' is no longer configured"))
 }
 
+/// Save a new server to the user config, validated like `rustcode mcp add`,
+/// and start it in this process. A start failure is recorded for the
+/// settings surfaces rather than returned: the server stays configured.
+pub async fn add_mcp_server(spec: &crate::config::McpServerSpec) -> Result<McpEntry, String> {
+    let server = crate::config::mcp_server_from_spec(spec)?;
+    let name = server.name.clone();
+    crate::config::add_mcp_server_in(&user_config_dir()?, server, false).map_err(|error| {
+        error.replace(
+            "pass --force to replace it",
+            "remove it first or choose another name",
+        )
+    })?;
+    apply_mcp_toggle(&name, true).await;
+    mcp_entries()
+        .into_iter()
+        .find(|entry| entry.name == name)
+        .ok_or_else(|| format!("MCP server '{name}' is not active in this workspace"))
+}
+
+/// Remove a server from the user config and stop it in this process.
+pub async fn remove_mcp_server(name: &str) -> Result<(), String> {
+    crate::config::remove_mcp_server_in(&user_config_dir()?, name)?;
+    crate::mcp::shutdown_server(name).await;
+    Ok(())
+}
+
 /// Start or stop a server after its toggle was saved, recording a start
 /// failure so the settings surfaces can show it.
 pub async fn apply_mcp_toggle(name: &str, enabled: bool) {

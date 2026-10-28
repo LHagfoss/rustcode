@@ -1156,6 +1156,30 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            async move |request: capabilities::AddMcpServerRequest, responder, connection| {
+                connection.spawn(async move {
+                    match capabilities::add_mcp_server(request).await {
+                        Ok(snapshot) => responder.respond(snapshot)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: capabilities::RemoveMcpServerRequest, responder, connection| {
+                connection.spawn(async move {
+                    match capabilities::remove_mcp_server(request).await {
+                        Ok(snapshot) => responder.respond(snapshot)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         // Each runs gh or the account store, so none holds the dispatch loop.
         .on_receive_request(
             async move |_request: connections::ConnectionsRequest, responder, connection| {
