@@ -526,27 +526,33 @@ mod tests {
         assert!(boundary.summary.contains(STRUCTURED_MEMORY_MARKER));
     }
 
-    /// One long turn has no complete earlier turn to cut at. `/compact` must
-    /// say so instead of spending a summary request that changes nothing.
+    /// One long turn has no complete earlier turn to cut at. `/compact`
+    /// cuts inside it instead, keeping the recent messages and pinning the
+    /// request the turn answers.
     #[tokio::test]
-    async fn manual_compaction_of_a_single_turn_reports_nothing_to_compact() {
+    async fn manual_compaction_of_a_single_turn_cuts_inside_it() {
+        let url = one_shot_json_server(serde_json::json!({
+            "choices": [{"message": {"content": "- Goal: original task"}}]
+        }))
+        .await;
         let mut history = vec![ChatMessage::new("user", "original task")];
         for i in 0..(KEEP_RECENT_TURNS + 8) {
             history.push(ChatMessage::new("assistant", format!("fact {i}")));
         }
-        let expected = history.clone();
+        let expected_tail = history[history.len() - KEEP_RECENT_TURNS..].to_vec();
 
-        let result = force_compact(
-            &reqwest::Client::new(),
-            "http://127.0.0.1:9/v1/chat/completions",
-            "model",
-            &mut history,
-            None,
-        )
-        .await;
+        force_compact(&reqwest::Client::new(), &url, "model", &mut history, None)
+            .await
+            .expect("a single turn compacts");
 
-        assert_eq!(result, Err("Not enough messages to compact.".to_string()));
-        assert!(history == expected);
+        assert!(history[0].content.starts_with(SUMMARY_MARKER));
+        assert!(history.ends_with(&expected_tail));
+        assert!(
+            history
+                .iter()
+                .any(|message| message.content.ends_with("\noriginal task")),
+            "the turn's request stays pinned"
+        );
     }
 
     #[tokio::test]

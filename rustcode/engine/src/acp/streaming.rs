@@ -304,6 +304,17 @@ impl AcpEventStream {
                 updates
             }
             crate::network::AgentUiEvent::RoundCompleted { usage } => vec![usage],
+            crate::network::AgentUiEvent::Compacted { stats, summary } => {
+                // The card goes between the text before the compaction and
+                // the text after it.
+                let mut updates = self.flush();
+                updates.push(crate::acp::usage::compaction_card(
+                    Some(&stats),
+                    summary.as_deref(),
+                    None,
+                ));
+                updates
+            }
             crate::network::AgentUiEvent::PromptStarted { .. }
             | crate::network::AgentUiEvent::SubagentUpdated { .. }
             | crate::network::AgentUiEvent::ApprovalRequested { .. }
@@ -403,6 +414,35 @@ mod tests {
             }),
             vec![usage]
         );
+    }
+
+    #[test]
+    fn a_compaction_during_the_turn_becomes_the_chat_card() {
+        let stats = crate::app::CompactionStats::new(
+            crate::app::CompactionTrigger::Auto,
+            crate::app::CompactionMode::DeterministicRecord,
+            90_000,
+            12_000,
+            40,
+            0,
+        );
+        let mut stream = AcpEventStream::new();
+
+        let updates = stream.updates(AgentUiEvent::Compacted {
+            stats,
+            summary: Some("Modified files: src/lib.rs".into()),
+        });
+
+        let [card] = updates.as_slice() else {
+            panic!("expected one card, got {updates:?}");
+        };
+        let value = serde_json::to_value(card).unwrap();
+        let meta = &value["_meta"]["rustcode"];
+        assert_eq!(meta["kind"], "compaction");
+        assert_eq!(meta["trigger"], "auto");
+        assert_eq!(meta["mode"], "deterministic_record");
+        assert_eq!(meta["count"], 1);
+        assert_eq!(meta["summary"], "Modified files: src/lib.rs");
     }
 }
 

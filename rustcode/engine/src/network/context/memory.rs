@@ -741,7 +741,19 @@ pub(super) fn compact_with_structured_memory_from_archive(
         desired_cutoff,
         (budget as f64 * 0.3) as usize,
     );
-    if cutoff == 0 {
+    compact_with_structured_memory_at(history, cutoff, budget, archival_source)
+}
+
+/// Replace `history[..cutoff]` with the deterministic record. The caller
+/// owns the boundary: it may fall inside a turn, as long as it splits no
+/// tool transaction.
+pub(super) fn compact_with_structured_memory_at(
+    history: &mut Vec<ChatMessage>,
+    cutoff: usize,
+    budget: usize,
+    archival_source: &[ChatMessage],
+) -> bool {
+    if cutoff == 0 || cutoff >= history.len() {
         return false;
     }
     let Some(archival_prefix) = archival_source.get(..cutoff) else {

@@ -100,6 +100,48 @@ pub(crate) fn context_breakdown(state: &crate::app::AppState) -> serde_json::Val
     })
 }
 
+/// Bumped when the `_meta.rustcode` compaction card fields change
+/// incompatibly.
+pub(crate) const COMPACTION_META_VERSION: u32 = 1;
+
+/// The chat's compaction card: a reply chunk whose text says what happened,
+/// for a client that does not draw the card, and whose
+/// `_meta.rustcode.kind == "compaction"` carries the numbers and the summary
+/// the model now works from. `stats` is `None` for a replayed compaction the
+/// session has no record of. `text` replaces the default one-line notice.
+pub(crate) fn compaction_card(
+    stats: Option<&crate::app::CompactionStats>,
+    summary: Option<&str>,
+    text: Option<String>,
+) -> SessionUpdate {
+    use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+    let text = text.unwrap_or_else(|| match stats {
+        Some(stats) => format!(
+            "History compacted: reduced context from {} to {} tokens.",
+            stats.before_tokens, stats.after_tokens
+        ),
+        None => "History compacted.".to_owned(),
+    });
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "rustcode".to_owned(),
+        serde_json::json!({
+            "kind": "compaction",
+            "version": COMPACTION_META_VERSION,
+            "trigger": stats.map(|stats| stats.trigger),
+            "mode": stats.map(|stats| stats.mode),
+            "beforeTokens": stats.map(|stats| stats.before_tokens),
+            "afterTokens": stats.map(|stats| stats.after_tokens),
+            "reclaimedTokens": stats.map(|stats| stats.reclaimed_tokens),
+            "count": stats.map(|stats| stats.count),
+            "summary": summary,
+        }),
+    );
+    SessionUpdate::AgentMessageChunk(
+        ContentChunk::new(ContentBlock::Text(TextContent::new(text))).meta(meta),
+    )
+}
+
 /// `_meta` for the `/context` reply chunk: the breakdown beside the Markdown.
 pub(crate) fn context_reply_meta(
     state: &crate::app::AppState,
@@ -182,7 +224,10 @@ fn limits_json(
 
 #[cfg(test)]
 mod tests {
-    use super::{USAGE_META_VERSION, context_reply_meta, usage_update};
+    use super::{
+        COMPACTION_META_VERSION, USAGE_META_VERSION, compaction_card, context_reply_meta,
+        usage_update,
+    };
     use crate::app::{ChatMessage, TokenUsage};
 
     fn assistant(prompt: u32, completion: u32, cached: Option<u32>) -> ChatMessage {
@@ -243,6 +288,105 @@ mod tests {
         assert_eq!(meta["outputTokens"], 500);
         assert_eq!(meta["cachedTokens"], 400);
         assert_eq!(meta["responses"], 2);
+    }
+
+    #[test]
+    fn compaction_card_carries_the_numbers_and_the_summary() {
+        let stats = crate::app::CompactionStats::new(
+            crate::app::CompactionTrigger::Manual,
+            crate::app::CompactionMode::AiSummary,
+            161_495,
+            4_200,
+            116,
+            1,
+        );
+        let value = serde_json::to_value(compaction_card(Some(&stats), Some("- Goal: ship"), None))
+            .unwrap();
+        assert_eq!(value["sessionUpdate"], "agent_message_chunk");
+        assert_eq!(
+            value["content"]["text"],
+            "History compacted: reduced context from 161495 to 4200 tokens."
+        );
+        let meta = &value["_meta"]["rustcode"];
+        assert_eq!(meta["kind"], "compaction");
+        assert_eq!(meta["version"], COMPACTION_META_VERSION);
+        assert_eq!(meta["trigger"], "manual");
+        assert_eq!(meta["mode"], "ai_summary");
+        assert_eq!(meta["beforeTokens"], 161_495);
+        assert_eq!(meta["afterTokens"], 4_200);
+        assert_eq!(meta["count"], 2);
+        assert_eq!(meta["summary"], "- Goal: ship");
+
+        let unknown = serde_json::to_value(compaction_card(None, None, None)).unwrap();
+        assert_eq!(unknown["content"]["text"], "History compacted.");
+        assert!(unknown["_meta"]["rustcode"]["count"].is_null());
+    }
+
+    /// The provider's last usage measured the prompt before a compaction;
+    /// once the history is compacted the meter estimates the new history
+    /// instead of showing the old size.
+    #[test]
+    fn compaction_drops_the_stale_provider_usage() {
+        let mut state = crate::app::AppState::new();
+        state.history.replace(Vec::new());
+        state
+            .history
+            .push(ChatMessage::new("system", "a".repeat(4_000)));
+        state.current_token_usage = Some(TokenUsage {
+            prompt_tokens: 161_495,
+            completion_tokens: 300,
+            total_tokens: 161_795,
+            ..Default::default()
+        });
+
+        state.record_compaction(
+            crate::app::CompactionTrigger::Manual,
+            crate::app::CompactionMode::AiSummary,
+            161_495,
+            1_000,
+            116,
+        );
+
+        assert!(state.current_token_usage.is_none());
+        let value = serde_json::to_value(usage_update(&state)).unwrap();
+        assert_eq!(value["used"], 1_000);
+        assert_eq!(value["_meta"]["rustcode"]["estimated"], true);
+        assert_eq!(
+            value["_meta"]["rustcode"]["context"]["compaction"]["count"],
+            1
+        );
+        assert!(state.pending_compaction_card.is_some());
+    }
+
+    /// The count goes on across a reload, so a fourth compaction is not
+    /// shown as the first.
+    #[test]
+    fn compaction_count_survives_a_reload() {
+        let session_id = crate::config::create_detached_session();
+        let mut state = crate::app::AppState::new();
+        state.active_session_id = session_id.clone();
+        for _ in 0..2 {
+            state.record_compaction(
+                crate::app::CompactionTrigger::Auto,
+                crate::app::CompactionMode::AiSummary,
+                100_000,
+                5_000,
+                40,
+            );
+        }
+
+        let mut reopened = crate::app::AppState::new();
+        reopened.active_session_id = session_id;
+        reopened.restore_session_compaction();
+
+        let restored = reopened.last_compaction.expect("restored compaction");
+        assert_eq!(restored.count, 2);
+        assert_eq!(restored.before_tokens, 100_000);
+        assert_eq!(restored.trigger, crate::app::CompactionTrigger::Auto);
+        assert!(
+            reopened.pending_compaction_card.is_none(),
+            "a reload replays the card from history, not as a new one"
+        );
     }
 
     #[test]

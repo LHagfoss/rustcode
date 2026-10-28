@@ -152,7 +152,8 @@ impl TranscriptModel {
             | rustcode::controller::AgentUiEvent::ApprovalRequested { .. }
             | rustcode::controller::AgentUiEvent::QuestionRequested { .. }
             | rustcode::controller::AgentUiEvent::ToolFinished { .. }
-            | rustcode::controller::AgentUiEvent::RoundCompleted { .. } => {}
+            | rustcode::controller::AgentUiEvent::RoundCompleted { .. }
+            | rustcode::controller::AgentUiEvent::Compacted { .. } => {}
         }
     }
 

@@ -6,8 +6,9 @@
 //! report show the same numbers, and lets a user tell an AI summary apart
 //! from the reduced deterministic record a plan-backed profile gets.
 //!
-//! It is per session and in memory only: it describes the state of the live
-//! history, not durable session data.
+//! It is per session. The live value describes the active history; the last
+//! one is also recorded in the session's metadata, so the count and the
+//! chat's compaction card survive a reload.
 
 /// What triggered a compaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -108,6 +109,56 @@ impl CompactionStats {
         self.trigger == CompactionTrigger::Auto
             && self.reclaimed_tokens.saturating_mul(10) < self.before_tokens
     }
+
+    /// The record kept in the session's metadata, stamped `at_ms`.
+    pub fn to_session_record(&self, at_ms: u64) -> rustcode_session::SessionCompaction {
+        rustcode_session::SessionCompaction {
+            count: self.count,
+            trigger: snake_case_name(&self.trigger),
+            mode: snake_case_name(&self.mode),
+            before_tokens: self.before_tokens as u64,
+            after_tokens: self.after_tokens as u64,
+            messages_considered: self.messages_considered as u64,
+            at_ms,
+        }
+    }
+
+    /// The stats a recorded compaction describes; `None` for a record whose
+    /// trigger or mode this engine does not know.
+    pub fn from_session_record(record: &rustcode_session::SessionCompaction) -> Option<Self> {
+        let mut stats = Self::new(
+            parse_snake_case_name(&record.trigger)?,
+            parse_snake_case_name(&record.mode)?,
+            record.before_tokens as usize,
+            record.after_tokens as usize,
+            record.messages_considered as usize,
+            0,
+        );
+        stats.count = record.count;
+        Some(stats)
+    }
+}
+
+/// The summary the latest compaction left at the head of `history`: the
+/// handoff an AI summary wrote, or the deterministic record.
+pub fn compaction_summary(history: &[crate::app::ChatMessage]) -> Option<String> {
+    history
+        .iter()
+        .rev()
+        .find_map(|message| message.compaction_boundary.as_ref())
+        .map(|boundary| boundary.summary.clone())
+        .filter(|summary| !summary.trim().is_empty())
+}
+
+fn parse_snake_case_name<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
+    serde_json::from_value(serde_json::Value::from(name)).ok()
+}
+
+fn snake_case_name<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -149,6 +200,29 @@ mod tests {
             !stats.was_ineffective_auto(),
             "manual runs are the user's call"
         );
+    }
+
+    #[test]
+    fn the_session_record_round_trips() {
+        let stats = CompactionStats::new(
+            CompactionTrigger::Manual,
+            CompactionMode::AiSummary,
+            161_495,
+            4_000,
+            116,
+            2,
+        );
+        let record = stats.to_session_record(42);
+        assert_eq!(record.trigger, "manual");
+        assert_eq!(record.mode, "ai_summary");
+        assert_eq!(record.count, 3);
+        assert_eq!(record.at_ms, 42);
+        assert_eq!(CompactionStats::from_session_record(&record), Some(stats));
+        let unknown = rustcode_session::SessionCompaction {
+            trigger: "later".into(),
+            ..record
+        };
+        assert_eq!(CompactionStats::from_session_record(&unknown), None);
     }
 
     #[test]

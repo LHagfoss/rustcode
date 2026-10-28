@@ -280,13 +280,36 @@ fn replay_history_updates(
     history: &[crate::app::ChatMessage],
     cwd: Option<&std::path::Path>,
 ) -> Vec<SessionUpdate> {
+    replay_history_updates_with_compaction(history, cwd, None)
+}
+
+/// The replay of `history`, with the compaction card where a compaction
+/// left its summary. `compaction` is the session's recorded last
+/// compaction; it describes the latest summary only.
+fn replay_history_updates_with_compaction(
+    history: &[crate::app::ChatMessage],
+    cwd: Option<&std::path::Path>,
+    compaction: Option<&crate::app::CompactionStats>,
+) -> Vec<SessionUpdate> {
     use agent_client_protocol::schema::v1::{
         ContentBlock, ContentChunk, TextContent, ToolCall, ToolCallContent, ToolCallStatus,
         ToolCallUpdate, ToolCallUpdateFields,
     };
+    let latest_boundary = history
+        .iter()
+        .rposition(|message| message.compaction_boundary.is_some());
     let mut updates = Vec::new();
-    for message in history {
+    for (index, message) in history.iter().enumerate() {
         match message.role.as_str() {
+            "system" if message.compaction_boundary.is_some() => {
+                let summary = message
+                    .compaction_boundary
+                    .as_ref()
+                    .map(|boundary| boundary.summary.as_str())
+                    .filter(|summary| !summary.trim().is_empty());
+                let stats = compaction.filter(|_| Some(index) == latest_boundary);
+                updates.push(usage::compaction_card(stats, summary, None));
+            }
             "user" if !message.content.is_empty() => {
                 let mut chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(
                     message.content.clone(),
@@ -370,6 +393,7 @@ pub(crate) fn build_loaded_app_state(
 ) -> crate::app::AppState {
     let mut state = crate::app::AppState::new_with_workspace_session(cwd, Some(session_id));
     state.restore_session_model();
+    state.restore_session_compaction();
     state.task_working_directory = Some(cwd.to_path_buf());
     state.workspace_root = Some(cwd.to_path_buf());
     // Reattach the session's recorded task worktree so resume reuses its
@@ -481,6 +505,7 @@ async fn acp_load_session(
         );
         let config_options = build_session_config_options(&state);
         let loaded_usage = usage::usage_update(&state);
+        let loaded_compaction = state.last_compaction.clone();
         let state = Arc::new(Mutex::new(state));
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
         let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
@@ -521,7 +546,11 @@ async fn acp_load_session(
             },
         );
         drop(sessions);
-        let replay = replay_history_updates(&history, Some(&cwd));
+        let replay = replay_history_updates_with_compaction(
+            &history,
+            Some(&cwd),
+            loaded_compaction.as_ref(),
+        );
         let _ = crate::config::save_session_workspace(
             &session_id,
             &session_workspace(cwd, request.additional_directories.clone()),
@@ -2886,6 +2915,47 @@ mod tests {
             .collect::<String>();
         assert_eq!(prose, "\n\nDone.Fine.");
         assert!(!prose.contains("<think>"));
+    }
+
+    #[test]
+    fn replay_shows_the_compaction_card_where_the_summary_is() {
+        let summary = crate::network::compaction::durable_compaction_record_message(
+            "- Goal: ship the fix",
+            &[],
+            "/tmp/archive.jsonl",
+        );
+        let notice = crate::app::ChatMessage::new(
+            "system",
+            "🧹 History compacted: reduced context from 161495 to 4200 tokens.",
+        );
+        let stats = crate::app::CompactionStats::new(
+            crate::app::CompactionTrigger::Manual,
+            crate::app::CompactionMode::AiSummary,
+            161_495,
+            4_200,
+            116,
+            2,
+        );
+        let history = [
+            summary,
+            crate::app::ChatMessage::new("user", "next"),
+            notice,
+        ];
+
+        let updates = replay_history_updates_with_compaction(&history, None, Some(&stats));
+
+        let [
+            SessionUpdate::AgentMessageChunk(card),
+            SessionUpdate::UserMessageChunk(_),
+        ] = updates.as_slice()
+        else {
+            panic!("expected the card, then the user message: {updates:?}");
+        };
+        let meta = &card.meta.as_ref().expect("card meta")["rustcode"];
+        assert_eq!(meta["kind"], "compaction");
+        assert_eq!(meta["summary"], "- Goal: ship the fix");
+        assert_eq!(meta["count"], 3);
+        assert_eq!(meta["beforeTokens"], 161_495);
     }
 
     #[test]

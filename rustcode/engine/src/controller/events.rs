@@ -279,9 +279,11 @@ pub(crate) fn from_agent_ui_event(
                 prompt,
             ))]
         }
-        // The terminal shows the provider's message from the history row.
+        // The terminal shows the provider's message, and the compaction
+        // notice, from the history rows.
         AgentUiEvent::SubagentUpdated { .. }
         | AgentUiEvent::RoundCompleted { .. }
+        | AgentUiEvent::Compacted { .. }
         | AgentUiEvent::ProviderError { .. } => {
             return Vec::new();
         }

@@ -102,8 +102,12 @@ pub struct AppState {
     /// the next request has to drop messages. In memory only.
     pub(crate) last_request_overhead_tokens: u32,
     /// The last compaction applied to the active history, for the context
-    /// modal and `/context` in every frontend. In memory only.
+    /// modal and `/context` in every frontend. Recorded in the session's
+    /// metadata by [`AppState::record_compaction`] and restored on load.
     pub last_compaction: Option<crate::app::CompactionStats>,
+    /// A compaction no client has been shown yet. ACP takes it to put a
+    /// compaction card in the chat.
+    pub(crate) pending_compaction_card: Option<crate::app::CompactionStats>,
     /// Sticky-routing token a ChatGPT-plan response returned for the turn in
     /// progress. Sent back on the turn's later requests so they reach the
     /// backend that holds the prompt cache; cleared when a turn starts.
@@ -1460,6 +1464,67 @@ impl AppState {
         }
     }
 
+    /// Record a compaction that just rewrote the active history: the stats
+    /// for `/context` and the clients, the session's metadata, and the card
+    /// a client shows in the chat.
+    ///
+    /// The provider's last usage measured the prompt before the compaction.
+    /// Kept, it went on driving the context meter and the next budget check,
+    /// which added the old prompt size back on top of the compacted history
+    /// (a 161k session compacted to 49k still read 168k), so it is dropped
+    /// and the history is estimated until the next response measures it.
+    pub fn record_compaction(
+        &mut self,
+        trigger: crate::app::CompactionTrigger,
+        mode: crate::app::CompactionMode,
+        before_tokens: usize,
+        after_tokens: usize,
+        messages_considered: usize,
+    ) {
+        let previous_count = self
+            .last_compaction
+            .as_ref()
+            .map(|stats| stats.count)
+            .unwrap_or(0);
+        let stats = crate::app::CompactionStats::new(
+            trigger,
+            mode,
+            before_tokens,
+            after_tokens,
+            messages_considered,
+            previous_count,
+        );
+        self.current_token_usage = None;
+        crate::logger::operational_event(
+            "context.compaction",
+            serde_json::json!({
+                "session_id": self.active_session_id,
+                "trigger": stats.trigger,
+                "mode": stats.mode,
+                "before_tokens": stats.before_tokens,
+                "after_tokens": stats.after_tokens,
+                "reclaimed_tokens": stats.reclaimed_tokens,
+                "count": stats.count,
+            }),
+        );
+        let at_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        crate::config::save_session_compaction(
+            &self.active_session_id,
+            stats.to_session_record(at_ms),
+        );
+        self.pending_compaction_card = Some(stats.clone());
+        self.last_compaction = Some(stats);
+    }
+
+    /// Start with the compaction stats recorded for the active session, so
+    /// the count goes on from where it was.
+    pub fn restore_session_compaction(&mut self) {
+        self.last_compaction = crate::config::load_session_compaction(&self.active_session_id)
+            .as_ref()
+            .and_then(crate::app::CompactionStats::from_session_record);
+        self.pending_compaction_card = None;
+    }
+
     /// Continue with the model profile and effort recorded for the active
     /// session. A session that never set them, or whose profile no longer
     /// exists, keeps the configured defaults.
@@ -1573,6 +1638,7 @@ impl AppState {
             current_token_usage: None,
             last_request_overhead_tokens: 0,
             last_compaction: None,
+            pending_compaction_card: None,
             provider_turn_state: None,
             current_turn_token_usage: None,
             current_round_token_usage: None,

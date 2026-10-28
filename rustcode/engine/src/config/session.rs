@@ -721,6 +721,23 @@ pub fn save_session_model(session_id: &str, model: rustcode_session::SessionMode
     }
 }
 
+/// Record a session's last compaction. Sessions without a valid ID are
+/// skipped.
+pub fn save_session_compaction(session_id: &str, compaction: rustcode_session::SessionCompaction) {
+    if !rustcode_session::valid_session_id(session_id) {
+        return;
+    }
+    if let Some(session_store) = store()
+        && let Err(error) = session_store.save_session_compaction(session_id, compaction)
+    {
+        crate::dbg_log!("failed to record the compaction for session {session_id}: {error}");
+    }
+}
+
+pub fn load_session_compaction(session_id: &str) -> Option<rustcode_session::SessionCompaction> {
+    store()?.load_session_compaction(session_id)
+}
+
 pub fn load_session_model(session_id: &str) -> Option<rustcode_session::SessionModel> {
     store()?.load_session_model(session_id)
 }

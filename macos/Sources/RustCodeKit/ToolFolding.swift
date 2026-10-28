@@ -202,6 +202,10 @@ public struct ToolFolding: Equatable, Sendable {
         if case .assistant = item.content { true } else { false }
     }
 
+    private static func isCompaction(_ item: TranscriptItem) -> Bool {
+        if case .compaction = item.content { true } else { false }
+    }
+
     /// A call, or the screenshots calls took: what a turn's row folds.
     private static func isWork(_ item: TranscriptItem) -> Bool {
         if case .user(let text) = item.content { ToolAttachment.isAttachment(text) } else { isCall(item) }
@@ -247,6 +251,9 @@ public struct ToolFolding: Equatable, Sendable {
             return
         }
         hidden.formUnion(inside)
+        // A compaction during the turn stays in view: it is where the
+        // model's context was folded, not a step of the work.
+        hidden.subtract(work.filter(Self.isCompaction).map(\.id))
         // A turn that stopped before its answer, as when the connection
         // dropped, ends on the last thing the model said under its row.
         let answered = turn[(last + 1)...].contains(where: Self.isSaid)

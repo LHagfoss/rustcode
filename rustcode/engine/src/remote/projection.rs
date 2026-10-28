@@ -858,6 +858,7 @@ pub fn project_event(
         AgentUiEvent::ToolOutput { .. }
         | AgentUiEvent::ReasoningSource { .. }
         | AgentUiEvent::RoundCompleted { .. }
+        | AgentUiEvent::Compacted { .. }
         | AgentUiEvent::ProviderError { .. } => Vec::new(),
         AgentUiEvent::ToolFinished { id, result } => vec![
             // An attachment can begin after the original start event. Repeating

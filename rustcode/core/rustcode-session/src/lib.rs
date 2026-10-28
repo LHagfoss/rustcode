@@ -662,6 +662,26 @@ pub struct SessionMetadata {
     /// absent until set, so the configured defaults apply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<SessionModel>,
+    /// The session's last compaction; absent until it first compacts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<SessionCompaction>,
+}
+
+/// What the session's last compaction did and how many it has run, so the
+/// count and the chat's compaction card survive a reload. `trigger` and
+/// `mode` are the engine's snake_case names (`auto`/`manual`,
+/// `ai_summary`/`deterministic_record`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCompaction {
+    pub count: u32,
+    pub trigger: String,
+    pub mode: String,
+    pub before_tokens: u64,
+    pub after_tokens: u64,
+    #[serde(default)]
+    pub messages_considered: u64,
+    /// When it ran, in milliseconds since the Unix epoch.
+    pub at_ms: u64,
 }
 
 /// The model profile a session uses and its reasoning effort (`None` leaves
@@ -685,6 +705,7 @@ impl SessionMetadata {
             migrated_from,
             yolo: None,
             model: None,
+            compaction: None,
         }
     }
 }
@@ -1337,6 +1358,24 @@ impl SessionStore {
             metadata.model = Some(model);
             changed
         })
+    }
+
+    /// Record the session's last compaction.
+    pub fn save_session_compaction(
+        &self,
+        session_id: &str,
+        compaction: SessionCompaction,
+    ) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            let changed = metadata.compaction.as_ref() != Some(&compaction);
+            metadata.compaction = Some(compaction);
+            changed
+        })
+    }
+
+    /// The session's last recorded compaction, if it ever compacted.
+    pub fn load_session_compaction(&self, session_id: &str) -> Option<SessionCompaction> {
+        self.load_session_metadata(session_id)?.compaction
     }
 
     /// The session's recorded model profile and effort, if they were ever set.
@@ -2472,6 +2511,30 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn last_compaction_is_recorded_beside_the_model() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "018d6b28-0000-7000-8000-000000000005";
+
+        assert_eq!(store.load_session_compaction(id), None);
+        let compaction = SessionCompaction {
+            count: 2,
+            trigger: "manual".into(),
+            mode: "ai_summary".into(),
+            before_tokens: 161_495,
+            after_tokens: 4_210,
+            messages_considered: 116,
+            at_ms: 1_800_000_000_000,
+        };
+        store.save_session_yolo(id, true).expect("record yolo");
+        store
+            .save_session_compaction(id, compaction.clone())
+            .expect("record compaction");
+        assert_eq!(store.load_session_compaction(id), Some(compaction));
+        assert_eq!(store.load_session_yolo(id), Some(true));
     }
 
     #[test]

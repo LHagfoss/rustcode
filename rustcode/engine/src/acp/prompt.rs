@@ -358,6 +358,7 @@ pub(crate) async fn run_prompt(
                 ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text)),
             ))
         };
+        let compacting = matches!(command, Some(super::commands::AcpCommand::Compact));
         let text = match command {
             None => text,
             Some(super::commands::AcpCommand::Goal(prompt)) => {
@@ -398,8 +399,19 @@ pub(crate) async fn run_prompt(
                 // usage follows its reply.
                 // A command such as `/fast` or `/effort` can change a session
                 // option, so the client's controls are refreshed as well.
-                let (usage, options) = {
-                    let state = state.lock().await;
+                // A `/compact` that compacted answers with the chat's
+                // compaction card, its reply as the card's text.
+                let (usage, options, compaction) = {
+                    let mut state = state.lock().await;
+                    let compaction = compacting
+                        .then(|| state.pending_compaction_card.take())
+                        .flatten()
+                        .map(|stats| {
+                            (
+                                stats,
+                                crate::app::compaction_summary(state.history.as_slice()),
+                            )
+                        });
                     (
                         super::usage::usage_update(&state),
                         SessionUpdate::ConfigOptionUpdate(
@@ -407,13 +419,17 @@ pub(crate) async fn run_prompt(
                                 super::config::build_session_config_options(&state),
                             ),
                         ),
+                        compaction,
                     )
                 };
-                let reply = match (agent_text(reply), context_meta) {
-                    (SessionUpdate::AgentMessageChunk(chunk), Some(meta)) => {
+                let reply = match (compaction, agent_text(reply.clone()), context_meta) {
+                    (Some((stats, summary)), _, _) => {
+                        super::usage::compaction_card(Some(&stats), summary.as_deref(), Some(reply))
+                    }
+                    (None, SessionUpdate::AgentMessageChunk(chunk), Some(meta)) => {
                         SessionUpdate::AgentMessageChunk(chunk.meta(meta))
                     }
-                    (reply, _) => reply,
+                    (None, reply, _) => reply,
                 };
                 send_updates(&connection, &session_id, vec![reply, usage, options])?;
                 return Ok(if turn.cancel_token().is_cancelled() {

@@ -385,6 +385,8 @@ public enum SessionUpdate: Equatable, Sendable {
     case agentText(String, turn: TurnTiming? = nil, at: Date? = nil)
     /// The `/context` reply: its Markdown text and the breakdown it carries.
     case contextReport(text: String, context: ContextBreakdown)
+    /// The history was compacted: the chat shows a card where it happened.
+    case compaction(CompactionCard)
     /// Reasoning text. `summary` says it is the provider's summary of
     /// reasoning it keeps hidden rather than the model's own reasoning;
     /// `durationMs` is how long the reasoning took, sent with replayed history.
@@ -422,6 +424,8 @@ public enum SessionUpdate: Equatable, Sendable {
             if meta?["kind"]?.stringValue == "context",
                let context = ContextBreakdown(json: meta?["context"]) {
                 self = .contextReport(text: Self.text(update["content"]), context: context)
+            } else if let card = CompactionCard(text: Self.text(update["content"]), meta: meta) {
+                self = .compaction(card)
             } else if meta?["kind"]?.stringValue == "notice" {
                 self = meta?["resumable"]?.boolValue == true
                     ? .stopped(Self.text(update["content"])) : .notice(Self.text(update["content"]))

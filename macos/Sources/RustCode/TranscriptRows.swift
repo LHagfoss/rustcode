@@ -92,7 +92,51 @@ struct TranscriptRow: View, Equatable {
                 ToolRow(tool: tool).padding(.vertical, -6)
             }
         case .command(let input, let output): CommandCard(input: input, output: output)
+        case .compaction(let card): CompactionCardView(card: card)
         }
+    }
+}
+
+/// Where the history was compacted: the numbers, and the summary the model
+/// works from now behind a disclosure. The messages above stay in the chat;
+/// only the model's context was folded.
+private struct CompactionCardView: View {
+    let card: CompactionCard
+    @State private var showsSummary = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left").foregroundStyle(Color.brand)
+                Text(card.headline).font(.callout.weight(.semibold))
+                if let detail = card.detail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if card.summary != nil {
+                    Button(showsSummary ? "Hide summary" : "Show summary") {
+                        withAnimation(.snappy(duration: 0.2)) { showsSummary.toggle() }
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+            }
+            Text("The messages above are folded into this summary for the model.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if showsSummary, let summary = card.summary {
+                Divider().opacity(0.5)
+                MarkdownText(text: summary)
+            }
+        }
+        .card()
+        .contextMenu {
+            if let summary = card.summary {
+                Button("Copy Summary", systemImage: "doc.on.doc") { Clipboard.copy(summary) }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(card.headline)
     }
 }
 

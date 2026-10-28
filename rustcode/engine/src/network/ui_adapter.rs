@@ -60,6 +60,12 @@ pub enum AgentUiEvent {
     RoundCompleted {
         usage: agent_client_protocol::schema::v1::SessionUpdate,
     },
+    /// The history was compacted while the turn ran. ACP shows it as the
+    /// chat's compaction card; `summary` is what the model now works from.
+    Compacted {
+        stats: crate::app::CompactionStats,
+        summary: Option<String>,
+    },
 
     #[cfg(test)]
     TurnRecovered {
@@ -320,8 +326,13 @@ async fn publish_snapshot_with_mode(
         history_len,
         subagents,
         reasoning_summary,
+        compaction,
     ) = {
-        let state = state.lock().await;
+        let mut state = state.lock().await;
+        let compaction = state.pending_compaction_card.take().map(|stats| {
+            let summary = crate::app::compaction_summary(state.history.as_slice());
+            (stats, summary)
+        });
         (
             state.current_response.clone(),
             state.current_response_revision,
@@ -376,8 +387,13 @@ async fn publish_snapshot_with_mode(
                 .map(|agent| (agent.id, (agent.status, agent.active_turn)))
                 .collect::<Vec<_>>(),
             state.history.reasoning_summary(),
+            compaction,
         )
     };
+
+    if let Some((stats, summary)) = compaction {
+        sender.send(AgentUiEvent::Compacted { stats, summary });
+    }
 
     for (id, snapshot) in subagents {
         if previous_subagents.get(&id) != Some(&snapshot) {

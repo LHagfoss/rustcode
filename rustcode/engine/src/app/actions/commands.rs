@@ -1029,12 +1029,7 @@ pub(crate) async fn compact_history(
             // Compaction can fold the first prompt into a summary; name the
             // session after it first so its title does not move.
             crate::config::save_session_title_if_absent(&live_session_id, &original_history);
-            let previous_count = s
-                .last_compaction
-                .as_ref()
-                .map(|stats| stats.count)
-                .unwrap_or(0);
-            s.last_compaction = Some(crate::app::CompactionStats::new(
+            s.record_compaction(
                 crate::app::CompactionTrigger::Manual,
                 if summarized {
                     crate::app::CompactionMode::AiSummary
@@ -1044,8 +1039,7 @@ pub(crate) async fn compact_history(
                 before,
                 after,
                 original_history.len(),
-                previous_count,
-            ));
+            );
             format!("🧹 History compacted: reduced context from {before} to {after} tokens.")
         }
         Err(error) => {
