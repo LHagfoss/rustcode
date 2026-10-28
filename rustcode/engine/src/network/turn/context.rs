@@ -231,6 +231,10 @@ pub struct ResponseState {
     pub final_content: String,
     pub final_content_persisted: bool,
     pub streamed_call_ids: Vec<String>,
+    /// The provider failure this turn wrote to history, as a reader sees it
+    /// (`<profile> · <status>: <message>`). Clients show it in place of the
+    /// generic `provider_error` stop notice (#2584).
+    pub provider_error_notice: Option<String>,
 }
 
 pub struct MetricsState {
@@ -408,6 +412,7 @@ impl TurnContext {
                 final_content: String::new(),
                 final_content_persisted: false,
                 streamed_call_ids: Vec::new(),
+                provider_error_notice: None,
             },
             performance: Default::default(),
             metrics: MetricsState {

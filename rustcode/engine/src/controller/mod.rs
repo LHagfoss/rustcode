@@ -116,9 +116,10 @@ pub use transcript::{
     AgentUiEvent, AppStatus, ChatMessage, CommandPanel, ExpandOutcome, History, LiveToolCall,
     LiveToolFinish, LiveToolOutputChunk, PendingSteer, SettingsPicker, StreamTracker, SubAgent,
     SubAgentStatus, TokenUsage, ToolCallRef, ToolResult, ToolResultMetadata, ToolResultRecord,
-    Verbosity, is_compaction_summary, mcp_tool_display_name, sanitize_recap_content,
-    stop_marker_notice, toggle_all_expanded_bodies, toggle_all_expanded_thoughts,
-    toggle_expanded_bodies, toggle_expanded_thought, tool_arguments_hash,
+    Verbosity, is_compaction_summary, mcp_tool_display_name, provider_error_display,
+    sanitize_recap_content, stop_marker_notice, toggle_all_expanded_bodies,
+    toggle_all_expanded_thoughts, toggle_expanded_bodies, toggle_expanded_thought,
+    tool_arguments_hash,
 };
 
 pub use worker::InteractiveController;

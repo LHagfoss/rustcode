@@ -44,6 +44,13 @@ pub fn stop_marker_notice(content: &str) -> Option<String> {
     crate::network::lifecycle::stop_marker_notice(content)
 }
 
+/// What a frontend shows for a provider-failure history message: the
+/// provider's own message with its status and profile, or `None` for any
+/// other content (#2584).
+pub fn provider_error_display(content: &str) -> Option<String> {
+    crate::network::provider_error::provider_error_display(content)
+}
+
 /// Strip recap framing to the plain text a history cell renders.
 pub fn sanitize_recap_content(content: &str) -> String {
     crate::app::sanitize_recap_content(content)

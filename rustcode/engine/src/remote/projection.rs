@@ -857,7 +857,8 @@ pub fn project_event(
         // Remote clients receive tool output with the finished result.
         AgentUiEvent::ToolOutput { .. }
         | AgentUiEvent::ReasoningSource { .. }
-        | AgentUiEvent::RoundCompleted { .. } => Vec::new(),
+        | AgentUiEvent::RoundCompleted { .. }
+        | AgentUiEvent::ProviderError { .. } => Vec::new(),
         AgentUiEvent::ToolFinished { id, result } => vec![
             // An attachment can begin after the original start event. Repeating
             // its stable identity upserts the same row and retains the tool name;

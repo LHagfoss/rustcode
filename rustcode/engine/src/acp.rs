@@ -2458,6 +2458,33 @@ mod tests {
         );
     }
 
+    // #2584: the provider's own message is the stop notice, and the
+    // `provider_error` marker after it adds no second, vaguer one.
+    #[test]
+    fn acp_event_stream_sends_a_provider_refusal_as_the_only_stop_notice() {
+        use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate};
+        let mut stream = AcpEventStream::new();
+        let refusal = stream.updates(crate::network::AgentUiEvent::ProviderError {
+            message: "lfm2.5 · 507: Model does not fit in memory.".to_string(),
+        });
+        let [SessionUpdate::AgentMessageChunk(chunk)] = refusal.as_slice() else {
+            panic!("expected one notice chunk, got {refusal:?}");
+        };
+        assert!(
+            matches!(&chunk.content, ContentBlock::Text(text) if text.text == "lfm2.5 · 507: Model does not fit in memory.")
+        );
+        let meta = &chunk.meta.as_ref().expect("notice meta")["rustcode"];
+        assert_eq!(meta["kind"], "notice");
+        assert_eq!(meta["resumable"], true);
+
+        let marker = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "[harness: turn stopped — provider_error]".to_string(),
+            completed: false,
+            timing: None,
+        });
+        assert!(marker.is_empty(), "{marker:?}");
+    }
+
     #[test]
     fn acp_event_stream_keeps_final_text_after_an_earlier_tool_round_delta() {
         let mut stream = AcpEventStream::new();

@@ -23,16 +23,22 @@ const MAX_STREAM_RECOVERY_CHECKPOINT_BYTES: usize = 16 * 1024;
 const MAX_STREAM_RECOVERY_ERROR_BYTES: usize = 512;
 const MAX_STREAM_RECOVERY_ATTEMPTS: u8 = 1;
 
-/// What the transcript shows for a provider failure. A rejected model is a
-/// choice the user can change, so it is said in words instead of as the
-/// provider's JSON.
-fn provider_error_notice(error_message: &str, model_name: &str) -> String {
-    if error_message.contains("model_not_supported") {
-        return format!(
-            "Error from LLM Provider: model `{model_name}` is not available on this account or endpoint. Choose another model with /model."
-        );
-    }
-    format!("Error from LLM Provider: {error_message}")
+/// What the transcript shows for a provider failure: the provider's own
+/// message with its HTTP status and the profile that was asked (#2584). A
+/// rejected model is a choice the user can change, so it is said in words
+/// instead of as the provider's JSON. The raw diagnostic goes to `debug.log`.
+fn provider_error_notice(error_message: &str, model_name: &str, source: &str) -> String {
+    let line = if error_message.contains("model_not_supported") {
+        format!(
+            "model `{model_name}` is not available on this account or endpoint. Choose another model with /model."
+        )
+    } else {
+        crate::network::provider_error::provider_error_line(error_message, source)
+    };
+    format!(
+        "{}{line}",
+        crate::network::provider_error::PROVIDER_ERROR_PREFIX
+    )
 }
 
 fn is_recovery_request(ctx: &TurnContext) -> bool {
@@ -1031,7 +1037,22 @@ pub(super) async fn collect_round(
                     profile.name
                 )
             } else {
-                provider_error_notice(&error_message, &model_name)
+                let source = s
+                    .active_model_profile()
+                    .map_or_else(|| model_name.clone(), |profile| profile.name);
+                crate::logger::operational_event(
+                    "turn.provider_error",
+                    serde_json::json!({
+                        "session_id": request_session_id,
+                        "profile": source,
+                        "error": error_message,
+                    }),
+                );
+                let notice = provider_error_notice(&error_message, &model_name, &source);
+                ctx.response.provider_error_notice = notice
+                    .strip_prefix(crate::network::provider_error::PROVIDER_ERROR_PREFIX)
+                    .map(str::to_owned);
+                notice
             };
             s.history.push(ChatMessage::new("system", notice));
             s.current_token_usage = None;
@@ -1144,18 +1165,23 @@ mod tests {
     };
 
     #[test]
-    fn a_rejected_model_is_reported_in_words_and_other_failures_keep_their_detail() {
+    fn a_rejected_model_is_reported_in_words_and_other_failures_by_the_provider() {
         let rejected = super::provider_error_notice(
             r#"stream_failure:provider_error status=400 detail={"error":{"message":"The requested model is not supported.","code":"model_not_supported"}}"#,
             "kimi-k3",
+            "copilot",
         );
         assert_eq!(
             rejected,
             "Error from LLM Provider: model `kimi-k3` is not available on this account or endpoint. Choose another model with /model."
         );
         assert_eq!(
-            super::provider_error_notice("stream_failure:provider_error status=500", "kimi-k3"),
-            "Error from LLM Provider: stream_failure:provider_error status=500"
+            super::provider_error_notice(
+                "stream_failure:provider_error status=500",
+                "kimi-k3",
+                "copilot"
+            ),
+            "Error from LLM Provider: copilot · 500: Internal Server Error"
         );
     }
 

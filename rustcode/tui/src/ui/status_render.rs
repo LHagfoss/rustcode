@@ -161,6 +161,45 @@ fn is_compact_tool_batch_notice(content: &str) -> bool {
         || content.starts_with("Some tool calls were not run;")
 }
 
+/// A notice as plain rows, wrapped under its text, marked `!` when it warns.
+pub(super) fn push_notice_rows<'a>(
+    content: &str,
+    is_warning: bool,
+    width: u16,
+    show_picker: bool,
+    lines: &mut Vec<Line<'a>>,
+) {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            lines.push(Line::from(""));
+            continue;
+        }
+        let (marker, color, marker_weight) = if is_warning {
+            ("! ", COLOR_TIP(), Modifier::BOLD)
+        } else {
+            ("  ", COLOR_MUTED(), Modifier::empty())
+        };
+        let text_style = get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker);
+        // Wrapped here so the rows after the first stay under the text
+        // instead of starting at the left edge, under the marker.
+        let mut wrapped = Vec::new();
+        push_wrapped_with_continuation(
+            &mut wrapped,
+            vec![
+                Span::styled(
+                    marker,
+                    get_themed_style(color, COLOR_BG(), marker_weight, show_picker),
+                ),
+                Span::styled(trimmed.to_string(), text_style),
+            ],
+            usize::from(width).max(4),
+            Some(Span::styled("  ", text_style)),
+        );
+        lines.extend(wrapped);
+    }
+}
+
 pub(super) fn render_status_panel<'a>(
     content: &str,
     width: u16,
@@ -266,35 +305,7 @@ pub(super) fn render_status_panel<'a>(
             .any(|word| lower.contains(word));
 
     if !is_info_notice {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                lines.push(Line::from(""));
-                continue;
-            }
-            let (marker, color, marker_weight) = if is_warning {
-                ("! ", COLOR_TIP(), Modifier::BOLD)
-            } else {
-                ("  ", COLOR_MUTED(), Modifier::empty())
-            };
-            let text_style = get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker);
-            // Wrapped here so the rows after the first stay under the text
-            // instead of starting at the left edge, under the marker.
-            let mut wrapped = Vec::new();
-            push_wrapped_with_continuation(
-                &mut wrapped,
-                vec![
-                    Span::styled(
-                        marker,
-                        get_themed_style(color, COLOR_BG(), marker_weight, show_picker),
-                    ),
-                    Span::styled(trimmed.to_string(), text_style),
-                ],
-                usize::from(width).max(4),
-                Some(Span::styled("  ", text_style)),
-            );
-            lines.extend(wrapped);
-        }
+        push_notice_rows(content, is_warning, width, show_picker, lines);
         return;
     }
 

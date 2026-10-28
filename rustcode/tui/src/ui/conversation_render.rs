@@ -1156,7 +1156,12 @@ pub(crate) fn render_committed_history_block_snapshot(
             }
         }
         "system" => {
-            if let Some(content) = system_notice_for_display(&message.content) {
+            // A provider failure reads as the provider's own message, without
+            // the harness prefix or the stream diagnostics (#2584).
+            if let Some(content) = rustcode::controller::provider_error_display(&message.content) {
+                push_notice_rows(&content, true, width, show_picker, &mut lines);
+                lines.push(Line::from(""));
+            } else if let Some(content) = system_notice_for_display(&message.content) {
                 render_status_panel(content, width, show_picker, &mut lines);
                 lines.push(Line::from(""));
             }

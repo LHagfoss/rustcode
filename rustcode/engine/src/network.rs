@@ -115,6 +115,9 @@ pub use turn_engine::{SegmentCheckpoint, TurnContext, run_agent_turn};
 #[path = "network/lifecycle.rs"]
 pub(crate) mod lifecycle;
 
+#[path = "network/provider_error.rs"]
+pub(crate) mod provider_error;
+
 #[path = "network/history.rs"]
 pub(crate) mod history;
 
