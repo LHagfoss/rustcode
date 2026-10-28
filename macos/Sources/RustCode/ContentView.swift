@@ -2543,7 +2543,8 @@ struct AddPanel: View {
             ("New Chat in Folder…", "folder.badge.plus", { Task { await model.chooseChatProject() } }),
             ("Choose Default Project…", "folder", { model.chooseWorkspace() }),
             ("Ask for a Chart, Table or Tree…", "chart.bar.xaxis", { model.showsVisualizationGuide = true }),
-        ]
+        ] + (model.canSendDraftElsewhere
+            ? [("Send Message to Another Chat…", "paperplane", { model.chooseChatForDraft() })] : [])
     }
 
     var body: some View {

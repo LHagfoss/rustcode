@@ -96,6 +96,13 @@ chat's title, project or model, or something said in it, move with ↑↓ and
 press ⏎ to open the highlighted chat, or Esc to close. It searches in the
 sidebar's All or Project scope, which it can also switch.
 
+To hand a message to another chat without leaving this one, type it, then
+choose **+ > Send Message to Another Chat…** and pick the chat. It runs there as
+that chat's own turn, in its folder, after any turn it is running; this chat
+stays open. Its answer arrives as for any chat working in the background: a
+toast that opens it and a dot in the sidebar. It is a one-way handoff, so the
+answer stays in that chat.
+
 Long chats can be read from the keyboard: Page Up and Page Down (fn-↑ and
 fn-↓ on a laptop) scroll the chat by a screen, Home goes to its first message
 and End to the latest, following new output again like the Latest button. The

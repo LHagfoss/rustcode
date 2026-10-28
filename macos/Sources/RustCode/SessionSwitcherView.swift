@@ -75,6 +75,7 @@ private struct SessionSwitcherPanel: View {
         let results = results
         let selection = SessionSwitcher.keep(selectedID, in: results)
         VStack(spacing: 0) {
+            if model.switcherSendsDraft { sending }
             field(results, selection: selection)
             Divider().opacity(0.5)
             list(results, selection: selection)
@@ -118,7 +119,7 @@ private struct SessionSwitcherPanel: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField("Switch to chat…", text: $query)
+            TextField(model.switcherSendsDraft ? "Send message to chat…" : "Switch to chat…", text: $query)
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .focused($focused)
@@ -199,10 +200,25 @@ private struct SessionSwitcherPanel: View {
             .frame(height: 64)
     }
 
+    /// The message the picked chat gets, while the switcher picks for it.
+    private var sending: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "paperplane").foregroundStyle(Color.brand)
+            Text(model.draft.trimmingCharacters(in: .whitespacesAndNewlines))
+                .lineLimit(2)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .font(.callout)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .accessibilityLabel("Sending: \(model.draft)")
+    }
+
     private var footer: some View {
         HStack(spacing: 14) {
             hint("↑↓", "move")
-            hint("⏎", "open")
+            hint("⏎", model.switcherSendsDraft ? "send" : "open")
             hint("⇥", "all / project")
             hint("esc", "close")
             Spacer()
