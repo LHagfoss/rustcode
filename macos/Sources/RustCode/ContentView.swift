@@ -2098,12 +2098,57 @@ enum ComposerPredictions {
     }
 }
 
+/// Keeps the composer's caret in view. The field editor scrolls only its own
+/// field, which now grows to its full text inside the composer's scroll
+/// view, so typing past the tenth line or moving the caret off screen
+/// scrolled nothing (#2526). Sits behind the field, inside that scroll view.
+private struct ComposerCaretFollower: NSViewRepresentable {
+    func makeNSView(context: Context) -> FollowerView { FollowerView() }
+    func updateNSView(_ view: FollowerView, context: Context) {}
+
+    final class FollowerView: NSView {
+        private var observers: [Any] = []
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            guard window != nil else { return }
+            for name in [NSTextView.didChangeSelectionNotification, NSText.didChangeNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    guard let editor = note.object as? NSTextView else { return }
+                    // After SwiftUI has grown the field to the new text.
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.follow(editor) } }
+                })
+            }
+        }
+
+        private func follow(_ editor: NSTextView) {
+            guard let scroll = enclosingScrollView, let document = scroll.documentView,
+                  editor.window === window, editor.isDescendant(of: document),
+                  let layout = editor.layoutManager, let container = editor.textContainer else { return }
+            let caret = NSRange(location: editor.selectedRange().upperBound, length: 0)
+            let glyphs = layout.glyphRange(forCharacterRange: caret, actualCharacterRange: nil)
+            var rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+            if rect.height == 0 { rect.size.height = layout.defaultLineHeight(for: editor.font ?? .systemFont(ofSize: NSFont.systemFontSize)) }
+            rect = rect.offsetBy(dx: editor.textContainerOrigin.x, dy: editor.textContainerOrigin.y)
+            document.scrollToVisible(editor.convert(rect.insetBy(dx: 0, dy: -2), to: document))
+        }
+
+        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    }
+}
+
 private struct Composer: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var composer: ComposerDraft
     @FocusState private var focused: Bool
     @State private var isDropTarget = false
     @State private var pasteMonitor: Any?
+    /// The message field's height at its full text, for its scroll view.
+    @State private var fieldHeight: CGFloat = 0
 
     private var canSend: Bool {
         !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2277,12 +2322,29 @@ private struct Composer: View {
         return model.busy ? "Queue a message…" : "Message RustCode…"
     }
 
+    /// Ten lines of body text: the composer grows to this, then scrolls.
+    private static let maxFieldHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize)) * 10
+
     /// The text, with the rest of a half-typed command shown in gray after it.
+    /// The field grows with its text inside a scroll view no taller than ten
+    /// lines: a capped vertical field scrolled only to follow the caret, so
+    /// the wheel could not reach the rest of a long draft (#2526). The scroll
+    /// view lies outside the chat's frame, so the chat never takes its wheel.
     private var messageField: some View {
+        ScrollView(.vertical) {
+            field
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fieldHeight = $0 }
+                .background(ComposerCaretFollower())
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(fieldHeight > Self.maxFieldHeight ? .automatic : .never)
+        .frame(height: min(max(fieldHeight, 1), Self.maxFieldHeight))
+    }
+
+    private var field: some View {
         TextField(placeholder, text: $composer.text, axis: .vertical)
             .textFieldStyle(.plain)
             .font(.body)
-            .lineLimit(1...10)
             .focused($focused)
             .onChange(of: focused, initial: true) { _, on in ComposerPredictions.apply(composerFocused: on) }
             // Focus can settle before the field editor takes over: typing is

@@ -792,6 +792,9 @@ enum DebugDriver {
             if let menu = NSApp.mainMenu { walk(menu, "") }
             try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/menus",
                                                      atomically: true, encoding: .utf8)
+        case "draft":
+            // `draft <text>`: the composer's text, with `\n` for line breaks.
+            model.draft = String(line.dropFirst(6)).replacingOccurrences(of: "\\n", with: "\n")
         case "cleardraft":
             // What sending does to the composer, without sending anything.
             model.draft = ""
