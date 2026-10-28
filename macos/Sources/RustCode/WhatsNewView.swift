@@ -14,18 +14,25 @@ final class WhatsNew: ObservableObject {
 
     private let defaults: UserDefaults
     private var checked = false
+    /// Whether the app had saved settings before this launch wrote any.
+    private let launchedBefore: Bool
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, domain: String? = Bundle.main.bundleIdentifier) {
         self.defaults = defaults
+        // Read before the launch saves window frames or sweep dates.
+        let saved = domain.flatMap(defaults.persistentDomain(forName:)) ?? [:]
+        launchedBefore = saved.keys.contains { $0 != WhatsNewGate.announcedKey }
     }
 
     /// At launch: show the card if this version was not announced yet. A
-    /// fresh install records its version without one, and a development
-    /// build never shows it.
+    /// fresh install records its version without one (an update from a
+    /// release older than the card still shows it), and a development build
+    /// never shows it.
     func checkOnLaunch(current: AppVersion?) async {
         guard !checked else { return }
         checked = true
-        switch WhatsNewGate.decide(current: current, announced: defaults.string(forKey: WhatsNewGate.announcedKey)) {
+        switch WhatsNewGate.decide(current: current, announced: defaults.string(forKey: WhatsNewGate.announcedKey),
+                                   launchedBefore: launchedBefore) {
         case .nothing:
             return
         case .record(let version):

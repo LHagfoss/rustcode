@@ -28,7 +28,7 @@ final class WhatsNewFlowTests: XCTestCase {
         try cache(notes)
         defaults.set("0.1.0", forKey: WhatsNewGate.announcedKey)
 
-        let launch = WhatsNew(defaults: defaults)
+        let launch = WhatsNew(defaults: defaults, domain: suite)
         await launch.checkOnLaunch(current: AppVersion("0.2.0"))
         XCTAssertEqual(launch.card, notes)
         XCTAssertEqual(defaults.string(forKey: WhatsNewGate.announcedKey), "0.2.0")
@@ -36,29 +36,41 @@ final class WhatsNewFlowTests: XCTestCase {
         XCTAssertNil(launch.card)
         XCTAssertEqual(launch.full, notes)
 
-        let next = WhatsNew(defaults: defaults)
+        let next = WhatsNew(defaults: defaults, domain: suite)
         await next.checkOnLaunch(current: AppVersion("0.2.0"))
         XCTAssertNil(next.card, "shown once per release")
     }
 
     func testAFreshInstallAndADevelopmentBuildShowNothing() async {
-        let fresh = WhatsNew(defaults: defaults)
+        let fresh = WhatsNew(defaults: defaults, domain: suite)
         await fresh.checkOnLaunch(current: AppVersion("0.2.0"))
         XCTAssertNil(fresh.card)
         XCTAssertEqual(defaults.string(forKey: WhatsNewGate.announcedKey), "0.2.0")
 
-        let development = WhatsNew(defaults: defaults)
+        let development = WhatsNew(defaults: defaults, domain: suite)
         await development.checkOnLaunch(current: nil)
         XCTAssertNil(development.card)
         await development.reopen(current: nil)
         XCTAssertNil(development.full?.version, "a development build reopens to its fallback")
     }
 
+    func testAnUpdateFromAReleaseOlderThanTheCardShowsIt() async throws {
+        // 0.103.0 saved settings but never recorded a version; 0.104.0 took
+        // that for a fresh install and showed nothing.
+        let notes = ReleaseNotes(tag: "v0.104.0", body: "")
+        try cache(notes)
+        defaults.set(Date(), forKey: "sessionRetentionSweep")
+        let launch = WhatsNew(defaults: defaults, domain: suite)
+        await launch.checkOnLaunch(current: AppVersion("0.104.0"))
+        XCTAssertEqual(launch.card, notes)
+        XCTAssertEqual(defaults.string(forKey: WhatsNewGate.announcedKey), "0.104.0")
+    }
+
     func testDismissingAndReopeningUseTheSameNotes() async throws {
         let notes = ReleaseNotes(tag: "v0.3.0", body: "")
         try cache(notes)
         defaults.set("0.2.0", forKey: WhatsNewGate.announcedKey)
-        let whatsNew = WhatsNew(defaults: defaults)
+        let whatsNew = WhatsNew(defaults: defaults, domain: suite)
         await whatsNew.checkOnLaunch(current: AppVersion("0.3.0"))
         whatsNew.dismissCard()
         XCTAssertNil(whatsNew.card)
