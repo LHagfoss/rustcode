@@ -9,6 +9,7 @@ import SwiftUI
 struct AgentPill: View {
     @ObservedObject var model: DesktopModel
     @State private var showsList = false
+    @Environment(\.chatLayout) private var layout
 
     var body: some View {
         if let label = SubagentInfo.workingLabel(model.subagents) {
@@ -16,7 +17,9 @@ struct AgentPill: View {
                 HStack(spacing: 6) {
                     Circle().fill(Color.brand).frame(width: 6, height: 6)
                         .modifier(Pulse())
-                    Text(label).fontWeight(.medium).monospacedDigit().lineLimit(1)
+                    // A narrow chat shows just the count (#2552).
+                    Text(layout.compactComposer ? "\(model.subagents.filter(\.isActive).count)" : label)
+                        .fontWeight(.medium).monospacedDigit().lineLimit(1)
                     Image(systemName: "chevron.up")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)

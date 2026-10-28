@@ -669,6 +669,8 @@ private struct FadeInRenderer: TextRenderer {
 /// The find bar's text, so every message can mark where it matches.
 extension EnvironmentValues {
     @Entry var findQuery = ""
+    /// The chat column's layout at the chat's width (#2552).
+    @Entry var chatLayout = ChatColumnLayout(width: 1000)
 }
 
 enum FindHighlight {

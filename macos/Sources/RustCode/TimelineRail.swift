@@ -19,43 +19,37 @@ final class TimelineRailState: ObservableObject {
 /// centred. The turn being read has the widest tick, in the brand colour;
 /// the others narrow and fade with distance from it. Click a tick, or focus it with the
 /// keyboard and press Space, to go to that turn; hover shows its first
-/// words. Hidden when the gutter is too narrow for it.
+/// words. It narrows with the gutter (`ChatColumnLayout`, #2552) and hides
+/// only in a chat too narrow for any.
 struct TimelineRail: View {
     @ObservedObject var state: TimelineRailState
     let jump: (Int) -> Void
-
-    static let width: Double = 28
-    /// From the gutter's left edge, where the rail always sits.
-    static let edgeInset: Double = 10
-    /// The chat's column and the padding either side of it (`ChatView`).
-    static let column: Double = 760
-    static let padding: Double = 28
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
-            let width = geometry.size.width
-            if TimelineLayout.shows(width: width, column: Self.column, padding: Self.padding, turns: state.turnCount) {
-                let gutter = TimelineLayout.gutter(width: width, column: Self.column, padding: Self.padding)
-                rail(height: geometry.size.height)
-                    .offset(x: min(Self.edgeInset, (gutter - Self.width) / 2))
+            let layout = ChatColumnLayout(width: geometry.size.width)
+            if layout.showsRail(turns: state.turnCount), let placement = layout.rail {
+                rail(placement, height: geometry.size.height)
+                    .offset(x: placement.x)
                     .transition(.opacity)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: state.turnCount >= 2)
     }
 
-    private func rail(height: Double) -> some View {
+    private func rail(_ placement: ChatColumnLayout.Rail, height: Double) -> some View {
         ZStack(alignment: .top) {
             ForEach(state.layout.markers) { marker in
-                TimelineTick(marker: marker, reduceMotion: reduceMotion) { jump(marker.id) }
+                TimelineTick(marker: marker, width: placement.width, longest: placement.tick,
+                             reduceMotion: reduceMotion) { jump(marker.id) }
                     // Centred on its place, below the title bar's inset.
                     .offset(y: state.top + marker.y - TimelineTick.hit / 2)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: state.layout.current)
-        .frame(width: Self.width, height: height, alignment: .top)
+        .frame(width: placement.width, height: height, alignment: .top)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Session timeline")
     }
@@ -63,25 +57,26 @@ struct TimelineRail: View {
 
 private struct TimelineTick: View {
     let marker: TimelineMarker
+    /// The rail's width, which takes the clicks, and its longest tick.
+    let width: Double
+    let longest: Double
     let reduceMotion: Bool
     let action: () -> Void
 
     /// The height of the strip the tick takes clicks in; ticks are
     /// `TimelineLayout.step` apart, so neighbours do not overlap.
     static let hit: Double = TimelineLayout.step
-    /// The current turn's tick.
-    static let longest: Double = 22
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             Capsule()
                 .fill(marker.isCurrent ? Color.brand : Color.primary)
-                .frame(width: Self.longest * (isHovered ? max(marker.scale, 0.8) : marker.scale), height: 2)
+                .frame(width: longest * (isHovered ? max(marker.scale, 0.8) : marker.scale), height: 2)
                 .opacity(marker.isCurrent ? 1 : isHovered ? 0.8 : marker.opacity * 0.55)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: marker.scale)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
-                .frame(width: TimelineRail.width, height: Self.hit)
+                .frame(width: width, height: Self.hit)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)

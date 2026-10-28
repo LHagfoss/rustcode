@@ -66,14 +66,6 @@ final class TimelineMarkersTests: XCTestCase {
         XCTAssertGreaterThan(scales.last ?? 0, 0)
     }
 
-    func testRailShowsOnlyWithRoomAndTurns() {
-        // A 760-point column centred in 848 leaves 44 points.
-        XCTAssertTrue(TimelineLayout.shows(width: 848, column: 760, padding: 28, turns: 2))
-        XCTAssertFalse(TimelineLayout.shows(width: 840, column: 760, padding: 28, turns: 2))
-        XCTAssertFalse(TimelineLayout.shows(width: 1400, column: 760, padding: 28, turns: 1))
-        XCTAssertEqual(TimelineLayout.gutter(width: 700, column: 760, padding: 28), 28)
-    }
-
     func testLayoutDiffersOnlyWhenTheRailWouldMove() {
         let tops: [Double] = [100, 400]
         let layout = TimelineLayout(turns: turns(2), tops: tops, offset: 0, visible: 800, follows: false)

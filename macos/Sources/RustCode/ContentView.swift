@@ -541,9 +541,7 @@ final class GutterSelection {
         // enough to show it, or the scroller at the right: dragging those
         // moves through the chat.
         let x = event.locationInWindow.x
-        let railShown = TimelineLayout.shows(width: chat.width, column: TimelineRail.column,
-                                             padding: TimelineRail.padding, turns: 2)
-        let left = chat.minX + (railShown ? TimelineRail.edgeInset + TimelineRail.width + 6 : 0)
+        let left = chat.minX + (ChatColumnLayout(width: chat.width).rail.map { $0.x + $0.width + 3 } ?? 0)
         guard x > left, x < chat.maxX - 24 else { return }
         start = (window, event.locationInWindow, chat)
     }
@@ -582,8 +580,7 @@ final class GutterSelection {
     /// `ChatView` lays it out: centred, at most its maximum width, with its
     /// padding either side.
     static func column(in chat: CGRect) -> ClosedRange<CGFloat> {
-        let padding: CGFloat = 28
-        let width = min(max(chat.width - 2 * padding, 0), ChatView.columnMaxWidth)
+        let width = CGFloat(ChatColumnLayout(width: chat.width).column)
         return (chat.midX - width / 2)...(chat.midX + width / 2)
     }
 }
@@ -927,7 +924,7 @@ private struct ChatView: View {
     /// windows used to cap the conversation at 760pt and leave the rest empty
     /// (#2410); a larger cap keeps line length comfortable while using more of
     /// the window. Narrow windows are constrained by the width they have.
-    static let columnMaxWidth: CGFloat = 980
+    static let columnMaxWidth = CGFloat(ChatColumnLayout.maxColumn)
 
     @ObservedObject var model: DesktopModel
     /// The transcript publishes on its own, so streaming redraws the chat
@@ -936,6 +933,8 @@ private struct ChatView: View {
     /// Publishes once the matches for a query arrive, not per keystroke.
     @ObservedObject var find: ChatFind
     @State private var composerHeight: CGFloat = 60
+    /// The chat's width, which picks its `ChatColumnLayout`.
+    @State private var chatWidth: CGFloat = 1000
     /// The chat keeps the newest output in view. Scrolling up hands control to
     /// the reader and shows the Latest button; scrolling back down follows again.
     @StateObject private var following = FollowState()
@@ -1084,7 +1083,7 @@ private struct ChatView: View {
                 .coordinateSpace(.named(ChatScrollState.contentSpace))
                 #endif
                 .frame(maxWidth: Self.columnMaxWidth)
-                .padding(.horizontal, 28)
+                .padding(.horizontal, layout.padding)
                 .padding(.top, 20)
                 .frame(maxWidth: .infinity)
             }
@@ -1107,7 +1106,7 @@ private struct ChatView: View {
             .overlay(alignment: .top) {
                 StickyTurnBar(state: scroll.stickyTurn) { foldTurn($0, proxy) }
                     .frame(maxWidth: Self.columnMaxWidth)
-                    .padding(.horizontal, 28)
+                    .padding(.horizontal, layout.padding)
             }
             .onChange(of: openTurns, initial: true) { _, turns in scroll.setOpenTurns(turns) }
             // Over the chat rather than a pinned footer inside it: a pinned
@@ -1121,7 +1120,7 @@ private struct ChatView: View {
                             LatestButton { jumpToLatest(proxy) }
                         }
                         .frame(maxWidth: Self.columnMaxWidth)
-                        .padding(.horizontal, 28)
+                        .padding(.horizontal, layout.padding)
                         .padding(.bottom, 12)
                         .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottomTrailing)))
                     }
@@ -1258,7 +1257,7 @@ private struct ChatView: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                 ChatScrollInput.shared.composerFrame = $0
             }
-            .padding(.horizontal, 28)
+            .padding(.horizontal, layout.padding)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity)
         }
@@ -1276,7 +1275,14 @@ private struct ChatView: View {
         .overlay { composerPanel }
         .overlay { CommandSuggestions(model: model, composer: model.composer, composerHeight: composerHeight) }
         .animation(.snappy(duration: 0.18), value: model.composerPanel)
+        // The column, its padding and the composer adapt to the chat's
+        // width at set breakpoints (#2552).
+        .environment(\.chatLayout, layout)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chatWidth = $0 }
     }
+
+    /// How the column fits the chat's width now.
+    private var layout: ChatColumnLayout { ChatColumnLayout(width: chatWidth) }
 
     /// The + or model panel, drawn over the whole chat so nothing clips it, with
     /// its bottom just above the composer. A click outside or Esc closes it.
@@ -1301,7 +1307,7 @@ private struct ChatView: View {
                     if panel == .add { Spacer(minLength: 0) }
                 }
                 .frame(maxWidth: Self.columnMaxWidth)
-                .padding(.horizontal, 28)
+                .padding(.horizontal, layout.padding)
                 .padding(.bottom, composerHeight + 16 + 8)
                 .frame(maxWidth: .infinity)
             }
@@ -1524,6 +1530,7 @@ private struct CommandSuggestions: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var composer: ComposerDraft
     let composerHeight: CGFloat
+    @Environment(\.chatLayout) private var layout
 
     var body: some View {
         let suggestions = model.commandSuggestions
@@ -1553,7 +1560,7 @@ private struct CommandSuggestions: View {
                 .clipShape(.rect(cornerRadius: 20))
                 .glassSurface(in: .rect(cornerRadius: 20))
                 .frame(maxWidth: 760)
-                .padding(.horizontal, 28)
+                .padding(.horizontal, layout.padding)
                 .padding(.bottom, composerHeight + 16 + 8)
                 .frame(maxWidth: .infinity)
             }
@@ -2185,6 +2192,8 @@ private struct ComposerCaretFollower: NSViewRepresentable {
 private struct Composer: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var composer: ComposerDraft
+    /// A narrow chat drops the labels the row can do without (#2552).
+    @Environment(\.chatLayout) private var layout
     @FocusState private var focused: Bool
     @State private var isDropTarget = false
     @State private var pasteMonitor: Any?
@@ -2432,7 +2441,7 @@ private struct Composer: View {
         if !model.models.choices.isEmpty {
             Button { toggle(.model) } label: {
                 HStack(spacing: 5) {
-                    Text(modelLabel).lineLimit(1)
+                    Text(layout.compactComposer ? Self.shortened(modelLabel) : modelLabel).lineLimit(1)
                     Image(systemName: "chevron.up")
                         .font(.caption2.weight(.semibold))
                         .rotationEffect(.degrees(model.composerPanel == .model ? 180 : 0))
@@ -2445,7 +2454,7 @@ private struct Composer: View {
                 .contentShape(.capsule)
             }
             .buttonStyle(.plain)
-            .help("Model")
+            .help("Model: \(modelLabel)")
         }
     }
 
@@ -2457,7 +2466,9 @@ private struct Composer: View {
             Button { toggle(.effort) } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "brain").font(.caption.weight(.semibold))
-                    Text(isOn ? current?.name ?? "On" : "Off").lineLimit(1)
+                    if !layout.compactComposer {
+                        Text(isOn ? current?.name ?? "On" : "Off").lineLimit(1)
+                    }
                 }
                 .font(.callout)
                 .foregroundStyle(isOn ? Color.brand : .secondary)
@@ -2467,8 +2478,13 @@ private struct Composer: View {
                 .contentShape(.capsule)
             }
             .buttonStyle(.plain)
-            .help("Reasoning effort")
+            .help("Reasoning effort: \(isOn ? current?.name ?? "On" : "Off")")
         }
+    }
+
+    /// A model name cut to fit a narrow composer: `gemini-3.6-fl…`.
+    static func shortened(_ name: String, to limit: Int = 14) -> String {
+        name.count <= limit ? name : String(name.prefix(limit - 1)) + "…"
     }
 
     /// `provider/model` reads as just the model in the composer.
