@@ -4,6 +4,7 @@ mod queue;
 mod recovery;
 mod request;
 pub(crate) mod tools;
+mod workspace_note;
 
 pub use context::{GroundedArtifactEvidence, SegmentCheckpoint, TurnContext};
 pub use finish::run_agent_turn;

@@ -621,14 +621,20 @@ pub(crate) async fn confirm_and_execute_for_call_with_assessment(
     };
     let (agent_mode, auto_confirm, task_working_directory, execution_workspace_root) = {
         let s = state.lock().await;
-        let execution_workspace_root = workspace_root
+        let session_root = s.effective_workspace_root();
+        // A root other than the session's (a subagent's own workspace or the
+        // `cwd` it was spawned with) is also where its relative paths and
+        // commands start; the session's task directory belongs to the parent
+        // (#2560).
+        let own_root = workspace_root
             .clone()
-            .or_else(|| s.effective_workspace_root());
+            .filter(|root| Some(root) != session_root.as_ref());
+        let execution_workspace_root = workspace_root.clone().or(session_root);
         (
             s.agent_mode,
             s.auto_confirm,
-            s.task_working_directory
-                .clone()
+            own_root
+                .or_else(|| s.task_working_directory.clone())
                 .or_else(|| execution_workspace_root.clone()),
             execution_workspace_root,
         )

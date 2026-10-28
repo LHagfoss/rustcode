@@ -704,6 +704,7 @@ impl SubagentController {
             verification_command,
             workspace_root,
             review_manifest: None,
+            working_directory: None,
             depth,
             root_id,
             context_inheritance: Default::default(),

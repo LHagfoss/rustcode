@@ -392,6 +392,10 @@ pub struct SubAgent {
     pub verification_command: Option<String>,
     pub workspace_root: Option<std::path::PathBuf>,
     pub review_manifest: Option<std::path::PathBuf>,
+    /// Directory a shared-mode child works in when the parent passed `cwd`
+    /// to `spawn_agent`; `None` means the session workspace (#2560).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<std::path::PathBuf>,
     #[serde(default)]
     pub depth: u32,
     #[serde(default)]
