@@ -305,6 +305,51 @@ enum DebugDriver {
         case "viewimage":
             // `viewimage <path>`: open a file in the image viewer.
             model.viewedImage = .file(URL(fileURLWithPath: parts[1]))
+        case "pace":
+            // `pace <ms> [stream]`: for `ms`, how the main thread kept up while
+            // real input (as an external tool posts) scrolls the chat: the
+            // worst gap between 8 ms timer ticks, the gaps over 25 ms, and how
+            // far the chat moved (#2442). With `stream`, a reply streams meanwhile.
+            let duration = Double(parts.count > 1 ? parts[1] : "3000") ?? 3000
+            let streaming = Task { @MainActor in
+                guard parts.contains("stream") else { return }
+                for index in 0..<Int(duration / 30) {
+                    guard !Task.isCancelled else { return }
+                    model.transcript.apply(.agentText(index % 12 == 0 ? "\n\nNext paragraph with `code` and **bold** " : "word "))
+                    try? await Task.sleep(for: .milliseconds(30))
+                }
+            }
+            let scroll = ChatScrollState.current?.scrollView
+            let startY = scroll?.contentView.bounds.minY ?? 0
+            var gaps: [Double] = []
+            var last = Date()
+            // The top row's on-screen moves between ticks: during a scroll in
+            // one direction they share a sign, so the other sign is the chat
+            // jumping back, and a big one is a jump.
+            var moves: [Double] = []
+            var lastTop: (row: Int, minY: Double)?
+            let ticker = Timer.scheduledTimer(withTimeInterval: 0.008, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    gaps.append(Date().timeIntervalSince(last) * 1000)
+                    last = Date()
+                    let top = ChatScrollState.current?.topRow()
+                    if let top, let lastTop, top.row == lastTop.row, top.minY != lastTop.minY {
+                        moves.append(top.minY - lastTop.minY)
+                    }
+                    lastTop = top
+                }
+            }
+            RunLoop.main.add(ticker, forMode: .common)
+            try? await Task.sleep(for: .milliseconds(Int(duration)))
+            ticker.invalidate()
+            streaming.cancel()
+            let moved = Int(abs((scroll?.contentView.bounds.minY ?? 0) - startY))
+            let long = gaps.filter { $0 > 25 }
+            let sign: Double = moves.reduce(0, +) >= 0 ? 1 : -1
+            let back = moves.filter { $0 * sign < -1 }
+            let jumps = moves.filter { abs($0) > 60 }
+            func list(_ values: [Double]) -> String { values.prefix(12).map { String(Int($0)) }.joined(separator: ",") }
+            report("pace \(Int(duration)) ms: worst \(Int(gaps.max() ?? 0)) ms, over 25 ms \(long.count) (\(list(long))), moved \(moved), row moves \(moves.count), back \(back.count) (\(list(back))), jumps \(jumps.count) (\(list(jumps)))")
         case "wheelstream":
             // `wheelstream <steps> <points> [nostream|nowheel]`: a reply
             // streams while the reader scrolls up `steps` times by `points`, a

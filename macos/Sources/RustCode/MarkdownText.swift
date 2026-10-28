@@ -558,6 +558,11 @@ struct QuietPressStyle: ButtonStyle {
 /// The end of a reply still being written. Text that just arrived fades in
 /// instead of landing a chunk at a time, and only this last run of prose
 /// redraws while it does. With Reduce Motion it shows at once.
+///
+/// Its links get no `linkCursor` until the reply is done: the cursor measures
+/// links by laying the text out a second time, and for a run that grows with
+/// every chunk that doubled the work and dropped streaming to about 15 fps in
+/// replies with links (#2442). The finished reply's text has the cursor.
 struct StreamingProse: View {
     let text: AttributedString
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -579,7 +584,7 @@ struct StreamingProse: View {
         VStack(alignment: .leading, spacing: 0) {
             if head > 0 {
                 let settledText = AttributedString(text[text.startIndex..<index(head, count: count)])
-                Text(settledText).linkCursor(settledText, lineSpacing: 2)
+                Text(settledText)
             }
             Group {
                 if #available(macOS 15, *), reveals, !reduceMotion {
@@ -592,11 +597,9 @@ struct StreamingProse: View {
                             // text every frame. The few lines still arriving
                             // select once they settle.
                             .textSelection(.disabled)
-                            .linkCursor(AttributedString(text[index(head > 0 ? head + 1 : 0, count: count)...]), lineSpacing: 2)
                     }
                 } else {
-                    let tailText = AttributedString(text[index(head > 0 ? head + 1 : 0, count: count)...])
-                    Text(tailText).linkCursor(tailText, lineSpacing: 2)
+                    Text(AttributedString(text[index(head > 0 ? head + 1 : 0, count: count)...]))
                 }
             }
         }
