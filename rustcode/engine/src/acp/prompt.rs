@@ -396,14 +396,26 @@ pub(crate) async fn run_prompt(
                 .await;
                 // A command such as `/compact` can change the context, so the
                 // usage follows its reply.
-                let usage = super::usage::usage_update(&*state.lock().await);
+                // A command such as `/fast` or `/effort` can change a session
+                // option, so the client's controls are refreshed as well.
+                let (usage, options) = {
+                    let state = state.lock().await;
+                    (
+                        super::usage::usage_update(&state),
+                        SessionUpdate::ConfigOptionUpdate(
+                            agent_client_protocol::schema::v1::ConfigOptionUpdate::new(
+                                super::config::build_session_config_options(&state),
+                            ),
+                        ),
+                    )
+                };
                 let reply = match (agent_text(reply), context_meta) {
                     (SessionUpdate::AgentMessageChunk(chunk), Some(meta)) => {
                         SessionUpdate::AgentMessageChunk(chunk.meta(meta))
                     }
                     (reply, _) => reply,
                 };
-                send_updates(&connection, &session_id, vec![reply, usage])?;
+                send_updates(&connection, &session_id, vec![reply, usage, options])?;
                 return Ok(if turn.cancel_token().is_cancelled() {
                     StopReason::Cancelled
                 } else {

@@ -270,6 +270,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Toggle the prompt improver (on|off)",
     },
     CommandInfo {
+        name: "/fast",
+        desc: "Toggle fast mode for ChatGPT-plan models (on|off)",
+    },
+    CommandInfo {
         name: "/theme",
         desc: "Show or set UI color theme (default|light|nord|dracula|tokyo-night)",
     },
@@ -376,6 +380,13 @@ const STATIC_ARGUMENTS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("on", "Enable the prompt improver"),
             ("off", "Disable the prompt improver"),
+        ],
+    ),
+    (
+        "/fast",
+        &[
+            ("on", "Faster responses; uses plan usage faster"),
+            ("off", "Standard speed"),
         ],
     ),
     (

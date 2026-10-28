@@ -384,6 +384,10 @@ pub struct AppState {
     pub turn_progress_at: Option<std::time::Instant>,
 
     pub auto_confirm: bool,
+    /// Fast mode: ChatGPT-plan requests of this session ask for the
+    /// `priority` service tier, as Codex's Fast mode does. Faster, and it
+    /// spends plan usage faster. Saved with the session's model (#2582).
+    pub fast_mode: bool,
 
     pub subagent_supervisor: crate::app::SubagentSupervisor,
     pub subagents: Vec<SubAgent>,
@@ -1450,6 +1454,7 @@ impl AppState {
                 rustcode_session::SessionModel {
                     profile: profile.name,
                     reasoning_effort: profile.reasoning_effort,
+                    fast: self.fast_mode,
                 },
             );
         }
@@ -1475,12 +1480,39 @@ impl AppState {
             return false;
         };
         profile.reasoning_effort = saved.reasoning_effort.clone();
+        self.fast_mode = saved.fast;
         self.model_name = profile.model.clone();
         self.api_base_url = profile.url.clone();
         let name = profile.name.clone();
         self.config.mark_session_effort(&name);
         self.config.use_profile_for_session(name);
         true
+    }
+
+    /// Whether the active profile reaches its model over a ChatGPT plan, the
+    /// only transport fast mode applies to.
+    pub fn active_profile_uses_chatgpt(&self) -> bool {
+        crate::network::is_chatgpt_credential(self.active_model_profile().as_ref())
+    }
+
+    /// What `/fast` reports after changing or showing the setting.
+    pub fn fast_mode_notice(&self) -> String {
+        let state = if self.fast_mode {
+            "On: faster responses, uses your plan's usage faster."
+        } else {
+            "Off: standard speed."
+        };
+        if self.active_profile_uses_chatgpt() {
+            state.to_owned()
+        } else {
+            format!("{state} It applies only to ChatGPT-plan models; the current model is not one.")
+        }
+    }
+
+    /// Turn fast mode on or off for this session and remember it.
+    pub fn set_fast_mode(&mut self, enabled: bool) {
+        self.fast_mode = enabled;
+        self.record_session_model();
     }
 
     /// YOLO is a session-only override; keep the user's saved restricted mode intact.
@@ -1676,6 +1708,7 @@ impl AppState {
             stream_tracker: None,
             turn_progress_at: None,
             auto_confirm: false,
+            fast_mode: false,
             subagent_supervisor,
             active_session_id,
             subagents: Vec::new(),

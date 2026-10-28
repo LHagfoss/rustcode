@@ -321,7 +321,7 @@ pub(crate) fn command_catalog() -> Vec<super::protocol::RemoteCommandInfo> {
                 "/help" | "/status" | "/stats" | "/usage" | "/info" | "/about" | "/perf"
                 | "/context" | "/tasks" | "/ps" | "/mcp" | "/effort" | "/change_title"
                 | "/cancel" | "/pwd" | "/skills" | "/tools" | "/archive" | "/memory"
-                | "/prompts" | "/stop" | "/thinking" | "/yolo" | "/verbosity" | "/pi"
+                | "/prompts" | "/stop" | "/thinking" | "/yolo" | "/verbosity" | "/pi" | "/fast"
                 | "/delegate" | "/session" | "/changelog" | "/sandbox" | "/agents"
                 | "/workspace" | "/diff" | "/quota" => "execute",
                 _ => "terminal",
@@ -339,6 +339,7 @@ pub(crate) fn command_catalog() -> Vec<super::protocol::RemoteCommandInfo> {
                     | "/context"
                     | "/sandbox"
                     | "/workspace"
+                    | "/fast"
             );
             super::protocol::RemoteCommandInfo {
                 name: command.name.into(),
@@ -561,6 +562,19 @@ pub(crate) fn execute_command(
                 "Session setting",
                 format!("{}: {}", command, if enabled { "on" } else { "off" }),
             )
+        }
+        "/fast" => {
+            // Alone it toggles, as in the terminal. A change applies from the
+            // next request, so a running turn is no reason to refuse it.
+            let enabled = if arguments.is_empty() {
+                !state.fast_mode
+            } else if arguments == "status" {
+                state.fast_mode
+            } else {
+                switch_value(arguments, state.fast_mode)?
+            };
+            state.set_fast_mode(enabled);
+            ("Fast mode", state.fast_mode_notice())
         }
         "/verbosity" => {
             use crate::app::state::Verbosity;
@@ -1438,6 +1452,59 @@ mod tests {
         fresh.config.yolo = false;
         fresh.restore_auto_confirm();
         assert!(!fresh.auto_confirm);
+    }
+
+    fn chatgpt_profile() -> crate::config::ModelProfile {
+        crate::config::ModelProfile {
+            name: "chatgpt/gpt-6-luna".into(),
+            url: "https://api.openai.com/v1/responses".into(),
+            model: "gpt-6-luna".into(),
+            api_protocol: Some(crate::config::ApiProtocol::Responses),
+            credential: Some(crate::provider_auth::CredentialRef {
+                provider: "openai".into(),
+                account: "test-account".into(),
+                method: crate::provider_auth::AuthMethod::ChatGpt,
+            }),
+            ..Default::default()
+        }
+    }
+
+    // #2582: `/fast` toggles, is saved with the session's model, and comes
+    // back when another owner opens the session.
+    #[test]
+    fn fast_command_toggles_and_is_restored_with_the_session_model() {
+        let session_id = rustcode_session::next_session_id();
+        let mut state = AppState::new();
+        state.active_session_id = session_id.clone();
+        state.config.models = vec![chatgpt_profile()];
+        state.api_base_url = "https://api.openai.com/v1/responses".into();
+        state.model_name = "gpt-6-luna".into();
+        state
+            .config
+            .use_profile_for_session("chatgpt/gpt-6-luna".into());
+
+        let result = execute_command(&mut state, "/fast").unwrap();
+        assert!(state.fast_mode);
+        assert!(format!("{result:?}").contains("faster"), "{result:?}");
+
+        let mut reopened = AppState::new();
+        reopened.active_session_id = session_id.clone();
+        reopened.config.models = vec![chatgpt_profile()];
+        reopened.restore_session_model();
+        assert!(reopened.fast_mode);
+
+        execute_command(&mut reopened, "/fast off").unwrap();
+        assert!(!reopened.fast_mode);
+        assert!(execute_command(&mut reopened, "/fast sideways").is_err());
+
+        // Off a ChatGPT plan the command says the setting has no effect.
+        let mut other = AppState::new();
+        other.active_session_id = rustcode_session::next_session_id();
+        let result = execute_command(&mut other, "/fast on").unwrap();
+        assert!(
+            format!("{result:?}").contains("only to ChatGPT"),
+            "{result:?}"
+        );
     }
 
     fn registration() -> SessionRegistration {

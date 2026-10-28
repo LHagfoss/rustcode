@@ -671,6 +671,9 @@ pub struct SessionModel {
     pub profile: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Fast mode (the ChatGPT plan's priority tier) for this session.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
 }
 
 impl SessionMetadata {
@@ -2449,6 +2452,7 @@ mod tests {
         let model = SessionModel {
             profile: "deep".into(),
             reasoning_effort: Some("high".into()),
+            fast: true,
         };
         store
             .save_session_model(id, model.clone())
@@ -2463,6 +2467,7 @@ mod tests {
                     SessionModel {
                         profile: "x".into(),
                         reasoning_effort: None,
+                        fast: false,
                     }
                 )
                 .is_err()
