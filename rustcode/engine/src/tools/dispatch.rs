@@ -21,7 +21,17 @@ pub(super) fn as_error_message(message: &str) -> String {
 /// their payload in `structuredContent` without duplicating it in `content`;
 /// preserve the structured value in that case so RustCode does not hand the
 /// model an empty tool result.
+///
+/// Binary items (`image`/`audio` data, `resource` blobs) are decoded into the
+/// session's `artifacts/` folder and reported by path, size, type and a short
+/// preview instead of handing the model base64 (#2564).
 fn mcp_result_content(value: &Value) -> String {
+    let artifacts = super::get_active_session_id()
+        .and_then(|session| crate::config::get_active_session_artifacts_dir(&session));
+    mcp_result_content_in(value, artifacts.as_deref())
+}
+
+fn mcp_result_content_in(value: &Value, artifacts: Option<&std::path::Path>) -> String {
     let result = value.get("result");
     let text = result
         .and_then(|r| r.get("content"))
@@ -29,7 +39,8 @@ fn mcp_result_content(value: &Value) -> String {
         .map(|content| {
             content
                 .iter()
-                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .enumerate()
+                .filter_map(|(index, item)| mcp_content_item(item, index, artifacts))
                 .collect::<Vec<_>>()
                 .join("\n")
         })
@@ -44,6 +55,161 @@ fn mcp_result_content(value: &Value) -> String {
     }
 
     serde_json::to_string_pretty(value).unwrap_or_default()
+}
+
+/// One MCP content item as model-facing text, or `None` for kinds that
+/// carry nothing for the model.
+fn mcp_content_item(
+    item: &Value,
+    index: usize,
+    artifacts: Option<&std::path::Path>,
+) -> Option<String> {
+    let string =
+        |value: &Value, key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
+    match item.get("type").and_then(Value::as_str) {
+        Some("image" | "audio") => {
+            let data = item.get("data").and_then(Value::as_str)?;
+            Some(save_mcp_binary(
+                data,
+                string(item, "mimeType").as_deref(),
+                None,
+                index,
+                artifacts,
+            ))
+        }
+        Some("resource") => {
+            let resource = item.get("resource")?;
+            if let Some(text) = resource.get("text").and_then(Value::as_str) {
+                return Some(text.to_owned());
+            }
+            let blob = resource.get("blob").and_then(Value::as_str)?;
+            Some(save_mcp_binary(
+                blob,
+                string(resource, "mimeType").as_deref(),
+                string(resource, "uri").as_deref(),
+                index,
+                artifacts,
+            ))
+        }
+        Some("resource_link") => {
+            string(item, "uri").map(|uri| format!("[MCP resource link: {uri}]"))
+        }
+        _ => string(item, "text"),
+    }
+}
+
+/// Decode a base64 MCP payload into `artifacts` and describe it.
+fn save_mcp_binary(
+    base64_data: &str,
+    mime: Option<&str>,
+    uri: Option<&str>,
+    index: usize,
+    artifacts: Option<&std::path::Path>,
+) -> String {
+    use base64::Engine as _;
+    let mime = mime.unwrap_or("application/octet-stream");
+    let compact: String = base64_data
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&compact) else {
+        return format!(
+            "[binary MCP result ({mime}) could not be decoded; {} base64 characters omitted]",
+            compact.len()
+        );
+    };
+    let preview = binary_preview(&bytes);
+    let saved = artifacts.and_then(|directory| {
+        let name = mcp_artifact_name(mime, uri, index);
+        std::fs::create_dir_all(directory).ok()?;
+        let path = directory.join(name);
+        std::fs::write(&path, &bytes).ok()?;
+        Some(path)
+    });
+    match saved {
+        Some(path) => format!(
+            "[binary MCP result saved to {} ({} bytes, {mime}). Read it from that file; do not re-encode it.]\n{preview}",
+            path.display(),
+            bytes.len()
+        ),
+        None => format!(
+            "[binary MCP result ({} bytes, {mime}) not shown: no session artifacts folder to save it in]\n{preview}",
+            bytes.len()
+        ),
+    }
+}
+
+/// A unique artifact file name that keeps the resource's own name when it
+/// has one, else an extension for its type.
+fn mcp_artifact_name(mime: &str, uri: Option<&str>, index: usize) -> String {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let own = uri
+        .and_then(|uri| uri.rsplit(['/', ':']).next())
+        .map(|name| {
+            name.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+                .take(80)
+                .collect::<String>()
+        })
+        .filter(|name| !name.trim_matches('.').is_empty());
+    let name = own.unwrap_or_else(|| {
+        let extension = match mime {
+            "image/png" => "png",
+            "image/jpeg" => "jpg",
+            "image/gif" => "gif",
+            "image/webp" => "webp",
+            "application/pdf" => "pdf",
+            "application/gzip" | "application/x-gzip" => "gz",
+            "application/zip" => "zip",
+            "application/json" => "json",
+            "audio/wav" | "audio/x-wav" => "wav",
+            "audio/mpeg" => "mp3",
+            _ => "bin",
+        };
+        format!("result.{extension}")
+    });
+    format!("mcp-{stamp}-{index}-{name}")
+}
+
+/// A short look inside binary content: decompressed text for gzip, the text
+/// itself when it is text, else the first bytes in hex.
+fn binary_preview(bytes: &[u8]) -> String {
+    const LIMIT: usize = 400;
+    let text_preview = |label: &str, data: &[u8]| -> Option<String> {
+        let text = std::str::from_utf8(data)
+            .or_else(|error| std::str::from_utf8(&data[..error.valid_up_to()]))
+            .ok()?;
+        let printable = text
+            .chars()
+            .all(|c| !c.is_control() || c.is_ascii_whitespace());
+        (printable && !text.trim().is_empty()).then(|| {
+            let shown: String = text.chars().take(LIMIT).collect();
+            format!("{label}:\n{shown}")
+        })
+    };
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        use std::io::Read as _;
+        let mut decompressed = Vec::new();
+        let _ = flate2::read::GzDecoder::new(bytes)
+            .take(LIMIT as u64 * 4)
+            .read_to_end(&mut decompressed);
+        if let Some(preview) = text_preview("Preview (gzip, decompressed)", &decompressed) {
+            return preview;
+        }
+    }
+    if let Some(preview) = text_preview("Preview", &bytes[..bytes.len().min(LIMIT * 4)]) {
+        return preview;
+    }
+    let hex = bytes
+        .iter()
+        .take(32)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("First bytes: {hex}")
 }
 
 /// Execute a tool by name and return its output with metadata.
@@ -300,7 +466,7 @@ pub fn needs_confirmation(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::mcp_result_content;
+    use super::{mcp_result_content, mcp_result_content_in};
 
     #[test]
     fn refused_memory_note_is_a_validation_error() {
@@ -337,5 +503,57 @@ mod tests {
             }
         });
         assert_eq!(mcp_result_content(&result), "already formatted");
+    }
+
+    #[test]
+    fn binary_mcp_results_are_saved_as_artifacts_instead_of_base64() {
+        use base64::Engine as _;
+        use std::io::Write as _;
+        let artifacts = tempfile::tempdir().unwrap();
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(b"2026-10-28 12:00:01 ERROR upload failed\n")
+            .unwrap();
+        let gzip = gzip.finish().unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&gzip);
+        let result = serde_json::json!({"result": {"content": [
+            {"type": "text", "text": "fetched log"},
+            {"type": "resource", "resource": {
+                "uri": "file:///logs/app.log.gz", "mimeType": "application/gzip", "blob": encoded
+            }},
+            {"type": "image", "data": base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G', 0, 1]), "mimeType": "image/png"}
+        ]}});
+
+        let content = mcp_result_content_in(&result, Some(artifacts.path()));
+        assert!(content.starts_with("fetched log\n"), "{content}");
+        assert!(!content.contains(&encoded), "base64 leaked: {content}");
+        assert!(content.contains("ERROR upload failed"), "{content}");
+        assert!(content.contains(&format!("{} bytes, application/gzip", gzip.len())));
+        assert!(content.contains("image/png"));
+        let mut saved = std::fs::read_dir(artifacts.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        saved.sort();
+        assert_eq!(saved.len(), 2);
+        let log = saved
+            .iter()
+            .find(|path| path.to_string_lossy().ends_with("app.log.gz"))
+            .unwrap();
+        assert_eq!(std::fs::read(log).unwrap(), gzip);
+        assert!(content.contains(&log.display().to_string()));
+        assert!(
+            saved
+                .iter()
+                .any(|path| path.to_string_lossy().ends_with(".png"))
+        );
+    }
+
+    #[test]
+    fn text_resources_and_plain_text_are_unchanged() {
+        let result = serde_json::json!({"result": {"content": [
+            {"type": "text", "text": "one"},
+            {"type": "resource", "resource": {"uri": "file:///a.txt", "text": "two"}}
+        ]}});
+        assert_eq!(mcp_result_content_in(&result, None), "one\ntwo");
     }
 }
