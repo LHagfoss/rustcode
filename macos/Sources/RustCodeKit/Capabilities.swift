@@ -96,10 +96,134 @@ public enum CapabilityKind: String, Sendable {
 extension ACPMethod {
     public static let capabilities = "_rustcode/capabilities"
     public static let setCapability = "_rustcode/capabilities/set"
+    public static let addMCPServer = "_rustcode/capabilities/mcp/add"
+    public static let removeMCPServer = "_rustcode/capabilities/mcp/remove"
 }
 
 extension ACPRequests {
     public static func setCapability(_ kind: CapabilityKind, name: String, enabled: Bool) -> JSONValue {
         .object(["kind": .string(kind.rawValue), "name": .string(name), "enabled": .bool(enabled)])
     }
+
+    public static func removeMCPServer(name: String) -> JSONValue {
+        .object(["name": .string(name)])
+    }
+}
+
+/// What the Add Server sheet collects, before the engine validates it the
+/// way `rustcode mcp add` does.
+public struct MCPServerDraft: Equatable, Sendable {
+    public enum Transport: String, CaseIterable, Sendable {
+        case stdio, http
+    }
+
+    public var name = ""
+    public var transport: Transport = .stdio
+    /// The command line for a stdio server, split like a shell would.
+    public var command = ""
+    public var url = ""
+    /// One `KEY=value` per line, stdio only.
+    public var environment = ""
+    /// One `Name: value` per line, http only.
+    public var headers = ""
+
+    public init() {}
+
+    public var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The first problem the user can fix before sending, or nil.
+    public var problem: String? {
+        if trimmedName.isEmpty { return "Enter a name." }
+        if trimmedName.contains(where: \.isWhitespace) { return "A name cannot contain spaces." }
+        switch transport {
+        case .stdio:
+            switch Self.splitCommandLine(command) {
+            case .failure(let error): return error.message
+            case .success(let words) where words.isEmpty: return "Enter the command that starts the server."
+            case .success: return nil
+            }
+        case .http:
+            let url = url.trimmingCharacters(in: .whitespaces)
+            if url.isEmpty { return "Enter the server URL." }
+            if !(url.hasPrefix("http://") || url.hasPrefix("https://")) { return "The URL must start with http:// or https://." }
+            return nil
+        }
+    }
+
+    /// The `_rustcode/capabilities/mcp/add` params, or the problem.
+    public func request() -> Result<JSONValue, MCPServerDraftError> {
+        if let problem { return .failure(MCPServerDraftError(message: problem)) }
+        let target: [String]
+        var extra: [String: JSONValue] = [:]
+        switch transport {
+        case .stdio:
+            guard case .success(let words) = Self.splitCommandLine(command) else {
+                return .failure(MCPServerDraftError(message: "The command has an unclosed quote."))
+            }
+            target = words
+            extra["env"] = .array(Self.lines(environment).map(JSONValue.string))
+        case .http:
+            target = [url.trimmingCharacters(in: .whitespaces)]
+            extra["headers"] = .array(Self.lines(headers).map(JSONValue.string))
+        }
+        var params: [String: JSONValue] = [
+            "name": .string(trimmedName),
+            "transport": .string(transport.rawValue),
+            "target": .array(target.map(JSONValue.string)),
+        ]
+        params.merge(extra) { _, new in new }
+        return .success(.object(params))
+    }
+
+    static func lines(_ text: String) -> [String] {
+        text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Split a command line into words: whitespace separates, single and
+    /// double quotes group, a backslash escapes the next character outside
+    /// single quotes.
+    public static func splitCommandLine(_ line: String) -> Result<[String], MCPServerDraftError> {
+        var words: [String] = []
+        var word = ""
+        var inWord = false
+        var quote: Character?
+        var escaped = false
+        for character in line {
+            if escaped {
+                word.append(character)
+                escaped = false
+                continue
+            }
+            switch (quote, character) {
+            case ("'", "'"), ("\"", "\""):
+                quote = nil
+            case ("'", _):
+                word.append(character)
+            case (_, "\\"):
+                escaped = true
+                inWord = true
+            case (nil, "'"), (nil, "\""):
+                quote = character
+                inWord = true
+            case (nil, _) where character.isWhitespace:
+                if inWord { words.append(word) }
+                word = ""
+                inWord = false
+            default:
+                word.append(character)
+                inWord = true
+            }
+        }
+        if quote != nil || escaped {
+            return .failure(MCPServerDraftError(message: "The command has an unclosed quote."))
+        }
+        if inWord { words.append(word) }
+        return .success(words)
+    }
+}
+
+public struct MCPServerDraftError: Error, Equatable, Sendable {
+    public var message: String
 }
