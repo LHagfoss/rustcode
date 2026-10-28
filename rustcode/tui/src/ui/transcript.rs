@@ -145,6 +145,7 @@ impl TranscriptModel {
                 self.commit_live();
             }
             rustcode::controller::AgentUiEvent::Cancelled { .. }
+            | rustcode::controller::AgentUiEvent::ProviderError { .. }
             | rustcode::controller::AgentUiEvent::ToolStarted { .. }
             | rustcode::controller::AgentUiEvent::ToolOutput { .. }
             | rustcode::controller::AgentUiEvent::ReasoningSource { .. }

@@ -16,6 +16,9 @@ pub(crate) struct AcpEventStream {
     thought_ms: Option<u64>,
     /// The session directory, for edit paths a receipt does not resolve.
     cwd: Option<std::path::PathBuf>,
+    /// The provider's refusal was sent as the turn's stop notice, so the
+    /// `provider_error` stop marker that follows sends nothing (#2584).
+    provider_error_sent: bool,
 }
 
 impl AcpEventStream {
@@ -28,6 +31,7 @@ impl AcpEventStream {
             reasoning_summary: false,
             thought_ms: None,
             cwd: None,
+            provider_error_sent: false,
         }
     }
 
@@ -243,13 +247,34 @@ impl AcpEventStream {
                 updates.extend(self.thought_update(message));
                 updates
             }
+            crate::network::AgentUiEvent::ProviderError { message } => {
+                // The provider's own words stand in for the stop notice;
+                // `continue` retries the request, as for any provider stop.
+                let mut updates = self.flush();
+                self.provider_error_sent = true;
+                updates.push(SessionUpdate::AgentMessageChunk(
+                    ContentChunk::new(ContentBlock::Text(TextContent::new(message))).meta(
+                        rustcode_meta(serde_json::json!({
+                            "kind": "notice",
+                            "resumable": true,
+                        })),
+                    ),
+                ));
+                updates
+            }
             crate::network::AgentUiEvent::TurnFinished { content, .. } => {
                 let mut updates = self.flush();
                 // A harness stop marker is not part of the answer. The prompt's
                 // stop reason already says the user cancelled; any other stop
                 // goes out as a notice the client can toast.
                 if let Some(notice) = crate::network::lifecycle::stop_marker_notice(&content) {
-                    if !crate::network::lifecycle::is_turn_cancelled_marker(&content) {
+                    let reported_provider_error = self.provider_error_sent
+                        && content
+                            .trim()
+                            .starts_with("[harness: turn stopped — provider_error");
+                    if !crate::network::lifecycle::is_turn_cancelled_marker(&content)
+                        && !reported_provider_error
+                    {
                         // A stop `continue` can pick up is flagged, so the
                         // client can offer to continue instead of a toast.
                         let resumable =

@@ -13174,7 +13174,7 @@ fn a_wrapped_notice_keeps_its_later_rows_under_its_text() {
         .filter(|row| !row.is_empty())
         .collect::<Vec<_>>();
     assert!(rows.len() > 1, "{rows:#?}");
-    assert!(rows[0].starts_with("! Error"), "{rows:#?}");
+    assert!(rows[0].starts_with("! the provider closed"), "{rows:#?}");
     for row in &rows {
         assert!(
             unicode_width::UnicodeWidthStr::width(row.as_str()) <= 40,
@@ -13187,6 +13187,32 @@ fn a_wrapped_notice_keeps_its_later_rows_under_its_text() {
             "{rows:#?}"
         );
     }
+}
+
+// #2584: a provider refusal reads as the provider's own message with its
+// status, not as the harness prefix and stream diagnostics. The session here
+// was saved before the engine cleaned the message.
+#[test]
+fn a_provider_refusal_shows_the_providers_message_not_diagnostics() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+    let mut state = RenderState::new();
+    state.history.push(ChatMessage::new(
+        "system",
+        r#"Error from LLM Provider: stream_failure:provider_error status=507 bytes_received=0 events_received=0 partial_event_bytes=0 detail={"error":{"message":"Model does not fit under the memory ceiling.","type":"server_error"}}"#,
+    ));
+    state.history.push(ChatMessage::new(
+        "system",
+        "[harness: turn stopped — provider_error]",
+    ));
+    let rows = super::render_committed_history_block(&state, 0, 120)
+        .into_iter()
+        .map(|line| line.to_string())
+        .filter(|row| !row.trim().is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec!["! 507: Model does not fit under the memory ceiling.".to_owned()]
+    );
 }
 
 #[test]

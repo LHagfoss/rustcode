@@ -200,7 +200,12 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     if let Some(content) = final_transcript {
         // A stop marker is turn bookkeeping: history keeps it, and the
         // terminal announces it in the footer rather than as a chat row.
-        if !had_final_content && let Some(notice) = lifecycle::stop_marker_notice(&content) {
+        // A provider failure already wrote the provider's message to the
+        // chat, so its stop gets no second, vaguer notice (#2584).
+        if !had_final_content
+            && !stopped_by_reported_provider_error(&ctx, &stop_reason)
+            && let Some(notice) = lifecycle::stop_marker_notice(&content)
+        {
             s.set_transient_notice(notice);
         }
         let role = if had_final_content {
@@ -769,6 +774,16 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
     }
 
     FinishGateOutcome::Stop
+}
+
+/// Whether the turn stopped on a provider failure whose message it already
+/// wrote to history.
+pub(crate) fn stopped_by_reported_provider_error(
+    ctx: &TurnContext,
+    stop_reason: &lifecycle::StopReason,
+) -> bool {
+    matches!(stop_reason, lifecycle::StopReason::ProviderError(_))
+        && ctx.response.provider_error_notice.is_some()
 }
 
 #[cfg(test)]

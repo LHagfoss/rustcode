@@ -279,7 +279,10 @@ pub(crate) fn from_agent_ui_event(
                 prompt,
             ))]
         }
-        AgentUiEvent::SubagentUpdated { .. } | AgentUiEvent::RoundCompleted { .. } => {
+        // The terminal shows the provider's message from the history row.
+        AgentUiEvent::SubagentUpdated { .. }
+        | AgentUiEvent::RoundCompleted { .. }
+        | AgentUiEvent::ProviderError { .. } => {
             return Vec::new();
         }
     };

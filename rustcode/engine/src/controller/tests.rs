@@ -1814,7 +1814,15 @@ async fn provider_error_is_reported_and_a_later_submit_can_run() {
             server.is_finished()
         )
     });
-    assert!(matches!(first_error, super::ControllerError::Provider(_)));
+    // The provider's body, its status and the profile; no stream diagnostics.
+    assert!(
+        matches!(
+            &first_error,
+            super::ControllerError::Provider(message)
+                if message == "Error from LLM Provider: controller-mock · 400: nope"
+        ),
+        "{first_error:?}"
+    );
 
     handle
         .send(Command::Submit("second attempt".to_owned()))

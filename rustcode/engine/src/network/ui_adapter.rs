@@ -65,6 +65,13 @@ pub enum AgentUiEvent {
     TurnRecovered {
         message: String,
     },
+    /// The turn stopped because the provider refused the request. `message`
+    /// is the provider's own sentence with its status and profile, sent just
+    /// before `TurnFinished` so a client shows it instead of the generic
+    /// `provider_error` stop notice (#2584).
+    ProviderError {
+        message: String,
+    },
     TurnFinished {
         content: String,
         completed: bool,
@@ -659,6 +666,12 @@ async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
             timing: context.lifecycle.turn_timing.clone(),
         });
     } else {
+        if let Some(stop_reason) = context.lifecycle.stop_reason.as_ref()
+            && super::turn_engine::stopped_by_reported_provider_error(&context, stop_reason)
+            && let Some(message) = context.response.provider_error_notice.clone()
+        {
+            sender.send(AgentUiEvent::ProviderError { message });
+        }
         sender.send(AgentUiEvent::TurnFinished {
             content: context.response.final_content.clone(),
             completed: context.lifecycle.task_completed,
