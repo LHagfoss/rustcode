@@ -349,9 +349,18 @@ pub(crate) fn shell_redirection_targets(command: &str) -> Vec<String> {
     let mut single_quote = false;
     let mut double_quote = false;
     let mut escaped = false;
+    // Heredoc delimiters opened on the current line. Their bodies are data,
+    // not shell: `struct.unpack('>h',take(2))` in a Python heredoc recorded
+    // `h',take` as a changed file (#2577).
+    let mut pending_heredocs: Vec<String> = Vec::new();
     let mut index = 0;
     while index < bytes.len() {
         let byte = bytes[index];
+        if byte == b'\n' && !single_quote && !double_quote && !pending_heredocs.is_empty() {
+            index = skip_heredoc_bodies(command, index + 1, &pending_heredocs);
+            pending_heredocs.clear();
+            continue;
+        }
         if escaped {
             escaped = false;
             index += 1;
@@ -370,6 +379,19 @@ pub(crate) fn shell_redirection_targets(command: &str) -> Vec<String> {
         if byte == b'"' && !single_quote {
             double_quote = !double_quote;
             index += 1;
+            continue;
+        }
+        if byte == b'<'
+            && !single_quote
+            && !double_quote
+            && bytes.get(index + 1) == Some(&b'<')
+            && bytes.get(index + 2) != Some(&b'<')
+        {
+            let (delimiter, next) = heredoc_delimiter(command, index + 2);
+            if !delimiter.is_empty() {
+                pending_heredocs.push(delimiter);
+            }
+            index = next;
             continue;
         }
         if byte != b'>' || single_quote || double_quote {
@@ -444,6 +466,53 @@ pub(crate) fn shell_redirection_targets(command: &str) -> Vec<String> {
         index = cursor.max(index + 1);
     }
     targets
+}
+
+/// The delimiter word of a heredoc whose `<<` ends just before `start`, and
+/// the index after it. Handles `<<-`, spacing and quoted delimiters.
+fn heredoc_delimiter(command: &str, start: usize) -> (String, usize) {
+    let bytes = command.as_bytes();
+    let mut cursor = start;
+    if bytes.get(cursor) == Some(&b'-') {
+        cursor += 1;
+    }
+    while bytes.get(cursor).is_some_and(|b| *b == b' ' || *b == b'\t') {
+        cursor += 1;
+    }
+    let mut delimiter = String::new();
+    while let Some(&b) = bytes.get(cursor) {
+        if b.is_ascii_whitespace() || matches!(b, b';' | b'&' | b'|' | b'<' | b'>' | b'(' | b')') {
+            break;
+        }
+        if !matches!(b, b'\'' | b'"' | b'\\') {
+            delimiter.push(b as char);
+        }
+        cursor += 1;
+    }
+    (delimiter, cursor)
+}
+
+/// The index just past the bodies of `delimiters`, read in order from `start`
+/// (the line after the one that opened them). An unterminated body runs to
+/// the end of the command.
+fn skip_heredoc_bodies(command: &str, start: usize, delimiters: &[String]) -> usize {
+    let mut offset = start;
+    for delimiter in delimiters {
+        loop {
+            if offset >= command.len() {
+                return command.len();
+            }
+            let end = command[offset..]
+                .find('\n')
+                .map_or(command.len(), |found| offset + found);
+            let line = &command[offset..end];
+            offset = (end + 1).min(command.len());
+            if line.trim_start_matches('\t').trim_end() == delimiter {
+                break;
+            }
+        }
+    }
+    offset
 }
 
 pub(crate) fn tool_result_from_execution(
@@ -1124,6 +1193,20 @@ mod tests {
         assert!(shell_redirection_targets("echo \"a > b\"").is_empty());
         assert!(shell_redirection_targets("cmd 2>&1").is_empty());
         assert!(shell_redirection_targets("echo x > /dev/null").is_empty());
+    }
+
+    // Regression (#2577): a `>` inside a heredoc body is data, not a
+    // redirection, and the command after the body is still scanned.
+    #[test]
+    fn heredoc_bodies_are_not_scanned_for_redirections() {
+        let command = "python3 - <<'PY'\nimport struct\n\
+                       def i16(): return struct.unpack('>h',take(2))[0]\n\
+                       if n > 3: print(\"don't\")\nPY\necho done > out.txt";
+        assert_eq!(shell_redirection_targets(command), ["out.txt"]);
+        assert_eq!(
+            shell_redirection_targets("cat <<-EOF > notes.md\n\ta > b\n\tEOF"),
+            ["notes.md"]
+        );
     }
 
     #[test]

@@ -422,6 +422,12 @@ fn provider_adjusted_tokens(history: &[ChatMessage], usage: Option<&TokenUsage>)
     )
 }
 
+/// Whether a compaction pass with this `originating_path` was real work worth
+/// a `context.compaction` event, rather than a below-budget no-op.
+fn compaction_pass_did_work(originating_path: &str) -> bool {
+    originating_path != "below_budget"
+}
+
 /// Record what compaction decided and how far it had to go.
 ///
 /// `originating_path` names the branch that produced this event. The metrics
@@ -434,6 +440,15 @@ fn emit_compaction_metrics(
     summarized: bool,
     messages_considered: usize,
 ) {
+    // A pass that found the history under budget changed nothing. Logged as a
+    // `context.compaction` event it outnumbered the real compactions 91 to 4
+    // in one session and made them hard to find (#2577).
+    if !compaction_pass_did_work(originating_path) {
+        crate::dbg_log!(
+            "Compaction skipped ({originating_path}): {before_tokens} tokens within budget {budget}"
+        );
+        return;
+    }
     crate::logger::operational_event(
         "context.compaction",
         serde_json::json!({
@@ -1214,6 +1229,20 @@ async fn request_summary(
 #[cfg(test)]
 mod preserved_user_request_tests {
     use super::*;
+
+    // Regression (#2577): below-budget passes were logged as compactions.
+    #[test]
+    fn only_passes_that_did_work_are_compaction_events() {
+        assert!(!compaction_pass_did_work("below_budget"));
+        for path in [
+            "deterministic_record",
+            "ai_summary",
+            "too_few_messages",
+            "turn_tool_output_shortened",
+        ] {
+            assert!(compaction_pass_did_work(path), "{path}");
+        }
+    }
 
     #[tokio::test]
     async fn ai_compaction_archives_the_exact_unpruned_prefix_before_rewrite() {

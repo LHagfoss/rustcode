@@ -61,10 +61,52 @@ pub struct StructuredSessionMemory {
 /// System messages the harness writes as turn bookkeeping. They are not
 /// project instructions and must not be carried into the record as such.
 fn is_harness_notice(content: &str) -> bool {
-    matches!(
-        content.trim(),
+    let content = content.trim();
+    if matches!(
+        content,
         "Request cancelled by user" | "YOLO mode enabled" | "YOLO mode disabled"
-    )
+    ) {
+        return true;
+    }
+    // Status lines lead with a pictograph ("🧹 History compacted: …"); an
+    // instruction starts with a word.
+    if content
+        .chars()
+        .next()
+        .is_some_and(|first| !first.is_alphanumeric() && !first.is_ascii_punctuation())
+    {
+        return true;
+    }
+    const STATUS_PREFIXES: &[&str] = &[
+        "History compacted",
+        "History compaction",
+        "Compaction",
+        "Turn interrupted",
+        "Switched to model profile",
+        "Chat renamed to",
+        "No active turn",
+        "Provider authentication",
+    ];
+    STATUS_PREFIXES
+        .iter()
+        .any(|prefix| content.starts_with(prefix))
+}
+
+/// A path a tool call recorded as changed, as opposed to a fragment of code a
+/// shell command happened to contain (`'>h',take` in a heredoc's Python
+/// became `Modified files: h',take`). Also drops such junk inherited from an
+/// earlier record.
+pub(crate) fn is_plausible_changed_path(path: &str) -> bool {
+    let path = path.trim();
+    !path.is_empty()
+        && path.len() <= 4096
+        && !path.chars().any(|ch| {
+            ch.is_control()
+                || matches!(
+                    ch,
+                    '\'' | '"' | '`' | '$' | ',' | ';' | '(' | ')' | '{' | '}' | '<' | '>' | '|'
+                )
+        })
 }
 
 /// A follow-up that only says "keep going" or acknowledges the last answer
@@ -207,7 +249,7 @@ impl StructuredSessionMemory {
 
             if let Some(ref result) = message.tool_result {
                 for path in &result.changed_paths {
-                    if !memory.modified_files.contains(path) {
+                    if is_plausible_changed_path(path) && !memory.modified_files.contains(path) {
                         memory.modified_files.push(path.clone());
                     }
                 }
@@ -364,13 +406,17 @@ impl StructuredSessionMemory {
                 trimmed.strip_prefix("Project instructions/constraints: ")
             {
                 for c in constraints.split("; ") {
-                    if !self.user_constraints.iter().any(|existing| existing == c) {
+                    if !is_harness_notice(c)
+                        && !self.user_constraints.iter().any(|existing| existing == c)
+                    {
                         self.user_constraints.push(c.to_string());
                     }
                 }
             } else if let Some(files) = trimmed.strip_prefix("Modified files: ") {
                 for f in files.split(", ") {
-                    if !self.modified_files.iter().any(|existing| existing == f) {
+                    if is_plausible_changed_path(f)
+                        && !self.modified_files.iter().any(|existing| existing == f)
+                    {
                         self.modified_files.push(f.to_string());
                     }
                 }
@@ -731,6 +777,43 @@ pub(super) fn compact_with_structured_memory_from_archive(
 mod tests {
     use super::*;
     use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
+
+    // Regression (#2577): a compaction status line became a project
+    // constraint and a heredoc's Python became a modified file, and the next
+    // record inherited both.
+    #[test]
+    fn status_lines_and_code_fragments_stay_out_of_the_record() {
+        let mut edit = ChatMessage::new("tool", "run_command: exit code: 0");
+        edit.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: true,
+            changed_paths: vec!["h',take".into(), "plugins/LuckPerms/config.yml".into()],
+            ..Default::default()
+        });
+        let history = vec![
+            ChatMessage::new("user", "give my agent FTP access"),
+            ChatMessage::new(
+                "system",
+                "🧹 History compacted: reduced context from 37148 to 2406 tokens.",
+            ),
+            ChatMessage::new("system", "History compaction failed: timeout"),
+            ChatMessage::new("system", "Keep the engine headless."),
+            edit,
+        ];
+        let memory = StructuredSessionMemory::extract_from_history(&history);
+        assert_eq!(memory.user_constraints, ["Keep the engine headless."]);
+        assert_eq!(memory.modified_files, ["plugins/LuckPerms/config.yml"]);
+
+        // A record written before the fix does not pass its junk on.
+        let mut merged = StructuredSessionMemory::default();
+        merged.merge_from_text(
+            "[Deterministic context record]\nGoal: g\n\
+             Project instructions/constraints: 🧹 History compacted: reduced context from 1 to 2 tokens.; Use tabs\n\
+             Modified files: h',take, src/main.rs\n",
+        );
+        assert_eq!(merged.user_constraints, ["Use tabs"]);
+        assert_eq!(merged.modified_files, ["src/main.rs"]);
+    }
 
     #[test]
     fn harness_notices_and_successful_reads_are_not_carried_as_constraints_or_failures() {
