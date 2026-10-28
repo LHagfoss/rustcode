@@ -17,63 +17,39 @@ enum AppearanceSetting {
     }
 }
 
-/// ⌘, — a sheet over the chat: sections on the left, the chosen one on the right.
+/// ⌘, — Settings as a page of the window, in place of the chats and the
+/// chat (#2553): its own sidebar of sections on the left, the chosen section
+/// on the right. The chat stays alive under it, so Back (or Esc) returns to
+/// it with its draft and scroll position. In a narrow window the sidebar
+/// keeps only the sections' icons.
 struct SettingsView: View {
     @ObservedObject var model: DesktopModel
-    @Environment(\.closePanel) private var dismiss
+    @Environment(\.closePanel) private var close
     @StateObject private var capabilities = CapabilitiesStore()
     @StateObject private var connections = ConnectionsStore()
     typealias Section = SettingsSection
 
+    /// Below this window width the sidebar shows icons only.
+    static let compactWidth: CGFloat = 760
+
     private var section: Section { model.settingsSection }
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Settings")
-                    .font(.title3.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
-                ForEach(Section.allCases) { item in
-                    SectionRow(section: item, isSelected: item == section) { model.settingsSection = item }
-                }
-                Spacer()
+        GeometryReader { proxy in
+            let compact = proxy.size.width < Self.compactWidth
+            HStack(spacing: 0) {
+                sidebar(compact: compact)
+                    .frame(width: compact ? 64 : SettingsView.sidebarWidth)
+                    .background(Color.sidebarBackground)
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(Color.chatBackground)
             }
-            .padding(12)
-            .padding(.top, 8)
-            .frame(width: 220)
-            .background(Color.sidebarBackground)
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text(section.rawValue).font(.title2.weight(.semibold))
-                    Spacer()
-                    ChromeButton(systemImage: "xmark", help: "Close (Esc)") { dismiss() }
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 20)
-                .padding(.bottom, 12)
-                ScrollView {
-                    Group {
-                        switch section {
-                        case .general: GeneralSettings(model: model)
-                        case .keybinds: KeybindingsSettings(store: model.keybindings)
-                        case .connections: ConnectionsSettings(model: model, store: connections)
-                        case .skills: SkillsSettings(model: model, store: capabilities)
-                        case .mcp: MCPSettings(model: model, store: capabilities)
-                        case .engine: EngineSettings(model: model)
-                        case .about: AboutSettings(updater: model.updater)
-                        }
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Color.chatBackground)
         }
-        .frame(maxWidth: 880, maxHeight: 620)
+        .ignoresSafeArea()
         .tint(.brand)
+        // Esc goes back to the chat from wherever focus is.
+        .background { Button("Back to Chat", action: close).keyboardShortcut(.cancelAction).hidden() }
         .task(id: section) {
             if section == .general { await model.loadPresence() }
             if section == .skills || section == .mcp { await capabilities.load(model.engineConnection) }
@@ -83,11 +59,96 @@ struct SettingsView: View {
             }
         }
     }
+
+    static let sidebarWidth: CGFloat = 230
+
+    private var chatTitle: String {
+        model.sessions.first { $0.id == model.selectedSession }?.title ?? "Chat"
+    }
+
+    private func sidebar(compact: Bool) -> some View {
+        VStack(alignment: compact ? .center : .leading, spacing: 2) {
+            // The title bar's room, beside the traffic lights.
+            Color.clear
+                .frame(height: 34)
+                .frame(maxWidth: .infinity)
+                .background(WindowDragArea())
+            Button(action: close) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
+                    if !compact { Text(chatTitle).lineLimit(1) }
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .frame(height: 28)
+                .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .hoverHighlight(cornerRadius: 8, padding: 0)
+            .pointingHandCursor()
+            .help("Back to \(chatTitle) (Esc)")
+            .accessibilityLabel("Back to \(chatTitle)")
+            if !compact {
+                Text("Settings")
+                    .font(.title3.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.top, 10)
+                    .padding(.bottom, 8)
+                    .accessibilityAddTraits(.isHeader)
+            } else {
+                Divider().padding(.vertical, 8)
+            }
+            ForEach(Section.allCases) { item in
+                SectionRow(section: item, isSelected: item == section, compact: compact) { model.settingsSection = item }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, compact ? 8 : 12)
+        .padding(.bottom, 12)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Settings sections")
+    }
+
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(section.rawValue)
+                .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+                .frame(maxWidth: 760, alignment: .leading)
+                .padding(.horizontal, 32)
+                .padding(.top, 40)
+                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(WindowDragArea())
+            ScrollView {
+                Group {
+                    switch section {
+                    case .general: GeneralSettings(model: model)
+                    case .keybinds: KeybindingsSettings(store: model.keybindings)
+                    case .connections: ConnectionsSettings(model: model, store: connections)
+                    case .skills: SkillsSettings(model: model, store: capabilities)
+                    case .mcp: MCPSettings(model: model, store: capabilities)
+                    case .engine: EngineSettings(model: model)
+                    case .about: AboutSettings(updater: model.updater)
+                    }
+                }
+                .frame(maxWidth: 760, alignment: .leading)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 32)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            // Each section opens at its top, not where the last one was left.
+            .id(section)
+        }
+    }
 }
 
 private struct SectionRow: View {
     let section: SettingsView.Section
     let isSelected: Bool
+    /// Only the icon, in a narrow window.
+    var compact = false
     let action: () -> Void
     @State private var isHovered = false
 
@@ -100,8 +161,10 @@ private struct SectionRow: View {
                     .symbolRenderingMode(.monochrome)
                     .foregroundStyle(isSelected ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
                     .frame(width: 22, height: 22)
-                Text(section.rawValue)
-                Spacer()
+                if !compact {
+                    Text(section.rawValue)
+                    Spacer()
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -111,6 +174,9 @@ private struct SectionRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .help(compact ? section.rawValue : "")
+        .accessibilityLabel(section.rawValue)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 

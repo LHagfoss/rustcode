@@ -880,10 +880,12 @@ enum DebugDriver {
             let names = ["light": NSAppearance.Name.aqua, "dark": .darkAqua]
             NSApp.appearance = parts.count > 1 ? names[parts[1]].flatMap(NSAppearance.init(named:)) : nil
         case "settings":
-            if parts.count > 1, let section = SettingsSection(rawValue: parts.dropFirst().joined(separator: " ")) {
-                model.settingsSection = section
+            // `settings [section]|close`
+            if parts.count > 1, parts[1] == "close" {
+                model.closeSettings()
+            } else {
+                model.openSettings(parts.count > 1 ? SettingsSection(rawValue: parts.dropFirst().joined(separator: " ")) : nil)
             }
-            model.showsSettings = true
         case "keybind":
             // `keybind <action> <key> [cmd|opt|shift|ctrl]...`
             guard parts.count > 2, let action = KeybindingAction(rawValue: parts[1]) else { break }

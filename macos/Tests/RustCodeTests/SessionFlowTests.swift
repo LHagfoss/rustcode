@@ -488,6 +488,38 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2553: Settings is a page over the chat. Opening it keeps the chat,
+    /// its draft and its open agent state under it; a deep link opens its
+    /// section, and Settings reopens where it was left.
+    func testSettingsPageReturnsToTheChatItCovered() async throws {
+        let model = try await started()
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        await model.select(quick)
+        model.draft = "half written"
+        model.toggleSwitcher()
+        XCTAssertTrue(model.showsSwitcher)
+
+        model.openSettings()
+        XCTAssertTrue(model.showsSettings)
+        XCTAssertFalse(model.showsSwitcher, "the switcher gives way to Settings")
+        XCTAssertTrue(model.coversChat)
+        model.settingsSection = .keybinds
+        model.closeSettings()
+        XCTAssertFalse(model.showsSettings)
+        XCTAssertEqual(model.selectedSession, "quick")
+        XCTAssertEqual(model.draft, "half written")
+        XCTAssertEqual(model.transcript.items.count, Self.replayed)
+
+        // ⌘, again: the section last used. Check for Updates: About.
+        model.openSettings()
+        XCTAssertEqual(model.settingsSection, .keybinds)
+        model.openSettings(.about)
+        XCTAssertEqual(model.settingsSection, .about)
+        model.closeSettings()
+        XCTAssertEqual(model.draft, "half written")
+        model.stop()
+    }
+
     /// An ACP engine with two stored chats of `replayed` messages, "slow" (its
     /// load takes a moment) and "quick", that answers each prompt with one
     /// short reply.
