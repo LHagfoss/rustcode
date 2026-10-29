@@ -91,9 +91,45 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
     }
 
     /// The children the sidebar nests under their chat (#2492): those still
-    /// working, and the one open on screen, so its row stays while it is read.
-    public static func sidebarChildren(_ agents: [SubagentInfo], viewing: Int?) -> [SubagentInfo] {
-        agents.filter { $0.isActive || $0.id == viewing }
+    /// working, the one open on screen, so its row stays while it is read,
+    /// and those `seen` working since the app started, so one that ended
+    /// stays there with its result to open (#2596).
+    public static func sidebarChildren(_ agents: [SubagentInfo], viewing: Int?,
+                                       seen: Set<Int> = []) -> [SubagentInfo] {
+        agents.filter { $0.isActive || $0.id == viewing || seen.contains($0.id) }
+    }
+
+    /// Done, failed or cancelled, and no follow-up turn running: the child
+    /// will do nothing more unless it is sent another message.
+    public var hasEnded: Bool {
+        !isActive && (status == .completed || status == .failed || status == .cancelled)
+    }
+
+    /// Whether `new`, the latest state of the child open on screen, ends the
+    /// reading of it, so the chat that started it comes back (#2596): it was
+    /// working when last seen and has ended. A child opened after it ended,
+    /// to read its result, stays open.
+    public static func endsViewing(was old: SubagentInfo, now new: SubagentInfo) -> Bool {
+        old.id == new.id && old.isActive && new.hasEnded
+    }
+
+    /// What the chat says as it comes back from a child that ended, as
+    /// `agent-1 finished: All tests pass`.
+    public var endedMessage: String {
+        let verb = switch status {
+        case .failed: "failed"
+        case .cancelled: "was cancelled"
+        default: "finished"
+        }
+        let result = completion?.split(whereSeparator: \.isNewline).first.map(String.init)
+        return result.map { "\(name) \(verb): \($0)" } ?? "\(name) \(verb)"
+    }
+
+    /// Whether a chat's row in the sidebar shows as the one open (#2596):
+    /// only while none of its agents is read in its place, so the chat and
+    /// the agent are never both selected.
+    public static func chatRowSelected(_ session: String, selected: String?, viewingAgent: Int?) -> Bool {
+        session == selected && viewingAgent == nil
     }
 
     /// The children in an `_rustcode/agents` list answer.

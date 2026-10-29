@@ -52,6 +52,14 @@ final class ChatScrollState: ObservableObject {
         setNeedsUpdate()
     }
 
+    /// The page in the chat's place closed (an agent's, #2598): work out
+    /// the rows drawn in full afresh, so the rows in view draw now rather
+    /// than standing in blank until the reader scrolls.
+    func uncovered() {
+        drawnRows.invalidate()
+        setNeedsUpdate()
+    }
+
     func setRows(_ rows: [Int]) {
         #if DEBUG
         Self.current = self

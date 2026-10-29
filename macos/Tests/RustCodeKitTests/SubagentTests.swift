@@ -19,6 +19,52 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(SubagentInfo.sidebarChildren([], viewing: 4).map(\.id), [])
     }
 
+    /// #2596: an agent seen working keeps its row under its chat once it
+    /// ends, so its result can still be opened from there.
+    func testAnAgentSeenWorkingKeepsItsRowOnceItEnds() {
+        let agents = SubagentInfo.list(from: ["agents": [
+            ["id": 1, "name": "running", "status": "running"],
+            ["id": 3, "name": "done", "status": "completed"],
+            ["id": 4, "name": "earlier", "status": "completed"],
+        ]])
+        XCTAssertEqual(SubagentInfo.sidebarChildren(agents, viewing: nil, seen: [3]).map(\.id), [1, 3])
+        XCTAssertEqual(SubagentInfo.sidebarChildren(agents, viewing: 4, seen: [3]).map(\.id), [1, 3, 4])
+    }
+
+    /// #2596: the open agent gives the screen back to its chat only when it
+    /// goes from working to done, failed or cancelled; one opened after it
+    /// ended, to read its result, stays open.
+    func testOnlyAnAgentEndingWhileReadReturnsToItsChat() {
+        func agent(_ id: Int, _ status: String, activeTurn: Bool = false, completion: String? = nil) -> SubagentInfo {
+            let json: JSONValue = ["id": .number(Double(id)), "name": .string("agent-\(id)"), "status": .string(status),
+                                   "activeTurn": .bool(activeTurn), "completion": completion.map(JSONValue.string) ?? .null]
+            return SubagentInfo(json: json)!
+        }
+        let running = agent(1, "running")
+        XCTAssertTrue(SubagentInfo.endsViewing(was: running, now: agent(1, "completed")))
+        XCTAssertTrue(SubagentInfo.endsViewing(was: running, now: agent(1, "failed")))
+        XCTAssertTrue(SubagentInfo.endsViewing(was: agent(1, "cancelling"), now: agent(1, "cancelled")))
+        // A follow-up turn on a finished child that ends.
+        XCTAssertTrue(SubagentInfo.endsViewing(was: agent(1, "completed", activeTurn: true), now: agent(1, "completed")))
+        XCTAssertFalse(SubagentInfo.endsViewing(was: running, now: running))
+        XCTAssertFalse(SubagentInfo.endsViewing(was: running, now: agent(1, "interrupted")))
+        XCTAssertFalse(SubagentInfo.endsViewing(was: agent(1, "completed"), now: agent(1, "completed")),
+                       "opened to read its result")
+        XCTAssertFalse(SubagentInfo.endsViewing(was: running, now: agent(2, "completed")), "another agent")
+
+        XCTAssertEqual(agent(1, "completed", completion: "All 214 tests pass.\nMore").endedMessage,
+                       "agent-1 finished: All 214 tests pass.")
+        XCTAssertEqual(agent(1, "failed").endedMessage, "agent-1 failed")
+        XCTAssertEqual(agent(1, "cancelled").endedMessage, "agent-1 was cancelled")
+    }
+
+    /// #2596: the chat's row and its agent's are never selected together.
+    func testTheChatAndItsAgentAreNotBothSelected() {
+        XCTAssertTrue(SubagentInfo.chatRowSelected("a", selected: "a", viewingAgent: nil))
+        XCTAssertFalse(SubagentInfo.chatRowSelected("a", selected: "a", viewingAgent: 2))
+        XCTAssertFalse(SubagentInfo.chatRowSelected("b", selected: "a", viewingAgent: nil))
+    }
+
     /// A status a newer engine sends is shown as unknown, not as queued,
     /// so the chat does not keep polling a child that may have ended.
     func testUnknownStatusIsNotActive() {

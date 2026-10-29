@@ -225,7 +225,7 @@ struct SubagentChildRows: View {
         let shown = session.id == model.selectedSession
         let viewing = shown ? model.viewedAgent?.id : nil
         let children = shown
-            ? SubagentInfo.sidebarChildren(model.subagents, viewing: viewing)
+            ? model.sidebarChildren(of: session.id)
             : model.backgroundAgents.agents(of: session.id)
         VStack(alignment: .leading, spacing: 1) {
             ForEach(children) { agent in
