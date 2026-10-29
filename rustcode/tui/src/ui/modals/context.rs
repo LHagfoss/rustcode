@@ -687,7 +687,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
         subagent_tokens,
         // The TUI renders visualizations, so its root requests carry the hint.
         visualization_level: 1,
-        smart_ui: rustcode::app::SmartUi::Unsupported,
+        smart_ui: Default::default(),
         compaction: state.last_compaction().cloned(),
     })
 }
