@@ -1,3 +1,14 @@
+## [v0.109.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.109.0) - 2026-10-29
+
+### Features
+- The Settings page centers its content, has a clear Back button to the chat you came from, and opens without an animation. (#2606)
+- Holding ⌘W in the terminal panel closes only the focused terminal, and the panel closes only with the last one. (#2607)
+- The chat now comes back by itself when the subagent you are reading finishes. Ended agents stay listed under their chat, and returning to a long chat after reading an agent keeps it at its latest messages. (#2610)
+- Add `rustcode storage status` and a versioned user-data migration checkpoint that later releases use to upgrade stored data once on first start. (#2609)
+- Fix a near-full chat dropping its oldest turn on several requests in a row instead of compacting. (#2612)
+- The macOS composer now has one Model & Effort picker, which also holds a labeled Fast mode switch for ChatGPT-plan models, including on a new chat before its first message. (#2611)
+- When Fast mode is on and a response is served at the default tier instead, RustCode now says so once instead of only logging it. (#2615)
+- Finished replies in the macOS chat render in a native text view, the groundwork for selecting text across messages. (#2614)
 ## [v0.108.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.108.0) - 2026-10-28
 
 ### Fixes
