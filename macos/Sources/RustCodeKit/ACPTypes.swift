@@ -88,15 +88,16 @@ public enum ACPProtocolError: Error, Equatable, CustomStringConvertible {
 }
 
 public enum ACPRequests {
-    /// `smartUI` advertises Smart UI blocks (docs/smart-ui.md); the app sends
-    /// it only while the setting is on.
+    /// `smartUI` advertises Smart UI blocks (docs/smart-ui.md). While the
+    /// setting is off the app sends version 0, so the agent can point the
+    /// user at the setting instead of guessing a format.
     public static func initialize(appVersion: String, smartUI: Bool = false) -> JSONValue {
         var rustcode: [String: JSONValue] = [
             "visualizations": .number(Double(Visualization.capabilityLevel)),
             "preview": .number(Double(rustcodePreviewCapabilityVersion)),
             "presence": .number(Double(rustcodePresenceCapabilityVersion)),
         ]
-        if smartUI { rustcode["smartUi"] = .number(Double(SmartUI.capabilityVersion)) }
+        rustcode["smartUi"] = .number(Double(smartUI ? SmartUI.capabilityVersion : 0))
         return [
             "protocolVersion": .number(Double(acpProtocolVersion)),
             // The app offers no client-side filesystem or terminal: the engine

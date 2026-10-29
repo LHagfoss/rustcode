@@ -43,9 +43,14 @@ on every card.
 ## Teaching the agent
 
 A client that runs blocks advertises `clientCapabilities._meta.rustcode.smartUi = 1`
-at `initialize`. The app sends it only while the setting is on. Sessions of
-that engine then get a short `# Smart UI` section (under 180 tokens) in the
-root system prompt. It tells the agent to use Smart UI only when the user asks
+at `initialize` while the setting is on. Sessions of that engine then get a
+short `# Smart UI` section (under 180 tokens) in the root system prompt.
+
+While the setting is off the app sends `smartUi = 0`. The root prompt then
+carries a one-line note instead (under 80 tokens): Smart UI exists but is off,
+so when the user asks for it the agent names Settings › General › Chat › Smart
+UI rather than inventing a fence the app shows as source. A client that sends
+no `smartUi` gets neither. It tells the agent to use Smart UI only when the user asks
 for an interactive view or controls clearly help, and to use Markdown or
 `rustcode-viz` otherwise. Subagent prompts and compact prompts never carry it.
 The engine announces `agentCapabilities._meta.rustcode.smartUi = 1`.

@@ -2490,10 +2490,31 @@ Write a ```rustcode-ui v1 fence holding one self-contained HTML fragment: a <tit
 Network, external files, frameworks and navigation are blocked, so embed the data. Max 64 KB. \
 Style with system colors (Canvas, CanvasText, AccentColor) so it reads in light and dark.\n\n";
 
+/// Sent instead of [`SMART_UI_PROMPT_HINT`] when the frontend could run the
+/// blocks but the user has the setting off. Without it an agent asked for
+/// "Smart UI" guesses a fence the app shows as source.
+pub(crate) const SMART_UI_OFF_PROMPT_HINT: &str = "# Smart UI\n\
+This app has Smart UI (interactive HTML components in the chat), but it is turned off. \
+If the user asks for Smart UI or an interactive view, tell them to turn on Settings › General › Chat › Smart UI \
+and restart the engine; until then answer with Markdown or rustcode-viz, never an HTML fence.\n\n";
+
+/// The Smart UI hint, if any, for a root prompt.
+pub(crate) fn smart_ui_hint(smart_ui: crate::app::SmartUi) -> &'static str {
+    match smart_ui {
+        crate::app::SmartUi::On => SMART_UI_PROMPT_HINT,
+        crate::app::SmartUi::Off => SMART_UI_OFF_PROMPT_HINT,
+        crate::app::SmartUi::Unsupported => "",
+    }
+}
+
 /// Append the Smart UI hint for a root prompt whose frontend runs the blocks.
-pub(crate) fn append_smart_ui_hint(prompt: &mut String, policy: ToolSchemaPolicy, smart_ui: bool) {
-    if smart_ui && !policy.is_subagent() && !policy.compact_text_prompt {
-        prompt.push_str(SMART_UI_PROMPT_HINT);
+pub(crate) fn append_smart_ui_hint(
+    prompt: &mut String,
+    policy: ToolSchemaPolicy,
+    smart_ui: crate::app::SmartUi,
+) {
+    if !policy.is_subagent() && !policy.compact_text_prompt {
+        prompt.push_str(smart_ui_hint(smart_ui));
     }
 }
 
