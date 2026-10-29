@@ -1283,8 +1283,9 @@ private struct ChatView: View {
                         PermissionCard(model: model, request: permission).id(permission.id)
                     }
                 }
-                VStack(spacing: 6) {
+                VStack(spacing: 0) {
                     Composer(model: model, composer: model.composer)
+                        .zIndex(1)
                     ComposerFooter(model: model)
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
@@ -2143,9 +2144,11 @@ private struct ChatProjectMenu: View {
 /// sending. Agents here cover neither the chat's end nor the text (#2555).
 private struct ComposerFooter: View {
     @ObservedObject var model: DesktopModel
+    /// How far the tray runs up under the composer's rounded bottom.
+    static let tuck: CGFloat = 22
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             ChatProjectMenu(model: model, name: model.chatProject.lastPathComponent,
                             path: model.chatProject.path.abbreviatingHome, style: .footer)
             FooterButton(title: "Files", systemImage: "paperclip", help: "Attach files or folders") {
@@ -2155,7 +2158,22 @@ private struct ComposerFooter: View {
             AgentPill(model: model)
         }
         .padding(.horizontal, 8)
-        .frame(minHeight: 26)
+        .padding(.top, Self.tuck + 4)
+        .padding(.bottom, 6)
+        .frame(minHeight: 34 + Self.tuck)
+        // A tray the composer sits on: a little narrower, its top tucked
+        // under the composer and its own material, so the chat scrolling
+        // beneath never shows through the labels.
+        .background {
+            UnevenRoundedRectangle(bottomLeadingRadius: 16, bottomTrailingRadius: 16)
+                .fill(.regularMaterial)
+                .overlay {
+                    UnevenRoundedRectangle(bottomLeadingRadius: 16, bottomTrailingRadius: 16)
+                        .fill(Color.primary.opacity(0.04))
+                }
+        }
+        .padding(.top, -Self.tuck)
+        .padding(.horizontal, 12)
         .animation(.snappy(duration: 0.2), value: SubagentInfo.workingLabel(model.subagents))
     }
 }
@@ -2173,7 +2191,7 @@ private struct FooterButton: View {
                 .footerControl()
         }
         .buttonStyle(.plain)
-        .hoverHighlight(cornerRadius: 8, padding: 0)
+        .hoverHighlight(cornerRadius: 12, padding: 0)
         .help(help)
     }
 }
