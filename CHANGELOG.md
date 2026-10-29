@@ -1,3 +1,11 @@
+## [v0.110.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.110.0) - 2026-10-29
+
+### Features
+- Settings' sidebar now looks like the chat sidebar, with a simpler Back button, and always opens on General. (#2619)
+- Tool calls from models that write Qwen-style `<function=…>` XML now run instead of failing as malformed. (#2617)
+- When Smart UI is off and you ask for it, the agent tells you where to turn it on instead of printing raw HTML. (#2618)
+- Each model now keeps its own tool-call protocol even when several share a server, and the app can change it. (#2621)
+- New Model & Effort picker with a smooth effort slider and labelled Fast mode, a tool-call protocol choice for your own models, and a composer footer with project, files and agents. (#2622)
 ## [v0.109.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.109.0) - 2026-10-29
 
 ### Features
