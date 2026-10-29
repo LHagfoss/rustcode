@@ -28,17 +28,23 @@ struct SettingsView: View {
     @Environment(\.closePanel) private var close
     @StateObject private var capabilities = CapabilitiesStore()
     @StateObject private var connections = ConnectionsStore()
+    @AppStorage(SidebarResizeHandle.key) private var sidebarWidth = SidebarResizeHandle.defaultWidth
     typealias Section = SettingsSection
 
     private var section: Section { model.settingsSection }
 
     var body: some View {
         GeometryReader { proxy in
-            let layout = SettingsLayout(width: proxy.size.width)
+            let layout = SettingsLayout(width: proxy.size.width,
+                                        sidebar: Double(SidebarResizeHandle.clamp(sidebarWidth)))
             HStack(spacing: 0) {
                 sidebar(compact: layout.compact)
                     .frame(width: layout.sidebar)
                     .background(Color.sidebarBackground)
+                    // The chat sidebar's edge line, so the two read as one.
+                    .overlay(alignment: .trailing) {
+                        Rectangle().fill(Color.primary.opacity(0.1)).frame(width: 1)
+                    }
                 detail(layout)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .background(Color.chatBackground)
@@ -60,57 +66,53 @@ struct SettingsView: View {
 
     private var chatTitle: String { model.settingsBackTitle }
 
+    /// Laid out like the chat sidebar it replaces: Back in a toolbar cluster
+    /// where that sidebar's buttons sit, a caption header like "Chats", and
+    /// rows with its fills, so opening Settings changes only the list.
     private func sidebar(compact: Bool) -> some View {
-        VStack(alignment: compact ? .center : .leading, spacing: 2) {
-            // The title bar's room, beside the traffic lights.
-            Color.clear
-                .frame(height: 34)
-                .frame(maxWidth: .infinity)
-                .background(WindowDragArea())
-            // Back to the chat: the first thing in the sidebar, on its own
-            // tile, naming where it goes.
-            Button(action: close) {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
-                    if !compact {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Back").font(.body.weight(.semibold))
-                            Text(chatTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                }
-                .foregroundStyle(.primary)
-                .padding(.horizontal, compact ? 0 : 10)
-                .frame(width: compact ? 40 : nil, height: compact ? 32 : 40)
-                .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 9))
-                .contentShape(.rect)
+        VStack(alignment: compact ? .center : .leading, spacing: 0) {
+            // The title bar's room, beside the traffic lights, holding Back.
+            HStack(spacing: 2) {
+                Spacer()
+                if !compact { backButton }
             }
-            .buttonStyle(.plain)
-            .hoverHighlight(cornerRadius: 9, padding: 0)
-            .pointingHandCursor()
-            .help("Back to \(chatTitle) (Esc)")
-            .accessibilityLabel("Back to \(chatTitle)")
+            .padding(.leading, compact ? 0 : 80)
+            .padding(.trailing, 10)
+            .frame(height: SidebarMetrics.barHeight)
+            .padding(.top, SidebarMetrics.barTopInset)
+            .background(WindowDragArea())
+            if compact {
+                // Too narrow beside the traffic lights: Back goes under them.
+                backButton.padding(.top, 8)
+            }
             if !compact {
                 Text("Settings")
-                    .font(.title3.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.top, 10)
-                    .padding(.bottom, 8)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 20)
+                    .padding(.top, 12)
+                    .padding(.bottom, 4)
                     .accessibilityAddTraits(.isHeader)
             } else {
                 Divider().padding(.vertical, 8)
             }
-            ForEach(Section.allCases) { item in
-                SectionRow(section: item, isSelected: item == section, compact: compact) { model.settingsSection = item }
+            VStack(alignment: compact ? .center : .leading, spacing: 2) {
+                ForEach(Section.allCases) { item in
+                    SectionRow(section: item, isSelected: item == section, compact: compact) { model.settingsSection = item }
+                }
             }
+            .padding(.horizontal, compact ? 8 : 12)
             Spacer()
         }
-        .padding(.horizontal, compact ? 8 : 12)
         .padding(.bottom, 12)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Settings sections")
+    }
+
+    private var backButton: some View {
+        ToolbarCluster {
+            ClusterButton(systemImage: "chevron.left", help: "Back to \(chatTitle) (Esc)", action: close)
+        }
     }
 
     /// The section in a column centered in the room right of the sidebar.
@@ -170,7 +172,8 @@ private struct SectionRow: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(isSelected ? Color.primary.opacity(0.09) : isHovered ? Color.primary.opacity(0.04) : .clear,
+            // The chat rows' fills: selection strong, hover a faint wash.
+            .background(isSelected ? Color.primary.opacity(0.1) : isHovered ? Color.primary.opacity(0.035) : .clear,
                         in: .rect(cornerRadius: 9))
             .contentShape(.rect)
         }

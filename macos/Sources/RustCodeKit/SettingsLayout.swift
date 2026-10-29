@@ -22,10 +22,12 @@ public struct SettingsLayout: Equatable, Sendable {
     public var margin: Double
     public var column: Double
 
-    public init(width: Double) {
+    /// `sidebar` is the wide sidebar's width: the chat sidebar's, so its edge
+    /// stays put when Settings opens over it.
+    public init(width: Double, sidebar wide: Double = Self.sidebarWidth) {
         let width = max(width, 0)
         compact = width < Self.compactWidth
-        sidebar = compact ? Self.compactSidebarWidth : Self.sidebarWidth
+        sidebar = compact ? Self.compactSidebarWidth : wide
         let room = max(width - sidebar, 0)
         margin = min(max(room * 0.05, 24), 64)
         column = max(min(Self.maxColumn, room - 2 * margin), 0)

@@ -275,10 +275,11 @@ final class DesktopModel: ObservableObject {
     @Published var showsSidebar = true
     @Published var showsSettings = false
 
-    /// Settings in the window's place (#2553), at `section` or where it was
-    /// last left. The chat stays as it was under it.
+    /// Settings in the window's place (#2553), at `section`, else General
+    /// when it opens (an open Settings stays where it is). The chat stays as
+    /// it was under it.
     func openSettings(_ section: SettingsSection? = nil) {
-        if let section { settingsSection = section }
+        if let section { settingsSection = section } else if !showsSettings { settingsSection = .general }
         composerPanel = nil
         showsSwitcher = false
         if !showsSettings { settingsReturnSession = selectedSession }
