@@ -166,7 +166,12 @@ final class DesktopModel: ObservableObject {
     /// Kept per chat: picking another chat mid-load used to drop the replay
     /// and remember the chat as empty, and it stayed blank until a restart.
     @Published private(set) var loadingSessions: Set<String> = []
-    private var replays: [String: Transcript] = [:]
+    /// Chats open in this engine and chats being opened (`OpenSessions`).
+    /// Only its loading set is published: a background chat's updates must
+    /// not redraw the shown one.
+    private var openChats = OpenSessions() {
+        didSet { if openChats.loading != loadingSessions { loadingSessions = openChats.loading } }
+    }
     /// The shown chat is still being opened.
     var isLoadingSelected: Bool { selectedSession.map(loadingSessions.contains) ?? false }
     /// A host command's long answer, shown in its sheet.
@@ -646,7 +651,7 @@ final class DesktopModel: ObservableObject {
     /// Tell the user a chat they are not looking at finished, with the start
     /// of its reply: a notification in the background, a toast in front.
     private func notifyFinished(_ session: String) {
-        let items = session == selectedSession ? transcript.items : openSessions[session]?.transcript.items ?? []
+        let items = session == selectedSession ? transcript.items : openChats.snapshot(session)?.transcript.items ?? []
         var reply = ""
         if let last = items.last(where: { if case .assistant = $0.content { true } else { false } }),
            case .assistant(let text) = last.content {
@@ -1090,7 +1095,7 @@ final class DesktopModel: ObservableObject {
               url.standardizedFileURL.path != current.standardizedFileURL.path else { return }
         var summary = sessions.first { $0.id == id } ?? SessionSummary(id: id, cwd: current.path)
         _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(id), timeout: .seconds(10))
-        openSessions[id] = nil
+        openChats.forget(id)
         do {
             let result = try await connection.request(ACPMethod.sessionMove, params: ACPRequests.moveSession(id: id, cwd: url),
                                                       timeout: .seconds(10))
@@ -1411,7 +1416,7 @@ final class DesktopModel: ObservableObject {
             } while pages.hasMore
         } catch { return }
         archivedDates = SessionRetention.dated(archivedSessions, dates: archivedDates, now: now)
-        var inUse = runningSessions.union(openSessions.keys).union(startedSessions.keys)
+        var inUse = runningSessions.union(openChats.openIds).union(startedSessions.keys)
         if let selectedSession { inUse.insert(selectedSession) }
         let plan = SessionRetention.plan(sessions: pages.listed, archived: archivedDates, pinned: pinnedSessions,
                                          inUse: inUse, now: now)
@@ -1519,11 +1524,11 @@ final class DesktopModel: ObservableObject {
             error = "Could not find this chat's folder."
             return
         }
-        if openSessions[session.id] != nil || selectedSession == session.id,
+        if openChats.isOpen(session.id) || selectedSession == session.id,
            capabilities?.closeSession == true, let connection = engine?.connection {
             _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(session.id), timeout: .seconds(10))
         }
-        openSessions[session.id] = nil
+        openChats.forget(session.id)
         do {
             try await NSWorkspace.shared.recycle([directory])
         } catch {
@@ -1724,21 +1729,11 @@ final class DesktopModel: ObservableObject {
         await restartForWorkspace()
     }
 
-    /// What a session opened in this engine looked like when the user left it.
-    /// The engine refuses a second `session/load` of an open session, so
-    /// switching back restores this instead, kept current by its updates.
-    private struct OpenSession {
-        var transcript: Transcript
-        var models: ModelOptions
-        var selectedModel: String?
-    }
-
-    private var openSessions: [String: OpenSession] = [:]
-
+    /// Keep the chat on screen open in the background; one still loading is
+    /// stored by its load instead.
     private func stashSelectedSession() {
-        // A chat still loading has no transcript yet; its load stores it.
-        guard let current = selectedSession, !loadingSessions.contains(current) else { return }
-        openSessions[current] = OpenSession(transcript: transcript, models: models, selectedModel: selectedModel)
+        guard let current = selectedSession else { return }
+        openChats.stash(current, transcript: transcript, models: models, selectedModel: selectedModel)
     }
 
     private func restartForWorkspace() async {
@@ -2009,7 +2004,7 @@ final class DesktopModel: ObservableObject {
         }
         // An open terminal stays open, showing this chat's folder's shells.
         if !session.cwd.isEmpty { sessionProjects[session.id] = session.cwd }
-        if let open = openSessions[session.id] {
+        if let open = openChats.snapshot(session.id) {
             selectedSession = session.id
             transcript = open.transcript
             models = open.models
@@ -2020,10 +2015,10 @@ final class DesktopModel: ObservableObject {
         transcript.removeAll()
         // Picked again while its first load is still running: that load
         // shows it when it is in.
-        guard !loadingSessions.contains(session.id) else { return }
+        guard !openChats.isLoading(session.id) else { return }
         guard let result = await loadInEngine(session, on: connection) else { return }
         // Another chat may have been picked while this one loaded.
-        guard selectedSession == session.id, let loaded = openSessions[session.id] else { return }
+        guard selectedSession == session.id, let loaded = openChats.snapshot(session.id) else { return }
         transcript = loaded.transcript
         applyConfig(result["configOptions"])
     }
@@ -2031,32 +2026,28 @@ final class DesktopModel: ObservableObject {
     /// Make sure the engine has `session` open, without showing it: a chat
     /// sent a message from another one (#2527). True once it is open.
     private func load(_ session: SessionSummary) async -> Bool {
-        if session.id == selectedSession || openSessions[session.id] != nil { return true }
+        if session.id == selectedSession || openChats.isOpen(session.id) { return true }
         guard let connection = engine?.connection else { return false }
-        if loadingSessions.contains(session.id) {
+        if openChats.isLoading(session.id) {
             // Another load of it is running; wait for that one.
-            for _ in 0..<300 where loadingSessions.contains(session.id) {
+            for _ in 0..<300 where openChats.isLoading(session.id) {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            return openSessions[session.id] != nil || session.id == selectedSession
+            return openChats.isOpen(session.id) || session.id == selectedSession
         }
         return await loadInEngine(session, on: connection) != nil
     }
 
-    /// `session/load`, kept in `openSessions`. It replays the transcript as
+    /// `session/load`, kept in `openChats`. It replays the transcript as
     /// `session/update` notifications before it answers. The replay builds
     /// off screen and shows at once: applied line by line, every replayed
     /// chunk redrew the whole chat. Nil when it failed.
     private func loadInEngine(_ session: SessionSummary, on connection: ACPConnection) async -> JSONValue? {
-        loadingSessions.insert(session.id)
-        replays[session.id] = Transcript()
+        openChats.beginLoad(session.id)
         defer {
             // A stopped engine already cleared these, and a new one may be
             // loading this chat again.
-            if engine?.connection === connection {
-                replays[session.id] = nil
-                loadingSessions.remove(session.id)
-            }
+            if engine?.connection === connection { openChats.endLoad(session.id) }
         }
         do {
             let result = try await connection.request(ACPMethod.sessionLoad, params: ACPRequests.loadSession(id: session.id, cwd: URL(fileURLWithPath: session.cwd)), timeout: .seconds(30))
@@ -2064,7 +2055,7 @@ final class DesktopModel: ObservableObject {
             // The engine replaced while this loaded has not opened it.
             guard engine?.connection === connection else { return nil }
             let options = result["configOptions"].map(ModelOptions.init(configOptions:)) ?? .empty
-            openSessions[session.id] = OpenSession(transcript: replays[session.id] ?? Transcript(), models: options, selectedModel: options.current)
+            openChats.finishLoad(session.id, models: options)
             return result
         } catch {
             self.error = String(describing: error)
@@ -2452,8 +2443,8 @@ final class DesktopModel: ObservableObject {
     private func appendToTranscript(of session: String, _ update: (inout Transcript) -> Void) {
         if session == selectedSession {
             update(&transcript)
-        } else if openSessions[session] != nil {
-            update(&openSessions[session]!.transcript)
+        } else {
+            openChats.updateTranscript(of: session, update)
         }
     }
 
@@ -2564,7 +2555,7 @@ final class DesktopModel: ObservableObject {
         do {
             let result = try await connection.request(
                 ACPMethod.sessionSetConfigOption, params: change.params(sessionId: session), timeout: .seconds(15))
-            let current = session == selectedSession ? models : openSessions[session]?.models
+            let current = session == selectedSession ? models : openChats.snapshot(session)?.models
             let options = result["configOptions"].map(ModelOptions.init(configOptions:))
                 ?? current.map(change.applied(to:)) ?? .empty
             show(options, for: session, config: result["configOptions"])
@@ -2583,18 +2574,14 @@ final class DesktopModel: ObservableObject {
                 models = options
                 selectedModel = options.current
             }
-        } else if var open = openSessions[session] {
-            open.models = options
-            open.selectedModel = options.current
-            openSessions[session] = open
+        } else {
+            openChats.updateModels(of: session, options)
         }
     }
 
     func stop() {
         releaseInboundWaiters()
-        openSessions = [:]
-        replays = [:]
-        loadingSessions = []
+        openChats.reset()
         remotePollTask?.cancel()
         remotePollTask = nil
         remoteSessionID = nil
@@ -2672,14 +2659,12 @@ final class DesktopModel: ObservableObject {
                 return
             }
             if captureCommandUpdate(SessionUpdate(notificationParams: params), in: sessionId) { return }
-            // A chat being opened collects its replay off screen, shown or not.
-            if replays[sessionId] != nil, !SessionUpdate.isReport(notificationParams: params) {
-                let update = SessionUpdate(notificationParams: params)
-                if case .notice = update {} else if case .stopped = update {} else {
-                    replays[sessionId]?.apply(update)
-                    return
-                }
-            }
+            // A chat being opened collects its replay off screen, shown or
+            // not; a chat open in the background keeps its transcript current.
+            let route = openChats.route(SessionUpdate(notificationParams: params),
+                                        isReport: SessionUpdate.isReport(notificationParams: params),
+                                        in: sessionId, selected: selectedSession)
+            if route == .replay { return }
             if case .stopped(let text) = SessionUpdate(notificationParams: params) {
                 // Kept until the chat sends again, so a turn that stopped while
                 // the reader was away still says so when they come back.
@@ -2696,18 +2681,7 @@ final class DesktopModel: ObservableObject {
                                 session: sessionId == selectedSession ? nil : sessionId))
                 return
             }
-            // A session open in the background keeps its transcript current.
-            guard sessionId == selectedSession else {
-                let update = SessionUpdate(notificationParams: params)
-                if case .configOptions(let options) = update {
-                    // `/fast` or `/effort` in a chat not on screen.
-                    show(ModelOptions(configOptions: options), for: sessionId)
-                } else if var open = openSessions[sessionId] {
-                    open.transcript.apply(update, at: Date())
-                    openSessions[sessionId] = open
-                }
-                return
-            }
+            guard route == .shown else { return }
             let update = SessionUpdate(notificationParams: params)
             switch update {
             case .title: await refreshSessions()
