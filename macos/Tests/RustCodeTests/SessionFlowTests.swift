@@ -605,9 +605,12 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertEqual(model.draft, "half written")
         XCTAssertEqual(model.transcript.items.count, Self.replayed)
 
-        // ⌘, again: the section last used. Check for Updates: About.
+        // ⌘, again: General, not the section last used. Check for Updates: About.
         model.openSettings()
-        XCTAssertEqual(model.settingsSection, .keybinds)
+        XCTAssertEqual(model.settingsSection, .general)
+        model.settingsSection = .keybinds
+        model.openSettings()
+        XCTAssertEqual(model.settingsSection, .keybinds, "⌘, while open stays put")
         model.openSettings(.about)
         XCTAssertEqual(model.settingsSection, .about)
         model.closeSettings()

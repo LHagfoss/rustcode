@@ -11,7 +11,7 @@ struct ContentView: View {
     @AppStorage("previewWidth") private var previewWidth: Double = 480
     /// The sidebar width, remembered across launches. An out-of-range stored
     /// value is clamped on read, so a bad value never strands the sidebar.
-    @AppStorage("sidebarWidth") private var sidebarWidth: Double = Double(SessionSidebar.width)
+    @AppStorage(SidebarResizeHandle.key) private var sidebarWidth: Double = SidebarResizeHandle.defaultWidth
     private var sidebarClampedWidth: CGFloat { SidebarResizeHandle.clamp(sidebarWidth) }
 
     var body: some View {
@@ -96,6 +96,16 @@ struct ContentView: View {
     }
 }
 
+/// The sidebar's top bar, shared with Settings' sidebar so its Back button
+/// sits where the chat sidebar's buttons do.
+enum SidebarMetrics {
+    /// The hidden title bar's height, so buttons line up with the traffic lights.
+    static let barHeight: CGFloat = 28
+    /// Room above the toolbar clusters so their glass does not touch the
+    /// window's top edge.
+    static let barTopInset: CGFloat = 6
+}
+
 /// The line between the sidebar and the chat, dragged to resize the sidebar.
 /// The chosen width is stored (`sidebarWidth`), so it comes back next launch;
 /// `clamp` keeps it in range, so an invalid stored value is safe.
@@ -107,6 +117,9 @@ struct SidebarResizeHandle: View {
     static let range: ClosedRange<Double> = 200...460
     /// The line and the padding either side that can be grabbed.
     static let width: CGFloat = 7
+    /// Where the chosen width is stored; Settings' sidebar reads it too.
+    static let key = "sidebarWidth"
+    static let defaultWidth = Double(SessionSidebar.width)
 
     static func clamp(_ width: Double) -> CGFloat {
         CGFloat(min(max(width, range.lowerBound), range.upperBound))
@@ -235,13 +248,10 @@ private struct SessionSidebar: View {
     /// several rows lit at once.
     @State var hoveredSession: String?
 
-    /// The hidden title bar's height, so buttons line up with the traffic lights.
-    static let barHeight: CGFloat = 28
+    static let barHeight = SidebarMetrics.barHeight
     /// How wide the sidebar is beside the chat.
     static let width: CGFloat = 270
-    /// Room above the toolbar clusters so their glass does not touch the
-    /// window's top edge.
-    static let barTopInset: CGFloat = 6
+    static let barTopInset = SidebarMetrics.barTopInset
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
