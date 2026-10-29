@@ -2831,9 +2831,22 @@ impl AppState {
     /// without function calling need. A rejected probe cannot fall back to an
     /// API-native global default, so that case uses the JSON text protocol.
     pub fn tool_protocol_for(&self, url: &str) -> crate::config::ToolProtocol {
-        if let Some(profile) = self.config.models.iter().find(|profile| profile.url == url)
-            && let Some(protocol) = profile.tool_protocol
-        {
+        let pinned = self
+            .config
+            .models
+            .iter()
+            .find(|profile| profile.url == url)
+            .and_then(|profile| profile.tool_protocol);
+        self.resolve_tool_protocol(url, pinned)
+    }
+
+    /// The protocol for `url` given the profile's own pin, if any.
+    fn resolve_tool_protocol(
+        &self,
+        url: &str,
+        pinned: Option<crate::config::ToolProtocol>,
+    ) -> crate::config::ToolProtocol {
+        if let Some(protocol) = pinned {
             return protocol;
         }
         if self.config.models.iter().any(|profile| {
@@ -2888,8 +2901,36 @@ impl AppState {
     }
 
     /// Tool protocol for the model this session is currently talking to.
+    /// Only its own profile's pin counts: several profiles can share one
+    /// server URL, and another model's pin there is no evidence for this one.
     pub fn active_tool_protocol(&self) -> crate::config::ToolProtocol {
-        self.tool_protocol_for(&self.api_base_url)
+        match self.active_model_profile_index() {
+            Some(index) => self
+                .resolve_tool_protocol(&self.api_base_url, self.config.models[index].tool_protocol),
+            None => self.tool_protocol_for(&self.api_base_url),
+        }
+    }
+
+    /// Pin the active profile's tool protocol and save it, so it outlives the
+    /// session and survives model switches. Without a matching profile it
+    /// becomes the fallback for every model. Returns the profile's name.
+    pub fn set_active_tool_protocol(
+        &mut self,
+        protocol: crate::config::ToolProtocol,
+    ) -> Option<String> {
+        let name = match self.active_model_profile_index() {
+            Some(index) => {
+                let profile = &mut self.config.models[index];
+                profile.tool_protocol = Some(protocol);
+                Some(profile.name.clone())
+            }
+            None => {
+                self.config.tool_protocol = protocol;
+                None
+            }
+        };
+        crate::config::save_entire_config(&self.config);
+        name
     }
 
     pub fn clear_selection(&mut self) {
