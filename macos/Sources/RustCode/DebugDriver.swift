@@ -759,7 +759,8 @@ enum DebugDriver {
             if let content = NSApp.windows.first?.contentView { walk(content) }
             try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/dump", atomically: true, encoding: .utf8)
         case "key":
-            // A key press as the keyboard sends it: `key <code> [shift|cmd|opt]`.
+            // A key press as the keyboard sends it: `key <code> [shift|cmd|opt|repeat]`;
+            // `repeat` marks it as auto-repeat from a held key.
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
                   let code = UInt16(parts[1]) else { break }
             // Page, Home, End and the arrows come with the Function flag.
@@ -769,10 +770,10 @@ enum DebugDriver {
             if parts.contains("opt") { flags.insert(.option) }
             // `return` stands for the carriage return ⏎ types.
             let named: [UInt16: String] = [36: "\r", 48: "\t", 51: "\u{7f}", 53: "\u{1b}"]
-            let characters = parts.count > 2 && !["shift", "cmd", "opt"].contains(parts[2]) ? (parts[2] == "return" ? "\r" : parts[2]) : named[code] ?? ""
+            let characters = parts.count > 2 && !["shift", "cmd", "opt", "repeat"].contains(parts[2]) ? (parts[2] == "return" ? "\r" : parts[2]) : named[code] ?? ""
             if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                             windowNumber: window.windowNumber, context: nil, characters: characters,
-                                            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) {
+                                            charactersIgnoringModifiers: characters, isARepeat: parts.contains("repeat"), keyCode: code) {
                 NSApp.postEvent(event, atStart: false)
             }
         case "mouse":
@@ -861,6 +862,7 @@ enum DebugDriver {
             let lines = ["draft [\(model.draft)]", "field [\(editor?.string ?? "-")] marked \(editor?.hasMarkedText() ?? false)",
                          "selected \(model.selectedSession ?? "-") pinned \(model.isSelectedPinned)",
                          "toasts \(model.toasts.map(\.title))", "key \(window?.isKeyWindow ?? false) responder \(String(describing: window?.firstResponder.map { type(of: $0) }))",
+                         "terminal \(model.terminal.isShown) tabs \(model.terminal.manager.projectSessions.count)",
                          "predictions \(editor.map { $0.inlinePredictionType == .yes ? "yes" : "default" } ?? "-")"]
             try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/state",
                                                      atomically: true, encoding: .utf8)
@@ -935,6 +937,7 @@ enum DebugDriver {
             try? lines.joined(separator: "\n").write(toFile: (ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] ?? "/tmp") + "/state",
                                                      atomically: true, encoding: .utf8)
         case "terminal": model.terminal.open()
+        case "terminaltab": model.terminal.newSession()
         case "focussearch": model.focusSessionSearch = true
         case "click":
             // `click <x> <y>`: a left click at a point measured from the
