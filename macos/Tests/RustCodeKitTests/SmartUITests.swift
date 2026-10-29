@@ -70,10 +70,10 @@ final class SmartUITests: XCTestCase {
         XCTAssertFalse(SmartUI.contentSecurityPolicy.contains("http"))
     }
 
-    func testInitializeAdvertisesSmartUIOnlyWhenOn() {
+    func testInitializeAdvertisesSmartUIVersionZeroWhileOff() {
         let off = ACPRequests.initialize(appVersion: "1", smartUI: false)
         let on = ACPRequests.initialize(appVersion: "1", smartUI: true)
-        XCTAssertNil(off["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"])
+        XCTAssertEqual(off["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"], .number(0))
         XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"], .number(1))
         XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["visualizations"],
                        .number(Double(Visualization.capabilityLevel)))

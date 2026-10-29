@@ -4856,23 +4856,28 @@ fn a_harness_notice_does_not_unbind_a_discovery_result() {
 
 #[test]
 fn smart_ui_hint_needs_the_capability_and_a_root_prompt() {
-    use super::schema::{SMART_UI_PROMPT_HINT, append_smart_ui_hint};
+    use super::schema::{SMART_UI_OFF_PROMPT_HINT, SMART_UI_PROMPT_HINT, append_smart_ui_hint};
+    use crate::app::SmartUi;
     use crate::config::AgentMode;
     assert!(crate::network::compaction::estimate_tokens(SMART_UI_PROMPT_HINT) < 180);
+    assert!(crate::network::compaction::estimate_tokens(SMART_UI_OFF_PROMPT_HINT) < 80);
     assert!(SMART_UI_PROMPT_HINT.contains("```rustcode-ui v1"));
-    let with = |policy: ToolSchemaPolicy, on: bool| {
+    assert!(SMART_UI_OFF_PROMPT_HINT.contains("Settings › General › Chat › Smart UI"));
+    let with = |policy: ToolSchemaPolicy, on: SmartUi| {
         let mut prompt = String::new();
         append_smart_ui_hint(&mut prompt, policy, on);
         prompt
     };
     let root = ToolSchemaPolicy::root_for_mode(false, AgentMode::Build);
-    assert_eq!(with(root, true), SMART_UI_PROMPT_HINT);
-    assert_eq!(with(root, false), "");
+    assert_eq!(with(root, SmartUi::On), SMART_UI_PROMPT_HINT);
+    assert_eq!(with(root, SmartUi::Off), SMART_UI_OFF_PROMPT_HINT);
+    assert_eq!(with(root, SmartUi::Unsupported), "");
     let compact = ToolSchemaPolicy {
         compact_text_prompt: true,
         ..root
     };
-    assert_eq!(with(compact, true), "");
+    assert_eq!(with(compact, SmartUi::On), "");
+    assert_eq!(with(compact, SmartUi::Off), "");
 }
 
 #[test]

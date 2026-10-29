@@ -308,9 +308,9 @@ pub struct AppState {
     /// state, so the system prompt (and its cached prefix) stays the same for
     /// the whole session.
     pub visualization_level: u8,
-    /// The frontend runs `rustcode-ui v1` blocks (#2484) and the user turned
-    /// Smart UI on. Set once with the session state, like the level above.
-    pub smart_ui: bool,
+    /// Whether the frontend runs `rustcode-ui v1` blocks (#2484). Set once
+    /// with the session state, like the level above.
+    pub smart_ui: SmartUi,
     /// The client's localhost preview, when it advertised one (#2138). Set
     /// once with the session state, so the tool menu and system prompt stay
     /// the same for the whole session. `None` hides `localhost_preview`.
@@ -1779,7 +1779,7 @@ impl AppState {
             stats_usage_history: std::collections::BTreeMap::new(),
             session_title_tool_available: false,
             visualization_level: 0,
-            smart_ui: false,
+            smart_ui: SmartUi::Unsupported,
             preview_client: None,
             pending_preview_images: Vec::new(),
             show_mcp_config: false,
@@ -3003,4 +3003,34 @@ mod turn_timing_tests;
 fn live_call_summary(arguments: &serde_json::Value) -> Option<String> {
     crate::tools::call_summary(arguments)
         .map(|summary| rustcode_core::activity::sanitize_tool_parameter(summary, 120))
+}
+
+/// What the frontend can do with `rustcode-ui v1` blocks (#2484).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SmartUi {
+    /// The client never advertised Smart UI: say nothing about it.
+    #[default]
+    Unsupported,
+    /// The client can run blocks, but the user has the setting off.
+    Off,
+    /// The client runs blocks.
+    On,
+}
+
+impl SmartUi {
+    pub(crate) fn as_u8(self) -> u8 {
+        match self {
+            Self::Unsupported => 0,
+            Self::Off => 1,
+            Self::On => 2,
+        }
+    }
+
+    pub(crate) fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Off,
+            2 => Self::On,
+            _ => Self::Unsupported,
+        }
+    }
 }
