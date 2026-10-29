@@ -488,6 +488,55 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2596: an agent that ends while it is read gives the screen back to
+    /// its chat; one ending while another agent is read changes nothing.
+    /// The chat's row and the agent's are never both selected, and an agent
+    /// that ended stays under its chat to open, also after the chat was left
+    /// and opened again.
+    func testAnAgentEndingWhileReadReturnsToItsChat() async throws {
+        let model = try await started()
+        let pair = try XCTUnwrap(model.sessions.first { $0.id == "pair" })
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        await model.select(pair)
+        try await until { model.subagents.filter(\.isActive).count == 2 }
+        func chatSelected() -> Bool {
+            SubagentInfo.chatRowSelected("pair", selected: model.selectedSession, viewingAgent: model.viewedAgent?.id)
+        }
+        XCTAssertTrue(chatSelected())
+        let first = try XCTUnwrap(model.subagents.first { $0.id == 1 })
+        let second = try XCTUnwrap(model.subagents.first { $0.id == 2 })
+
+        model.openAgent(first)
+        XCTAssertFalse(chatSelected(), "the agent's row is the selected one")
+        XCTAssertTrue(model.replacesChat)
+        // The first is told to finish, and the reader moves on to the second
+        // before it does: its end does not take the screen.
+        await model.sendToViewedAgent("finish")
+        model.openAgent(second)
+        try await until { model.subagents.first { $0.id == 1 }?.status == .completed }
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertEqual(model.viewedAgent?.id, 2)
+
+        // The second ends while it is read: back to the chat.
+        await model.sendToViewedAgent("finish")
+        try await until { model.viewedAgent == nil }
+        XCTAssertEqual(model.selectedSession, "pair")
+        XCTAssertTrue(chatSelected())
+        XCTAssertFalse(model.replacesChat)
+        XCTAssertEqual(model.sidebarChildren(of: "pair").map(\.id), [1, 2], "ended agents stay to open")
+        XCTAssertTrue(model.sidebarChildren(of: "pair").allSatisfy { !$0.isActive })
+
+        // Left and opened again: still there, and opened to read, one stays open.
+        await model.selectFromSidebar(quick)
+        await model.selectFromSidebar(pair)
+        try await until { model.sidebarChildren(of: "pair").map(\.id) == [1, 2] }
+        model.openAgent(try XCTUnwrap(model.subagents.first { $0.id == 1 }))
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertEqual(model.viewedAgent?.id, 1)
+        XCTAssertEqual(model.viewedAgent?.info.status, .completed)
+        model.stop()
+    }
+
     /// #2553: Settings is a page over the chat. Opening it keeps the chat,
     /// its draft and its open agent state under it; a deep link opens its
     /// section, and Settings reopens where it was left.
@@ -540,17 +589,24 @@ final class SessionFlowTests: XCTestCase {
               "update": {"sessionUpdate": kind, "content": {"type": "text", "text": text}}}})
     # Long replays: their updates queue up ahead of the load's response.
     history = [m for i in range(30) for m in ("question %d" % i, "answer %d" % i)]
-    stored = {"slow": list(history), "quick": list(history), "elsewhere": ["question", "answer"]}
+    stored = {"slow": list(history), "quick": list(history), "elsewhere": ["question", "answer"],
+              "pair": ["question", "answer"]}
     # The folder each chat was created in, as the engine records it.
     cwds = {"elsewhere": "/tmp/rustcode-elsewhere"}
     created = 0
     steers = {}
-    # One subagent of "slow", working until a message saying "finish" ends it.
-    agents = {"slow": [{"id": 1, "name": "agent-1", "task": "dig", "status": "running", "messageCount": 1}]}
+    # Subagents of "slow" and "pair", each working until a message saying
+    # "finish" ends it.
+    agents = {"slow": [{"id": 1, "name": "agent-1", "task": "dig", "status": "running", "messageCount": 1}],
+              "pair": [{"id": i, "name": "agent-%d" % i, "task": "dig", "status": "running", "messageCount": 1}
+                       for i in (1, 2)]}
     agent_messages = []
-    def finish_agent():
+    def finish_agent(session, agent):
         time.sleep(0.5)
-        agents["slow"][0]["status"] = "completed"
+        for listed in agents[session]:
+            if listed["id"] == agent:
+                listed["status"] = "completed"
+                listed["completion"] = "dug"
     def handle(message):
         global created
         method, params, rid = message.get("method"), message.get("params", {}), message.get("id")
@@ -567,7 +623,7 @@ final class SessionFlowTests: XCTestCase {
             elif params["action"] == "send":
                 agent_messages.append(params["text"])
                 if "finish" in params["text"]:
-                    threading.Thread(target=finish_agent, daemon=True).start()
+                    threading.Thread(target=finish_agent, args=(params["sessionId"], params["id"]), daemon=True).start()
                 result = {"queued": False}
         elif method == "_rustcode/steer":
             steers.setdefault(params["sessionId"], []).append(params["text"])

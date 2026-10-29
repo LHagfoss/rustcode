@@ -177,6 +177,21 @@ final class DrawnRowsTests: XCTestCase {
         XCTAssertFalse(drawn.update(map: &map, offset: 4500, visible: 300), "same rows")
     }
 
+    /// #2598: the chat's turn kept writing, then folded, while one of its
+    /// agents was read in its place. Back at the chat, the rows in view are
+    /// drawn at once, not left as stand-ins until a scroll.
+    func testRowsInViewAreDrawnOnTheWayBackFromAnAgent() {
+        var map = map(rows: 100)
+        var drawn = DrawnRows()
+        _ = drawn.update(map: &map, offset: 5000, visible: 300)
+        // The turn's steps fold away and new rows arrive below.
+        map.setRows(Array(0..<40) + Array(100..<130))
+        drawn.invalidate()
+        let end = map.contentHeight() - 300
+        XCTAssertTrue(drawn.update(map: &map, offset: end, visible: 300))
+        XCTAssertTrue(Set(map.rows(within: end...(end + 300))).isSubset(of: drawn.ids))
+    }
+
     /// #2481: a turn opened with its rows guessed tall; once they measure
     /// short, rows below move into view and are drawn without a scroll.
     func testRowsMovedIntoViewByNewHeightsAreDrawn() {

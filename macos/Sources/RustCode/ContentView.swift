@@ -452,7 +452,10 @@ extension SessionSidebar {
                  ]) {
         SessionRow(session: session,
                    showsProject: model.showsAllProjects,
-                   isSelected: session.id == model.selectedSession,
+                   // While one of its agents is read, the agent's row is
+                   // the selected one, not both (#2596).
+                   isSelected: SubagentInfo.chatRowSelected(session.id, selected: model.selectedSession,
+                                                            viewingAgent: model.viewedAgent?.id),
                    needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
                    isRunning: model.runningSessions.contains(session.id),
                    hasUnseenReply: model.unseenReplies.contains(session.id),
@@ -1166,6 +1169,7 @@ private struct ChatView: View {
                 }
                 TranscriptKeyInput.shared.start()
                 TranscriptKeyInput.shared.isCovered = { [model] in model.coversChat }
+                ChatScrollInput.shared.isReplaced = { [model] in model.replacesChat }
                 TranscriptKeyInput.shared.perform = { action in perform(action, proxy) }
             }
             .onGeometryChange(for: [CGRect].self) { proxy in
@@ -1193,6 +1197,11 @@ private struct ChatView: View {
                 scroll.setTurns(TimelineTurn.turns(in: chat.transcript.items))
             }
             .onChange(of: following.follows, initial: true) { _, follows in scroll.anchoredToTop = !follows }
+            // Back from an agent or Settings: the rows in view are drawn
+            // now, not at the reader's next scroll (#2598).
+            .onChange(of: model.replacesChat) { _, replaced in
+                if !replaced { scroll.uncovered() }
+            }
             .onChange(of: chat.transcript) { old, new in
                 find.transcriptChanged(new)
                 // A reply watched while it was written stays whole once done,
@@ -1798,6 +1807,11 @@ final class ChatScrollInput {
     /// The composer and the cards above it.
     var composerFrame: CGRect = .zero
     var onScrollUp: () -> Void = {}
+    /// A page is in the chat's place, as an agent's conversation: wheels
+    /// and clicks over it are that page's, not the chat's under it. Taken
+    /// for the chat's, they let go of its end while its turn kept writing,
+    /// and the chat was left far up when the reader came back (#2598).
+    var isReplaced: () -> Bool = { false }
     private var lastInput = Date.distantPast
     private var monitor: Any?
 
@@ -1819,13 +1833,14 @@ final class ChatScrollInput {
     /// the cards above it. A wheel beside the composer scrolled the chat
     /// without counting as the reader's, so a streaming reply pulled the chat
     /// back to its end on every token (#2554).
-    static func wheelScrollsChat(at point: CGPoint, chat: CGRect, composer: CGRect) -> Bool {
-        chat.contains(point) && !composer.contains(point)
+    static func wheelScrollsChat(at point: CGPoint, chat: CGRect, composer: CGRect, replaced: Bool = false) -> Bool {
+        !replaced && chat.contains(point) && !composer.contains(point)
     }
 
     #if DEBUG
     /// The debug driver's wheel event over the chat, as `observe` sees one.
     func debugObserve(deltaY: Double) {
+        guard !isReplaced() else { return }
         lastInput = Date()
         if deltaY != 0 { isTowardEnd = deltaY < 0 }
         if deltaY > 0 { onScrollUp() }
@@ -1847,9 +1862,10 @@ final class ChatScrollInput {
         let location = event.locationInWindow
         let point = CGPoint(x: location.x, y: content.bounds.height - location.y)
         if event.type == .scrollWheel {
-            guard Self.wheelScrollsChat(at: point, chat: wheelFrame, composer: composerFrame) else { return false }
+            guard Self.wheelScrollsChat(at: point, chat: wheelFrame, composer: composerFrame,
+                                        replaced: isReplaced()) else { return false }
         } else {
-            guard chatFrame.contains(point) else { return false }
+            guard !isReplaced(), chatFrame.contains(point) else { return false }
         }
         if event.type == .leftMouseDown {
             if TextSelection.endIfOutsideText(event) {

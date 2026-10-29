@@ -421,9 +421,13 @@ final class DesktopModel: ObservableObject {
     /// The debug driver's stand-in for the agents list and an open agent.
     func debugAgents(_ agents: [SubagentInfo], viewing transcript: Transcript?) {
         debugHoldsAgents = true
-        subagents = agents
-        viewedAgent = transcript.flatMap { transcript in
-            agents.first.map { ViewedAgent(info: $0, transcript: transcript, loadedCount: $0.messageCount) }
+        if let transcript {
+            subagents = agents
+            viewedAgent = agents.first.map { ViewedAgent(info: $0, transcript: transcript, loadedCount: $0.messageCount) }
+        } else {
+            // A new state for the agents, as a poll brings: the open one may end.
+            applyAgents(agents, of: selectedSession ?? "", askedWhileViewing: viewedAgent?.id)
+            subagents = agents
         }
     }
     /// The debug driver's agents stand in for the engine's, which has none.
@@ -704,6 +708,10 @@ final class DesktopModel: ObservableObject {
     /// The working agents of chats no longer on screen, nested under their
     /// rows in the sidebar until those chats are opened again (#2556).
     @Published private(set) var backgroundAgents = BackgroundAgents()
+    /// The agents seen working since the app started, by chat: their rows
+    /// stay under the chat once they end, so a result can still be opened
+    /// from there (#2596).
+    @Published private(set) var seenAgents: [String: Set<Int>] = [:]
     private var backgroundAgentPollTask: Task<Void, Never>?
 
     /// Another chat is on screen: its agents replace the last one's, whose
@@ -755,9 +763,23 @@ final class DesktopModel: ObservableObject {
             backgroundAgents.forget(session)
             return
         }
+        let agents = SubagentInfo.list(from: result)
+        noteWorking(agents, of: session)
         var next = backgroundAgents
-        next.update(session, agents: SubagentInfo.list(from: result))
+        next.update(session, agents: agents)
         if next != backgroundAgents { backgroundAgents = next }
+    }
+
+    /// Remember which of `session`'s agents were seen working.
+    private func noteWorking(_ agents: [SubagentInfo], of session: String) {
+        let working = Set(agents.filter(\.isActive).map(\.id))
+        guard !working.isSubset(of: seenAgents[session] ?? []) else { return }
+        seenAgents[session, default: []].formUnion(working)
+    }
+
+    /// The children the sidebar nests under the shown chat.
+    func sidebarChildren(of session: String) -> [SubagentInfo] {
+        SubagentInfo.sidebarChildren(subagents, viewing: viewedAgent?.id, seen: seenAgents[session] ?? [])
     }
 
     /// Open `agent`, a working agent of `session`, from its row in the
@@ -805,13 +827,15 @@ final class DesktopModel: ObservableObject {
         #if DEBUG
         if debugHoldsAgents { return }
         #endif
+        // The child open when the list was asked for: an answer about it
+        // may close its panel, never another one opened since (#2596).
+        let asked = viewedAgent?.id
         guard let result = try? await connection.request(
             ACPMethod.agents, params: ACPRequests.agents(sessionId: session), timeout: .seconds(10)),
               selectedSession == session else { return }
-        let agents = SubagentInfo.list(from: result)
-        if agents != subagents { subagents = agents }
-        guard var viewed = viewedAgent else { return }
-        if let info = agents.first(where: { $0.id == viewed.id }) { viewed.info = info }
+        applyAgents(SubagentInfo.list(from: result), of: session, askedWhileViewing: asked)
+        guard var viewed = viewedAgent, viewed.id == asked else { return }
+        if let info = subagents.first(where: { $0.id == viewed.id }) { viewed.info = info }
         if viewed.info.messageCount != viewed.loadedCount,
            let history = try? await connection.request(
             ACPMethod.agents, params: ACPRequests.agentHistory(sessionId: session, id: viewed.id), timeout: .seconds(10)),
@@ -820,6 +844,21 @@ final class DesktopModel: ObservableObject {
             viewed.loadedCount = viewed.info.messageCount
         }
         if viewedAgent?.id == viewed.id { viewedAgent = viewed }
+    }
+
+    /// A fresh agents list for the shown chat `session`. The child open on
+    /// screen, still the one open when the list was asked for, that has
+    /// ended since it was last seen working gives the screen back to the
+    /// chat, which says how it ended (#2596).
+    func applyAgents(_ agents: [SubagentInfo], of session: String, askedWhileViewing asked: Int?) {
+        guard selectedSession == session else { return }
+        noteWorking(agents, of: session)
+        if agents != subagents { subagents = agents }
+        guard let viewed = viewedAgent, viewed.id == asked,
+              let now = agents.first(where: { $0.id == viewed.id }),
+              SubagentInfo.endsViewing(was: viewed.info, now: now) else { return }
+        viewedAgent = nil
+        confirm(now.endedMessage, systemImage: now.status == .completed ? "checkmark.circle" : "xmark.circle")
     }
 
     /// Open `agent`'s conversation in the agent panel.
@@ -1903,6 +1942,9 @@ final class DesktopModel: ObservableObject {
         savedPinned = next
         UserDefaults.standard.set(try? JSONEncoder().encode(next), forKey: "pinnedSessionSummaries")
     }
+
+    /// A page is open in the chat's place: input over it is not the chat's.
+    var replacesChat: Bool { viewedAgent != nil || showsSettings }
 
     /// A sheet or panel is open over the chat, which keeps its keys.
     var coversChat: Bool {
