@@ -4,7 +4,8 @@ import SwiftUI
 /// Assistant text. Blocks come from `MarkdownBlock`; inline styling from
 /// `AttributedString(markdown:)`. Consecutive prose blocks (paragraphs, headings,
 /// list items) render as one selectable text, so a drag can select across them;
-/// quotes, code blocks, tables and rules stand on their own.
+/// quotes, code blocks, tables and rules stand on their own. A finished run
+/// is a `ProseTextView`; the run a reply is still writing is `StreamingProse`.
 struct MarkdownText: View {
     let text: String
     /// Draw `rustcode-viz` blocks as widgets. Only assistant replies set it.
@@ -15,14 +16,18 @@ struct MarkdownText: View {
     /// The reply is still streaming, so an unclosed visualization shows a placeholder.
     var isStreaming = false
     @Environment(\.findQuery) private var findQuery
+    @Environment(\.prosePlace) private var place
 
     private enum Segment {
         /// A run of prose blocks, already styled.
-        case prose(AttributedString)
+        case prose(ProseContent)
         case block(MarkdownBlock)
     }
 
     private static let segmentCache = RenderCache<[Segment]>(countLimit: 2_000)
+    /// Per run of prose blocks, so the runs above a reply's streaming tail
+    /// keep their styled text and measured heights while the tail grows.
+    private static let proseCache = RenderCache<ProseContent>(countLimit: 4_000)
     private static let inlineCache = RenderCache<AttributedString>(countLimit: 8_000)
 
     /// Parsed once per text: a message redrawn unchanged reuses its blocks,
@@ -32,7 +37,12 @@ struct MarkdownText: View {
             var segments: [Segment] = []
             var run: [MarkdownBlock] = []
             func flush() {
-                if !run.isEmpty { segments.append(.prose(Self.prose(run))) }
+                if !run.isEmpty {
+                    let blocks = run
+                    segments.append(.prose(Self.proseCache.value(for: String(describing: blocks)) {
+                        ProseContent(Self.prose(blocks))
+                    }))
+                }
                 run.removeAll()
             }
             for block in MarkdownBlock.parse(text, visualizations: visualizations, smartUI: smartUI) {
@@ -54,12 +64,13 @@ struct MarkdownText: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
                 switch segment {
-                case .prose(let text):
+                case .prose(let content):
                     if isStreaming, index == segments.count - 1 {
-                        StreamingProse(text: text).lineSpacing(2)
+                        StreamingProse(text: content.text).lineSpacing(2)
                     } else {
-                        let shown = FindHighlight.apply(text, query: findQuery)
-                        Text(shown).lineSpacing(2).linkCursor(shown, lineSpacing: 2)
+                        // A text view of its own, so the chat can own its
+                        // selection (#2440); it marks find matches itself.
+                        ProseTextView(content: content, run: place?.run(index))
                     }
                 case .block(let block):
                     // Any block of a reply being written, not only the last:

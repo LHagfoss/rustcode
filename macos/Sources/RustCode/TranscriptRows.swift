@@ -434,6 +434,7 @@ private struct AssistantMessage: View {
                         switch block {
                         case .markdown(let text):
                             MarkdownText(text: text, visualizations: true, smartUI: true, isStreaming: isStreaming && isLast)
+                                .environment(\.prosePlace, ProsePlace(item: id, block: index))
                         case .thinking(let text, let isComplete):
                             ThinkingBlock(text: text, isLive: isStreaming && isLast && !isComplete)
                         }
