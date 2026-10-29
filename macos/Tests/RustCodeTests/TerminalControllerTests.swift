@@ -34,4 +34,28 @@ final class TerminalControllerTests: XCTestCase {
 
         XCTAssertFalse(terminal.closeSelectedTab())
     }
+
+    /// #2594: a held ⌘W's auto-repeats close nothing more, so a press meant
+    /// for one terminal no longer takes the others and the panel with it.
+    func testHeldCommandWClosesOneTabAndKeepsThePanel() {
+        let terminal = TerminalController(manager: TerminalSessionManager(launch: Self.shell))
+        defer { terminal.manager.terminateAll() }
+        terminal.setWorkspace(NSTemporaryDirectory())
+        terminal.open()
+        terminal.newSession()
+        let first = terminal.manager.projectSessions[0]
+
+        XCTAssertTrue(terminal.closeSelectedTab(isKeyRepeat: false))
+        XCTAssertTrue(terminal.closeSelectedTab(isKeyRepeat: true))
+        XCTAssertTrue(terminal.closeSelectedTab(isKeyRepeat: true))
+        XCTAssertTrue(terminal.isShown)
+        XCTAssertEqual(terminal.manager.projectSessions.map(\.id), [first.id])
+
+        // Opening right after the last closes shows the panel again.
+        XCTAssertTrue(terminal.closeSelectedTab(isKeyRepeat: false))
+        XCTAssertFalse(terminal.isShown)
+        terminal.newSession()
+        XCTAssertTrue(terminal.isShown)
+        XCTAssertEqual(terminal.manager.projectSessions.count, 1)
+    }
 }

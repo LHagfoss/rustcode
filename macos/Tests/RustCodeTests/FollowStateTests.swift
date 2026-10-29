@@ -63,5 +63,33 @@ final class FollowStateTests: XCTestCase {
         // The title bar and the sidebar are not the chat.
         XCTAssertFalse(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 700, y: 20), chat: chat, composer: composer))
         XCTAssertFalse(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 100, y: 300), chat: chat, composer: composer))
+        // #2598: an agent's conversation in the chat's place scrolls itself.
+        XCTAssertFalse(ChatScrollInput.wheelScrollsChat(at: CGPoint(x: 700, y: 300), chat: chat, composer: composer,
+                                                        replaced: true))
+    }
+
+    /// #2598: scrolling an agent's conversation does not let go of the end
+    /// of the chat under it, so the chat's turn writing meanwhile does not
+    /// leave it far up the transcript for when the reader comes back.
+    func testScrollingAnAgentLeavesTheChatFollowing() {
+        let input = ChatScrollInput.shared
+        let (savedReplaced, savedScrollUp) = (input.isReplaced, input.onScrollUp)
+        defer { input.isReplaced = savedReplaced; input.onScrollUp = savedScrollUp }
+        var follow = ChatFollow()
+        _ = follow.update(geometry(offset: 1000, fromBottom: 0), readerScrolling: false)
+        input.onScrollUp = { follow.readerScrolledUp() }
+
+        input.isReplaced = { true }
+        input.debugObserve(deltaY: 40)
+        XCTAssertFalse(input.isActive)
+        XCTAssertTrue(follow.follows)
+        // The chat's turn writes on: it stays at its end.
+        XCTAssertTrue(follow.transcriptChanged(readerScrolling: input.isActive))
+
+        // Back at the chat, the same wheel is the reader's.
+        input.isReplaced = { false }
+        input.debugObserve(deltaY: 40)
+        XCTAssertTrue(input.isActive)
+        XCTAssertFalse(follow.follows)
     }
 }

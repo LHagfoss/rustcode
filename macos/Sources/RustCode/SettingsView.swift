@@ -20,8 +20,9 @@ enum AppearanceSetting {
 /// ⌘, — Settings as a page of the window, in place of the chats and the
 /// chat (#2553): its own sidebar of sections on the left, the chosen section
 /// on the right. The chat stays alive under it, so Back (or Esc) returns to
-/// it with its draft and scroll position. In a narrow window the sidebar
-/// keeps only the sections' icons.
+/// it with its draft and scroll position. The section sits in a centered
+/// column with margins that follow the window, and in a narrow window the
+/// sidebar keeps only the sections' icons (`SettingsLayout`, #2593).
 struct SettingsView: View {
     @ObservedObject var model: DesktopModel
     @Environment(\.closePanel) private var close
@@ -29,20 +30,17 @@ struct SettingsView: View {
     @StateObject private var connections = ConnectionsStore()
     typealias Section = SettingsSection
 
-    /// Below this window width the sidebar shows icons only.
-    static let compactWidth: CGFloat = 760
-
     private var section: Section { model.settingsSection }
 
     var body: some View {
         GeometryReader { proxy in
-            let compact = proxy.size.width < Self.compactWidth
+            let layout = SettingsLayout(width: proxy.size.width)
             HStack(spacing: 0) {
-                sidebar(compact: compact)
-                    .frame(width: compact ? 64 : SettingsView.sidebarWidth)
+                sidebar(compact: layout.compact)
+                    .frame(width: layout.sidebar)
                     .background(Color.sidebarBackground)
-                detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                detail(layout)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .background(Color.chatBackground)
             }
         }
@@ -60,11 +58,7 @@ struct SettingsView: View {
         }
     }
 
-    static let sidebarWidth: CGFloat = 230
-
-    private var chatTitle: String {
-        model.sessions.first { $0.id == model.selectedSession }?.title ?? "Chat"
-    }
+    private var chatTitle: String { model.settingsBackTitle }
 
     private func sidebar(compact: Bool) -> some View {
         VStack(alignment: compact ? .center : .leading, spacing: 2) {
@@ -73,19 +67,28 @@ struct SettingsView: View {
                 .frame(height: 34)
                 .frame(maxWidth: .infinity)
                 .background(WindowDragArea())
+            // Back to the chat: the first thing in the sidebar, on its own
+            // tile, naming where it goes.
             Button(action: close) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
-                    if !compact { Text(chatTitle).lineLimit(1) }
+                    if !compact {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Back").font(.body.weight(.semibold))
+                            Text(chatTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
                 }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .frame(height: 28)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, compact ? 0 : 10)
+                .frame(width: compact ? 40 : nil, height: compact ? 32 : 40)
                 .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 9))
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .hoverHighlight(cornerRadius: 8, padding: 0)
+            .hoverHighlight(cornerRadius: 9, padding: 0)
             .pointingHandCursor()
             .help("Back to \(chatTitle) (Esc)")
             .accessibilityLabel("Back to \(chatTitle)")
@@ -110,16 +113,16 @@ struct SettingsView: View {
         .accessibilityLabel("Settings sections")
     }
 
-    private var detail: some View {
+    /// The section in a column centered in the room right of the sidebar.
+    private func detail(_ layout: SettingsLayout) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(section.rawValue)
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-                .frame(maxWidth: 760, alignment: .leading)
-                .padding(.horizontal, 32)
+                .frame(width: layout.column, alignment: .leading)
                 .padding(.top, 40)
                 .padding(.bottom, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
                 .background(WindowDragArea())
             ScrollView {
                 Group {
@@ -133,10 +136,9 @@ struct SettingsView: View {
                     case .about: AboutSettings(updater: model.updater)
                     }
                 }
-                .frame(maxWidth: 760, alignment: .leading)
-                .padding(.horizontal, 32)
+                .frame(width: layout.column, alignment: .leading)
                 .padding(.bottom, 32)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
             // Each section opens at its top, not where the last one was left.
             .id(section)

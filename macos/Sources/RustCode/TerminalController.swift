@@ -72,12 +72,28 @@ final class TerminalController: ObservableObject {
 
     /// ⌘W: close the selected terminal tab when the panel is open, asking
     /// first while something runs in it; closing the last tab hides the
-    /// panel. Returns whether there was a panel to act on.
+    /// panel. A held ⌘W's auto-repeats close nothing more. Returns whether
+    /// there was a panel to act on.
     @discardableResult
-    func closeSelectedTab() -> Bool {
-        guard isShown else { return false }
-        if let session = manager.selectedSession { requestClose(session) } else { hide() }
+    func closeSelectedTab(isKeyRepeat: Bool? = nil) -> Bool {
+        let isKeyRepeat = isKeyRepeat ?? Self.currentEventIsKeyRepeat
+        switch TerminalPanelClose.step(panelShown: isShown, selected: manager.selectedSession?.id, isKeyRepeat: isKeyRepeat) {
+        case .nothing:
+            return isShown
+        case .hidePanel:
+            hide()
+        case .close(let id):
+            if let session = manager.selectedSession, session.id == id { requestClose(session) }
+        }
         return true
+    }
+
+    /// Whether the event being handled is a held key's auto-repeat.
+    /// `isARepeat` raises for anything but a key event, so a click on the
+    /// menu item is checked as a fresh press.
+    private static var currentEventIsKeyRepeat: Bool {
+        guard let event = NSApp?.currentEvent, event.type == .keyDown else { return false }
+        return event.isARepeat
     }
 
     func newSession() {
@@ -117,7 +133,7 @@ final class TerminalController: ObservableObject {
     func close(_ session: TerminalSession) {
         views.removeValue(forKey: session.id)?.removeFromSuperview()
         manager.close(session.id)
-        if manager.projectSessions.isEmpty { hide() } else { focusRequest += 1 }
+        if TerminalPanelClose.keepsPanel(remaining: manager.projectSessions.count) { focusRequest += 1 } else { hide() }
     }
 
     /// The emulator showing a session. It lives as long as the session, so
