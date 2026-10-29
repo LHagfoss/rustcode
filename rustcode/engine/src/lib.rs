@@ -36,6 +36,7 @@ pub mod remote;
 pub mod serve;
 pub mod shell_env;
 pub mod skills;
+pub mod storage_migrations;
 mod symbols;
 pub mod tools;
 pub mod update;
