@@ -108,6 +108,11 @@ pub struct AppState {
     /// A compaction no client has been shown yet. ACP takes it to put a
     /// compaction card in the chat.
     pub(crate) pending_compaction_card: Option<crate::app::CompactionStats>,
+    /// A Fast-tier notice no ACP client has been sent yet (#2608).
+    pub(crate) pending_service_tier_notice: Option<String>,
+    /// Whether the user was already told that Fast requests are served at
+    /// another tier, so the notice shows once per change, not per request.
+    pub(crate) service_tier_downgrade_noticed: bool,
     /// Sticky-routing token a ChatGPT-plan response returned for the turn in
     /// progress. Sent back on the turn's later requests so they reach the
     /// backend that holds the prompt cache; cleared when a turn starts.
@@ -1577,7 +1582,38 @@ impl AppState {
     /// Turn fast mode on or off for this session and remember it.
     pub fn set_fast_mode(&mut self, enabled: bool) {
         self.fast_mode = enabled;
+        // Turning Fast on again is a new request worth reporting on.
+        self.service_tier_downgrade_noticed = false;
         self.record_session_model();
+    }
+
+    /// Compare the tier a response was served at with the one requested, and
+    /// tell the user once when a Fast request was served at another tier
+    /// (#2608): in the footer for the TUI, and as a pending notice ACP sends.
+    /// A response served at the requested tier rearms the notice, so a later
+    /// downgrade is reported again.
+    pub(crate) fn note_served_service_tier(
+        &mut self,
+        requested: Option<&serde_json::Value>,
+        served: &serde_json::Value,
+    ) {
+        let Some(requested) = requested.filter(|tier| !tier.is_null()) else {
+            return;
+        };
+        if requested == served {
+            self.service_tier_downgrade_noticed = false;
+            return;
+        }
+        if self.service_tier_downgrade_noticed {
+            return;
+        }
+        self.service_tier_downgrade_noticed = true;
+        let served = served.as_str().unwrap_or("another");
+        let text = format!(
+            "Fast mode was requested, but the provider served this response at the {served} tier."
+        );
+        self.pending_service_tier_notice = Some(text.clone());
+        self.set_transient_notice(text);
     }
 
     /// YOLO is a session-only override; keep the user's saved restricted mode intact.
@@ -1639,6 +1675,8 @@ impl AppState {
             last_request_overhead_tokens: 0,
             last_compaction: None,
             pending_compaction_card: None,
+            pending_service_tier_notice: None,
+            service_tier_downgrade_noticed: false,
             provider_turn_state: None,
             current_turn_token_usage: None,
             current_round_token_usage: None,

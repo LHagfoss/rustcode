@@ -78,6 +78,12 @@ pub enum AgentUiEvent {
     ProviderError {
         message: String,
     },
+    /// Something the user should know that is not part of the answer, such
+    /// as a Fast request served at the default tier (#2608). ACP sends it as
+    /// a notice the client toasts; the terminal shows it in its footer.
+    Notice {
+        message: String,
+    },
     TurnFinished {
         content: String,
         completed: bool,
@@ -333,6 +339,9 @@ async fn publish_snapshot_with_mode(
             let summary = crate::app::compaction_summary(state.history.as_slice());
             (stats, summary)
         });
+        if let Some(message) = state.pending_service_tier_notice.take() {
+            sender.send(AgentUiEvent::Notice { message });
+        }
         (
             state.current_response.clone(),
             state.current_response_revision,
@@ -828,6 +837,37 @@ mod tests {
             receiver.try_recv(),
             Ok(AgentUiEvent::TextDelta { text }) if text == "mock reply"
         ));
+    }
+
+    // #2608: a Fast-tier downgrade noted during the turn reaches the client
+    // as one notice event, however often the snapshot runs.
+    #[tokio::test]
+    async fn a_service_tier_downgrade_is_sent_as_one_notice() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let turn_state = Arc::clone(&state);
+        let turn = async move {
+            for _ in 0..2 {
+                turn_state
+                    .lock()
+                    .await
+                    .note_served_service_tier(Some(&json!("priority")), &json!("default"));
+                tokio::time::sleep(std::time::Duration::from_millis(32)).await;
+            }
+            crate::network::TurnContext::new()
+        };
+        let mut turn = Box::pin(turn);
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+
+        super::drive_turn_with_snapshots(turn.as_mut(), &state, &sender, false, 0).await;
+
+        let mut notices = Vec::new();
+        while let Ok(event) = receiver.try_recv() {
+            if let AgentUiEvent::Notice { message } = event {
+                notices.push(message);
+            }
+        }
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("default tier"), "{notices:?}");
     }
 
     #[tokio::test]

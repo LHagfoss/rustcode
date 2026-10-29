@@ -262,6 +262,18 @@ impl AcpEventStream {
                 ));
                 updates
             }
+            crate::network::AgentUiEvent::Notice { message } => {
+                let mut updates = self.flush();
+                updates.push(SessionUpdate::AgentMessageChunk(
+                    ContentChunk::new(ContentBlock::Text(TextContent::new(message))).meta(
+                        rustcode_meta(serde_json::json!({
+                            "kind": "notice",
+                            "resumable": false,
+                        })),
+                    ),
+                ));
+                updates
+            }
             crate::network::AgentUiEvent::TurnFinished { content, .. } => {
                 let mut updates = self.flush();
                 // A harness stop marker is not part of the answer. The prompt's
