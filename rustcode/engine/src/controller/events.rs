@@ -284,7 +284,8 @@ pub(crate) fn from_agent_ui_event(
         AgentUiEvent::SubagentUpdated { .. }
         | AgentUiEvent::RoundCompleted { .. }
         | AgentUiEvent::Compacted { .. }
-        | AgentUiEvent::ProviderError { .. } => {
+        | AgentUiEvent::ProviderError { .. }
+        | AgentUiEvent::Notice { .. } => {
             return Vec::new();
         }
     };

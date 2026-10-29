@@ -675,6 +675,14 @@ pub(crate) fn apply_fast_service_tier(
     }
 }
 
+/// The tier a Responses `response.completed`/`response.incomplete` event
+/// says the provider served, when it says one.
+pub(crate) fn served_service_tier(event: &serde_json::Value) -> Option<&serde_json::Value> {
+    event
+        .pointer("/response/service_tier")
+        .filter(|tier| !tier.is_null())
+}
+
 pub(crate) fn chatgpt_endpoint_is_supported(profile: &crate::config::ModelProfile) -> bool {
     profile.resolved_api_protocol() == crate::config::ApiProtocol::Responses
         && profile.endpoint_url() == "https://api.openai.com/v1/responses"
@@ -2869,6 +2877,53 @@ mod tests {
         assert_eq!(tier(true, false, true), None, "fast mode off");
         assert_eq!(tier(false, true, true), None, "not a ChatGPT plan");
         assert_eq!(tier(true, true, false), None, "a side request");
+    }
+
+    // #2608: a Fast request served at another tier is reported to the user
+    // once, until a response comes back at the requested tier again.
+    #[test]
+    fn a_fast_request_served_at_the_default_tier_is_reported_once() {
+        let completed = |tier: &str| -> serde_json::Value {
+            let line = format!(
+                "data: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\",\"service_tier\":\"{tier}\"}}}}"
+            );
+            serde_json::from_str(parse_sse_line(&line).unwrap()).unwrap()
+        };
+        let priority = serde_json::json!(FAST_SERVICE_TIER);
+        let mut state = crate::app::AppState::new();
+        let mut serve = |requested: Option<&serde_json::Value>, tier: &str| {
+            let event = completed(tier);
+            state.note_served_service_tier(requested, served_service_tier(&event).unwrap());
+            state.pending_service_tier_notice.take()
+        };
+
+        let notice = serve(Some(&priority), "default").expect("downgrade is reported");
+        assert!(notice.contains("Fast mode was requested"), "{notice}");
+        assert!(notice.contains("default tier"), "{notice}");
+        assert_eq!(serve(Some(&priority), "default"), None, "only once");
+        assert_eq!(serve(None, "default"), None, "Fast off asks for no tier");
+        assert_eq!(serve(Some(&priority), "priority"), None, "served as asked");
+        assert!(
+            serve(Some(&priority), "default").is_some(),
+            "a new downgrade after a served Fast response is reported again"
+        );
+        assert_eq!(
+            state.active_transient_notice(),
+            Some(notice.as_str()),
+            "the terminal shows it in the footer"
+        );
+        assert!(
+            state.history.is_empty(),
+            "the notice is not part of the chat history"
+        );
+
+        let mut fresh = crate::app::AppState::new();
+        fresh.note_served_service_tier(Some(&priority), &priority);
+        fresh.note_served_service_tier(None, &serde_json::json!("default"));
+        assert_eq!(fresh.pending_service_tier_notice, None);
+        assert!(
+            served_service_tier(&serde_json::json!({"response": {"service_tier": null}})).is_none()
+        );
     }
 
     #[test]
@@ -6048,7 +6103,7 @@ async fn stream_request_with_timeouts(
                                     responses_completed = true;
                                     // The tier the provider served, next to the one asked
                                     // for, so fast mode can be checked from the log (#2582).
-                                    if let Some(served) = value.pointer("/response/service_tier").filter(|tier| !tier.is_null()) {
+                                    if let Some(served) = served_service_tier(&value) {
                                         request_event!(
                                             "provider.service_tier",
                                             serde_json::json!({
@@ -6056,6 +6111,7 @@ async fn stream_request_with_timeouts(
                                                 "served": served,
                                             }),
                                         );
+                                        state.lock().await.note_served_service_tier(requested_service_tier.as_ref(), served);
                                     }
                                 }
                                 if (chatgpt_plan || claude_cli)

@@ -48,6 +48,35 @@ final class OpenSessionsTests: XCTestCase {
         XCTAssertEqual(chats.route(.userText("x"), in: "z", selected: "b"), .ignored)
     }
 
+    /// #2608: the engine's Fast-tier notice, exactly as it is sent, is a
+    /// toast for its own chat: it lands in no transcript, neither the
+    /// background chat it belongs to, nor a replay, nor the chat on screen.
+    func testAFastTierNoticeIsAToastNotATranscriptRow() {
+        let text = "Fast mode was requested, but the provider served this response at the default tier."
+        let params: JSONValue = ["sessionId": "a", "update": [
+            "sessionUpdate": "agent_message_chunk",
+            "content": ["type": "text", "text": .string(text)],
+            "_meta": ["rustcode": ["kind": "notice", "resumable": false]],
+        ]]
+        let update = SessionUpdate(notificationParams: params)
+        XCTAssertEqual(update, .notice(text))
+
+        var chats = OpenSessions()
+        chats.stash("a", transcript: transcript("one"), models: models, selectedModel: "gpt")
+        chats.stash("b", transcript: transcript("two"), models: models, selectedModel: "gpt")
+        XCTAssertEqual(chats.route(update, in: "a", selected: "b"), .background)
+        XCTAssertEqual(texts(chats.snapshot("a")?.transcript), ["one"])
+        XCTAssertEqual(texts(chats.snapshot("b")?.transcript), ["two"])
+
+        chats.beginLoad("c")
+        XCTAssertEqual(chats.route(update, in: "c", selected: "c"), .shown)
+        XCTAssertEqual(chats.replay("c")?.items.count, 0)
+
+        var shown = transcript("three")
+        shown.apply(update)
+        XCTAssertEqual(texts(shown), ["three"])
+    }
+
     func testAnUpdateToTheShownChatIsLeftToTheCaller() {
         var chats = OpenSessions()
         chats.stash("a", transcript: transcript("one"), models: models, selectedModel: nil)

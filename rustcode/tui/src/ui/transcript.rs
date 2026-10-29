@@ -146,6 +146,7 @@ impl TranscriptModel {
             }
             rustcode::controller::AgentUiEvent::Cancelled { .. }
             | rustcode::controller::AgentUiEvent::ProviderError { .. }
+            | rustcode::controller::AgentUiEvent::Notice { .. }
             | rustcode::controller::AgentUiEvent::ToolStarted { .. }
             | rustcode::controller::AgentUiEvent::ToolOutput { .. }
             | rustcode::controller::AgentUiEvent::ReasoningSource { .. }

@@ -2490,6 +2490,26 @@ mod tests {
         );
     }
 
+    // #2608: a notice is sent as one non-resumable notice chunk, which the
+    // app shows as a toast and keeps out of the transcript.
+    #[test]
+    fn acp_event_stream_sends_a_notice_as_a_plain_notice_chunk() {
+        use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate};
+        let mut stream = AcpEventStream::new();
+        let text =
+            "Fast mode was requested, but the provider served this response at the default tier.";
+        let updates = stream.updates(crate::network::AgentUiEvent::Notice {
+            message: text.to_string(),
+        });
+        let [SessionUpdate::AgentMessageChunk(chunk)] = updates.as_slice() else {
+            panic!("expected one notice chunk, got {updates:?}");
+        };
+        assert!(matches!(&chunk.content, ContentBlock::Text(t) if t.text == text));
+        let meta = &chunk.meta.as_ref().expect("notice meta")["rustcode"];
+        assert_eq!(meta["kind"], "notice");
+        assert_eq!(meta["resumable"], false);
+    }
+
     // #2584: the provider's own message is the stop notice, and the
     // `provider_error` marker after it adds no second, vaguer one.
     #[test]
