@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 
 mod pythonic;
 pub mod text;
+mod xml;
 
 pub use pythonic::{END as LFM_TOOL_CALL_END, START as LFM_TOOL_CALL_START};
 
@@ -395,6 +396,11 @@ fn parse_tool_calls_impl(text: &str, protocol: ToolProtocol) -> Vec<ToolCall> {
     // says (#2587); a closed envelope is unambiguous under every protocol.
     if text.contains(LFM_TOOL_CALL_START) {
         pythonic::parse_envelopes(text, &mut calls);
+    }
+    // Qwen3-Coder-style XML calls are the same: a closed block is
+    // unambiguous, and small models write it under any contract.
+    if calls.is_empty() && text.contains(xml::FUNCTION_START) {
+        xml::parse_functions(text, &mut calls);
     }
 
     match protocol {
@@ -814,6 +820,21 @@ mod tests {
         assert!(!has_incomplete_actionable_tool_call(
             "The answer is ordinary prose about a tool call."
         ));
+    }
+
+    #[test]
+    fn qwen_xml_calls_parse_under_every_protocol() {
+        let text = "<think>\nUse get_time.\n</think>\n\n<tool_call>\n<function=get_time>\n</function>\n</tool_call>";
+        for protocol in [
+            ToolProtocol::Native,
+            ToolProtocol::Json,
+            ToolProtocol::ApiNative,
+        ] {
+            let calls = parse_tool_calls(text, protocol);
+            assert_eq!(calls.len(), 1, "{protocol:?}");
+            assert_eq!(calls[0].name, "get_time");
+        }
+        assert_eq!(crate::text::strip_tool_call_syntax(text), "");
     }
 
     #[test]
