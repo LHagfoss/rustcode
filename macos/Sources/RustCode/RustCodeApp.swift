@@ -2547,6 +2547,13 @@ final class DesktopModel: ObservableObject {
         await send(.fast(enabled), to: session)
     }
 
+    /// How the chat's model writes tool calls. The engine saves it on the
+    /// model's profile, so it needs a session; a draft has none to send to.
+    func setToolProtocol(_ id: String) async {
+        guard let session = selectedSession, id != models.toolProtocol else { return }
+        await send(.toolProtocol(id), to: session)
+    }
+
     /// Change one of `session`'s model settings and return its options after.
     /// The reply goes to that session even when another chat is on screen by
     /// then, so a slow reply never shows one chat's settings on another.

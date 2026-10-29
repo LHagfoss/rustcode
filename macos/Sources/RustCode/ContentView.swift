@@ -1283,8 +1283,11 @@ private struct ChatView: View {
                         PermissionCard(model: model, request: permission).id(permission.id)
                     }
                 }
-                Composer(model: model, composer: model.composer)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+                VStack(spacing: 6) {
+                    Composer(model: model, composer: model.composer)
+                    ComposerFooter(model: model)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             }
             .frame(maxWidth: Self.columnMaxWidth)
             // The composer and the cards above it scroll their own text.
@@ -2071,10 +2074,13 @@ private struct EmptyChat: View {
 /// for that chat only; an open chat stays in its own and can start another
 /// chat there or elsewhere.
 private struct ChatProjectMenu: View {
+    enum Style { case header, footer }
     @ObservedObject var model: DesktopModel
     let name: String
-    /// What the label shows: the folder's path, from home as `~`.
+    /// What the header's label shows: the folder's path, from home as `~`.
     let path: String
+    /// The footer's label is a folder and the folder's name.
+    var style = Style.header
 
     var body: some View {
         Menu {
@@ -2105,13 +2111,23 @@ private struct ChatProjectMenu: View {
             Divider()
             Button("Open in Finder", systemImage: "folder") { NSWorkspace.shared.open(folder) }
         } label: {
-            HStack(spacing: 3) {
-                Text(path).truncationMode(.head)
-                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+            switch style {
+            case .header:
+                HStack(spacing: 3) {
+                    Text(path).truncationMode(.head)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            case .footer:
+                HStack(spacing: 5) {
+                    Image(systemName: "folder")
+                    Text(name)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+                .footerControl()
             }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -2119,6 +2135,58 @@ private struct ChatProjectMenu: View {
         .fixedSize()
         .help(ProjectFolder.help(chat: model.chatProject, default: model.workspace))
         .accessibilityLabel("Project folder \(name)")
+    }
+}
+
+/// Under the composer: the chat's project and files on the left, the agents
+/// at work on the right, so the composer's own row keeps to writing and
+/// sending. Agents here cover neither the chat's end nor the text (#2555).
+private struct ComposerFooter: View {
+    @ObservedObject var model: DesktopModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ChatProjectMenu(model: model, name: model.chatProject.lastPathComponent,
+                            path: model.chatProject.path.abbreviatingHome, style: .footer)
+            FooterButton(title: "Files", systemImage: "paperclip", help: "Attach files or folders") {
+                model.chooseAttachments()
+            }
+            Spacer(minLength: 0)
+            AgentPill(model: model)
+        }
+        .padding(.horizontal, 8)
+        .frame(minHeight: 26)
+        .animation(.snappy(duration: 0.2), value: SubagentInfo.workingLabel(model.subagents))
+    }
+}
+
+/// A quiet footer control: icon and label, a fill only on hover.
+private struct FooterButton: View {
+    let title: String
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .footerControl()
+        }
+        .buttonStyle(.plain)
+        .hoverHighlight(cornerRadius: 8, padding: 0)
+        .help(help)
+    }
+}
+
+extension View {
+    /// The footer's controls: callout, secondary, a 24 pt row.
+    fileprivate func footerControl() -> some View {
+        font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .contentShape(.rect)
     }
 }
 
@@ -2339,9 +2407,6 @@ private struct Composer: View {
                 }
             HStack(spacing: 8) {
                 addMenu
-                // In the composer's own row, so it covers neither the end of
-                // the chat nor the composer's text (#2555).
-                AgentPill(model: model)
                 Spacer(minLength: 0)
                 if let usage = model.planUsage {
                     PlanUsageMeter(usage: usage, hovering: $model.showsPlanUsage) { Task { await model.refreshPlanUsage() } }
@@ -2416,8 +2481,11 @@ private struct Composer: View {
         return model.busy ? "Queue a message…" : "Message RustCode…"
     }
 
+    private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
     /// Ten lines of body text: the composer grows to this, then scrolls.
-    private static let maxFieldHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize)) * 10
+    private static let maxFieldHeight = lineHeight * 10
+    /// Two lines: an empty composer has room to start writing.
+    private static let minFieldHeight = lineHeight * 2
 
     /// The text, with the rest of a half-typed command shown in gray after it.
     /// The field grows with its text inside a scroll view no taller than ten
@@ -2432,7 +2500,7 @@ private struct Composer: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .scrollIndicators(fieldHeight > Self.maxFieldHeight ? .automatic : .never)
-        .frame(height: min(max(fieldHeight, 1), Self.maxFieldHeight))
+        .frame(height: min(max(fieldHeight, Self.minFieldHeight), Self.maxFieldHeight), alignment: .top)
     }
 
     private var field: some View {
@@ -2477,8 +2545,8 @@ private struct Composer: View {
 
     /// Model, reasoning effort and Fast mode in one pill that opens one
     /// picker, as the iOS app's Model & Effort sheet (#2595). The pill names
-    /// the model, then shows the effort (its icon only in a narrow composer)
-    /// and a bolt while Fast is on.
+    /// the model, then the effort a shade dimmer (left out in a narrow
+    /// composer), and a bolt while Fast is on.
     @ViewBuilder
     private var modelMenu: some View {
         if !model.models.choices.isEmpty {
@@ -2489,9 +2557,8 @@ private struct Composer: View {
             Button { toggle(.model) } label: {
                 HStack(spacing: 5) {
                     Text(layout.compactComposer ? Self.shortened(modelLabel) : modelLabel).lineLimit(1)
-                    if thinks {
-                        Image(systemName: "brain").font(.caption.weight(.semibold)).foregroundStyle(Color.brand)
-                        if !layout.compactComposer, let effortName { Text(effortName).lineLimit(1) }
+                    if thinks, !layout.compactComposer, let effortName {
+                        Text(effortName).lineLimit(1).foregroundStyle(.tertiary)
                     }
                     if fast {
                         Image(systemName: "bolt.fill").font(.caption.weight(.semibold)).foregroundStyle(Color.brand)
@@ -2522,11 +2589,7 @@ private struct Composer: View {
     }
 
     /// `provider/model` reads as just the model in the composer.
-    private var modelLabel: String {
-        let current = model.models.choices.first { $0.id == model.selectedModel }
-        let name = current?.name ?? model.selectedModel ?? "Model"
-        return name.split(separator: "/").last.map(String.init) ?? name
-    }
+    private var modelLabel: String { ModelEffortPanel.label(for: model) }
 
     @ViewBuilder
     private var trailingAction: some View {
@@ -2739,125 +2802,288 @@ extension View {
     }
 }
 
-/// The composer's Model & Effort picker (#2595): the model list, then the
-/// picked model's reasoning effort, then Fast mode when the model offers it.
-/// Picking a model keeps it open; ⏎ on the filter picks, Esc closes.
+/// The composer's Model & Effort picker (#2595): Fast mode and the model on
+/// one line, the effort slider under them, and for a model the user set up,
+/// how it writes tool calls. The model's name opens the model list in the
+/// panel's place; picking one comes back. ←→ move the slider, ⏎ or Esc close.
 struct ModelEffortPanel: View {
     @ObservedObject var model: DesktopModel
+    @State private var showsModels = false
+    /// The stop under a dragged knob, named in the header while it moves.
+    @State private var previewEffort: Int?
+
+    private var efforts: [ModelChoice] { model.models.efforts }
+    private var hasEffort: Bool { efforts.count > 1 }
+    private var showsToolProtocol: Bool { !model.models.toolProtocols.isEmpty && model.selectedSession != nil }
+    /// With nothing to set but the model, the list is the whole panel.
+    private var listOnly: Bool { !hasEffort && model.models.fast == nil && !showsToolProtocol }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ModelListPanel(model: model, maxHeight: 220, closesOnPick: false) { model.composerPanel = nil }
-            if model.models.efforts.count > 1 {
-                Divider().padding(.horizontal, 8)
-                EffortPanel(model: model, takesFocus: false)
+        Group {
+            if showsModels || listOnly {
+                modelsPage
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: 12)), removal: .opacity))
+            } else {
+                settingsPage
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: -12)), removal: .opacity))
             }
-            if let isOn = model.models.fast {
-                Divider().padding(.horizontal, 8)
-                FastModeRow(isOn: isOn) { on in Task { await model.setFast(on) } }
+        }
+        .animation(.snappy(duration: 0.22), value: showsModels)
+        // Letters typed as the picker opened (its shortcut) filter the list.
+        .onAppear { if !model.panelTypeahead.isEmpty { showsModels = true } }
+    }
+
+    private var settingsPage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                if let fast = model.models.fast {
+                    FastModeButton(isOn: fast) { on in Task { await model.setFast(on) } }
+                }
+                Spacer(minLength: 8)
+                modelButton
+            }
+            if hasEffort {
+                EffortSlider(model: model, preview: $previewEffort)
+            }
+            if showsToolProtocol {
+                ToolProtocolRow(model: model)
+            }
+        }
+        .padding(8)
+    }
+
+    /// `GPT-6.1 Sol  Light ›`: the model, then its effort dimmer.
+    private var modelButton: some View {
+        let current = efforts.firstIndex { $0.id == (model.models.effort ?? "default") }
+        let shown = previewEffort ?? current
+        return Button { showsModels = true } label: {
+            HStack(spacing: 5) {
+                Text(ModelEffortPanel.label(for: model)).foregroundStyle(.primary)
+                if hasEffort, let shown, efforts.indices.contains(shown) {
+                    Text(efforts[shown].name).foregroundStyle(.tertiary)
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.15), value: shown)
+                }
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .hoverHighlight(cornerRadius: 14, padding: 0)
+        .help("Choose a model")
+        .accessibilityLabel("Model \(ModelEffortPanel.label(for: model))")
+        .accessibilityHint("Shows the models")
+    }
+
+    private var modelsPage: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !listOnly {
+                Button { showsModels = false } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left").font(.caption.weight(.semibold))
+                        Text("Models")
+                    }
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("Back to effort (Esc)")
+            }
+            ModelListPanel(model: model, maxHeight: 260, closesOnPick: listOnly,
+                           picked: { showsModels = false }) {
+                if listOnly { model.composerPanel = nil } else { showsModels = false }
             }
         }
     }
+
+    /// `provider/model` reads as just the model.
+    static func label(for model: DesktopModel) -> String {
+        let current = model.models.choices.first { $0.id == model.selectedModel }
+        let name = current?.name ?? model.selectedModel ?? "Model"
+        return name.split(separator: "/").last.map(String.init) ?? name
+    }
 }
 
-/// Fast mode, named and explained where it is turned on: it is offered only
-/// for a model on a ChatGPT plan, and its speed costs plan usage.
-struct FastModeRow: View {
+/// Fast mode as a labelled toggle: offered only for a model on a ChatGPT
+/// plan, and its speed costs plan usage, which the tooltip says.
+struct FastModeButton: View {
     let isOn: Bool
     let set: (Bool) -> Void
+    @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Label("Fast mode", systemImage: isOn ? "bolt.fill" : "bolt")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(isOn ? Color.brand : .primary)
-                Spacer()
-                Toggle("Fast mode", isOn: Binding(get: { isOn }, set: set))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(.brandFill)
-                    .labelsHidden()
+        Button { set(!isOn) } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isOn ? "bolt.fill" : "bolt")
+                Text("Fast mode")
             }
-            Text(ModelEffortSummary.fastExplanation)
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .font(.callout.weight(.medium))
+            .foregroundStyle(isOn ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(isOn ? AnyShapeStyle(Color.brand.opacity(0.16))
+                        : isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .capsule)
+            .contentShape(.capsule)
+            .animation(.snappy(duration: 0.18), value: isOn)
         }
-        .padding(8)
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(ModelEffortSummary.fastExplanation)
+        .accessibilityLabel("Fast mode")
+        .accessibilityValue(isOn ? "On" : "Off")
     }
 }
 
-/// Reasoning effort: a switch for thinking at all and a slider over the levels.
-/// ←→ move the slider, Space toggles, ⏎ or Esc closes.
-struct EffortPanel: View {
+/// Reasoning effort as one track of evenly spaced stops, Off first. The knob
+/// follows the pointer while dragged and springs to the nearest stop when
+/// let go; a click on the track glides there. The engine hears only the
+/// stop the knob settles on.
+struct EffortSlider: View {
     @ObservedObject var model: DesktopModel
-    /// Off inside the Model & Effort picker, where the model filter has focus.
-    var takesFocus = true
+    /// The stop under the knob while it is dragged, for the header to name.
+    @Binding var preview: Int?
     @FocusState private var focused: Bool
+    /// The knob's position while a drag holds it, 0...1.
+    @State private var dragFraction: Double?
+    /// The stop picked, shown at once while the engine confirms it.
+    @State private var pending: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var levels: [ModelChoice] { model.models.efforts.filter { $0.id != "default" } }
-    private var isOn: Bool { (model.models.effort ?? "default") != "default" }
-    private var index: Int { levels.firstIndex { $0.id == model.models.effort } ?? 0 }
+    private static let height: CGFloat = 28
+    private static let inset: CGFloat = 2
+    private static var knob: CGFloat { height - 2 * inset }
+
+    private var levels: [ModelChoice] { model.models.efforts }
+    private var current: Int {
+        pending ?? levels.firstIndex { $0.id == (model.models.effort ?? "default") } ?? 0
+    }
+    private var shown: Int { dragFraction.map { EffortTrack.index(nearest: $0, count: levels.count) } ?? current }
+    private var settle: Animation { reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.32, dampingFraction: 0.78) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Reasoning", systemImage: "brain")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-                Toggle("", isOn: Binding(get: { isOn }, set: { on in
-                    set(on ? (levels.first { $0.id == "medium" } ?? levels.last)?.id : "default")
-                }))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .tint(.brandFill)
-                .labelsHidden()
+        GeometryReader { proxy in
+            let travel = max(proxy.size.width - Self.knob - 2 * Self.inset, 0)
+            let fraction = dragFraction ?? EffortTrack.fraction(of: current, count: levels.count)
+            let knobX = Self.inset + travel * fraction
+            ZStack(alignment: .leading) {
+                Capsule().fill(.fill.tertiary)
+                Capsule().fill(Color.brandFill)
+                    .frame(width: knobX + Self.knob + Self.inset)
+                ForEach(levels.indices, id: \.self) { index in
+                    Circle()
+                        .fill(index <= shown ? AnyShapeStyle(Color.white.opacity(0.5)) : AnyShapeStyle(.tertiary))
+                        .frame(width: 4, height: 4)
+                        .offset(x: Self.inset + travel * EffortTrack.fraction(of: index, count: levels.count)
+                                + Self.knob / 2 - 2)
+                }
+                Circle()
+                    .fill(.white)
+                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                    .frame(width: Self.knob, height: Self.knob)
+                    .scaleEffect(dragFraction == nil ? 1 : 1.06)
+                    .offset(x: knobX)
             }
-            if isOn, levels.count > 1 {
-                VStack(spacing: 6) {
-                    Slider(value: Binding(get: { Double(index) }, set: { set(levels[Int($0.rounded())].id) }),
-                           in: 0...Double(levels.count - 1), step: 1)
-                        .tint(.brandFill)
-                    HStack {
-                        ForEach(Array(levels.enumerated()), id: \.offset) { position, level in
-                            Text(level.name)
-                                .font(.caption.weight(position == index ? .semibold : .regular))
-                                .foregroundStyle(position == index ? Color.brand : .secondary)
-                                .frame(maxWidth: .infinity, alignment: position == 0 ? .leading
-                                       : position == levels.count - 1 ? .trailing : .center)
-                                .onTapGesture { set(level.id) }
+            .contentShape(.capsule)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        let next = EffortTrack.fraction(atX: drag.location.x - Self.inset,
+                                                        width: proxy.size.width - 2 * Self.inset, knob: Self.knob)
+                        // The first touch glides there; then the knob tracks the pointer.
+                        if dragFraction == nil {
+                            withAnimation(settle) { dragFraction = next }
+                        } else {
+                            dragFraction = next
                         }
                     }
-                }
-                .transition(.opacity)
-            } else if !isOn {
-                Text("The model answers without extra reasoning.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .onEnded { _ in
+                        let index = shown
+                        withAnimation(settle) {
+                            dragFraction = nil
+                            pending = index
+                        }
+                        commit(index)
+                    }
+            )
+        }
+        .frame(height: Self.height)
+        .onChange(of: shown) { _, index in
+            preview = dragFraction == nil ? nil : index
+            if dragFraction != nil {
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
             }
         }
-        .padding(8)
-        .animation(.snappy(duration: 0.2), value: isOn)
+        .onChange(of: dragFraction == nil) { _, resting in if resting { preview = nil } }
+        .onChange(of: model.models.effort) { _, _ in pending = nil }
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
-        .onAppear { if takesFocus { focused = true } }
+        .onAppear { focused = true }
         .onKeyPress(.leftArrow) { step(-1) }
         .onKeyPress(.rightArrow) { step(1) }
-        .onKeyPress(.space) { set(isOn ? "default" : (levels.first { $0.id == "medium" } ?? levels.last)?.id); return .handled }
         .onKeyPress(.return) { model.composerPanel = nil; return .handled }
         .onKeyPress(.escape) { model.composerPanel = nil; return .handled }
+        .accessibilityElement()
+        .accessibilityLabel("Reasoning effort")
+        .accessibilityValue(levels.indices.contains(current) ? levels[current].name : "")
+        .accessibilityAdjustableAction { direction in
+            _ = step(direction == .increment ? 1 : -1)
+        }
+        .help("Reasoning effort: \(levels.indices.contains(shown) ? levels[shown].name : "")")
     }
 
     private func step(_ delta: Int) -> KeyPress.Result {
-        guard isOn, !levels.isEmpty else { return .ignored }
-        set(levels[min(max(index + delta, 0), levels.count - 1)].id)
+        guard !levels.isEmpty else { return .ignored }
+        let index = min(max(current + delta, 0), levels.count - 1)
+        withAnimation(settle) { pending = index }
+        commit(index)
         return .handled
     }
 
-    private func set(_ effort: String?) {
-        guard let effort, effort != model.models.effort else { return }
+    private func commit(_ index: Int) {
+        guard levels.indices.contains(index) else { return }
+        let effort = levels[index].id
+        guard effort != (model.models.effort ?? "default") else {
+            pending = nil
+            return
+        }
         Task { await model.setEffort(effort) }
+    }
+}
+
+/// How a model the user configured writes tool calls. A small local model
+/// may only manage one of them; the choice is saved on its profile.
+struct ToolProtocolRow: View {
+    @ObservedObject var model: DesktopModel
+
+    var body: some View {
+        let choices = model.models.toolProtocols
+        let current = model.models.toolProtocol ?? choices.first?.id ?? ""
+        HStack {
+            Label("Tool calls", systemImage: "wrench.and.screwdriver")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Picker("Tool calls", selection: Binding(get: { current }, set: { id in
+                Task { await model.setToolProtocol(id) }
+            })) {
+                ForEach(choices) { choice in
+                    Text(choice.name).tag(choice.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+        }
+        .padding(.horizontal, 6)
+        .help(choices.first { $0.id == current }?.detail ?? "How the model writes tool calls")
     }
 }
 
@@ -2869,6 +3095,8 @@ struct ModelListPanel: View {
     /// Off in the Model & Effort picker, which stays open to show the
     /// picked model's effort and Fast choices.
     var closesOnPick = true
+    /// After a pick that keeps the panel open.
+    var picked: () -> Void = {}
     let close: () -> Void
     @State private var filter = ""
     @State private var highlighted = 0
@@ -2952,7 +3180,7 @@ struct ModelListPanel: View {
     }
 
     private func pick(_ choice: ModelChoice) {
-        if closesOnPick { close() }
+        if closesOnPick { close() } else { picked() }
         Task { await model.setModel(choice.id) }
     }
 }
