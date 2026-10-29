@@ -3122,7 +3122,8 @@ mod tests {
         let state = crate::app::AppState::new();
         let options = build_session_config_options(&state);
 
-        assert_eq!(options.len(), 1);
+        let ids: Vec<_> = options.iter().map(|option| option.id.0.as_ref()).collect();
+        assert_eq!(ids, ["model", "tool_protocol"]);
         let model_opt = &options[0];
         assert_eq!(model_opt.id.0.as_ref(), "model");
         assert_eq!(model_opt.name, "Model");
@@ -3165,7 +3166,7 @@ mod tests {
         let resp = NewSessionResponse::new("test-session").config_options(options);
         assert!(resp.config_options.is_some());
         let config_opts = resp.config_options.unwrap();
-        assert_eq!(config_opts.len(), 1);
+        assert_eq!(config_opts.len(), 2);
         assert_eq!(config_opts[0].id.0.as_ref(), "model");
     }
 

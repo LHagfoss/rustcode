@@ -839,22 +839,7 @@ async fn handle_enter_inner(
                     };
                     match chosen {
                         Some((protocol, label)) => {
-                            // Recorded against the model being used, so it survives
-                            // model switches and outlives the session.
-                            let url = s.api_base_url.clone();
-                            let scoped = s
-                                .config
-                                .models
-                                .iter_mut()
-                                .find(|profile| profile.url == url)
-                                .map(|profile| {
-                                    profile.tool_protocol = Some(protocol);
-                                    profile.name.clone()
-                                });
-                            if scoped.is_none() {
-                                s.config.tool_protocol = protocol;
-                            }
-                            crate::config::save_entire_config(&s.config);
+                            let scoped = s.set_active_tool_protocol(protocol);
                             let scope = scoped
                                 .map(|name| format!("for model '{name}'"))
                                 .unwrap_or_else(|| "as the fallback for all models".to_string());
