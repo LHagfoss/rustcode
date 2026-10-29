@@ -60,15 +60,16 @@ struct ContentView: View {
         .ignoresSafeArea()
         .tint(.brand)
         // Settings is a page in the window's place, over the chats and the
-        // chat, which stay alive under it (#2553).
+        // chat, which stay alive under it (#2553). It opens and closes at
+        // once, with no transition, even inside an animated change (#2593).
         .overlay {
             if model.showsSettings {
                 SettingsView(model: model)
                     .environment(\.closePanel) { model.closeSettings() }
-                    .transition(.opacity)
+                    .transition(.identity)
             }
         }
-        .animation(.snappy(duration: 0.2), value: model.showsSettings)
+        .transaction(value: model.showsSettings) { $0.disablesAnimations = true }
         .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
         .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0, planUsage: model.planUsage) }
         .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
