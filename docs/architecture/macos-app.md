@@ -42,7 +42,7 @@ EngineProcess ── LineFramer ──► ACPConnection (actor)
                  DesktopModel.handle(_:)  (@MainActor, RustCodeApp.swift)
                    │ SessionUpdate → Transcript.apply
                    ▼
-   LiveTranscript (shown chat) / openSessions (background chats) / replays (loading)
+   LiveTranscript (shown chat) / OpenSessions (background chats, replays while loading)
                    │ objectWillChange, at most every 33 ms
                    ▼
    ContentView → ChatView → ChatScroller → TranscriptRow (TranscriptRows.swift)
@@ -68,8 +68,8 @@ EngineProcess ── LineFramer ──► ACPConnection (actor)
 4. **Inbound.** `ACPConnection.inbound` delivers notifications and
    agent-initiated requests in order. `DesktopModel.handle(_:)` routes them:
    - `session/update` for the shown chat goes to `LiveTranscript`; for a chat
-     open in the background, to its `openSessions` entry; for a chat being
-     loaded, to its off-screen `replays` entry. Report/command answers
+     open in the background, to its `OpenSessions` snapshot; for a chat being
+     loaded, to its off-screen replay (`OpenSessions.route`). Report/command answers
      (`PendingReports`, `/context`) are diverted to sheets and toasts;
      `stopped` and `notice` become toasts or banners.
    - `session/request_permission` appends to `permissionQueue` (rendered by
@@ -118,13 +118,13 @@ covers the switching ones end to end (`testSwitchingAwayMidLoadKeepsTheChat`,
 the stale-engine checks have no direct test.
 
 - **One load per chat.** The engine refuses a second `session/load` of an open
-  session, so switching back restores the `openSessions` snapshot instead.
+  session, so switching back restores the `OpenSessions` snapshot instead.
   `select(_:)` stashes the outgoing chat (`stashSelectedSession`) and parks its
   draft (`parkDraft`/`restoreDraft`) before showing the next one.
 - **Replay is built off screen.** `loadInEngine` collects the replayed
-  `session/update`s into `replays[id]` and shows the whole transcript at once;
-  `loadingSessions` is per chat, so picking another chat mid-load keeps the
-  first one's replay.
+  `session/update`s into the chat's `OpenSessions` replay and shows the whole
+  transcript at once; loads are per chat, so picking another chat mid-load
+  keeps the first one's replay.
 - **Responses can overtake updates.** A response resolves ahead of updates
   queued before it, so `catchUpInbound` waits until `handledInbound` reaches
   the connection's `inboundCount` before a load or a finished turn reads the
@@ -176,18 +176,16 @@ that already reads its decisions from `RustCodeKit`. Splitting them into more
 files would move code without making anything testable, and `ChatView`'s
 scroll and stream handling is timing-sensitive. Not worth doing on its own.
 
-**Candidate next slice: the open-session cache.** The bookkeeping behind the
-invariants above (`openSessions`, `replays`, `loadingSessions`, `OpenSession`,
-and the routing of a `session/update` to the shown chat, a background chat or
-a replay) is plain value logic, but it lives inside `DesktopModel` and is only
-tested end to end through `SessionFlowTests` with a fake engine process. A
-`RustCodeKit` value type that owns these maps and answers "where does this
-update go" would let the races (switch mid-load, update for a background chat,
-reload after a move, engine replaced mid-load) be unit-tested directly, while
-`DesktopModel` keeps the async requests, `catchUpInbound` and the engine
-identity checks. Regression tests: the existing `SessionFlowTests` unchanged,
-plus new `RustCodeKitTests` for the cache. Tracked in #2602; it is not part
-of this document.
+**Extracted: the open-session cache.** The bookkeeping behind the
+invariants above lives in `OpenSessions` (RustCodeKit): background chats'
+snapshots, replays of chats being opened, the per-chat loading set, and
+`route`, which says whether a `session/update` goes to a replay, the shown
+chat or a background chat. `DesktopModel` holds one as `openChats` and keeps
+the async side: the `session/load` request, `catchUpInbound` and the engine
+identity checks. `OpenSessionsTests` covers the races directly (switch
+mid-load, update for a background chat, forget on trash or move, reload after
+the engine is replaced); `SessionFlowTests` still covers them end to end
+(#2602).
 
 **Out of scope.** Splitting `DesktopModel` into several observable objects,
 or moving chat scrolling out of `ChatView`, would touch session switching,
