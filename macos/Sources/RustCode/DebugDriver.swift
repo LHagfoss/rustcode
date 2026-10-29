@@ -729,8 +729,9 @@ enum DebugDriver {
             ])
             withAnimation(.snappy(duration: 0.15)) { model.showsPlanUsage = parts.contains("hover") }
         case "panel":
-            // `panel model|effort|add|none`: open a composer panel as its chip does.
-            model.composerPanel = ["model": .model, "effort": .effort, "add": .add][parts[1]]
+            // `panel model|effort|add|none`: open a composer panel as its chip does;
+            // `effort` opens the Model & Effort picker, which holds it now.
+            model.composerPanel = ["model": .model, "effort": .model, "add": .add][parts[1]]
         case "snap":
             // `snap <file.png>`: the window drawn to a file, for when
             // `screencapture` cannot see the screen.

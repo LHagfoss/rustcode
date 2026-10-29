@@ -58,8 +58,9 @@ public struct ChatColumnLayout: Equatable, Sendable {
         }
     }
 
-    /// The composer drops labels it can do without: effort shows only its
-    /// icon, and the agents pill only its count.
+    /// The composer drops labels it can do without: the Model & Effort pill
+    /// shortens the model and shows effort only as its icon, and the agents
+    /// pill only its count.
     public var compactComposer: Bool { size == .narrow }
 
     /// Whether the rail shows for `turns` turns. One turn has nowhere to go.

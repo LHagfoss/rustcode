@@ -104,6 +104,50 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2595: the model, effort and Fast picked on an empty draft are shown
+    /// before the first message and applied before its prompt runs.
+    func testDraftModelSettingsApplyBeforeTheFirstPrompt() async throws {
+        let model = try await started()
+        await model.newSession()
+        XCTAssertEqual(model.models.fast, false, "Fast shows on the empty draft of a model that offers it")
+        await model.setEffort("high")
+        await model.setFast(true)
+        await send("first", in: model)
+        let id = try XCTUnwrap(model.selectedSession)
+        XCTAssertEqual(model.models.effort, "high")
+        XCTAssertEqual(model.models.fast, true)
+        let reply = model.transcript.items.compactMap { item -> String? in
+            if case .assistant(let text) = item.content { return text } else { return nil }
+        }.last
+        XCTAssertEqual(reply, "reply to first [plan high fast]")
+        // The next new chat starts from the defaults again, Fast off.
+        await model.newSession()
+        XCTAssertNotEqual(model.selectedSession, id)
+        model.stop()
+    }
+
+    /// #2595: a setting's reply that lands after another chat was picked
+    /// stays with the chat it was made for.
+    func testSlowSettingReplyStaysWithItsChat() async throws {
+        let model = try await started()
+        let quick = try XCTUnwrap(model.sessions.first { $0.id == "quick" })
+        let slow = try XCTUnwrap(model.sessions.first { $0.id == "slow" })
+        await model.select(quick)
+        XCTAssertEqual(model.models.effort, "default")
+        let setting = Task { await model.setEffort("high") }
+        await Task.yield()
+        await model.select(slow)
+        await setting.value
+        XCTAssertEqual(model.selectedSession, "slow")
+        XCTAssertEqual(model.models.effort, "default", "quick's reply must not show on slow")
+        await model.select(quick)
+        XCTAssertEqual(model.models.effort, "high")
+        // A model without Fast shows no toggle.
+        await model.setModel("local")
+        XCTAssertFalse(model.models.offersFast)
+        model.stop()
+    }
+
     /// #2258: each chat keeps its own unsent draft, and so does a new chat.
     func testDraftsStayWithTheirChat() async throws {
         let model = try await started()
@@ -551,6 +595,18 @@ final class SessionFlowTests: XCTestCase {
     def finish_agent():
         time.sleep(0.5)
         agents["slow"][0]["status"] = "completed"
+    # Each chat's model settings: "plan" offers effort and Fast, "local" neither.
+    config = {}
+    tuned = set()
+    def options(sid):
+        c = config.setdefault(sid, {"model": "plan", "effort": "default", "fast": False})
+        opts = [{"id": "model", "type": "select", "currentValue": c["model"],
+                 "options": [{"value": "plan", "name": "plan"}, {"value": "local", "name": "local"}]}]
+        if c["model"] == "plan":
+            opts.append({"id": "effort", "type": "select", "currentValue": c["effort"],
+                         "options": [{"value": v, "name": v} for v in ("default", "low", "high")]})
+            opts.append({"id": "fast", "type": "boolean", "currentValue": c["fast"]})
+        return opts
     def handle(message):
         global created
         method, params, rid = message.get("method"), message.get("params", {}), message.get("id")
@@ -577,7 +633,18 @@ final class SessionFlowTests: XCTestCase {
             sid = "new-%d" % created
             stored[sid] = []
             cwds[sid] = params["cwd"]
-            result = {"sessionId": sid}
+            result = {"sessionId": sid, "configOptions": options(sid)}
+        elif method == "session/set_config_option":
+            sid, key, value = params["sessionId"], params["configId"], params["value"]
+            # A slow reply, so a chat can be switched before it lands.
+            if value == "high":
+                time.sleep(0.6)
+            c = config.setdefault(sid, {"model": "plan", "effort": "default", "fast": False})
+            c[key] = value
+            tuned.add(sid)
+            if key == "model" and value == "local":
+                c["effort"], c["fast"] = "default", False
+            result = {"configOptions": options(sid)}
         elif method == "session/list":
             result = {"sessions": [{"sessionId": sid, "cwd": cwds.get(sid, params.get("cwd", "/tmp")), "title": sid,
                                     "updatedAt": "2026-10-20T08:00:00Z"} for sid, messages in stored.items() if messages]}
@@ -591,11 +658,15 @@ final class SessionFlowTests: XCTestCase {
                 time.sleep(0.4)
             for index, text in enumerate(stored[sid]):
                 update(sid, "user_message_chunk" if index % 2 == 0 else "agent_message_chunk", text)
+            result = {"configOptions": options(sid)}
         elif method == "session/prompt":
             sid = params["sessionId"]
             text = params["prompt"][0]["text"]
             time.sleep(0.8 if text.startswith("long") else 0.15)
-            update(sid, "agent_message_chunk", "reply to " + text)
+            # The settings the turn ran with, to check a draft's were applied first.
+            c = config.get(sid)
+            settings = " [%s %s %s]" % (c["model"], c["effort"], "fast" if c["fast"] else "standard") if sid in tuned else ""
+            update(sid, "agent_message_chunk", "reply to " + text + settings)
             stored[sid] += [text, "reply to " + text]
             result = {"stopReason": "end_turn"}
             # Steers the turn "read" are consumed; one marked unread comes back.
