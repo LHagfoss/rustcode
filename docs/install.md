@@ -65,6 +65,8 @@ Build the terminal executable separately with `cargo build -p rustcode-tui`.
 The native SwiftUI app is a separate front end to the Rust engine. It launches
 `rustcode --acp` as a child process; the reusable protocol client and process
 management code live in the UI-independent `RustCodeKit` Swift package target.
+How the app is put together (targets, engine-to-UI data flow, state and
+tests) is in [macOS app architecture](architecture/macos-app.md).
 Build and test it on macOS with Swift 6:
 
 ```bash

@@ -25,6 +25,10 @@ rustcode/
 └── desktop/    `rustcode-app`, the native GPUI shell.
 ```
 
+The SwiftUI macOS app in `macos/` is a separate Swift package that runs the
+engine over ACP; its targets, data flow and state ownership are mapped in
+[macOS app architecture](architecture/macos-app.md).
+
 The root `Cargo.toml` is both the workspace manifest and the `rustcode`
 package manifest; the engine lives in `rustcode/engine/src` and is declared
 with `[lib] path`. There are no Cargo features left: the terminal stack
