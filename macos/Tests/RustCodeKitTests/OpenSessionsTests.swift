@@ -111,4 +111,22 @@ final class OpenSessionsTests: XCTestCase {
         XCTAssertTrue(chats.updateTranscript(of: "a") { $0.apply(.userText("x")) })
         XCTAssertEqual(texts(chats.snapshot("a")?.transcript), ["x"])
     }
+
+    /// #2595: a background chat's settings follow `/fast` run there and a
+    /// setting's reply that lands after another chat was picked.
+    func testABackgroundChatKeepsItsOwnModelOptions() {
+        var chats = OpenSessions()
+        chats.stash("a", transcript: Transcript(), models: models, selectedModel: "gpt")
+        let fastOn: JSONValue = [["id": "model", "type": "select", "currentValue": "plan", "options": [["value": "plan"]]],
+                                 ["id": "fast", "type": "boolean", "currentValue": true]]
+        XCTAssertEqual(chats.route(.configOptions(fastOn), in: "a", selected: "b"), .background)
+        XCTAssertEqual(chats.snapshot("a")?.models.fast, true)
+        XCTAssertEqual(chats.snapshot("a")?.selectedModel, "plan")
+        XCTAssertTrue(chats.snapshot("a")?.transcript.items.isEmpty ?? false)
+        var off = ModelOptions(configOptions: fastOn)
+        off.fast = false
+        XCTAssertTrue(chats.updateModels(of: "a", off))
+        XCTAssertEqual(chats.snapshot("a")?.models.fast, false)
+        XCTAssertFalse(chats.updateModels(of: "closed", off), "a chat not open is left alone")
+    }
 }

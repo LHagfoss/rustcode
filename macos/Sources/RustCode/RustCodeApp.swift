@@ -108,7 +108,8 @@ struct RustCodeApp: App {
 }
 
 /// The panel open above the composer.
-enum ComposerPanel { case add, model, effort }
+/// `model` is the Model & Effort picker: model, reasoning effort and Fast.
+enum ComposerPanel { case add, model }
 
 /// The shown chat's transcript, observed apart from the rest of the model.
 /// Streamed chunks arrive far faster than the screen redraws, and each one
@@ -1765,6 +1766,7 @@ final class DesktopModel: ObservableObject {
         guard selectedSession == nil, let modelDefaults else { return }
         models = modelDefaults.options
         selectedModel = modelDefaults.model
+        draftFastPick = false
     }
 
     func loadModelDefaults() async {
@@ -1810,23 +1812,20 @@ final class DesktopModel: ObservableObject {
     /// picked for it.
     private func createSession(in folder: URL) async -> String? {
         guard let connection = engine?.connection else { return nil }
-        let wanted = selectedModel
-        let wantedEffort = models.effort
-        let wantedFast = models.fast
+        let wanted = DraftModelSettings(options: models, selectedModel: selectedModel)
         do {
             let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: folder), timeout: .seconds(30))
             guard let id = result["sessionId"]?.stringValue else { throw ACPProtocolError.malformed("session/new has no sessionId") }
             sessionProjects[id] = folder.path
             selectedSession = id
             applyConfig(result["configOptions"])
-            if let wanted, wanted != selectedModel, models.choices.contains(where: { $0.id == wanted }) {
-                await setModel(wanted)
-            }
-            if let wantedEffort, wantedEffort != models.effort, models.efforts.contains(where: { $0.id == wantedEffort }) {
-                await setEffort(wantedEffort)
-            }
-            if let wantedFast, models.offersFast, wantedFast != models.fast {
-                await setFast(wantedFast)
+            // The draft's model, effort and Fast, sent to this session by id
+            // before the first prompt, so a chat picked meanwhile is untouched.
+            var options = models
+            for _ in 0..<3 {
+                guard let change = wanted.nextChange(for: options),
+                      let next = await send(change, to: id) else { break }
+                options = next
             }
             stashSelectedSession()
             return id
@@ -2509,21 +2508,18 @@ final class DesktopModel: ObservableObject {
 
     func setModel(_ model: String) async {
         guard let session = selectedSession else {
+            let previous = selectedModel
             selectedModel = model   // applied when the draft becomes a session
             if let modelDefaults {
-                models.efforts = modelDefaults.efforts(for: model)
-                if !models.efforts.contains(where: { $0.id == models.effort }) {
-                    models.effort = models.efforts.isEmpty ? nil : "default"
-                }
+                models = modelDefaults.draftOptions(models, switchingTo: model, fastPick: draftFastPick)
+            } else if model != previous {
+                // Without the defaults it is not known whether this model
+                // offers Fast, so no toggle claims it does.
+                models.fast = nil
             }
             return
         }
-        guard let connection = engine?.connection else { return }
-        do {
-            let result = try await connection.request(ACPMethod.sessionSetConfigOption, params: ACPRequests.setModel(sessionId: session, value: model), timeout: .seconds(15))
-            if let options = result["configOptions"] { applyConfig(options) }
-            selectedModel = model
-        } catch { self.error = String(describing: error) }
+        await send(.model(model), to: session)
     }
 
     /// Reasoning effort for the chat. A draft keeps it until its session exists.
@@ -2532,31 +2528,55 @@ final class DesktopModel: ObservableObject {
             models.effort = effort
             return
         }
-        guard let connection = engine?.connection else { return }
-        do {
-            let result = try await connection.request(
-                ACPMethod.sessionSetConfigOption,
-                params: ACPRequests.setConfig(sessionId: session, configId: "effort", value: effort),
-                timeout: .seconds(15))
-            if let options = result["configOptions"] { applyConfig(options) } else { models.effort = effort }
-        } catch { self.error = String(describing: error) }
+        await send(.effort(effort), to: session)
     }
+
+    /// The Fast choice made on the draft, kept while a model without Fast is
+    /// picked for it.
+    private var draftFastPick = false
 
     /// Fast mode for the chat (ChatGPT plans only). A draft keeps it until
     /// its session exists.
     func setFast(_ enabled: Bool) async {
         guard let session = selectedSession else {
-            models.fast = enabled
+            draftFastPick = enabled
+            if models.offersFast { models.fast = enabled }
             return
         }
-        guard let connection = engine?.connection else { return }
+        await send(.fast(enabled), to: session)
+    }
+
+    /// Change one of `session`'s model settings and return its options after.
+    /// The reply goes to that session even when another chat is on screen by
+    /// then, so a slow reply never shows one chat's settings on another.
+    @discardableResult
+    private func send(_ change: DraftModelSettings.Change, to session: String) async -> ModelOptions? {
+        guard let connection = engine?.connection else { return nil }
         do {
             let result = try await connection.request(
-                ACPMethod.sessionSetConfigOption,
-                params: ACPRequests.setConfig(sessionId: session, configId: "fast", value: enabled),
-                timeout: .seconds(15))
-            if let options = result["configOptions"] { applyConfig(options) } else { models.fast = enabled }
-        } catch { self.error = String(describing: error) }
+                ACPMethod.sessionSetConfigOption, params: change.params(sessionId: session), timeout: .seconds(15))
+            let current = session == selectedSession ? models : openChats.snapshot(session)?.models
+            let options = result["configOptions"].map(ModelOptions.init(configOptions:))
+                ?? current.map(change.applied(to:)) ?? .empty
+            show(options, for: session, config: result["configOptions"])
+            return options
+        } catch {
+            self.error = String(describing: error)
+            return nil
+        }
+    }
+
+    /// Model options the engine sent for `session`: shown when it is the
+    /// chat on screen, else kept for when it is picked again.
+    private func show(_ options: ModelOptions, for session: String, config: JSONValue? = nil) {
+        if session == selectedSession {
+            if let config { applyConfig(config) } else {
+                models = options
+                selectedModel = options.current
+            }
+        } else {
+            openChats.updateModels(of: session, options)
+        }
     }
 
     func stop() {

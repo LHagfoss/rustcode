@@ -97,6 +97,17 @@ public struct OpenSessions: Equatable, Sendable {
         return true
     }
 
+    /// Changes an open background chat's model options, as a reply to a
+    /// setting made for it lands after another chat was picked (#2595);
+    /// false when not open.
+    @discardableResult
+    public mutating func updateModels(of id: String, _ models: ModelOptions) -> Bool {
+        guard open[id] != nil else { return false }
+        open[id]!.models = models
+        open[id]!.selectedModel = models.current
+        return true
+    }
+
     /// Where `update` for `sessionId` goes, applying it to a replay or a
     /// background chat. A report answer, a notice and a stopped turn never go
     /// into a replay, and a notice or stopped turn not into a background chat.
@@ -113,7 +124,12 @@ public struct OpenSessions: Equatable, Sendable {
         }
         if sessionId == selected { return .shown }
         guard open[sessionId] != nil else { return .ignored }
-        if !alert { open[sessionId]!.transcript.apply(update, at: now) }
+        if case .configOptions(let options) = update {
+            // `/fast` or `/effort` run in a chat not on screen (#2595).
+            updateModels(of: sessionId, ModelOptions(configOptions: options))
+        } else if !alert {
+            open[sessionId]!.transcript.apply(update, at: now)
+        }
         return .background
     }
 }

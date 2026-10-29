@@ -1316,12 +1316,11 @@ private struct ChatView: View {
                     Group {
                         switch panel {
                         case .add: AddPanel(model: model)
-                        case .model: ModelListPanel(model: model) { model.composerPanel = nil }
-                        case .effort: EffortPanel(model: model)
+                        case .model: ModelEffortPanel(model: model)
                         }
                     }
                     .padding(6)
-                    .frame(width: panel == .model ? 380 : panel == .effort ? 330 : 290, alignment: .leading)
+                    .frame(width: panel == .model ? min(380, max(CGFloat(layout.column), 290)) : 290, alignment: .leading)
                     .glassSurface(in: .rect(cornerRadius: 20))
                     if panel == .add { Spacer(minLength: 0) }
                 }
@@ -2332,8 +2331,6 @@ private struct Composer: View {
                 if let usage = model.planUsage {
                     PlanUsageMeter(usage: usage, hovering: $model.showsPlanUsage) { Task { await model.refreshPlanUsage() } }
                 }
-                fastToggle
-                effortMenu
                 modelMenu
                 trailingAction
             }
@@ -2463,12 +2460,27 @@ private struct Composer: View {
         .help("Add files, start a chat or switch project")
     }
 
+    /// Model, reasoning effort and Fast mode in one pill that opens one
+    /// picker, as the iOS app's Model & Effort sheet (#2595). The pill names
+    /// the model, then shows the effort (its icon only in a narrow composer)
+    /// and a bolt while Fast is on.
     @ViewBuilder
     private var modelMenu: some View {
         if !model.models.choices.isEmpty {
+            let effort = model.models.efforts.count > 1 ? model.models.effort ?? "default" : nil
+            let effortName = effort.map { id in model.models.efforts.first { $0.id == id }?.name ?? ModelChoice.effortLabel(id) }
+            let thinks = effort.map { $0 != "default" } ?? false
+            let fast = model.models.fast == true
             Button { toggle(.model) } label: {
                 HStack(spacing: 5) {
                     Text(layout.compactComposer ? Self.shortened(modelLabel) : modelLabel).lineLimit(1)
+                    if thinks {
+                        Image(systemName: "brain").font(.caption.weight(.semibold)).foregroundStyle(Color.brand)
+                        if !layout.compactComposer, let effortName { Text(effortName).lineLimit(1) }
+                    }
+                    if fast {
+                        Image(systemName: "bolt.fill").font(.caption.weight(.semibold)).foregroundStyle(Color.brand)
+                    }
                     Image(systemName: "chevron.up")
                         .font(.caption2.weight(.semibold))
                         .rotationEffect(.degrees(model.composerPanel == .model ? 180 : 0))
@@ -2481,54 +2493,11 @@ private struct Composer: View {
                 .contentShape(.capsule)
             }
             .buttonStyle(.plain)
-            .help("Model: \(modelLabel)")
-        }
-    }
-
-    /// Fast mode, beside effort: a bolt that lights up when on. Shown only
-    /// when the engine offers it (a ChatGPT-plan model), and icon-only so it
-    /// fits every composer width.
-    @ViewBuilder
-    private var fastToggle: some View {
-        if let isOn = model.models.fast {
-            Button { Task { await model.setFast(!isOn) } } label: {
-                Image(systemName: isOn ? "bolt.fill" : "bolt")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(isOn ? Color.brand : .secondary)
-                    .frame(width: 30, height: 30)
-                    .background(isOn ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.fill.tertiary), in: .circle)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .help(isOn
-                ? "Fast mode is on: faster responses, but it uses your plan's usage faster."
-                : "Fast mode: faster responses, but it uses your plan's usage faster.")
-            .accessibilityLabel("Fast mode")
-            .accessibilityValue(isOn ? "On" : "Off")
-        }
-    }
-
-    @ViewBuilder
-    private var effortMenu: some View {
-        if model.models.efforts.count > 1 {
-            let current = model.models.efforts.first { $0.id == model.models.effort }
-            let isOn = (model.models.effort ?? "default") != "default"
-            Button { toggle(.effort) } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "brain").font(.caption.weight(.semibold))
-                    if !layout.compactComposer {
-                        Text(isOn ? current?.name ?? "On" : "Off").lineLimit(1)
-                    }
-                }
-                .font(.callout)
-                .foregroundStyle(isOn ? Color.brand : .secondary)
-                .padding(.horizontal, 11)
-                .frame(height: 30)
-                .background(model.composerPanel == .effort ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.fill.tertiary), in: .capsule)
-                .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .help("Reasoning effort: \(isOn ? current?.name ?? "On" : "Off")")
+            .help(ModelEffortSummary.help(model: modelLabel, effort: effort.map { _ in thinks ? effortName ?? "On" : "Off" },
+                                          fast: model.models.fast))
+            .accessibilityLabel("Model & Effort")
+            .accessibilityValue(ModelEffortSummary.help(model: modelLabel, effort: effort.map { _ in thinks ? effortName ?? "On" : "Off" },
+                                                        fast: model.models.fast))
         }
     }
 
@@ -2755,10 +2724,61 @@ extension View {
     }
 }
 
+/// The composer's Model & Effort picker (#2595): the model list, then the
+/// picked model's reasoning effort, then Fast mode when the model offers it.
+/// Picking a model keeps it open; ⏎ on the filter picks, Esc closes.
+struct ModelEffortPanel: View {
+    @ObservedObject var model: DesktopModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ModelListPanel(model: model, maxHeight: 220, closesOnPick: false) { model.composerPanel = nil }
+            if model.models.efforts.count > 1 {
+                Divider().padding(.horizontal, 8)
+                EffortPanel(model: model, takesFocus: false)
+            }
+            if let isOn = model.models.fast {
+                Divider().padding(.horizontal, 8)
+                FastModeRow(isOn: isOn) { on in Task { await model.setFast(on) } }
+            }
+        }
+    }
+}
+
+/// Fast mode, named and explained where it is turned on: it is offered only
+/// for a model on a ChatGPT plan, and its speed costs plan usage.
+struct FastModeRow: View {
+    let isOn: Bool
+    let set: (Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label("Fast mode", systemImage: isOn ? "bolt.fill" : "bolt")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(isOn ? Color.brand : .primary)
+                Spacer()
+                Toggle("Fast mode", isOn: Binding(get: { isOn }, set: set))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tint(.brandFill)
+                    .labelsHidden()
+            }
+            Text(ModelEffortSummary.fastExplanation)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(8)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// Reasoning effort: a switch for thinking at all and a slider over the levels.
 /// ←→ move the slider, Space toggles, ⏎ or Esc closes.
 struct EffortPanel: View {
     @ObservedObject var model: DesktopModel
+    /// Off inside the Model & Effort picker, where the model filter has focus.
+    var takesFocus = true
     @FocusState private var focused: Bool
 
     private var levels: [ModelChoice] { model.models.efforts.filter { $0.id != "default" } }
@@ -2806,7 +2826,7 @@ struct EffortPanel: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
-        .onAppear { focused = true }
+        .onAppear { if takesFocus { focused = true } }
         .onKeyPress(.leftArrow) { step(-1) }
         .onKeyPress(.rightArrow) { step(1) }
         .onKeyPress(.space) { set(isOn ? "default" : (levels.first { $0.id == "medium" } ?? levels.last)?.id); return .handled }
@@ -2831,6 +2851,9 @@ struct EffortPanel: View {
 struct ModelListPanel: View {
     @ObservedObject var model: DesktopModel
     var maxHeight: CGFloat = 340
+    /// Off in the Model & Effort picker, which stays open to show the
+    /// picked model's effort and Fast choices.
+    var closesOnPick = true
     let close: () -> Void
     @State private var filter = ""
     @State private var highlighted = 0
@@ -2914,7 +2937,7 @@ struct ModelListPanel: View {
     }
 
     private func pick(_ choice: ModelChoice) {
-        close()
+        if closesOnPick { close() }
         Task { await model.setModel(choice.id) }
     }
 }

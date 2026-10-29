@@ -22,6 +22,9 @@ pub struct ModelChoice {
     pub model: String,
     /// Effort choices, "default" first. A single entry means no choice.
     pub efforts: Vec<String>,
+    /// Whether the profile offers fast mode (a ChatGPT plan), so a new chat
+    /// can show the toggle before its session exists (#2595).
+    pub fast: bool,
 }
 
 pub fn report(config: &AppConfig) -> ModelDefaults {
@@ -42,6 +45,7 @@ pub fn report(config: &AppConfig) -> ModelDefaults {
                 name: profile.name.clone(),
                 model: profile.model.clone(),
                 efforts: crate::remote::projection::reasoning_efforts(profile),
+                fast: crate::network::is_chatgpt_credential(Some(profile)),
             })
             .collect(),
     }
@@ -141,5 +145,22 @@ mod tests {
         assert!(apply(&mut config, None, Some("high")).is_err());
         assert!(apply(&mut config, Some("deep"), Some("xhigh")).is_err());
         assert_eq!(config.default.big(), "deep");
+    }
+
+    // #2595: a new chat shows the fast toggle only for a ChatGPT-plan profile.
+    #[test]
+    fn reports_fast_mode_only_for_chatgpt_plan_profiles() {
+        let mut config = config();
+        config.models[1].credential = Some(crate::provider_auth::CredentialRef {
+            provider: "openai".into(),
+            account: "test-account".into(),
+            method: crate::provider_auth::AuthMethod::ChatGpt,
+        });
+        let fast = report(&config)
+            .models
+            .iter()
+            .map(|choice| choice.fast)
+            .collect::<Vec<_>>();
+        assert_eq!(fast, [false, true]);
     }
 }
