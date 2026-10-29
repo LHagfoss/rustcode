@@ -11,6 +11,38 @@ the next normal save, Rustcode writes the merged configuration to
 fields use compiled defaults. Malformed or newer unsupported TOML is preserved
 and reported instead of being overwritten.
 
+## User-data migrations
+
+When a newer RustCode first starts (terminal, `--acp` for the macOS app, or a
+headless prompt), it applies any user-data migrations that release introduced,
+whether it was installed with Homebrew, the installer, or by replacing the
+binary. Each migration has a stable id and runs once: its id is recorded in
+`storage/migrations.json` in the config directory only after it succeeded.
+`storage/migrations.lock` keeps RustCode processes that start together from
+running the same step twice; a process that cannot take the lock within ten
+seconds starts normally and leaves the work to the one that holds it.
+
+A step that fails is not recorded. RustCode prints which step failed, carries
+on starting, and retries the step (and the steps after it) on the next start.
+Migrations are written to be safe to repeat after an interruption, and they
+keep the original data until its replacement is in place.
+
+Inspect the state without changing anything:
+
+```bash
+rustcode storage status          # pending and completed migrations
+rustcode storage status --json   # the same, for scripts and support tools
+```
+
+If `migrations.json` was written by a newer RustCode (a higher `format`), this
+version runs no migrations and leaves the file alone; upgrade RustCode. If the
+file is unreadable, RustCode reports it and runs nothing; move it aside to let
+every step run again. The file is machine-local and is never synced.
+
+No migrations are registered yet. The legacy configuration conversion above
+and `rustcode sessions migrate [--dry-run]` keep their own entry points for
+now.
+
 ## Configuration files
 
 The TOML file contains the `default` model selection, `models` array, runtime

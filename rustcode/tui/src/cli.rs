@@ -98,6 +98,12 @@ pub enum Commands {
         command: Option<SessionCommands>,
     },
 
+    /// Inspect user-data migrations
+    Storage {
+        #[command(subcommand)]
+        command: StorageCommands,
+    },
+
     /// Configure RustCode's optional local Discord Rich Presence publisher
     Discord {
         /// Enable Rich Presence and print desktop Discord setup guidance
@@ -471,6 +477,16 @@ pub enum SessionCommands {
 }
 
 #[derive(clap::Subcommand, Debug)]
+pub enum StorageCommands {
+    /// List pending and completed user-data migrations without changing files
+    Status {
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
 pub enum SyncCommands {
     /// Pull latest config, skills, and themes from remote
     Pull,
@@ -765,6 +781,17 @@ mod tests {
             Some(Commands::Sessions {
                 command: Some(SessionCommands::Path { id })
             }) if id == "abc"
+        ));
+    }
+
+    #[test]
+    fn parses_storage_status() {
+        let cli = Cli::try_parse_from(["rustcode", "storage", "status", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Storage {
+                command: StorageCommands::Status { json: true }
+            })
         ));
     }
 

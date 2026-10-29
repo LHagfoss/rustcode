@@ -392,8 +392,36 @@ fn run_mcp_command(
     Ok(())
 }
 
+fn run_storage_command(
+    command: &crate::cli::StorageCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        crate::cli::StorageCommands::Status { json } => {
+            let Some(config_dir) = rustcode::config::get_config_dir() else {
+                eprintln!("Configuration directory is unavailable.");
+                std::process::exit(1);
+            };
+            let status = rustcode::storage_migrations::status(&config_dir);
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else {
+                print!("{}", status.render());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = crate::cli::Cli::parse();
+    if let Some(crate::cli::Commands::Storage { command }) = cli_args.command.as_ref() {
+        run_storage_command(command)?;
+        return Ok(());
+    }
+    // Apply user-data migrations a newer release introduced, once, before
+    // anything reads the config directory (#2599). A failure is reported and
+    // retried next start; it never stops startup.
+    rustcode::storage_migrations::run_at_startup();
     if run_daemon_or_cron_command(&cli_args).await? {
         return Ok(());
     }
