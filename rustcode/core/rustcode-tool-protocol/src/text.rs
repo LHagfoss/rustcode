@@ -356,6 +356,11 @@ pub fn strip_tool_call_syntax(content: &str) -> String {
         out.replace_range(start..end, "");
     }
 
+    // Remove Qwen-style `<tool_call><function=…>…</function></tool_call>` calls.
+    for (start, end) in crate::xml::call_spans(&out).into_iter().rev() {
+        out.replace_range(start..end, "");
+    }
+
     // Remove Mistral-style `[TOOL_CALLS]name[ARGS]{...}` spans (drop to end of
     // the JSON object if we can find the matching brace, else to end of string).
     while let Some(start) = out.find("[TOOL_CALLS]") {
