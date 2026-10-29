@@ -1473,18 +1473,39 @@ async fn prepare_turn_request_pass(
                     .as_ref()
                     .is_some_and(crate::app::CompactionStats::was_ineffective_auto);
             let context_budget = s.active_context_budget();
+            let proactive =
+                proactive_history_budget(&context_budget, s.last_request_overhead_tokens) as usize;
+            let (budget, provider_usage) = match compaction_shortfall {
+                None => (proactive, s.current_token_usage.clone()),
+                // The retry runs because this request would drop history, so
+                // it must compact. The provider's count cannot gate it: after
+                // a hard trim it measured the trimmed request, which sits
+                // below the stored history by about the dropped turn, more
+                // than the shortfall lowers the budget, and the same turn was
+                // trimmed again on every request (#2603). Measure the stored
+                // history itself and ask for the shortfall off whichever of
+                // it and the budget is smaller.
+                Some(shortfall) => {
+                    let history_tokens: usize = s
+                        .history
+                        .iter()
+                        .map(compaction::estimate_message_tokens)
+                        .sum();
+                    (
+                        proactive.min(history_tokens).saturating_sub(shortfall),
+                        None,
+                    )
+                }
+            };
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
-                (proactive_history_budget(&context_budget, s.last_request_overhead_tokens)
-                    as usize)
-                    .saturating_sub(compaction_shortfall.unwrap_or(0))
-                    .max(1),
+                budget.max(1),
                 local_model,
                 deterministic_compaction,
                 s.active_session_id.clone(),
                 s.history.clone(),
-                s.current_token_usage.clone(),
+                provider_usage,
                 plan_profile,
             )
         };

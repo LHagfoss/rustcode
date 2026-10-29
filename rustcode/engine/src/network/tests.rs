@@ -8979,6 +8979,107 @@ async fn near_full_history_compacts_before_the_request_trims_it() {
     );
 }
 
+/// After a request has been hard trimmed, the provider's prompt count measures
+/// the trimmed request, not the stored history. The compaction gate anchored on
+/// that count reported `below_budget`, the `CompactFirst` retry lowered its
+/// budget only by the overrun, and the same oldest turn was trimmed again on
+/// every request until the local estimate caught up (#2603). Here the stored
+/// history renders larger than its own estimate (text-protocol tool results
+/// carry a metadata envelope) and the last usage came from a trimmed request:
+/// the first preparation that has to act compacts and trims nothing.
+#[tokio::test]
+async fn a_request_after_a_hard_trim_compacts_instead_of_trimming_again() {
+    let profile = crate::config::ModelProfile {
+        name: "trimmed".to_owned(),
+        url: "http://127.0.0.1:9/v1/chat/completions".to_owned(),
+        model: "trimmed".to_owned(),
+        context_window: Some(32_768),
+        soft_context_target: Some(30_000),
+        hard_effective_limit: Some(30_000),
+        provider_overhead_margin: Some(0),
+        ..Default::default()
+    };
+    let filler = |turn: usize, role: &str, words: usize| {
+        (0..words)
+            .map(|word| format!("{role}{turn}w{word}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut turns: Vec<ChatMessage> = Vec::new();
+    // What the previous request measured outside history, as in a session
+    // that has been running for a while.
+    let mut request_overhead = 0;
+    for turn in 0..200 {
+        turns.push(ChatMessage::new("user", filler(turn, "u", 20)));
+        for call in 0..4 {
+            let mut result = ChatMessage::new(
+                "tool",
+                format!("run_command: {}", filler(turn * 4 + call, "t", 6)),
+            );
+            result.tool_result = Some(crate::app::ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                arguments_hash: format!("{:064x}", turn * 4 + call),
+                success: true,
+                ..Default::default()
+            });
+            turns.push(result);
+        }
+        let history_tokens: usize = turns.iter().map(compaction::estimate_message_tokens).sum();
+        // The last response was measured on a request that left the oldest
+        // turns out: well under what the stored history holds.
+        let usage = crate::app::TokenUsage {
+            prompt_tokens: u32::try_from(history_tokens / 2).unwrap_or(u32::MAX),
+            completion_tokens: 64,
+            total_tokens: u32::try_from(history_tokens / 2 + 64).unwrap_or(u32::MAX),
+            ..Default::default()
+        };
+        let mut reply = ChatMessage::new("assistant", filler(turn, "a", 20));
+        reply.token_usage = Some(usage.clone());
+
+        let mut app = AppState::new();
+        app.api_base_url = profile.url.clone();
+        app.model_name = profile.name.clone();
+        app.config.models = vec![profile.clone()];
+        app.record_function_calling_support("http://127.0.0.1:9/v1/chat/completions", false);
+        app.history.extend(turns.iter().cloned());
+        app.history.push(reply.clone());
+        app.history
+            .push(ChatMessage::new("user", "Continue the task."));
+        app.current_token_usage = Some(usage);
+        app.last_request_overhead_tokens = request_overhead;
+        let state = Arc::new(Mutex::new(app));
+        let prepared = super::prepare_turn_request_measured(
+            &reqwest::Client::new(),
+            &state,
+            1,
+            &tokio_util::sync::CancellationToken::new(),
+            ContextCheckpoint::default(),
+            None,
+        )
+        .await
+        .expect("request preparation");
+        let (compacted, overhead) = {
+            let app = state.lock().await;
+            (
+                app.last_compaction.is_some(),
+                app.last_request_overhead_tokens,
+            )
+        };
+        request_overhead = overhead;
+        if !compacted && prepared.hard_trimmed == 0 {
+            turns.push(reply);
+            continue;
+        }
+        assert_eq!(
+            prepared.hard_trimmed, 0,
+            "turn {turn}: the request trimmed history instead of compacting it"
+        );
+        assert!(compacted, "turn {turn}");
+        return;
+    }
+    panic!("the history never filled the request");
+}
+
 /// A caller cancelled while its approval is pending (a subagent stopped by
 /// `cancel_agent`) stops waiting at once and withdraws its prompt (#2558).
 #[tokio::test]
