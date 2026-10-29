@@ -502,6 +502,8 @@ final class SessionFlowTests: XCTestCase {
         model.openSettings()
         XCTAssertTrue(model.showsSettings)
         XCTAssertFalse(model.showsSwitcher, "the switcher gives way to Settings")
+        XCTAssertEqual(model.settingsReturnSession, "quick", "Back's destination is the chat Settings covered")
+        XCTAssertEqual(model.settingsBackTitle, quick.title)
         XCTAssertTrue(model.coversChat)
         model.settingsSection = .keybinds
         model.closeSettings()
@@ -517,6 +519,19 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertEqual(model.settingsSection, .about)
         model.closeSettings()
         XCTAssertEqual(model.draft, "half written")
+
+        // A deep link while Settings is open moves to its section and keeps
+        // Back's destination; Back returns there even if the selection moved.
+        model.openSettings(.keybinds)
+        model.openSettings(.about)
+        XCTAssertEqual(model.settingsSection, .about)
+        XCTAssertEqual(model.settingsReturnSession, "quick")
+        let slow = try XCTUnwrap(model.sessions.first { $0.id == "slow" })
+        await model.select(slow)
+        XCTAssertEqual(model.settingsBackTitle, quick.title)
+        model.closeSettings()
+        XCTAssertFalse(model.showsSettings)
+        try await until { model.selectedSession == "quick" }
         model.stop()
     }
 

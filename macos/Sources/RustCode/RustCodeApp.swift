@@ -275,12 +275,25 @@ final class DesktopModel: ObservableObject {
         if let section { settingsSection = section }
         composerPanel = nil
         showsSwitcher = false
+        if !showsSettings { settingsReturnSession = selectedSession }
         showsSettings = true
     }
 
-    /// Back from Settings to the chat it covered.
+    /// Back from Settings to the chat it covered (#2593), even if something
+    /// changed the selection meanwhile, unless that chat is gone.
     func closeSettings() {
         showsSettings = false
+        guard let id = settingsReturnSession, id != selectedSession,
+              let session = sessions.first(where: { $0.id == id }) else { return }
+        Task { await select(session) }
+    }
+
+    /// The chat Back returns to, recorded when Settings opened.
+    private(set) var settingsReturnSession: String?
+
+    /// What the Back button names: the chat it returns to.
+    var settingsBackTitle: String {
+        sessions.first { $0.id == settingsReturnSession }?.title ?? "Chat"
     }
     /// `/remote`: the pairing panel over the chat.
     @Published var showsRemote = false
