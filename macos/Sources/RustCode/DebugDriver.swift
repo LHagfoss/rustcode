@@ -742,6 +742,9 @@ enum DebugDriver {
                 "secondary": ["usedPercent": 40, "windowMinutes": 10080, "resetsAt": .number(now + 4 * 86400)],
             ])
             withAnimation(.snappy(duration: 0.15)) { model.showsPlanUsage = parts.contains("hover") }
+        case "model":
+            // `model <profile>`: switch the shown chat's model, as the picker does.
+            if parts.count > 1 { await model.setModel(parts.dropFirst().joined(separator: " ")) }
         case "panel":
             // `panel model|effort|add|none`: open a composer panel as its chip does;
             // `effort` opens the Model & Effort picker, which holds it now.

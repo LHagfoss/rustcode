@@ -24,6 +24,8 @@ public struct DraftModelSettings: Equatable, Sendable {
         case model(String)
         case effort(String)
         case fast(Bool)
+        /// Saved on the model's profile, so it never waits on a draft.
+        case toolProtocol(String)
 
         /// The `session/set_config_option` params for `sessionId`.
         public func params(sessionId: String) -> JSONValue {
@@ -31,6 +33,7 @@ public struct DraftModelSettings: Equatable, Sendable {
             case .model(let model): ACPRequests.setModel(sessionId: sessionId, value: model)
             case .effort(let effort): ACPRequests.setConfig(sessionId: sessionId, configId: "effort", value: effort)
             case .fast(let fast): ACPRequests.setConfig(sessionId: sessionId, configId: "fast", value: fast)
+            case .toolProtocol(let id): ACPRequests.setConfig(sessionId: sessionId, configId: "tool_protocol", value: id)
             }
         }
 
@@ -42,6 +45,7 @@ public struct DraftModelSettings: Equatable, Sendable {
             case .model(let model): options.current = model
             case .effort(let effort): options.effort = effort
             case .fast(let fast): options.fast = fast
+            case .toolProtocol(let id): options.toolProtocol = id
             }
             return options
         }

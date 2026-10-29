@@ -347,6 +347,11 @@ public struct ModelOptions: Equatable, Sendable {
     /// Whether the composer shows the fast-mode toggle.
     public var offersFast: Bool { fast != nil }
 
+    /// How the model writes tool calls (`apinative`, `native`, `json`), when
+    /// the engine lets the user choose: only for a model they configured.
+    public var toolProtocol: String?
+    public var toolProtocols: [ModelChoice] = []
+
     /// Reads the `model` and `effort` selects from a `configOptions` array.
     public init(configOptions: JSONValue?) {
         func select(_ id: String) -> (String?, [ModelChoice]) {
@@ -361,6 +366,7 @@ public struct ModelOptions: Equatable, Sendable {
         }
         (current, choices) = select("model")
         (effort, efforts) = select("effort")
+        (toolProtocol, toolProtocols) = select("tool_protocol")
         let fastOption = configOptions?.arrayValue?.first { $0["id"]?.stringValue == "fast" }
         fast = fastOption?["type"]?.stringValue == "boolean" ? fastOption?["currentValue"]?.boolValue : nil
     }

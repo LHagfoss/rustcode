@@ -103,4 +103,20 @@ final class ModelEffortPickerTests: XCTestCase {
         XCTAssertEqual(ModelEffortSummary.help(model: "qwen", effort: nil, fast: nil), "Model: qwen")
         XCTAssertTrue(ModelEffortSummary.fastExplanation.contains("usage"))
     }
+
+    func testToolProtocolIsReadAndSentAsASelect() {
+        let options = ModelOptions(configOptions: [[
+            "id": "tool_protocol", "type": "select", "currentValue": "native",
+            "options": [["value": "apinative", "name": "API"], ["value": "native", "name": "Text tags"],
+                        ["value": "json", "name": "Text blocks"]],
+        ]])
+        XCTAssertEqual(options.toolProtocol, "native")
+        XCTAssertEqual(options.toolProtocols.map(\.name), ["API", "Text tags", "Text blocks"])
+        XCTAssertNil(ModelOptions(configOptions: []).toolProtocol, "an engine that offers no choice")
+
+        let change = DraftModelSettings.Change.toolProtocol("apinative")
+        XCTAssertEqual(change.params(sessionId: "s"),
+                       ["sessionId": "s", "configId": "tool_protocol", "value": "apinative"])
+        XCTAssertEqual(change.applied(to: options).toolProtocol, "apinative")
+    }
 }
