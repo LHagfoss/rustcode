@@ -509,6 +509,9 @@ enum TextSelection {
             view = current.superview
         }
         if holdsSelection(window) { window.makeFirstResponder(nil) }
+        // A run of prose redrawn with its highlight restored holds a
+        // selection without the keyboard.
+        ProseSelection.shared.clear()
         return true
     }
 
@@ -516,6 +519,7 @@ enum TextSelection {
     /// False when the keyboard is anywhere else, so Esc keeps its meaning there.
     @MainActor static func endOnEscape(in window: NSWindow) -> Bool {
         guard holdsSelection(window) else { return false }
+        ProseSelection.shared.clear()
         window.makeFirstResponder(nil)
         return true
     }
@@ -523,6 +527,7 @@ enum TextSelection {
     /// The keyboard is with selectable text in the chat, not a field the
     /// reader types in.
     @MainActor private static func holdsSelection(_ window: NSWindow) -> Bool {
+        if ProseSelection.shared.holds(window.firstResponder) { return true }
         guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
               let field = editor.delegate as? NSTextField else { return false }
         return !field.isEditable

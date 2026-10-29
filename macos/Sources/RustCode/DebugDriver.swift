@@ -807,6 +807,63 @@ enum DebugDriver {
                                               pressure: type == .leftMouseUp ? 0 : 1) {
                 NSApp.postEvent(event, atStart: false)
             }
+        case "dragselect":
+            // `dragselect <x1> <y1> <x2> <y2>`: a press, a drag in steps and a
+            // release, from the window's top left. Reports what holds the
+            // keyboard and the selection.
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  parts.count > 4, let x1 = Double(parts[1]), let y1 = Double(parts[2]),
+                  let x2 = Double(parts[3]), let y2 = Double(parts[4]) else { break }
+            // From the window's top left, as `hit` counts.
+            guard let root = window.contentView?.superview else { break }
+            let height = root.bounds.height
+            let steps = 6
+            func event(_ type: NSEvent.EventType, _ x: Double, _ y: Double) -> NSEvent? {
+                NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: height - y), modifierFlags: [],
+                                   timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                   context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
+            }
+            var rest: [NSEvent] = []
+            for step in 1...steps {
+                let t = Double(step) / Double(steps)
+                event(.leftMouseDragged, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t).map { rest.append($0) }
+            }
+            event(.leftMouseUp, x2, y2).map { rest.append($0) }
+            guard let down = event(.leftMouseDown, x1, y1) else { break }
+            // A press on text goes to it directly, its tracking loop then
+            // taking the queued drag: a window that is not key would take a
+            // posted press only as the click that activates it. Elsewhere the
+            // press is posted, so the chat's mouse monitor sees it.
+            let hit = root.hitTest(down.locationInWindow)
+            if let text = hit as? NSTextView {
+                rest.forEach { NSApp.postEvent($0, atStart: false) }
+                window.makeFirstResponder(text)
+                text.mouseDown(with: down)
+            } else {
+                ([down] + rest).forEach { NSApp.postEvent($0, atStart: false) }
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+            report("dragselect " + DebugDriver.selectionReport(window))
+        case "copysel":
+            // ⌘C to what holds the keyboard, then what the pasteboard holds.
+            NSPasteboard.general.clearContents()
+            let window = NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+            _ = window?.firstResponder?.tryToPerform(#selector(NSText.copy(_:)), with: nil)
+            report("copied \(String(reflecting: NSPasteboard.general.string(forType: .string) ?? ""))")
+        case "find":
+            // `find on|off`: the find bar, focused, for `type` to fill.
+            model.showsFind = parts.count < 2 || parts[1] != "off"
+        case "selection":
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { break }
+            report("selection " + DebugDriver.selectionReport(window))
+        case "escape":
+            // Esc as the chat's key monitor sees it.
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                               windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+                                               charactersIgnoringModifiers: "\u{1b}", isARepeat: false,
+                                               keyCode: KeyRecorderInput.escapeKeyCode) else { break }
+            NSApp.postEvent(event, atStart: false)
         case "responder":
             // What has the keyboard, and what the window hits at a point.
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { break }
@@ -1010,6 +1067,20 @@ extension DebugDriver {
 
     And text after it.
     """
+
+    /// What holds the keyboard, the text it has selected, and the chat's
+    /// prose selection in transcript terms.
+    static func selectionReport(_ window: NSWindow) -> String {
+        let responder = window.firstResponder.map { String(describing: type(of: $0)) } ?? "-"
+        var selected = ""
+        if let text = window.firstResponder as? NSTextView {
+            selected = (text.string as NSString).substring(with: text.selectedRange())
+        }
+        let model = ProseSelection.shared.selection.bounds.map {
+            "\($0.start.run.item).\($0.start.run.segment)@\($0.start.offset)-\($0.end.run.item).\($0.end.run.segment)@\($0.end.offset)"
+        } ?? "none"
+        return "first \(responder) selected \(String(reflecting: selected)) model \(model)"
+    }
 
     static let markdownSample = """
     Here is the comparison:
