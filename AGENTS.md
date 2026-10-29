@@ -60,6 +60,20 @@ instructions for work in this repository.
     (filter by class or test name; `RustCodeTests.X` matches nothing).
   - A Swift-only change needs no cargo run, and a Rust-only one no Swift run,
     unless the change crosses the ACP boundary between them.
+- Keep build output bounded; `target/` once grew to 500 GB. Cargo never
+  prunes it, and every feature set, profile and stale dependency version
+  leaves artifacts behind.
+  - Incremental compilation is off for the dev and test profiles
+    (`Cargo.toml`); do not turn it back on locally.
+  - Before a long cargo session and when you finish, check the size and clean
+    above 50 GB:
+    `[ "$(du -sk target 2>/dev/null | cut -f1)" -gt 52428800 ] && cargo clean`.
+  - Each worktree has its own `target/` and `macos/.build`. Removing the
+    worktree when its branch merges (see above) is what frees them; do not
+    leave idle worktrees, and point a long-lived one at a shared
+    `CARGO_TARGET_DIR` rather than building a second full tree.
+  - `cargo clean --release` drops only release artifacts; use it after a
+    local release build instead of keeping both profiles around.
 - The iOS app lives in `ios/` with its own checks; see `ios/AGENTS.md`.
 - For releases, load `~/.agents/skills/release-automation/SKILL.md`;
   use `scripts/release.sh` as the source of truth. Draft the notes with

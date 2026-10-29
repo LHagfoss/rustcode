@@ -91,6 +91,14 @@ tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
 # dominate scroll latency in long sessions. Our own code stays at opt-level=0
 # for fast compilation and full debuginfo.
+# Keep rustc's per-build incremental state from accumulating in this large
+# workspace. Full debug information remains enabled for normal debugging.
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
+
 [profile.dev.package."*"]
 opt-level = 2
 
