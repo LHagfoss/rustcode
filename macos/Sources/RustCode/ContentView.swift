@@ -2273,7 +2273,7 @@ private struct ChatProjectMenu: View {
                     Task { await model.chooseChatProject() }
                 }
                 if model.canMoveChat {
-                    Button("Change Project Folder…", systemImage: "folder.badge.gearshape") {
+                    Button("Change Thread Folder…", systemImage: "folder.badge.gearshape") {
                         Task { await model.moveChatProject() }
                     }
                     .disabled(model.isTurnRunning)
