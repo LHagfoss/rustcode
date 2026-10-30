@@ -1696,6 +1696,9 @@ private struct ChatView: View {
                 Text(title).font(.headline).lineLimit(1)
             }
             Spacer()
+            ForEach(model.pullWatches(in: model.selectedSession)) { watch in
+                PullWatchChip(model: model, watch: watch)
+            }
             TaskPlanButton(model: model, chat: chat)
             if let usage = chat.transcript.usage {
                 Button { model.showContext() } label: { UsageCapsule(usage: usage) }
