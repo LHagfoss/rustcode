@@ -14,6 +14,9 @@ public struct ToolItem: Equatable, Sendable {
     public var summary: String?
     /// What the call changed, one entry per edited file.
     public var changes: [FileChange] = []
+    /// The call never reported back: the turn ended and closed it. Its
+    /// status is how the card shows it, not an outcome (#2649).
+    public var settledByTurnEnd = false
 
     public var displayTitle: String { ToolPresentation.title(title) }
     public var detail: String? { inputDetail ?? ToolPresentation.detail(input: nil, output: output) }
@@ -290,6 +293,7 @@ public struct Transcript: Equatable, Sendable {
             } else {
                 tool.status = .completed
             }
+            tool.settledByTurnEnd = true
             items[index].content = .tool(tool)
         }
     }

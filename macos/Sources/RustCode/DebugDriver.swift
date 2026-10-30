@@ -1028,6 +1028,25 @@ enum DebugDriver {
             }
         case "filter":
             model.sessionFilter = parts.dropFirst().joined(separator: " ")
+        case "completion":
+            // `completion`: a finished turn that edited a file and ran checks
+            // (one passed, one failed, one never reported), for its card.
+            let start = Date().addingTimeInterval(-42)
+            model.transcript.appendUser("Fix the rules and run the checks.")
+            model.transcript.beginTurn(at: start)
+            model.transcript.apply(.toolCall(id: "drive-c-edit", title: "edit_file", kind: "edit", status: .inProgress, input: nil))
+            model.transcript.apply(.toolCallUpdate(id: "drive-c-edit", title: nil, status: .completed, output: "ok",
+                                                   diffs: [FileDiff(path: "/tmp/btd6/src/rules.js", oldText: "a\n", newText: "b\nc\n")]))
+            for (index, (command, status)) in [("npm test -- rules", ToolStatus.completed), ("npm run lint", .failed),
+                                               ("npm run build", nil)].enumerated() {
+                model.transcript.apply(.toolCall(id: "drive-c-\(index)", title: "run_command", kind: "execute",
+                                                 status: .inProgress, input: nil, detail: command))
+                if let status {
+                    model.transcript.apply(.toolCallUpdate(id: "drive-c-\(index)", title: nil, status: status, output: "done"))
+                }
+            }
+            model.transcript.apply(.agentText("Fixed the rules; the lint still fails on an unused import."))
+            model.transcript.finishTurn(at: Date())
         case "changes":
             // `changes`: show or hide the Changes panel.
             model.toggleChanges()

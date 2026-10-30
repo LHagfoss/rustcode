@@ -17,6 +17,8 @@ struct TranscriptRow: View, Equatable {
     var isExpanded = false
     /// The agents this row's spawn and the ones right after it started.
     var agents: [AgentSpawn]? = nil
+    /// On a finished turn's last reply: what the turn changed and checked.
+    var completion: TurnCompletion? = nil
 
     var body: some View {
         Group {
@@ -71,9 +73,12 @@ struct TranscriptRow: View, Equatable {
             UserMessage(id: item.id, text: text, isExpanded: isExpanded || isCurrentMatch, sentAt: item.at)
                 .padding(.bottom, 10)
         case .assistant(let text):
-            PacedReply(text: text, isStreaming: isStreaming) { shown, isWriting in
-                AssistantMessage(id: item.id, text: shown, isStreaming: isWriting, turn: item.turn, writtenAt: item.at,
-                                 isExpanded: isExpanded || isCurrentMatch, isStep: isStep)
+            VStack(alignment: .leading, spacing: 10) {
+                PacedReply(text: text, isStreaming: isStreaming) { shown, isWriting in
+                    AssistantMessage(id: item.id, text: shown, isStreaming: isWriting, turn: item.turn, writtenAt: item.at,
+                                     isExpanded: isExpanded || isCurrentMatch, isStep: isStep)
+                }
+                if let completion, !isStreaming { TurnCompletionCard(completion: completion) }
             }
         case .thinking(let text) where isStep:
             ThoughtLine(text: text)
@@ -1448,6 +1453,103 @@ struct HorizontalOverflow<Content: View>: View {
             content.fixedSize(horizontal: true, vertical: false)
             ScrollView(.horizontal) { content }
                 .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        }
+    }
+}
+
+/// Under a finished turn's answer: the files it changed and the checks it
+/// ran, with how each ended as observed (#2649). Unknown and cancelled checks
+/// say so; nothing here claims a check passed that did not report it. Show
+/// Steps opens the turn's calls, where the output is. Off in Settings, it
+/// does not show.
+struct TurnCompletionCard: View {
+    let completion: TurnCompletion
+    @AppStorage(TurnCompletionCard.enabledKey) private var enabled = true
+    @Environment(\.toggleToolRun) private var toggle
+    @Environment(\.projectRoot) private var projectRoot
+    @State private var showsFiles = false
+
+    static let enabledKey = "showsTurnCompletion"
+
+    var body: some View {
+        if enabled {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    if !completion.edited.isEmpty {
+                        Button {
+                            withAnimation(.snappy(duration: 0.15)) { showsFiles.toggle() }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "doc.text")
+                                Text("\(completion.edited.count) file\(completion.edited.count == 1 ? "" : "s") changed")
+                                Text("+\(completion.added)").foregroundStyle(.green)
+                                Text("\u{2212}\(completion.removed)").foregroundStyle(.red)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help(showsFiles ? "Hide the files" : "List the files")
+                    }
+                    if completion.checks.isEmpty {
+                        Label("No checks ran", systemImage: "questionmark.circle")
+                            .foregroundStyle(.secondary)
+                            .help("This turn ran no tests, builds or lints that RustCode could see.")
+                    }
+                    Spacer(minLength: 0)
+                    Button("Show Steps") { toggle(TurnFold.key(for: completion.anchor)) }
+                        .buttonStyle(.link)
+                        .help("Open the turn's calls and their output")
+                }
+                if !completion.checks.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(completion.checks.enumerated()), id: \.offset) { _, check in
+                            CheckLine(check: check)
+                        }
+                    }
+                }
+                if completion.failedCommands > 0 {
+                    Label("\(completion.failedCommands) other command\(completion.failedCommands == 1 ? "" : "s") failed",
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+                if showsFiles {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(completion.edited, id: \.self) { path in
+                            Text(ProjectPath.relative(path, to: projectRoot))
+                                .font(.caption.monospaced())
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+            .font(.caption)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.fill.quaternary, in: .rect(cornerRadius: 10))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("What this turn changed and checked")
+        }
+    }
+
+    private struct CheckLine: View {
+        let check: TurnCompletion.Check
+
+        var body: some View {
+            let (symbol, color, word): (String, Color, String) = switch check.outcome {
+            case .passed: ("checkmark.circle.fill", .green, "passed")
+            case .failed: ("xmark.circle.fill", .red, "failed")
+            case .cancelled: ("stop.circle", .secondary, "stopped")
+            case .unknown: ("questionmark.circle", .secondary, "no result")
+            }
+            HStack(spacing: 6) {
+                Image(systemName: symbol).foregroundStyle(color)
+                Text(check.command).font(.caption.monospaced()).lineLimit(1).truncationMode(.tail)
+                Text(word).foregroundStyle(.secondary)
+            }
+            .help(check.command)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(check.command): \(word)")
         }
     }
 }

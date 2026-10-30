@@ -152,12 +152,17 @@ public struct ToolFolding: Equatable, Sendable {
     public private(set) var agentGroups: [Int: [Int]] = [:]
     /// What the running turn is doing now (`CurrentWork`).
     public private(set) var activity: String?
+    /// What each finished turn changed and checked, by its last reply (#2649).
+    public private(set) var completions: [Int: TurnCompletion] = [:]
 
     public init() {}
 
     /// `open` holds the runs and turns the reader opened.
+    public func completion(for id: Int) -> TurnCompletion? { completions[id] }
+
     public init(items: [TranscriptItem], verbosity: ToolVerbosity, open: Set<Int>, running: Bool) {
         groupAgents(items)
+        completions = TurnCompletion.byLastReply(items)
         let lastStart = items.lastIndex(where: \.startsTurn).map { $0 + 1 } ?? 0
         if running { activity = CurrentWork.now(in: items[lastStart...]) }
         guard verbosity.folds else { return }

@@ -1169,7 +1169,7 @@ private struct ChatView: View {
                                           isStreaming: isReplyStreaming && item.id == lastId,
                                           fold: rows.folding.fold(for: item.id), turnFold: rows.folding.turn(for: item.id),
                                           isNested: rows.folding.isNested(item.id), isExpanded: expanded.contains(item.id),
-                                          agents: rows.agents[item.id])
+                                          agents: rows.agents[item.id], completion: rows.folding.completion(for: item.id))
                                 .equatable()
                                 .transition(.rowReveal)
                                 .arrives(arrivals.isNew(item.id, in: transcript.identity, last: lastId),
@@ -1745,7 +1745,7 @@ private struct OlderRows: View {
                 TranscriptRow(item: item, isCurrentMatch: item.id == currentMatch,
                               fold: folding.fold(for: item.id), turnFold: folding.turn(for: item.id),
                               isNested: folding.isNested(item.id), isExpanded: expanded.contains(item.id),
-                              agents: agents[item.id])
+                              agents: agents[item.id], completion: folding.completion(for: item.id))
                     .equatable()
                     .transition(.rowReveal)
                     .reportsChatRow(item.id, to: scroll)
