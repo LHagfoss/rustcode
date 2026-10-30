@@ -215,14 +215,18 @@ struct SessionEndToEndTests {
         let gateway = try await GatewayIntegrationTests.Gateway(configFile: config)
         let workspace = gateway.configuration.appendingPathComponent("workspace")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-        let terminal = try TerminalSession(binary: gateway.binary, configuration: gateway.configuration, workspace: workspace)
-        defer { terminal.stop(); gateway.stop(); model.stop() }
+        defer { gateway.stop(); model.stop() }
         let client = LiveRemoteClient(codec: WireCodec(), requestTimeout: .seconds(5))
         let credential = try await client.pair(.scanned(try gateway.pairingChallenge().payload), deviceName: "Question test")
         try await client.connect(using: credential)
         var lists = try await client.subscribeSessions().makeAsyncIterator()
         _ = try await lists.next()
-        try await Task.sleep(for: .seconds(3))
+        // Started only now: with the gateway running, a terminal may share
+        // itself as it starts (#2010), and a list that was already shared
+        // when the device subscribed never changes again.
+        let terminal = try TerminalSession(binary: gateway.binary, configuration: gateway.configuration, workspace: workspace)
+        defer { terminal.stop() }
+        try await terminal.waitForPrompt()
         terminal.type("/remote\r")
         let shared = try await list(&lists) { !$0.isEmpty }
         let session = try #require(shared.first)
@@ -271,11 +275,9 @@ struct SessionEndToEndTests {
         let gateway = try await GatewayIntegrationTests.Gateway(configFile: configFile(modelPort: modelPort))
         let workspace = gateway.configuration.appendingPathComponent("workspace")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-        let terminal = try TerminalSession(binary: gateway.binary, configuration: gateway.configuration, workspace: workspace)
         let log = FrameLog()
         defer {
             log.flush()
-            terminal.stop()
             gateway.stop()
             model.stop()
         }
@@ -288,8 +290,11 @@ struct SessionEndToEndTests {
         var lists = try await client.subscribeSessions().makeAsyncIterator()
         #expect(try await lists.next() == [])
 
-        // Share the terminal session.
-        try await Task.sleep(for: .seconds(3))
+        // Share the terminal session. It starts only now: with the gateway
+        // running, a terminal may share itself as it starts (#2010).
+        let terminal = try TerminalSession(binary: gateway.binary, configuration: gateway.configuration, workspace: workspace)
+        defer { terminal.stop() }
+        try await terminal.waitForPrompt()
         terminal.type("/remote\r")
         let shared = try await list(&lists) { !$0.isEmpty }
         let session = try #require(shared.first)
@@ -473,12 +478,14 @@ struct SessionEndToEndTests {
             Issue.record("a prompt to a closed session was not rejected: \(late.state)")
         }
 
-        // Revoking the device closes the connection for good.
-        try gateway.run("remote", "revoke", credential.host.device.id)
-        await #expect(throws: RemoteError.unauthorized) {
+        // `/remote off` switches remote access off for the whole machine
+        // (#2010): the gateway stops, so the list ends and nothing answers a
+        // new connection. Revoking a device on a running gateway is covered
+        // by `GatewayIntegrationTests`.
+        await #expect(throws: RemoteError.self) {
             while try await lists.next() != nil {}
         }
-        await #expect(throws: RemoteError.unauthorized) {
+        await #expect(throws: RemoteError.self) {
             try await client.connect(using: credential)
         }
     }
