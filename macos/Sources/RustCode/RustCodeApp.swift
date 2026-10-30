@@ -1543,13 +1543,14 @@ final class DesktopModel: ObservableObject {
         UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
     }
 
-    /// The chat's folder in the session store, from `rustcode sessions path`,
-    /// accepted only when it is that session's folder inside the store.
+    /// The chat's folder in the thread store, from `rustcode sessions path`,
+    /// accepted only when it is that thread's folder inside the store
+    /// (`threads/`, or `sessions/` from an engine that predates the rename).
     func sessionDirectory(_ session: SessionSummary) async -> URL? {
         let output = await runEngine(["sessions", "path", session.id]).map { String(decoding: $0, as: UTF8.self) }
         guard let path = output?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return nil }
         let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-        guard url.lastPathComponent == session.id, url.path.contains("/rustcode/sessions/") else { return nil }
+        guard url.lastPathComponent == session.id, ["/rustcode/threads/", "/rustcode/sessions/"].contains(where: url.path.contains) else { return nil }
         return url
     }
 

@@ -55,7 +55,7 @@ impl Sandbox {
     /// layout that session discovery walks. A transcript needs at least one
     /// user and one assistant turn to be resumable.
     fn write_session(&self, id: &str, prompt: &str) {
-        let directory = self.config_dir().join("sessions").join(id);
+        let directory = self.config_dir().join("threads").join(id);
         std::fs::create_dir_all(&directory).expect("create session dir");
         let transcript = format!(
             r#"[{{"role":"user","content":"{prompt}"}},{{"role":"assistant","content":"ack"}}]"#
@@ -66,7 +66,7 @@ impl Sandbox {
     /// Simulate a session that existed and was later deleted or archived: the
     /// id stays known to the user, the transcript does not.
     fn delete_session(&self, id: &str) {
-        std::fs::remove_dir_all(self.config_dir().join("sessions").join(id))
+        std::fs::remove_dir_all(self.config_dir().join("threads").join(id))
             .expect("remove session dir");
     }
 

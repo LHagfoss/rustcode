@@ -479,7 +479,7 @@ async fn acp_load_session(
             .data(format!("session history is unavailable: {error}"))
     })?;
     let sessions_root = crate::config::get_config_dir()
-        .map(|root| root.join(rustcode_session::SESSIONS_DIR))
+        .map(|root| rustcode_session::threads_dir(&root))
         .and_then(|path| std::fs::canonicalize(path).ok())
         .ok_or_else(|| {
             agent_client_protocol::Error::invalid_params().data("session storage is unavailable")

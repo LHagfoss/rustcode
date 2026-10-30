@@ -42,10 +42,125 @@ pub struct Migration {
 
 /// The registry, oldest first. Append new steps at the end.
 ///
-/// Empty for now: the legacy config (`config.json`/`models.json`) and session
-/// layout migrations keep their existing entry points until each can be moved
-/// here without changing its compatibility behavior.
-pub const MIGRATIONS: &[Migration] = &[];
+/// The legacy config (`config.json`/`models.json`) and session layout
+/// migrations keep their existing entry points until each can be moved here
+/// without changing its compatibility behavior.
+pub const MIGRATIONS: &[Migration] = &[Migration {
+    id: "0001-sessions-folder-to-threads",
+    description: "rename the sessions/ folder to threads/",
+    run: sessions_folder_to_threads,
+}];
+
+/// Rename `sessions/` to `threads/` and leave `sessions` as a link to it, so
+/// an older RustCode (or a process started before the upgrade) still finds
+/// every thread. When both folders exist (an older version wrote to a fresh
+/// `sessions/` after the rename), the old one's entries are moved in; an
+/// entry that exists in both is left where it is and reported, and the step
+/// runs again on the next start. Nothing is deleted except emptied folders.
+fn sessions_folder_to_threads(config_dir: &Path) -> Result<(), String> {
+    let legacy = config_dir.join(rustcode_session::LEGACY_SESSIONS_DIR);
+    let threads = config_dir.join(rustcode_session::THREADS_DIR);
+    // Twice at most: a process still on the old folder name can create a
+    // new `sessions/` between the rename and the link.
+    for _ in 0..2 {
+        match fs::symlink_metadata(&legacy) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if threads.is_dir() {
+                    link_legacy_name(config_dir);
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(format!("could not inspect {}: {error}", legacy.display())),
+            Ok(meta) if meta.file_type().is_symlink() => return Ok(()),
+            Ok(meta) if !meta.is_dir() => {
+                return Err(format!(
+                    "{} is not a folder; move it aside",
+                    legacy.display()
+                ));
+            }
+            Ok(_) => {}
+        }
+        if fs::symlink_metadata(&threads).is_err() {
+            fs::rename(&legacy, &threads).map_err(|error| {
+                format!(
+                    "could not rename {} to {}: {error}",
+                    legacy.display(),
+                    threads.display()
+                )
+            })?;
+        } else {
+            let mut collisions = Vec::new();
+            merge_folder(&legacy, &threads, &mut collisions)?;
+            if !collisions.is_empty() {
+                let shown: Vec<String> = collisions
+                    .iter()
+                    .take(5)
+                    .map(|path| path.display().to_string())
+                    .collect();
+                return Err(format!(
+                    "{} entries exist in both {} and {}, for example {}; move them aside and restart",
+                    collisions.len(),
+                    legacy.display(),
+                    threads.display(),
+                    shown.join(", ")
+                ));
+            }
+            fs::remove_dir(&legacy).map_err(|error| {
+                format!("could not remove the emptied {}: {error}", legacy.display())
+            })?;
+        }
+        link_legacy_name(config_dir);
+    }
+    Ok(())
+}
+
+/// Move every entry of `from` into `into`, recursing into folders present in
+/// both. Entries present in both that are not both folders go to `collisions`
+/// and stay in `from`.
+fn merge_folder(from: &Path, into: &Path, collisions: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(from)
+        .map_err(|error| format!("could not read {}: {error}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("could not read {}: {error}", from.display()))?;
+        let source = entry.path();
+        let target = into.join(entry.file_name());
+        let Ok(target_meta) = fs::symlink_metadata(&target) else {
+            fs::rename(&source, &target).map_err(|error| {
+                format!(
+                    "could not move {} to {}: {error}",
+                    source.display(),
+                    target.display()
+                )
+            })?;
+            continue;
+        };
+        if entry.file_name() == ".DS_Store" {
+            let _ = fs::remove_file(&source);
+        } else if target_meta.is_dir() && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            let before = collisions.len();
+            merge_folder(&source, &target, collisions)?;
+            if collisions.len() == before {
+                let _ = fs::remove_dir(&source);
+            }
+        } else {
+            collisions.push(source);
+        }
+    }
+    Ok(())
+}
+
+/// Point `sessions` at `threads/`. Best effort: without the link only an
+/// older RustCode loses sight of the threads (and Windows needs a privilege
+/// to make one).
+fn link_legacy_name(config_dir: &Path) {
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(
+        rustcode_session::THREADS_DIR,
+        config_dir.join(rustcode_session::LEGACY_SESSIONS_DIR),
+    );
+    #[cfg(not(unix))]
+    let _ = config_dir;
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct Checkpoint {

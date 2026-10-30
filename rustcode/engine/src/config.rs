@@ -293,7 +293,7 @@ pub const PROJECT_CONFIG_FILE: &str = "config.toml";
 const PROJECT_GITIGNORE_ENTRY: &str = ".rustcode/config.toml";
 const HISTORY_FILE: &str = "history.json";
 #[cfg(test)]
-const SESSIONS_DIR: &str = "sessions";
+const SESSIONS_DIR: &str = rustcode_session::THREADS_DIR;
 
 /// Opt-in Mapika decider routing via a raw OpenAI completions endpoint.
 /// Presence enables immediate routing; omission preserves normal generation.
