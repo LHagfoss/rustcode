@@ -14,6 +14,10 @@ final class AsciiBannerTests: XCTestCase {
         XCTAssertEqual(AsciiBanner.crop(width: 300, height: 300), CGRect(x: 0, y: 100, width: 300, height: 100))
         XCTAssertEqual(AsciiBanner.crop(width: 800, height: 100), CGRect(x: 0, y: 0, width: 800, height: 100))
         XCTAssertEqual(AsciiBanner.crop(width: 0, height: 10), .zero)
+        // A wider band on request, never a narrower one than 3:1.
+        XCTAssertEqual(AsciiBanner.crop(width: 600, height: 300, aspect: 6), CGRect(x: 0, y: 100, width: 600, height: 100))
+        XCTAssertEqual(AsciiBanner.crop(width: 300, height: 300, aspect: 1), CGRect(x: 0, y: 100, width: 300, height: 100))
+        XCTAssertEqual(AsciiBanner.rowCount(columns: 120, width: 600, height: 300, aspect: 6), 10)
     }
 
     func testRowsFollowTheBandsAspectWithTallCells() {
