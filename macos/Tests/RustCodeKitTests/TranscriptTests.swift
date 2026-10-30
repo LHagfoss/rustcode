@@ -278,6 +278,15 @@ final class TranscriptIdentityTests: XCTestCase {
         XCTAssertEqual(stopped.items[1].turn?.outcome, .cancelled)
         XCTAssertEqual(stopped.items[1].turn?.label(), "Stopped after 8s")
 
+        // Stopped before any reply: an empty reply carries the stop.
+        var early = Transcript()
+        early.beginTurn(at: start)
+        early.appendUser("hi")
+        early.finishTurn(at: start.addingTimeInterval(10), failure: "Cancelled.", cancelled: true)
+        XCTAssertEqual(early.items.count, 2)
+        XCTAssertEqual(early.items[1].content, .assistant(""))
+        XCTAssertEqual(early.items[1].turn?.outcome, .cancelled)
+
         var failed = Transcript()
         failed.beginTurn(at: start)
         failed.appendUser("hi")

@@ -278,6 +278,14 @@ public struct Transcript: Equatable, Sendable {
     public mutating func finishTurn(at now: Date, failure: String? = nil, cancelled: Bool = false) {
         finishThinking(at: now)
         finishReply(at: now)
+        // A turn stopped before any reply gets an empty one, which shows
+        // that it was stopped and after how long, as its replay does.
+        if cancelled, let first = turnFirstId, turnStartedAt != nil,
+           !items.contains(where: { item in
+               if case .assistant = item.content { item.id >= first } else { false }
+           }) {
+            append(.assistant(""))
+        }
         if let started = turnStartedAt, let first = turnFirstId, failure == nil || cancelled,
            let last = items.lastIndex(where: { item in
                if case .assistant = item.content { item.id >= first } else { false }

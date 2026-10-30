@@ -429,8 +429,16 @@ private struct AssistantMessage: View {
     }
 
     var body: some View {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let turn, turn.outcome != .completed, !isStreaming {
+            StoppedLine(turn: turn)
+        } else {
+            reply
+        }
+    }
+
+    private var reply: some View {
         let parsed = parsed
-        VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 10) {
             FoldingMessage(id: id, text: text, folds: false,
                            isExpanded: isExpanded) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -476,6 +484,27 @@ private struct AssistantMessage: View {
         }
         .padding(.leading, -5)
         .padding(.top, MessageFooter.gap - 10)
+    }
+}
+
+/// A turn stopped before it wrote a reply: what stopped it and after how
+/// long, in place of an empty reply and its Copy.
+private struct StoppedLine: View {
+    let turn: TurnTiming
+
+    var body: some View {
+        Label {
+            Text("Stopped by you · after \(TurnTiming.duration(turn.elapsed))")
+        } icon: {
+            Image(systemName: "stop.circle")
+        }
+        .font(.caption)
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.5), in: .capsule)
+        .help(turn.finished.formatted(date: .complete, time: .standard))
     }
 }
 
