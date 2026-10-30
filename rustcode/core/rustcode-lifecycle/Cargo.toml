@@ -1,5 +1,5 @@
 [package]
 name = "rustcode-lifecycle"
-version = "0.112.0"
+version = "0.112.1"
 edition = "2024"
 license = "Apache-2.0"

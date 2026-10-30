@@ -1,3 +1,13 @@
+## [v0.112.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.112.1) - 2026-10-30
+
+### Fixes
+### Mac app
+- Showing or hiding the sidebar no longer stutters: the new-thread banner is drawn once into a picture instead of on every frame, and chat rows stay quiet while the chat slides. (#2717)
+- Switching the sidebar between All and Project shows that list at once, then refreshes it. (#2717)
+- The title bar's panel buttons (pull requests, terminal, changes, preview) share one glass group, its buttons fade on hover, and the folder menu gets a hover highlight. (#2717)
+- About shows what's new in this version, with a link to the full changelog, plus your thread, project, pinned and archived counts and system details you can copy for a bug report. (#2717)
+- The summary under a reply says what each command did, such as "Committed “message”", "Pushed to branch" or "Ran tests (cargo)", instead of the raw shell line; a pass is a small check and a failure a red badge, each changed file shows its own +/−, and the full command opens on click. (#2718)
+- The chat's chrome uses a rounder font, and monospace is kept to code, commands and paths. (#2718)
 ## [v0.112.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.112.0) - 2026-10-30
 
 ### Features
