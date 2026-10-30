@@ -1037,7 +1037,9 @@ final class InputAndTranscriptTests: XCTestCase {
         let copy = app.buttons["Copy Thread ID"]
         XCTAssertTrue(copy.waitForExistence(timeout: 3))
         copy.tap()
-        XCTAssertTrue(app.staticTexts["Thread ID Copied"].waitForExistence(timeout: 3))
+        // The "Thread ID Copied" capsule shows for 1.5 s, and the runner's
+        // wait for the menu to finish closing can outlast it (#2678); what
+        // was copied is checked by pasting it below.
         XCTAssertEqual(composer(in: app).value as? String, "Copy ID from chat")
         XCTAssertEqual(pasteIntoEmptyComposer(app), "demo-notes")
     }
