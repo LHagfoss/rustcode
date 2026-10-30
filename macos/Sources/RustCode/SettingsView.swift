@@ -442,6 +442,8 @@ private struct GeneralSettings: View {
     @AppStorage(SmartUI.enabledKey) private var smartUI = false
     @AppStorage(DesktopModel.groupsByAttentionKey) private var groupsByAttention = true
     @AppStorage(TurnCompletionCard.enabledKey) private var showsTurnCompletion = true
+    @AppStorage(NewThreadBanner.key) private var banner = ""
+    @AppStorage(NewThreadBanner.styleKey) private var bannerStyle = "ascii"
 
     private var verbositySubtitle: String {
         switch verbosity {
@@ -461,6 +463,35 @@ private struct GeneralSettings: View {
                     Spacer(minLength: 0)
                 }
                 .padding(14)
+                RowDivider()
+                SettingsRow(title: "New thread banner",
+                            subtitle: banner.isEmpty
+                                ? "A wide picture over new threads, drawn in text or as is. Cropped to at least 3:1"
+                                : "Over new threads, cropped to at least 3:1") {
+                    HStack(spacing: 8) {
+                        if !banner.isEmpty {
+                            SettingsSegments("Banner style", selection: $bannerStyle,
+                                             options: [("ascii", "Text"), ("picture", "Picture")])
+                            Button("Remove") {
+                                NewThreadBanner.remove(banner)
+                                banner = ""
+                            }
+                            .buttonStyle(PillButtonStyle())
+                        }
+                        Button(banner.isEmpty ? "Choose…" : "Change…") {
+                            if let name = NewThreadBanner.choose(replacing: banner) { banner = name }
+                        }
+                        .buttonStyle(PillButtonStyle())
+                    }
+                }
+                if !banner.isEmpty {
+                    NewThreadBannerView(name: banner, style: bannerStyle)
+                        .id(bannerStyle)
+                        .frame(maxHeight: 140)
+                        .clipped()
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 14)
+                }
             }
             .onChange(of: appearance) { _, value in AppearanceSetting.apply(value) }
 
@@ -1153,7 +1184,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general: ["appearance", "theme", "dark", "light", "notifications", "project", "folder", "fade", "sidebar", "group",
                         "predictions", "smart ui", "tool calls", "verbosity", "auto-approve", "yolo",
-                        "discord", "rich presence", "model", "effort", "reasoning", "new threads", "new chats"]
+                        "discord", "rich presence", "model", "effort", "reasoning", "new threads", "new chats",
+                        "banner", "picture", "image", "ascii", "wallpaper"]
         case .keybinds: ["keyboard", "shortcuts", "hotkeys", "keys"]
         case .connections: ["accounts", "providers", "login", "sign in", "api key", "github", "copilot", "remote", "phone"]
         case .skills: ["skill", "agent skills"]

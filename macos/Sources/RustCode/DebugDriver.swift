@@ -571,6 +571,21 @@ enum DebugDriver {
             }
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
+        case "banner":
+            // `banner <path> [picture]` or `banner none`: the new thread
+            // banner as Settings sets it, from a picture on disk.
+            let defaults = UserDefaults.standard
+            NewThreadBanner.remove(defaults.string(forKey: NewThreadBanner.key) ?? "")
+            defaults.set(parts.contains("picture") ? "picture" : "ascii", forKey: NewThreadBanner.styleKey)
+            if parts.count > 1, parts[1] != "none" {
+                let source = URL(fileURLWithPath: parts[1].replacingOccurrences(of: "%20", with: " "))
+                let name = "new-thread-banner-drive.\(source.pathExtension)"
+                try? FileManager.default.createDirectory(at: NewThreadBanner.directory, withIntermediateDirectories: true)
+                try? FileManager.default.copyItem(at: source, to: NewThreadBanner.directory.appendingPathComponent(name))
+                defaults.set(name, forKey: NewThreadBanner.key)
+            } else {
+                defaults.set("", forKey: NewThreadBanner.key)
+            }
         case "tools":
             // A turn's tool calls: a lone search, then three commands (one
             // failed), an edit, two more commands, then the answer.
