@@ -16,6 +16,22 @@ public struct TurnCompletion: Equatable, Sendable {
 
         public var command: String
         public var outcome: Outcome
+        /// The command in words, read once here rather than on every draw.
+        /// A commit or push in it is left to the pipeline's row.
+        public var summary: CommandSummary
+
+        public init(command: String, outcome: Outcome) {
+            self.command = command
+            self.outcome = outcome
+            summary = CommandSummary.of(command, omitting: CommandSummary.pipelineKinds)
+        }
+    }
+
+    /// One changed file and its lines, over the whole turn.
+    public struct FileStat: Equatable, Sendable {
+        public var path: String
+        public var added: Int
+        public var removed: Int
     }
 
     /// The first item of the turn's work: the turn row that opens its steps.
@@ -24,6 +40,8 @@ public struct TurnCompletion: Equatable, Sendable {
     public var edited: [String]
     public var added: Int
     public var removed: Int
+    /// `edited` with each file's lines added and removed.
+    public var files: [FileStat] = []
     public var checks: [Check]
     /// Other commands (not checks) that failed.
     public var failedCommands: Int
@@ -55,6 +73,7 @@ public struct TurnCompletion: Equatable, Sendable {
     static func of(_ work: ArraySlice<TranscriptItem>, cancelled: Bool) -> TurnCompletion? {
         guard let anchor = work.first?.id else { return nil }
         var edited: [String] = []
+        var files: [FileStat] = []
         var added = 0
         var removed = 0
         var checks: [Check] = []
@@ -63,7 +82,13 @@ public struct TurnCompletion: Equatable, Sendable {
             guard case .tool(let tool) = item.content else { continue }
             if tool.status == .completed {
                 for change in tool.changes {
-                    if !edited.contains(change.path) { edited.append(change.path) }
+                    if let index = edited.firstIndex(of: change.path) {
+                        files[index].added += change.added
+                        files[index].removed += change.removed
+                    } else {
+                        edited.append(change.path)
+                        files.append(FileStat(path: change.path, added: change.added, removed: change.removed))
+                    }
                     added += change.added
                     removed += change.removed
                 }
@@ -84,7 +109,7 @@ public struct TurnCompletion: Equatable, Sendable {
         }
         let pipeline = GitPipeline.of(work, cancelled: cancelled)
         guard !edited.isEmpty || !checks.isEmpty || pipeline != nil else { return nil }
-        return TurnCompletion(anchor: anchor, edited: edited, added: added, removed: removed, checks: checks,
+        return TurnCompletion(anchor: anchor, edited: edited, added: added, removed: removed, files: files, checks: checks,
                               failedCommands: failedCommands, cancelled: cancelled, pipeline: pipeline)
     }
 

@@ -446,6 +446,13 @@ private struct AgentContract: View {
         return (mode == "isolated" ? "Own workspace" : "The thread's folder") + place
     }
 
+    /// `Ran tests · cargo` for `cargo test --workspace`.
+    static func checkLabel(_ command: String) -> String {
+        let summary = CommandSummary.of(command)
+        return [summary.label, summary.detail].compactMap { $0 }.joined(separator: " ")
+            + (summary.tag.map { " · \($0)" } ?? "")
+    }
+
     private var check: (String, String, Color)? {
         switch verification {
         case .none: nil
@@ -467,8 +474,10 @@ private struct AgentContract: View {
                 GridRow {
                     Text("Check").foregroundStyle(.tertiary)
                     HStack(spacing: 6) {
-                        Text(command).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
-                            .textSelection(.enabled)
+                        // The command in words; the command itself on hover and to copy.
+                        Text(Self.checkLabel(command)).lineLimit(1).truncationMode(.tail)
+                            .help(command)
+                            .contextMenu { Button("Copy Command", systemImage: "doc.on.doc") { Clipboard.copy(command) } }
                         Label(check.0, systemImage: check.1)
                             .foregroundStyle(check.2)
                             .help("From \(info.name)'s own run of the command, not from what it wrote")

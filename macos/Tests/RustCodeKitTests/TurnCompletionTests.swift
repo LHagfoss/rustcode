@@ -36,6 +36,8 @@ final class TurnCompletionTests: XCTestCase {
         XCTAssertEqual(completions.count, 1)
         let completion = try! XCTUnwrap(completions.values.first)
         XCTAssertEqual(completion.edited, ["/p/a.rs"])
+        XCTAssertEqual(completion.files, [TurnCompletion.FileStat(path: "/p/a.rs", added: completion.added, removed: completion.removed)])
+        XCTAssertEqual(completion.checks.map(\.summary.label), ["Ran tests", "Built", "Linted"])
         XCTAssertEqual(completion.checks.map(\.outcome), [.passed, .failed, .unknown])
         XCTAssertEqual(completion.failedChecks, 1)
         XCTAssertEqual(completion.failedCommands, 1)
