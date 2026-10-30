@@ -1338,6 +1338,29 @@ private struct ChatView: View {
                 follow.jumpToLatest()
                 scrollToEnd(proxy)
             }
+            // A plan step asks for the row where the agent last updated it.
+            .onChange(of: model.revealRequest) { _, target in
+                guard let target else { return }
+                model.revealRequest = nil
+                unfold(to: target)
+                model.keepMessageOpen(target)
+                follow.letGo()
+                scroll.willJump()
+                let items = chat.transcript.items
+                if let index = items.firstIndex(where: { $0.id == target }),
+                   window.reveal(index, identity: chat.transcript.identity, count: items.count) {
+                    DispatchQueue.main.async { proxy.scrollTo(target, anchor: .center) }
+                } else {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { proxy.scrollTo(target, anchor: .center) }
+                }
+            }
+            // The plan is read again when the thread changes and after each
+            // update the agent makes to it.
+            .task(id: PlanReadKey(session: model.selectedSession,
+                                  updates: TaskPlan.finishedUpdates(in: chat.transcript.items),
+                                  running: model.isTurnRunning)) {
+                await model.refreshPlan()
+            }
             .onChange(of: currentMatch) { _, match in
                 guard let match else { return }
                 // A match in a folded message opens it, and it stays open.
@@ -1437,6 +1460,31 @@ private struct ChatView: View {
         }
     }
 
+    /// Open the finished turn and the run of calls `target` is folded
+    /// into, so its row is drawn to be scrolled to.
+    private func unfold(to target: Int) {
+        let items = chat.transcript.items
+        let before = items.prefix { $0.id != target }.reversed()
+        var folding = ToolFolding(items: items, verbosity: verbosity, open: model.openToolRuns, running: isReplyStreaming)
+        // A turn's work starts on its folded row: the target may be that row.
+        let turn = folding.turn(for: target)
+            ?? (folding.hidden.contains(target) ? before.lazy.compactMap({ folding.turn(for: $0.id) }).first : nil)
+        if let turn, !turn.isOpen {
+            model.toggleToolRun(turn.key)
+            folding = ToolFolding(items: items, verbosity: verbosity, open: model.openToolRuns, running: isReplyStreaming)
+        }
+        if folding.hidden.contains(target),
+           let run = ([target] + before.map(\.id)).lazy.compactMap({ folding.fold(for: $0) }).first, !run.isOpen {
+            model.toggleToolRun(run.run)
+        }
+    }
+
+    private struct PlanReadKey: Equatable {
+        var session: String?
+        var updates: Int
+        var running: Bool
+    }
+
     /// How the column fits the chat's width now.
     private var layout: ChatColumnLayout { ChatColumnLayout(width: chatWidth) }
 
@@ -1519,6 +1567,7 @@ private struct ChatView: View {
                 Text(title).font(.headline).lineLimit(1)
             }
             Spacer()
+            TaskPlanButton(model: model, chat: chat)
             if let usage = chat.transcript.usage {
                 Button { model.showContext() } label: { UsageCapsule(usage: usage) }
                     .buttonStyle(.plain)
