@@ -1953,48 +1953,20 @@ async fn handle_agent_tool_for_parent(
             ))
         }
         "todo_write" => {
-            let Some(arr) = args.get("todos").and_then(|t| t.as_array()) else {
-                return crate::tools::ToolExecutionOutput::failure(
-                    "error: missing 'todos' array argument".to_string(),
-                );
+            let mut s = state.lock().await;
+            let todos = match crate::app::apply_todo_write(&s.todos, &args) {
+                Ok(todos) => todos,
+                Err(error) => return crate::tools::ToolExecutionOutput::failure(error),
             };
-            let mut todos = Vec::with_capacity(arr.len());
-            for item in arr {
-                let Some(content) = item
-                    .get("content")
-                    .and_then(|c| c.as_str())
-                    .filter(|c| !c.trim().is_empty())
-                else {
-                    return crate::tools::ToolExecutionOutput::failure(
-                        "error: each todo needs a non-empty 'content'".to_string(),
-                    );
-                };
-                let status = item
-                    .get("status")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("pending")
-                    .to_string();
-                let priority = item
-                    .get("priority")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("medium")
-                    .to_string();
-                todos.push(crate::app::TodoItem {
-                    content: content.to_string(),
-                    status,
-                    priority,
-                });
-            }
             let summary = format!(
                 "Plan updated ({} item(s)): {}",
                 todos.len(),
                 todos
                     .iter()
-                    .map(|t| format!("[{}] {}", t.status, t.content))
+                    .map(|t| format!("{} [{}] {}", t.id, t.status, t.content))
                     .collect::<Vec<_>>()
                     .join(" | ")
             );
-            let mut s = state.lock().await;
             s.todos = todos;
             drop(s);
             crate::tools::ToolExecutionOutput::success(summary)
