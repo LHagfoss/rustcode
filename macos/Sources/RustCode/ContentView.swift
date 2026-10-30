@@ -1059,6 +1059,12 @@ private struct ChatView: View {
     @State private var composerHeight: CGFloat = 60
     /// The chat's width, which picks its `ChatColumnLayout`.
     @State private var chatWidth: CGFloat = 1000
+    @State private var chatHeight: CGFloat = 800
+    /// A new thread's composer sits in the middle of the chat under its
+    /// banner, and moves down to its place when the first message is sent.
+    @State private var centersComposer = false
+    /// The banner and composer together, measured while centered.
+    @State private var centeredHeight: CGFloat = 0
     /// The chat keeps the newest output in view. Scrolling up hands control to
     /// the reader and shows the Latest button; scrolling back down follows again.
     @StateObject private var following = FollowState()
@@ -1256,11 +1262,8 @@ private struct ChatView: View {
             .overlay {
                 if model.isLoadingSelected {
                     ProgressView("Loading thread…").controlSize(.small).foregroundStyle(.secondary)
-                } else if transcript.isEmpty, !model.busy {
-                    EmptyChat(folder: model.chatProject, isDefault: model.draftProject == nil,
-                              isDraft: model.selectedSession == nil,
-                              choose: { Task { await model.chooseChatProject() } },
-                              showVisualizations: { model.showsVisualizationGuide = true })
+                } else if transcript.isEmpty, !model.busy, !centersComposer {
+                    emptyChat.padding(.bottom, 80)
                 }
             }
             .followsLatest(Binding { following.value } set: { following.value = $0 }, scroll: scroll) { scrollToEnd(proxy) }
@@ -1371,6 +1374,11 @@ private struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 10) {
+                if centersComposer {
+                    emptyChat
+                        .padding(.bottom, 28)
+                        .transition(.opacity.combined(with: .offset(y: -30)))
+                }
                 if let error = model.error, !error.isEmpty { ErrorBanner(text: error) { model.error = nil } }
                 if let permission = model.pendingPermission {
                     if permission.question != nil {
@@ -1390,9 +1398,21 @@ private struct ChatView: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                 ChatScrollInput.shared.composerFrame = $0
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { centeredHeight = $0 }
             .padding(.horizontal, layout.padding)
-            .padding(.bottom, 16)
+            .padding(.bottom, 16 + composerLift)
             .frame(maxWidth: .infinity)
+        }
+        .onChange(of: isFresh, initial: true) { _, fresh in
+            guard fresh != centersComposer else { return }
+            // A thread opening or one already open does not move the
+            // composer; a new thread and its first message do.
+            let moves = fresh ? model.selectedSession == nil : sentFirstMessage
+            if moves, !reduceMotion {
+                withAnimation(.spring(duration: 0.55, bounce: 0.12)) { centersComposer = fresh }
+            } else {
+                centersComposer = fresh
+            }
         }
         // Over the chat, not inside the composer, so its glass has the chat
         // to sample (#2551).
@@ -1406,16 +1426,45 @@ private struct ChatView: View {
             .ignoresSafeArea()
         }
         .overlay { composerPanel }
-        .overlay { CommandSuggestions(model: model, composer: model.composer, composerHeight: composerHeight) }
+        .overlay { CommandSuggestions(model: model, composer: model.composer, composerHeight: composerHeight + composerLift) }
         .animation(.snappy(duration: 0.18), value: model.composerPanel)
         // The column, its padding and the composer adapt to the chat's
         // width at set breakpoints (#2552).
         .environment(\.chatLayout, layout)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chatWidth = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            chatWidth = $0.width
+            chatHeight = $0.height
+        }
     }
 
     /// How the column fits the chat's width now.
     private var layout: ChatColumnLayout { ChatColumnLayout(width: chatWidth) }
+
+    /// A thread with nothing in it yet, ready for its first message.
+    private var isFresh: Bool {
+        chat.transcript.isEmpty && !model.busy && !model.isLoadingSelected
+    }
+
+    /// The first message of the shown thread was just sent, as opposed to
+    /// another thread opening.
+    private var sentFirstMessage: Bool {
+        if model.isLoadingSelected { return false }
+        if case .user = chat.transcript.items.last?.content { return true }
+        return model.busy && chat.transcript.items.count <= 1
+    }
+
+    /// How far the composer is raised to sit, with the banner over it, in
+    /// the middle of the chat (a little above, where the eye rests).
+    private var composerLift: CGFloat {
+        centersComposer ? max(0, (chatHeight - centeredHeight) / 2 - 16 - 24) : 0
+    }
+
+    private var emptyChat: some View {
+        EmptyChat(folder: model.chatProject, isDefault: model.draftProject == nil,
+                  isDraft: model.selectedSession == nil,
+                  choose: { Task { await model.chooseChatProject() } },
+                  showVisualizations: { model.showsVisualizationGuide = true })
+    }
 
     /// The + or model panel, drawn over the whole chat so nothing clips it, with
     /// its bottom just above the composer. A click outside or Esc closes it.
@@ -1441,7 +1490,7 @@ private struct ChatView: View {
                 }
                 .frame(maxWidth: Self.columnMaxWidth)
                 .padding(.horizontal, layout.padding)
-                .padding(.bottom, composerHeight + 16 + 8)
+                .padding(.bottom, composerHeight + 16 + composerLift + 8)
                 .frame(maxWidth: .infinity)
             }
             .transition(.opacity.combined(with: .offset(y: 6)))
@@ -2140,13 +2189,20 @@ private struct EmptyChat: View {
     let choose: () -> Void
     /// Opens the visualization guide.
     let showVisualizations: () -> Void
+    @AppStorage(NewThreadBanner.key) private var banner = ""
+    @AppStorage(NewThreadBanner.styleKey) private var bannerStyle = "ascii"
 
     var body: some View {
         VStack(spacing: 14) {
             VStack(spacing: 14) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .frame(width: 88, height: 88)
+                if banner.isEmpty {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 88, height: 88)
+                } else {
+                    NewThreadBannerView(name: banner, style: bannerStyle)
+                        .padding(.bottom, 6)
+                }
                 Text("What should we build?")
                     .font(.title2.weight(.semibold))
             }
@@ -2182,7 +2238,6 @@ private struct EmptyChat: View {
             .buttonStyle(.link)
             .help("Examples of visualizations you can ask for (/visualize)")
         }
-        .padding(.bottom, 80)
     }
 }
 
