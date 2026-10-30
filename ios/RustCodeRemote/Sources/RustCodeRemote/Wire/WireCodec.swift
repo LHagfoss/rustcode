@@ -166,6 +166,8 @@ public struct WireCodec: RemoteCodec {
         case .resumeSession(let sessionID):
             // Not shared yet, so there is no registration to scope to.
             return WireRequest(requestID: requestID.rawValue, operation: .resumeSession(.init(sessionID: sessionID)))
+        case .getChanges(let session):
+            return scoped(session, .getChanges)
         }
     }
 
@@ -319,6 +321,22 @@ public struct WireCodec: RemoteCodec {
             )
         case .detached:
             return .detached
+        case .changes(let changes):
+            return .changes(SessionChanges(
+                capturedAt: ISO8601DateFormatter().date(from: changes.capturedAt),
+                workspace: changes.workspace,
+                isAvailable: changes.available,
+                reason: changes.reason,
+                head: changes.head,
+                branch: changes.branch,
+                files: changes.files.map { file in
+                    SessionChanges.File(
+                        path: file.path, oldPath: file.oldPath,
+                        status: SessionChanges.File.Status(rawValue: file.status) ?? .other,
+                        additions: Int(file.additions), deletions: Int(file.deletions),
+                        isBinary: file.binary, diff: file.diff, diffTruncated: file.diffTruncated)
+                },
+                omittedFiles: Int(changes.omittedFiles)))
         case .history(let page):
             return .history(HistoryPage(
                 items: page.messages.map(item),

@@ -64,6 +64,9 @@ public protocol RemoteClient: Sendable {
 
     func getHistory(_ session: SessionRef, before cursor: HistoryCursor, limit: Int) async throws -> HistoryPage
 
+    /// The session's uncommitted changes, read-only. Needs `HostCapability.sessionChanges`.
+    func getChanges(_ session: SessionRef) async throws -> SessionChanges
+
     /// One chunk of content that another frame carried only in part, for example the full
     /// detail of an approval.
     func getContent(
@@ -109,6 +112,7 @@ public extension RemoteClient {
     func hostCapabilities() async -> Set<String> { [] }
     func listSavedSessions(cursor: String?, limit: Int, query: String?) async throws -> SavedSessionPage { throw RemoteError.rejected(.unsupportedOperation) }
     func resumeSession(_ sessionID: String, requestID: RequestID) async throws -> SessionSummary { throw RemoteError.rejected(.unsupportedOperation) }
+    func getChanges(_ session: SessionRef) async throws -> SessionChanges { throw RemoteError.rejected(.unsupportedOperation) }
     func receiptUpdates() async -> AsyncStream<RequestReceipt> { AsyncStream { $0.finish() } }
     func executeCommand(_ command: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt { RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation)) }
     func cancelQuestion(_ questionID: String, in session: SessionRef, requestID: RequestID) async throws -> RequestReceipt { RequestReceipt(requestID: requestID, state: .rejected(.unsupportedOperation)) }

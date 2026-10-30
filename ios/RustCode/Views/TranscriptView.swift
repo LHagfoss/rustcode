@@ -368,7 +368,8 @@ struct TranscriptView: View {
                                     .onTapGesture { showsChatActions = false }
                                     .accessibilityLabel("Dismiss thread actions")
                                     .accessibilityAddTraits(.isButton)
-                                ChatActionsMenu(hadKeyboard: isComposerFocused, isRunning: snapshot.isRunning) { action in
+                                ChatActionsMenu(hadKeyboard: isComposerFocused, isRunning: snapshot.isRunning,
+                                                canReviewChanges: store.supportsSessionChanges) { action in
                                     nextChatAction = action
                                     showsChatActions = false
                                 }

@@ -473,7 +473,10 @@ pub struct WorkspaceRouter {
 }
 impl WorkspaceRouter {
     pub fn new(hub: Arc<SessionHub>, config: PathBuf, program: PathBuf) -> Self {
-        hub.advertise_capabilities(&[host_capability::SAVED_SESSIONS]);
+        hub.advertise_capabilities(&[
+            host_capability::SAVED_SESSIONS,
+            host_capability::SESSION_CHANGES,
+        ]);
         Self {
             hub,
             config,
@@ -2148,7 +2151,13 @@ mod tests {
                 config.path().to_path_buf(),
                 PathBuf::from("/never/launch"),
             );
-            assert_eq!(hub.capabilities(), [host_capability::SAVED_SESSIONS]);
+            assert_eq!(
+                hub.capabilities(),
+                [
+                    host_capability::SAVED_SESSIONS,
+                    host_capability::SESSION_CHANGES
+                ]
+            );
         });
     }
 

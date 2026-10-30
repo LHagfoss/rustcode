@@ -25,7 +25,8 @@
     ],
     "subscribed": false,
     "capabilities": [
-      "saved_sessions"
+      "saved_sessions",
+      "session_changes"
     ]
   }
 }

@@ -4,6 +4,8 @@ import Foundation
 public enum HostCapability {
     /// The host lists every saved session and can reopen one that nothing holds.
     public static let savedSessions = "saved_sessions"
+    /// The host reads an attached session's uncommitted changes (`get_changes`).
+    public static let sessionChanges = "session_changes"
 }
 
 /// Whether a saved session can be opened from the phone.

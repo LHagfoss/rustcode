@@ -384,6 +384,10 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
             ),
         ),
         (
+            "get_changes",
+            request("req-changes", session, RemoteOperation::GetChanges),
+        ),
+        (
             "get_history",
             request(
                 "req-0006",
@@ -848,6 +852,42 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             },
         ),
         response(
+            "changes",
+            "req-changes",
+            None,
+            RemoteResult::Changes(RemoteChanges {
+                captured_at: "2026-07-14T09:41:03Z".to_owned(),
+                workspace: "/Users/example/projects/rustcode".to_owned(),
+                available: true,
+                reason: None,
+                head: Some("3cf8743".to_owned()),
+                branch: Some("feat/watch".to_owned()),
+                files: vec![
+                    RemoteChangedFile {
+                        path: "src/watch.rs".to_owned(),
+                        old_path: None,
+                        status: "modified".to_owned(),
+                        additions: 2,
+                        deletions: 1,
+                        binary: false,
+                        diff: Some("diff --git a/src/watch.rs b/src/watch.rs\n--- a/src/watch.rs\n+++ b/src/watch.rs\n@@ -10,3 +10,4 @@ fn check() {\n     let due = store.due(now);\n-    poll(due);\n+    poll(due).await;\n+    store.save();\n }\n".to_owned()),
+                        diff_truncated: false,
+                    },
+                    RemoteChangedFile {
+                        path: "assets/logo.png".to_owned(),
+                        old_path: None,
+                        status: "untracked".to_owned(),
+                        additions: 0,
+                        deletions: 0,
+                        binary: true,
+                        diff: None,
+                        diff_truncated: false,
+                    },
+                ],
+                omitted_files: 0,
+            }),
+        ),
+        response(
             "saved_sessions",
             "req-saved",
             None,
@@ -917,7 +957,10 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                 instance_id: Some(INSTANCE.to_owned()),
                 sessions: vec![golden_session_info()],
                 subscribed: false,
-                capabilities: vec![host_capability::SAVED_SESSIONS.to_owned()],
+                capabilities: vec![
+                    host_capability::SAVED_SESSIONS.to_owned(),
+                    host_capability::SESSION_CHANGES.to_owned(),
+                ],
             },
         ),
         response(

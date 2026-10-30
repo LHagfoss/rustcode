@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum ChatAction: Equatable { case newSession, commands, folder, copySessionID, camera, photos, files, dismissKeyboard, stop }
+enum ChatAction: Equatable { case newSession, commands, folder, copySessionID, changes, camera, photos, files, dismissKeyboard, stop }
 
 /// Locate the attachment button in the transcript overlay without changing layout.
 struct ChatActionsAnchor: PreferenceKey {
@@ -14,6 +14,8 @@ struct ChatActionsAnchor: PreferenceKey {
 struct ChatActionsMenu: View {
     let hadKeyboard: Bool
     let isRunning: Bool
+    /// The host can show the thread's changes.
+    var canReviewChanges = false
     let select: (ChatAction) -> Void
     @ScaledMetric(relativeTo: .body) private var rowHeight = 60.0
     @ScaledMetric(relativeTo: .body) private var iconSize = 38.0
@@ -21,7 +23,7 @@ struct ChatActionsMenu: View {
     @State private var showingMore = false
 
     private var rowCount: Int {
-        showingMore ? 5 + (isRunning ? 1 : 0) + (hadKeyboard ? 1 : 0) : 4
+        showingMore ? 5 + (canReviewChanges ? 1 : 0) + (isRunning ? 1 : 0) + (hadKeyboard ? 1 : 0) : 4
     }
 
     var body: some View {
@@ -38,6 +40,7 @@ struct ChatActionsMenu: View {
                     action("New Thread", symbol: "square.and.pencil", .newSession)
                     action("Slash Commands", symbol: "command", .commands)
                     action("New Thread in Folder", symbol: "folder.badge.plus", .folder)
+                    if canReviewChanges { action("Review Changes", symbol: "plus.forwardslash.minus", .changes) }
                     action("Copy Thread ID", symbol: "number", .copySessionID)
                     if isRunning { action("Stop the running turn", symbol: "stop.circle", .stop) }
                     if hadKeyboard { action("Dismiss Keyboard", symbol: "keyboard.chevron.compact.down", .dismissKeyboard) }

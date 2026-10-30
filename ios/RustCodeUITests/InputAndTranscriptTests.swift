@@ -30,6 +30,36 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.buttons["Send message"].isHittable)
     }
 
+    func testReviewChangesSelectsLinesIntoTheDraftWithoutSending() {
+        let app = launchChat(draft: "")
+        app.buttons["Thread actions"].tap()
+        app.buttons["More"].tap()
+        let review = app.buttons["Review Changes"]
+        XCTAssertTrue(review.waitForExistence(timeout: 3))
+        review.tap()
+        let file = app.staticTexts["parser.rs"]
+        XCTAssertTrue(file.waitForExistence(timeout: 5))
+        let list = XCTAttachment(screenshot: app.screenshot())
+        list.name = "Changed files with freshness"
+        list.lifetime = .keepAlways
+        add(list)
+        file.tap()
+        let line = app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'filter(|line|'")).firstMatch
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        line.tap()
+        let ask = app.buttons["Ask About 1 Line"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 3))
+        let diff = XCTAttachment(screenshot: app.screenshot())
+        diff.name = "A file's diff with a selected line"
+        diff.lifetime = .keepAlways
+        add(diff)
+        ask.tap()
+        let field = composer(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        let value = field.value as? String ?? ""
+        XCTAssertTrue(value.contains("About src/parser.rs, line 41"), value)
+    }
+
     func testImageFilePickerCancellationPreservesDraft() {
         let app = launchChat(draft: "Keep my file draft")
         app.buttons["Thread actions"].tap()

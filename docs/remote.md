@@ -357,6 +357,17 @@ workspace or whose workspace directory no longer exists: reopen those in a
 terminal with `rustcode --resume`. The gateway advertises this with the
 `saved_sessions` capability; an older gateway lists only shared sessions.
 
+### Reviewing a session's changes
+
+From a shared session, More ▸ Review Changes on the phone shows the session's
+uncommitted changes: how many files and lines changed, when they were read,
+the branch and commit, each changed file, and each file's diff. Tap lines to
+select them, then **Ask About … Lines** to quote them, with their numbers,
+in the session's message field. Nothing is sent until you send it, and the
+draft stays through a disconnect. Reading the changes runs no Git command
+that writes. Large diffs are cut and say so. The gateway advertises this with
+the `session_changes` capability.
+
 To continue a device-started session in a terminal, run
 `/adopt <session-id>` there: it asks the detached owner to exit (gracefully,
 saving history first), waits for its lease to release, then opens the session

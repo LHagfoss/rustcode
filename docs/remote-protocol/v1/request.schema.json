@@ -483,6 +483,19 @@
             "session_id"
           ],
           "type": "object"
+        },
+        {
+          "description": "The attached session's uncommitted changes in its workspace, read\nonce: a bounded summary and per-file diff. Changes nothing, runs no\nGit operation that writes. Requires the `session_changes` host\ncapability.",
+          "properties": {
+            "type": {
+              "const": "get_changes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },

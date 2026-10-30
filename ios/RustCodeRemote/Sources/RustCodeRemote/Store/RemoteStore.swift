@@ -57,6 +57,18 @@ public final class RemoteStore {
     public private(set) var hostCapabilities: Set<String> = []
     /// True when the host can list every saved session and reopen one.
     public var supportsSavedSessions: Bool { hostCapabilities.contains(HostCapability.savedSessions) }
+    /// True when the host reads an attached session's changes for review.
+    public var supportsSessionChanges: Bool { hostCapabilities.contains(HostCapability.sessionChanges) }
+    /// The attached session's changes as last read, for review (#2650).
+    public private(set) var changes: ChangesState = .idle
+
+    public enum ChangesState: Equatable, Sendable {
+        case idle
+        case loading
+        /// `session` is the session they were read for.
+        case loaded(SessionChanges, session: String)
+        case failed(String)
+    }
     /// Saved sessions loaded so far for `savedSessionsQuery`, newest first.
     public private(set) var savedSessions: [SavedSession] = []
     public private(set) var savedSessionsQuery = ""
@@ -471,6 +483,7 @@ public final class RemoteStore {
         attachAttempt = 0
         commandResult = nil
         selectedSessionID = sessionID
+        changes = .idle
         if let sessionID {
             badges.markSeen(sessionID)
             startAttachment(sessionID)
@@ -487,6 +500,22 @@ public final class RemoteStore {
             return
         }
         startAttachment(selectedSessionID, freshSnapshot: true)
+    }
+
+    /// Read the attached session's changes. A read only: nothing on the host changes, and a
+    /// failure is shown and can simply be retried.
+    public func loadChanges() async {
+        guard let snapshot = attached, changes != .loading else { return }
+        changes = .loading
+        do {
+            let read = try await client.getChanges(snapshot.session)
+            guard attached?.session == snapshot.session else { return }
+            changes = .loaded(read, session: snapshot.session.sessionID)
+        } catch RemoteError.rejected(.unsupportedOperation) {
+            changes = .failed("This host can't show changes. Update RustCode on the computer.")
+        } catch {
+            changes = .failed("Couldn't read the changes. Check the connection and try again.")
+        }
     }
 
     public func loadEarlierHistory() async {
@@ -790,6 +819,7 @@ public final class RemoteStore {
         pendingCreation = nil
         isDemo = false
         hostCapabilities = []
+        changes = .idle
         savedSessions = []
         savedSessionsQuery = ""
         savedSessionsCursor = nil
