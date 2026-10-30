@@ -111,7 +111,7 @@ private struct SessionSwitcherPanel: View {
         .onDisappear { model.switcherSearches = false }
         .task(id: trimmed) { await searchContents() }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Switch chat")
+        .accessibilityLabel("Switch thread")
     }
 
     private func field(_ results: [SessionSwitcher.Result], selection: Int) -> some View {
@@ -119,7 +119,7 @@ private struct SessionSwitcherPanel: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField(model.switcherSendsDraft ? "Send message to chat…" : "Switch to chat…", text: $query)
+            TextField(model.switcherSendsDraft ? "Send message to thread…" : "Switch to thread…", text: $query)
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .focused($focused)
@@ -143,12 +143,12 @@ private struct SessionSwitcherPanel: View {
                     selectedID = SessionSwitcher.results(sessions: model.sessions.filter { !model.archivedSessions.contains($0.id) },
                                                          query: query, pinned: model.pinnedSessions).first?.id
                 }
-                .accessibilityLabel("Search chats")
+                .accessibilityLabel("Search threads")
             if searching {
                 ProgressView().controlSize(.small)
             }
             ScopeToggle(showsAll: $model.showsAllProjects)
-                .help(model.showsAllProjects ? "Searching chats in every project" : "Searching chats in \(model.workspace.lastPathComponent)")
+                .help(model.showsAllProjects ? "Searching threads in every project" : "Searching threads in \(model.workspace.lastPathComponent)")
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
@@ -157,14 +157,14 @@ private struct SessionSwitcherPanel: View {
     @ViewBuilder
     private func list(_ results: [SessionSwitcher.Result], selection: Int) -> some View {
         if !model.sessionsLoaded {
-            status { ProgressView().controlSize(.small); Text("Loading chats…") }
+            status { ProgressView().controlSize(.small); Text("Loading threads…") }
         } else if results.isEmpty {
             status {
                 if !trimmed.isEmpty && (searching || model.hasMoreSessions) {
                     ProgressView().controlSize(.small)
                     Text("Searching…")
                 } else {
-                    Text(trimmed.isEmpty ? "No chats yet." : "No chats match “\(trimmed)”.")
+                    Text(trimmed.isEmpty ? "No threads yet." : "No threads match “\(trimmed)”.")
                 }
             }
         } else {
@@ -296,7 +296,7 @@ private struct SwitcherRow: View {
                     .foregroundStyle(isSelected ? Color.brand : .secondary)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(highlighted(result.session.title ?? "New chat"))
+                    Text(highlighted(result.session.title ?? "New thread"))
                         .lineLimit(1)
                     Text(detail)
                         .font(.caption)

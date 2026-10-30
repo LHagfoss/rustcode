@@ -144,7 +144,7 @@ struct ConnectionsSettings: View {
                     GitHubRows(model: model, store: store, github: snapshot.github)
                 }
                 SettingsGroup(title: "Model accounts",
-                              footer: "Accounts you signed in to with /login. Signing out removes the saved credential from the keychain; sign in again with /login <provider> in a chat.") {
+                              footer: "Accounts you signed in to with /login. Signing out removes the saved credential from the keychain; sign in again with /login <provider> in a thread.") {
                     if snapshot.accounts.isEmpty {
                         Text("No saved accounts. API keys from environment variables are not listed.")
                             .font(.callout).foregroundStyle(.secondary)

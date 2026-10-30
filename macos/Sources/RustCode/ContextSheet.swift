@@ -124,7 +124,7 @@ struct ContextSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if compaction.isRepeated {
-                Text("This session has compacted \(compaction.count) times. Repeated compaction makes the model less accurate; start a new chat when the task is finished.")
+                Text("This thread has compacted \(compaction.count) times. Repeated compaction makes the model less accurate; start a new thread when the task is finished.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

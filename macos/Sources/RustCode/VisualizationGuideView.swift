@@ -44,7 +44,7 @@ struct VisualizationGuideView: View {
                 .frame(width: 30, height: 30)
                 .background(Color.brand.opacity(0.12), in: .rect(cornerRadius: 9))
             VStack(alignment: .leading, spacing: 4) {
-                Text("Charts, tables & trees in chat").font(.title3.weight(.semibold))
+                Text("Charts, tables & trees in thread").font(.title3.weight(.semibold))
                 Text(VisualizationGuide.overview)
                     .font(.callout)
                     .foregroundStyle(.secondary)

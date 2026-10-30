@@ -30,9 +30,9 @@ public enum ProjectFolder {
     /// differs, where new chats start.
     public static func help(chat: URL, default fallback: URL) -> String {
         let here = (chat.path as NSString).abbreviatingWithTildeInPath
-        guard !same(chat, fallback) else { return "This chat's folder: \(here), the default project" }
+        guard !same(chat, fallback) else { return "This thread's folder: \(here), the default project" }
         let start = (fallback.path as NSString).abbreviatingWithTildeInPath
-        return "This chat's folder: \(here)\nDefault project for new chats: \(start)"
+        return "This thread's folder: \(here)\nDefault project for new threads: \(start)"
     }
 
     /// Two paths name the same folder, ignoring a trailing slash, `.` and `..`.

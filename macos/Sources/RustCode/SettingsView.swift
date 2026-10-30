@@ -59,7 +59,7 @@ struct SettingsView: View {
         // Esc goes back to the chat from wherever focus is, once a search
         // in the sidebar is cleared.
         .background {
-            Button("Back to Chat") { if query.isEmpty { close() } else { query = "" } }
+            Button("Back to Thread") { if query.isEmpty { close() } else { query = "" } }
                 .keyboardShortcut(.cancelAction).hidden()
         }
         .task(id: section) {
@@ -464,21 +464,21 @@ private struct GeneralSettings: View {
             }
             .onChange(of: appearance) { _, value in AppearanceSetting.apply(value) }
 
-            SettingsGroup(title: "Chat") {
+            SettingsGroup(title: "Thread") {
                 SettingsRow(title: "Default project folder",
-                            subtitle: "\(model.workspace.path.abbreviatingHome) · New chats start here. Open chats keep their own") {
+                            subtitle: "\(model.workspace.path.abbreviatingHome) · New threads start here. Open threads keep their own") {
                     Button("Choose…") { model.chooseWorkspace() }.buttonStyle(PillButtonStyle())
                         .help(model.keybindings.help("Choose Default Project", .chooseProject))
                 }
                 if !ProjectFolder.same(model.chatProject, model.workspace) {
                     RowDivider()
-                    SettingsRow(title: "This chat's folder",
-                                subtitle: "\(model.chatProject.path.abbreviatingHome) · Only the chat on screen works here") {
+                    SettingsRow(title: "This thread's folder",
+                                subtitle: "\(model.chatProject.path.abbreviatingHome) · Only the thread on screen works here") {
                         Button("Show in Finder") { NSWorkspace.shared.open(model.chatProject) }.buttonStyle(PillButtonStyle())
                     }
                 }
                 RowDivider()
-                SettingsRow(title: "Notifications", subtitle: "When a chat finishes or needs you while RustCode is in the background") {
+                SettingsRow(title: "Notifications", subtitle: "When a thread finishes or needs you while RustCode is in the background") {
                     Toggle("Notifications", isOn: $notifyTurns)
                         .labelsHidden()
                         .toggleStyle(.switch)
@@ -502,7 +502,7 @@ private struct GeneralSettings: View {
                 SettingsRow(title: "Smart UI (experimental)",
                             subtitle: smartUI == model.engineSmartUI
                                 ? "Let the agent reply with small interactive views when you ask for one. They run sandboxed, with no network, file or app access"
-                                : "The agent learns this when the engine restarts; chats in progress keep running until then") {
+                                : "The agent learns this when the engine restarts; threads in progress keep running until then") {
                     HStack(spacing: 8) {
                         // The engine reads the setting at initialize.
                         if smartUI != model.engineSmartUI, model.runningSessions.isEmpty {
@@ -522,9 +522,9 @@ private struct GeneralSettings: View {
                         .toggleStyle(.switch)
                 }
                 RowDivider()
-                SettingsRow(title: "Group chats by attention",
-                            subtitle: "Chats that need you, are working or have a reply to read go to the top of the sidebar. Off keeps newest first") {
-                    Toggle("Group chats by attention", isOn: $groupsByAttention)
+                SettingsRow(title: "Group threads by attention",
+                            subtitle: "Threads that need you, are working or have a reply to read go to the top of the sidebar. Off keeps newest first") {
+                    Toggle("Group threads by attention", isOn: $groupsByAttention)
                         .labelsHidden()
                         .toggleStyle(.switch)
                 }
@@ -560,8 +560,8 @@ private struct GeneralSettings: View {
             }
 
             if let defaults = model.modelDefaults {
-                SettingsGroup(title: "New Chats",
-                              footer: "New chats and new terminal UI sessions start with this model and effort. Changing the model inside a chat or a terminal session applies to that session only.") {
+                SettingsGroup(title: "New Threads",
+                              footer: "New threads, in the app and the terminal UI, start with this model and effort. Changing the model inside a thread applies to that thread only.") {
                     SettingsRow(title: "Model") {
                         SettingsMenu("Model", selection: defaults.model,
                                      options: defaults.models.map { ($0.name, $0.name) }) { value in
@@ -1153,7 +1153,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general: ["appearance", "theme", "dark", "light", "notifications", "project", "folder", "fade", "sidebar", "group",
                         "predictions", "smart ui", "tool calls", "verbosity", "auto-approve", "yolo",
-                        "discord", "rich presence", "model", "effort", "reasoning", "new chats"]
+                        "discord", "rich presence", "model", "effort", "reasoning", "new threads", "new chats"]
         case .keybinds: ["keyboard", "shortcuts", "hotkeys", "keys"]
         case .connections: ["accounts", "providers", "login", "sign in", "api key", "github", "copilot", "remote", "phone"]
         case .skills: ["skill", "agent skills"]

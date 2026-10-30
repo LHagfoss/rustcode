@@ -51,7 +51,7 @@ struct TimelineRail: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: state.layout.current)
         .frame(width: placement.width, height: height, alignment: .top)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Session timeline")
+        .accessibilityLabel("Thread timeline")
     }
 }
 
@@ -84,6 +84,6 @@ private struct TimelineTick: View {
         .help(marker.title)
         .accessibilityLabel("Turn \(marker.number): \(marker.title)")
         .accessibilityAddTraits(marker.isCurrent ? .isSelected : [])
-        .accessibilityHint("Scrolls the chat to this message")
+        .accessibilityHint("Scrolls the thread to this message")
     }
 }

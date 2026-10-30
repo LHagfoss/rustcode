@@ -39,11 +39,11 @@ struct RustCodeApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Chat") { Task { await model.newSession() } }
+                Button("New Thread") { Task { await model.newSession() } }
                     .keyboardShortcut(model.keybindings.shortcut(for: .newChat))
                 // A chat with messages stays in its folder, so from one
                 // this starts a new chat; the title says which it does.
-                Button(model.selectedSession == nil ? "Choose Folder for This Chat…" : "New Chat in Folder…") {
+                Button(model.selectedSession == nil ? "Choose Folder for This Thread…" : "New Thread in Folder…") {
                     Task { await model.chooseChatProject() }
                 }
                 .keyboardShortcut(model.keybindings.shortcut(for: .chooseChatProject))
@@ -55,7 +55,7 @@ struct RustCodeApp: App {
                 CloseTerminalMenuItem(terminal: model.terminal, keybindings: model.keybindings)
             }
             CommandGroup(after: .newItem) {
-                Button("Switch Chat…") { model.toggleSwitcher() }
+                Button("Switch Thread…") { model.toggleSwitcher() }
                     .keyboardShortcut(model.keybindings.shortcut(for: .switchChat))
                 Button("Stop Turn") { Task { await model.cancel() } }
                     .keyboardShortcut(model.keybindings.shortcut(for: .stopTurn))
@@ -73,7 +73,7 @@ struct RustCodeApp: App {
                     .keyboardShortcut(model.keybindings.shortcut(for: .settings))
             }
             CommandGroup(after: .textEditing) {
-                Button("Find in Chat…") { model.showsFind = true }
+                Button("Find in Thread…") { model.showsFind = true }
                     .keyboardShortcut(model.keybindings.shortcut(for: .findInChat))
                 Button("Find Next") { model.findNext() }
                     .keyboardShortcut(model.keybindings.shortcut(for: .findNext))
@@ -84,7 +84,7 @@ struct RustCodeApp: App {
                 // Never disabled: the menu item kept the state it had at
                 // launch, with no chat open, so ⌘P stayed off after a chat
                 // was opened. The action reads the chat shown when it runs.
-                Button(model.isSelectedPinned ? "Unpin Chat" : "Pin Chat") { model.togglePinSelected() }
+                Button(model.isSelectedPinned ? "Unpin Thread" : "Pin Thread") { model.togglePinSelected() }
                     .keyboardShortcut(model.keybindings.shortcut(for: .pinChat))
             }
             CommandGroup(before: .sidebar) {
@@ -101,7 +101,7 @@ struct RustCodeApp: App {
                 Button("What's New in RustCode") {
                     Task { await model.whatsNew.reopen(current: model.updater.currentVersion) }
                 }
-                Button("Charts, Tables & Trees in Chat…") { model.showsVisualizationGuide = true }
+                Button("Charts, Tables & Trees in Thread…") { model.showsVisualizationGuide = true }
             }
         }
     }
@@ -307,7 +307,7 @@ final class DesktopModel: ObservableObject {
 
     /// What the Back button names: the chat it returns to.
     var settingsBackTitle: String {
-        sessions.first { $0.id == settingsReturnSession }?.title ?? "Chat"
+        sessions.first { $0.id == settingsReturnSession }?.title ?? "Thread"
     }
     /// `/remote`: the pairing panel over the chat.
     @Published var showsRemote = false
@@ -514,7 +514,7 @@ final class DesktopModel: ObservableObject {
             remotePollTask?.cancel()
             remotePollTask = nil
             remoteSessionID = nil
-            remoteStatus = RemoteShareStatus(error: "Open a chat before sharing it.")
+            remoteStatus = RemoteShareStatus(error: "Open a thread before sharing it.")
             showsRemote = true
             return
         }
@@ -525,7 +525,7 @@ final class DesktopModel: ObservableObject {
     /// Turn remote access back on from the panel's off state.
     func turnOnRemote() async {
         guard let session = remoteSessionID ?? selectedSession, let connection = engine?.connection else {
-            remoteStatus = RemoteShareStatus(error: "Open a chat before sharing it.")
+            remoteStatus = RemoteShareStatus(error: "Open a thread before sharing it.")
             return
         }
         remoteSessionID = session
@@ -1043,7 +1043,7 @@ final class DesktopModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.directoryURL = workspace
         panel.prompt = "Use as Default"
-        panel.message = "New chats start in this folder. Open chats keep their own."
+        panel.message = "New threads start in this folder. Open threads keep their own."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task { await setDefaultProject(url) }
     }
@@ -1075,11 +1075,11 @@ final class DesktopModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.directoryURL = chatProject
         if selectedSession == nil {
-            panel.prompt = "Use for This Chat"
-            panel.message = "This chat works in the folder you pick. New chats still start in \(workspace.lastPathComponent)."
+            panel.prompt = "Use for This Thread"
+            panel.message = "This thread works in the folder you pick. New threads still start in \(workspace.lastPathComponent)."
         } else {
-            panel.prompt = "Start New Chat"
-            panel.message = "A new chat starts in the folder you pick. This chat stays in \(chatProject.lastPathComponent)."
+            panel.prompt = "Start New Thread"
+            panel.message = "A new thread starts in the folder you pick. This thread stays in \(chatProject.lastPathComponent)."
         }
         guard panel.runModal() == .OK, let url = panel.url, usableProject(url) else { return }
         await newSession(in: url)
@@ -1093,7 +1093,7 @@ final class DesktopModel: ObservableObject {
         guard capabilities?.sessionMove == true, capabilities?.closeSession == true,
               let id = selectedSession, let connection = engine?.connection else { return }
         guard !runningSessions.contains(id) else {
-            error = "Stop the running turn before changing this chat's folder."
+            error = "Stop the running turn before changing this thread's folder."
             return
         }
         let current = chatProject
@@ -1102,8 +1102,8 @@ final class DesktopModel: ObservableObject {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.directoryURL = current
-        panel.prompt = "Move Chat Here"
-        panel.message = "This chat works in the folder you pick from now on. Other chats and new chats keep their folders."
+        panel.prompt = "Move Thread Here"
+        panel.message = "This thread works in the folder you pick from now on. Other threads and new threads keep their folders."
         guard panel.runModal() == .OK, let url = panel.url, usableProject(url),
               url.standardizedFileURL.path != current.standardizedFileURL.path else { return }
         var summary = sessions.first { $0.id == id } ?? SessionSummary(id: id, cwd: current.path)
@@ -1113,11 +1113,11 @@ final class DesktopModel: ObservableObject {
             let result = try await connection.request(ACPMethod.sessionMove, params: ACPRequests.moveSession(id: id, cwd: url),
                                                       timeout: .seconds(10))
             summary.cwd = result["cwd"]?.stringValue ?? url.path
-            showToast(Toast(style: .info, systemImage: "folder", title: "Chat moved to \(url.lastPathComponent)",
+            showToast(Toast(style: .info, systemImage: "folder", title: "Thread moved to \(url.lastPathComponent)",
                             message: summary.cwd.abbreviatingHome))
         } catch {
             // Still where it was: open it there again.
-            self.error = "Could not move this chat: \(error)"
+            self.error = "Could not move this thread: \(error)"
         }
         sessionProjects[id] = summary.cwd
         if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].cwd = summary.cwd }
@@ -1285,11 +1285,11 @@ final class DesktopModel: ObservableObject {
         if runningSessions.contains(session.id) {
             queuedPrompts.append(prompt)
             showToast(Toast(style: .info, systemImage: "tray.and.arrow.down", title: "Queued for \(title)",
-                            message: "It runs when that chat's turn ends.", session: session.id))
+                            message: "It runs when that thread's turn ends.", session: session.id))
             return
         }
         showToast(Toast(style: .info, systemImage: "paperplane", title: "Sent to \(title)",
-                        message: "Working there; this chat stays open.", session: session.id))
+                        message: "Working there; this thread stays open.", session: session.id))
         await run(prompt)
     }
 
@@ -1487,11 +1487,11 @@ final class DesktopModel: ObservableObject {
         }
         rememberArchived()
         UserDefaults.standard.set(now, forKey: "sessionRetentionSweep")
-        let lines = [plan.toArchive.isEmpty ? nil : "Archived \(plan.toArchive.count) chat\(plan.toArchive.count == 1 ? "" : "s") idle for a week.",
-                     trashed == 0 ? nil : "Moved \(trashed) chat\(trashed == 1 ? "" : "s") archived for a month to the Trash."]
+        let lines = [plan.toArchive.isEmpty ? nil : "Archived \(plan.toArchive.count) thread\(plan.toArchive.count == 1 ? "" : "s") idle for a week.",
+                     trashed == 0 ? nil : "Moved \(trashed) thread\(trashed == 1 ? "" : "s") archived for a month to the Trash."]
             .compactMap { $0 }
         guard !lines.isEmpty else { return }
-        showToast(Toast(style: .info, systemImage: "archivebox", title: "Tidied the chat list",
+        showToast(Toast(style: .info, systemImage: "archivebox", title: "Tidied the thread list",
                         message: lines.joined(separator: " ")))
     }
 
@@ -1522,7 +1522,7 @@ final class DesktopModel: ObservableObject {
     func togglePinSelected() {
         guard let id = selectedSession else {
             showToast(Toast(style: .info, systemImage: "pin", title: "Nothing to pin yet",
-                            message: "A new chat can be pinned once its first message is sent."))
+                            message: "A new thread can be pinned once its first message is sent."))
             return
         }
         togglePin(id: id)
@@ -1558,24 +1558,24 @@ final class DesktopModel: ObservableObject {
         let title = title.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { return }
         guard let directory = await sessionDirectory(session) else {
-            error = "Could not find this chat's folder to rename it."
+            error = "Could not find this thread's folder to rename it."
             return
         }
         do {
             try title.write(to: directory.appendingPathComponent("title.txt"), atomically: true, encoding: .utf8)
             await refreshSessions()
-        } catch { self.error = "Could not rename the chat: \(error.localizedDescription)" }
+        } catch { self.error = "Could not rename the thread: \(error.localizedDescription)" }
     }
 
     /// Move the chat's folder to the Trash, where it can be put back. A chat
     /// open in the engine is closed first so nothing writes to it afterwards.
     func trash(_ session: SessionSummary) async {
         if runningSessions.contains(session.id) {
-            error = "Stop the running turn before moving this chat to the Trash."
+            error = "Stop the running turn before moving this thread to the Trash."
             return
         }
         guard let directory = await sessionDirectory(session) else {
-            error = "Could not find this chat's folder."
+            error = "Could not find this thread's folder."
             return
         }
         if openChats.isOpen(session.id) || selectedSession == session.id,
@@ -1586,7 +1586,7 @@ final class DesktopModel: ObservableObject {
         do {
             try await NSWorkspace.shared.recycle([directory])
         } catch {
-            self.error = "Could not move the chat to the Trash: \(error.localizedDescription)"
+            self.error = "Could not move the thread to the Trash: \(error.localizedDescription)"
             return
         }
         forget(session.id)

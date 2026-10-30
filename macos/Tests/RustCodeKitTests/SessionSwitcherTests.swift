@@ -35,7 +35,7 @@ final class SessionSwitcherTests: XCTestCase {
     }
 
     func testUntitledChatsMatchAsNewChat() {
-        XCTAssertEqual(ids("new chat"), ["f"])
+        XCTAssertEqual(ids("new thread"), ["f"])
     }
 
     /// Chats found by their messages follow the title matches, once each,
@@ -53,9 +53,9 @@ final class SessionSwitcherTests: XCTestCase {
     }
 
     func testResultsAreCapped() {
-        let many = (0..<200).map { SessionSummary(id: "s\($0)", cwd: "/w", title: "Chat \($0)") }
+        let many = (0..<200).map { SessionSummary(id: "s\($0)", cwd: "/w", title: "Thread \($0)") }
         XCTAssertEqual(SessionSwitcher.results(sessions: many, query: "", pinned: []).count, SessionSwitcher.limit)
-        XCTAssertEqual(SessionSwitcher.results(sessions: many, query: "chat", pinned: [], limit: 5).count, 5)
+        XCTAssertEqual(SessionSwitcher.results(sessions: many, query: "thread", pinned: [], limit: 5).count, 5)
     }
 
     /// ⌘K ⏎ goes somewhere: the open chat is skipped for the first highlight.

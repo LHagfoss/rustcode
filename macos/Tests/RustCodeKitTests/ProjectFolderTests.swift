@@ -29,9 +29,9 @@ final class ProjectFolderTests: XCTestCase {
 
     /// #2306: the tooltip tells this chat's folder from the default.
     func testHelpNamesTheChatFolderAndTheDefault() {
-        XCTAssertEqual(ProjectFolder.help(chat: home, default: home), "This chat's folder: /Users/me/code/app, the default project")
+        XCTAssertEqual(ProjectFolder.help(chat: home, default: home), "This thread's folder: /Users/me/code/app, the default project")
         XCTAssertEqual(ProjectFolder.help(chat: other, default: home),
-                       "This chat's folder: /Users/me/code/site\nDefault project for new chats: /Users/me/code/app")
+                       "This thread's folder: /Users/me/code/site\nDefault project for new threads: /Users/me/code/app")
     }
 
     /// #2306: a missing or unreadable folder is refused before anything changes.
