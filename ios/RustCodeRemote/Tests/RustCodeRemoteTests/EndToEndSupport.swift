@@ -189,6 +189,26 @@ final class TerminalSession: Sendable {
         _ = write(master, bytes, bytes.count)
     }
 
+    /// Wait until the composer is drawn: keys typed before that are lost
+    /// while the terminal starts, which left `/remote` unsent and a test
+    /// waiting for a shared session until its time limit (#2678).
+    func waitForPrompt(timeout: Duration = .seconds(30)) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !screenText.contains("Ask RustCode to do anything") {
+            guard ContinuousClock.now < deadline else {
+                throw TerminalNotReady(screen: String(screenText.suffix(2000)))
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        // The prompt is drawn a moment before the terminal reads keys.
+        try await Task.sleep(for: .milliseconds(500))
+    }
+
+    struct TerminalNotReady: Error, CustomStringConvertible {
+        let screen: String
+        var description: String { "the terminal never showed its prompt:\n\(screen)" }
+    }
+
     /// What the terminal has printed so far, without escape sequences.
     var screenText: String {
         let raw = String(decoding: output.data, as: UTF8.self)
