@@ -67,6 +67,8 @@ struct ChangesPanel: View {
     @ObservedObject var model: DesktopModel
     @StateObject private var store = ChangesStore()
     @State private var expanded: Set<String> = []
+    /// The file whose lines are being picked for a message (#2643).
+    @State private var picking: String?
     let close: () -> Void
 
     private var folder: String { model.chatProject.path }
@@ -79,6 +81,14 @@ struct ChangesPanel: View {
         }
         .background(Color.chatBackground)
         .task(id: folder) { store.refresh(folder: folder) }
+        #if DEBUG
+        .onChange(of: model.debugPickFirstFile) { _, pick in
+            guard pick, case .loaded(let snapshot) = store.phase, let file = snapshot.files.first else { return }
+            expanded.insert(file.id)
+            picking = file.id
+            model.debugPickFirstFile = false
+        }
+        #endif
         // A turn that ends may have changed files: read again.
         .onChange(of: model.runningSessions.contains(model.selectedSession ?? "")) { _, running in
             if !running { store.refresh(folder: folder) }
@@ -166,6 +176,13 @@ struct ChangesPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    static func scopeLabel(_ scope: ChangesScope) -> String {
+        switch scope {
+        case .workingTree: "uncommitted changes"
+        case .branch(let base): "the branch since \(base)"
+        }
+    }
+
     /// What was compared: the scope, the commit, and that uncommitted and
     /// untracked files are part of it.
     private func summary(_ snapshot: ChangesSnapshot) -> some View {
@@ -236,7 +253,22 @@ struct ChangesPanel: View {
                 } else if file.rows.isEmpty {
                     Text(file.status == .renamed ? "Renamed without changes." : "No line changes.")
                         .font(.caption).foregroundStyle(.secondary)
+                } else if picking == file.id, case .loaded(let snapshot) = store.phase {
+                    LinePicker(file: file, root: snapshot.root, scope: Self.scopeLabel(snapshot.scope), baseCommit: snapshot.baseCommit) { reference in
+                        model.attachCodeReference(reference)
+                        picking = nil
+                    } cancel: {
+                        picking = nil
+                    }
                 } else {
+                    Button {
+                        picking = file.id
+                    } label: {
+                        Label("Pick lines for a message", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .help("Select diff lines and attach them to your message as a reference")
                     FileChangeView(change: FileChange(path: URL(fileURLWithPath: root).appendingPathComponent(file.path).path,
                                                       rows: file.rows, added: file.added, removed: file.removed,
                                                       isNewFile: file.status == .added || file.status == .untracked),
@@ -286,5 +318,145 @@ private struct StatusBadge: View {
             .background(color.opacity(0.15), in: .rect(cornerRadius: 4))
             .help(status.rawValue.capitalized)
             .accessibilityHidden(true)
+    }
+}
+
+/// Pick diff lines for a message (#2643): click a line, shift-click (or
+/// shift-arrow) to extend, arrows to move, Return to ask, Esc to cancel. A
+/// pick stays on one side of the diff: removed lines, or lines as they are now.
+private struct LinePicker: View {
+    let file: GitFileChange
+    let root: String
+    let scope: String
+    let baseCommit: String?
+    let attach: (CodeReference) -> Void
+    let cancel: () -> Void
+    @State private var anchor: Int?
+    @State private var cursor: Int?
+    @FocusState private var focused: Bool
+
+    private var lines: [DiffLine] {
+        file.rows.compactMap { if case .line(let line) = $0 { line } else { nil } }
+    }
+
+    /// The diff's rows in order: each line by its index in `lines`, or a gap
+    /// between hunks.
+    private var entries: [(line: Int?, gap: Int?)] {
+        var next = 0
+        return file.rows.map { row in
+            switch row {
+            case .line:
+                defer { next += 1 }
+                return (next, nil)
+            case .gap(let count):
+                return (nil, count)
+            }
+        }
+    }
+
+    private var selection: ClosedRange<Int>? {
+        guard let anchor, let cursor else { return nil }
+        return min(anchor, cursor)...max(anchor, cursor)
+    }
+
+    private func reference(_ intent: CodeReference.Intent) -> CodeReference? {
+        guard let selection else { return nil }
+        return CodeReference.from(rows: Array(lines[selection]), intent: intent, root: root, path: file.path, oldPath: file.oldPath,
+                                  scope: scope, baseCommit: baseCommit)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if let selection, let ref = reference(.ask) {
+                    Text(ref.label).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                    Text("\(selection.count) line\(selection.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                } else if selection != nil {
+                    Text("Pick removed lines or current lines, not both.").font(.caption).foregroundStyle(.orange)
+                } else {
+                    Text("Click a line; shift-click to extend.").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Button("Ask agent") { reference(.ask).map(attach) }
+                    .disabled(reference(.ask) == nil)
+                    .help("Attach the lines to your message as a question (Return)")
+                Button("Request change") { reference(.change).map(attach) }
+                    .disabled(reference(.change) == nil)
+                    .help("Attach the lines to your message as a change to make")
+                Button("Cancel", action: cancel)
+            }
+            .controlSize(.small)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                        if let index = entry.line {
+                            row(lines[index], index: index)
+                        } else {
+                            Text(entry.gap.map { "\u{22EF} \($0) unchanged line\($0 == 1 ? "" : "s")" } ?? "\u{22EF}")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary.opacity(0.6))
+                                .padding(.vertical, 2)
+                                .padding(.leading, 48)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 360)
+            .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
+            .focusable()
+            .focusEffectDisabled()
+            .focused($focused)
+            .onAppear { focused = true }
+            .onKeyPress(.upArrow, phases: .down) { press in move(-1, extend: press.modifiers.contains(.shift)) }
+            .onKeyPress(.downArrow, phases: .down) { press in move(1, extend: press.modifiers.contains(.shift)) }
+            .onKeyPress(.return) {
+                reference(.ask).map(attach)
+                return .handled
+            }
+            .onKeyPress(.escape) {
+                cancel()
+                return .handled
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Diff lines of \(file.path)")
+        }
+    }
+
+    private func move(_ step: Int, extend: Bool) -> KeyPress.Result {
+        guard !lines.isEmpty else { return .ignored }
+        let next = min(max((cursor ?? -1) + step, 0), lines.count - 1)
+        cursor = next
+        if !extend || anchor == nil { anchor = next }
+        return .handled
+    }
+
+    private func row(_ line: DiffLine, index: Int) -> some View {
+        let selected = selection?.contains(index) ?? false
+        let sign = switch line.kind { case .added: "+"; case .removed: "\u{2212}"; case .context: " " }
+        let tint: Color = switch line.kind { case .added: .green; case .removed: .red; case .context: .clear }
+        return HStack(spacing: 6) {
+            Text(line.number.map(String.init) ?? "").foregroundStyle(.secondary.opacity(0.6)).frame(width: 36, alignment: .trailing)
+            Text(sign).foregroundStyle(tint == .clear ? Color.secondary : tint)
+            Text(line.text.isEmpty ? " " : line.text).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .font(.system(.caption, design: .monospaced))
+        .padding(.vertical, 1)
+        .padding(.horizontal, 6)
+        .background(selected ? AnyShapeStyle(Color.accentColor.opacity(0.25)) : AnyShapeStyle(tint.opacity(0.13)))
+        .contentShape(.rect)
+        .onTapGesture {
+            if NSEvent.modifierFlags.contains(.shift), anchor != nil {
+                cursor = index
+            } else {
+                anchor = index
+                cursor = index
+            }
+            focused = true
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityLabel("\(line.kind == .removed ? "removed" : line.kind == .added ? "added" : "") line \(line.number.map(String.init) ?? ""): \(line.text)")
     }
 }
