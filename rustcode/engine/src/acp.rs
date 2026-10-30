@@ -2436,6 +2436,50 @@ mod tests {
     }
 
     #[test]
+    fn acp_event_stream_sends_only_the_unstreamed_rest_of_a_partial_answer() {
+        let mut stream = AcpEventStream::new();
+        stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "Here's the weather. It's comfortable with".to_string(),
+        });
+
+        let updates = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "Here's the weather. It's comfortable with light wind.".to_string(),
+            completed: true,
+            timing: None,
+        });
+        assert!(matches!(
+            updates.as_slice(),
+            [SessionUpdate::AgentMessageChunk(chunk)]
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == " light wind.")
+        ));
+    }
+
+    #[test]
+    fn acp_event_stream_prose_before_a_tool_call_is_not_the_answer_start() {
+        let mut stream = AcpEventStream::new();
+        stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "Let me".to_string(),
+        });
+        stream.updates(crate::network::AgentUiEvent::ToolStarted {
+            name: "search_web".to_string(),
+            id: "call-1".to_string(),
+            detail: None,
+            summary: None,
+        });
+
+        let updates = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "Let me know if you need more.".to_string(),
+            completed: true,
+            timing: None,
+        });
+        assert!(matches!(
+            updates.as_slice(),
+            [SessionUpdate::AgentMessageChunk(chunk)]
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "Let me know if you need more.")
+        ));
+    }
+
+    #[test]
     fn acp_event_stream_uses_final_text_when_no_delta_was_observed() {
         let mut stream = AcpEventStream::new();
         let updates = stream.updates(crate::network::AgentUiEvent::TurnFinished {
