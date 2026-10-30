@@ -36,7 +36,7 @@ struct RustCodeApp: App {
             }
             .frame(minWidth: 850, minHeight: 620)
         }
-        .windowToolbarStyle(.unified)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Thread") { Task { await model.newSession() } }
@@ -201,8 +201,6 @@ final class DesktopModel: ObservableObject {
     @Published var draftCommand: SlashCommand?
     /// The Settings section to show when the sheet opens.
     @Published var settingsSection: SettingsSection = .general
-    /// What Settings' search field holds.
-    @Published var settingsQuery = ""
     let chat = LiveTranscript()
     var transcript: Transcript {
         get { chat.transcript }
@@ -280,12 +278,12 @@ final class DesktopModel: ObservableObject {
     /// allows it for a chat (PreviewAgentBridge.swift).
     let preview = PreviewController()
     @Published var showsPreview = false {
-        didSet { if showsPreview { showsChanges = false } }
+        didSet { if showsPreview { showsChanges = false; showsPullRequests = false } }
     }
     /// The read-only Changes panel beside the chat, in the preview's place
     /// (#2642).
     @Published var showsChanges = false {
-        didSet { if showsChanges { showsPreview = false } }
+        didSet { if showsChanges { showsPreview = false; showsPullRequests = false } }
     }
     /// The workspace terminal, per project. The user's own shell: it never
     /// goes through the engine or reaches the agent.
@@ -686,8 +684,11 @@ final class DesktopModel: ObservableObject {
     var canReadPullRequests: Bool { capabilities?.pullRequests == true }
     /// The engine posts a review the user writes (#2646).
     var canReviewPullRequests: Bool { capabilities?.pullRequestReviews == true }
-    /// The pull requests panel is open.
-    @Published var showsPullRequests = false
+    /// The pull requests panel is open beside the chat, in the preview's
+    /// place.
+    @Published var showsPullRequests = false {
+        didSet { if showsPullRequests { showsPreview = false; showsChanges = false } }
+    }
     /// A pull request the panel should open, set from outside it (the
     /// debug driver).
     @Published var pullToOpen: Int?

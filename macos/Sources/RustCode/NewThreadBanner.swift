@@ -94,10 +94,11 @@ struct NewThreadBannerView: View {
     @State private var drawnHeight: CGFloat = 0
     @State private var image: CGImage?
     @State private var art: AttributedString?
-    /// The columns `art` was drawn at: while a resize waits for the next
-    /// drawing, the text is scaled to the new width instead of leaving a gap
-    /// or running over.
+    /// The cells `art` was drawn at: while a resize waits for the next
+    /// drawing, the text is scaled to fill the new room, as a picture is,
+    /// so the banner follows the window live instead of leaving a gap.
     @State private var artColumns = 0
+    @State private var artRows = 0
 
     /// The text's size: small enough that a band reads as a picture.
     static let fontSize: CGFloat = 7
@@ -164,11 +165,12 @@ struct NewThreadBannerView: View {
             if let cached = NewThreadBanner.drawings[key.cacheKey] {
                 art = cached
                 artColumns = key.columns
+                artRows = key.rows
                 return
             }
             // Settle a resize before drawing again.
             if art != nil { try? await Task.sleep(for: .milliseconds(120)) }
-            let columns = columns, inverted = colorScheme != .dark, aspect = aspect
+            let columns = columns, rows = rows, inverted = colorScheme != .dark, aspect = aspect
             let rendered = await Task.detached(priority: .userInitiated) {
                 Self.attributed(AsciiBanner.render(image, columns: columns, inverted: inverted, aspect: aspect))
             }.value
@@ -176,6 +178,7 @@ struct NewThreadBannerView: View {
             NewThreadBanner.drawings[key.cacheKey] = rendered
             art = rendered
             artColumns = columns
+            artRows = rows
         }
     }
 
@@ -193,13 +196,23 @@ struct NewThreadBannerView: View {
                 .frame(width: width, height: tall)
                 .clipped()
         } else if let art {
-            let drawnWidth = CGFloat(artColumns) * Self.charWidth
             Text(art)
                 .font(Font(Self.font))
                 .lineSpacing(0)
                 .fixedSize()
-                .scaleEffect(drawnWidth > 0 && width > 0 ? width / drawnWidth : 1, anchor: .top)
+                .scaleEffect(fillScale, anchor: .top)
         }
+    }
+
+    /// How much the drawing grows to cover the room, cropped at the sides
+    /// when it is relatively taller: the room's width, and with a `height`
+    /// its height too.
+    private var fillScale: CGFloat {
+        let drawnWidth = CGFloat(artColumns) * Self.charWidth
+        guard drawnWidth > 0, width > 0 else { return 1 }
+        var scale = width / drawnWidth
+        if let height, artRows > 0 { scale = max(scale, height / (CGFloat(artRows) * Self.lineHeight)) }
+        return scale
     }
 
     /// Clear at the sides, for a band.

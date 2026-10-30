@@ -43,10 +43,10 @@ final class FollowStateTests: XCTestCase {
     /// #2417: a stored sidebar width is clamped to the usable range, so an
     /// invalid value (a stale or hand-edited default) never strands the bar.
     func testSidebarWidthIsClamped() {
-        XCTAssertEqual(SidebarWidth.clamp(300), 300)
-        XCTAssertEqual(SidebarWidth.clamp(0), SidebarWidth.range.lowerBound)
-        XCTAssertEqual(SidebarWidth.clamp(10_000), SidebarWidth.range.upperBound)
-        XCTAssertEqual(SidebarWidth.clamp(-50), SidebarWidth.range.lowerBound)
+        XCTAssertEqual(SidebarResizeHandle.clamp(300), 300)
+        XCTAssertEqual(SidebarResizeHandle.clamp(0), SidebarResizeHandle.range.lowerBound)
+        XCTAssertEqual(SidebarResizeHandle.clamp(10_000), SidebarResizeHandle.range.upperBound)
+        XCTAssertEqual(SidebarResizeHandle.clamp(-50), SidebarResizeHandle.range.lowerBound)
     }
 
     /// #2554: a wheel beside or below the composer scrolls the chat, so it is

@@ -11,94 +11,31 @@ struct ContentView: View {
     @AppStorage("previewWidth") private var previewWidth: Double = 480
     /// The sidebar width, remembered across launches. An out-of-range stored
     /// value is clamped on read, so a bad value never strands the sidebar.
-    @AppStorage(SidebarWidth.key) private var sidebarWidth: Double = SidebarWidth.defaultWidth
-    private var sidebarClampedWidth: CGFloat { SidebarWidth.clamp(sidebarWidth) }
-
-    /// Room for the traffic lights and the sidebar's four toolbar buttons.
-    static let sidebarMinWidth = CGFloat(SidebarWidth.range.lowerBound)
-
-    /// The split view's sidebar, kept in step with `showsSidebar` both
-    /// ways, so its native toggle, the shortcut and the menu item agree.
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @AppStorage(SidebarResizeHandle.key) private var sidebarWidth: Double = SidebarResizeHandle.defaultWidth
+    private var sidebarClampedWidth: CGFloat { SidebarResizeHandle.clamp(sidebarWidth) }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            // Settings shows its sections here, over the threads, which stay
-            // alive under them (#2553).
-            ZStack {
-                SessionSidebar(model: model, updater: model.updater)
-                    .opacity(model.showsSettings ? 0 : 1)
-                    .allowsHitTesting(!model.showsSettings)
-                    .accessibilityHidden(model.showsSettings)
-                if model.showsSettings {
-                    SettingsView(model: model, part: .sidebar)
-                }
-            }
-            .frame(minWidth: Self.sidebarMinWidth, idealWidth: sidebarClampedWidth)
-            .navigationSplitViewColumnWidth(min: Self.sidebarMinWidth, ideal: sidebarClampedWidth,
-                                            max: CGFloat(SidebarWidth.range.upperBound))
-            // The width the reader drags it to, remembered for next launch.
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-                if width >= Self.sidebarMinWidth { sidebarWidth = Double(width) }
-            }
-            .toolbar { sidebarToolbar }
-        } detail: {
-            detail
-                .overlay {
-                    if model.showsSettings {
-                        SettingsView(model: model, part: .detail)
-                            .environment(\.closePanel) { model.closeSettings() }
-                    }
-                }
-                .toolbar { settingsToolbar }
-        }
-        .onChange(of: model.showsSidebar, initial: true) { _, shows in
-            let visibility: NavigationSplitViewVisibility = shows ? .all : .detailOnly
-            if columnVisibility != visibility { columnVisibility = visibility }
-        }
-        .onChange(of: columnVisibility) { _, visibility in
-            let shows = visibility != .detailOnly
-            if model.showsSidebar != shows { model.showsSidebar = shows }
-        }
-        .tint(.brand)
-        // Settings opens and closes at once, with no transition, even
-        // inside an animated change (#2593).
-        .transaction(value: model.showsSettings) { $0.disablesAnimations = true }
-        .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
-        .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0, planUsage: model.planUsage) }
-        .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
-        .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
-        .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
-        .modifier(WhatsNewPresenter(whatsNew: model.whatsNew))
-        .overlay { SessionSwitcherOverlay(model: model) }
-        .overlay {
-            if let image = model.viewedImage {
-                ImageViewer(image: image) { model.viewedImage = nil }
-                    .id(image.id)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.snappy(duration: 0.2), value: model.viewedImage)
-        .environment(\.openImage) { [model] in model.viewedImage = $0 }
-        // Centered on the chat, not the window: the sidebar and the preview
-        // beside it are left out.
-        .overlay {
-            ToastStack(model: model,
-                       leadingInset: model.showsSidebar ? sidebarClampedWidth : 0,
-                       trailingInset: model.showsPreview || model.showsChanges ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
-        }
-    }
-}
-
-extension ContentView {
-    /// The thread, with the preview or changes panel beside it.
-    private var detail: some View {
         HStack(spacing: 0) {
+            if model.showsSidebar {
+                SessionSidebar(model: model, updater: model.updater)
+                    .frame(width: sidebarClampedWidth)
+                    // The line sits on the sidebar's edge, its grab area
+                    // either side of it; laid out beside the sidebar, the
+                    // handle's own width showed as a strip of sidebar past
+                    // the line (#2433). Above the chat, so the half over it
+                    // still takes the drag.
+                    .overlay(alignment: .trailing) {
+                        SidebarResizeHandle(width: $sidebarWidth)
+                            .offset(x: SidebarResizeHandle.width / 2)
+                    }
+                    .zIndex(1)
+                    .transition(.move(edge: .leading))
+            }
             ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
-                // A subagent opens in the thread's place, the thread kept
-                // alive under it so its scroll position is there on the way
-                // back (#2492).
+                // A subagent opens in the chat's place, the chat kept alive
+                // under it so its scroll position is there on the way back
+                // (#2492).
                 .overlay {
                     if let agent = model.viewedAgent {
                         AgentPanel(model: model, agent: agent)
@@ -125,60 +62,135 @@ extension ContentView {
                 }
                 .background(Color.chatBackground)
                 .transition(.move(edge: .trailing))
-            }
-        }
-        .background(Color.chatBackground)
-    }
-
-    /// Over the threads: the inbox, archived threads and a new thread, after
-    /// the split view's own sidebar toggle.
-    @ToolbarContentBuilder
-    private var sidebarToolbar: some ToolbarContent {
-        if !model.showsSettings {
-            ToolbarItemGroup(placement: .automatic) {
-                AttentionInboxButton(model: model)
-                if model.showsArchived || !model.archivedSessions.isEmpty {
-                    Button {
-                        withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
-                    } label: {
-                        Label(model.showsArchived ? "Back to Threads" : "Archived Threads",
-                              systemImage: model.showsArchived ? "chevron.left" : "archivebox")
+            } else if model.showsPullRequests {
+                HStack(spacing: 0) {
+                    PreviewResizeHandle(width: $previewWidth)
+                    PullRequestsSidePanel(model: model) {
+                        withAnimation(.snappy(duration: 0.25)) { model.showsPullRequests = false }
                     }
-                    .help(model.showsArchived ? "Back to threads" : "Archived threads")
+                    .frame(width: CGFloat(previewWidth))
                 }
-                Button { Task { await model.newSession() } } label: {
-                    Label("New Thread", systemImage: "square.and.pencil")
-                }
-                .help(model.keybindings.help("New thread", .newChat))
+                .background(Color.chatBackground)
+                .transition(.move(edge: .trailing))
             }
         }
-    }
-
-    /// Settings' Back, where the thread's title is otherwise.
-    @ToolbarContentBuilder
-    private var settingsToolbar: some ToolbarContent {
-        if model.showsSettings {
-            ToolbarItem(placement: .navigation) {
-                Button { model.closeSettings() } label: {
-                    Label("Back to \(model.settingsBackTitle)", systemImage: "chevron.left")
-                }
-                .help("Back to \(model.settingsBackTitle) (Esc)")
+        .background(Color.sidebarBackground)
+        .ignoresSafeArea()
+        .tint(.brand)
+        // Settings is a page in the window's place, over the chats and the
+        // chat, which stay alive under it (#2553). It opens and closes at
+        // once, with no transition, even inside an animated change (#2593).
+        .overlay {
+            if model.showsSettings {
+                SettingsView(model: model)
+                    .environment(\.closePanel) { model.closeSettings() }
+                    .transition(.identity)
             }
+        }
+        .transaction(value: model.showsSettings) { $0.disablesAnimations = true }
+        .clickAwayPanel(item: $model.renamingSession) { RenameSheet(model: model, session: $0) }
+        .clickAwayPanel(item: $model.contextSheet) { ContextSheet(context: $0, planUsage: model.planUsage) }
+        .clickAwayPanel(item: $model.commandResult) { CommandResultSheet(result: $0) }
+        .clickAwayPanel(isPresented: $model.showsRemote) { RemotePanel(model: model) }
+        .clickAwayPanel(isPresented: $model.showsVisualizationGuide) { VisualizationGuideView(model: model) }
+        .modifier(WhatsNewPresenter(whatsNew: model.whatsNew))
+        .overlay { SessionSwitcherOverlay(model: model) }
+        .overlay {
+            if let image = model.viewedImage {
+                ImageViewer(image: image) { model.viewedImage = nil }
+                    .id(image.id)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: model.viewedImage)
+        .environment(\.openImage) { [model] in model.viewedImage = $0 }
+        // Centered on the chat, not the window: the sidebar and the preview
+        // beside it are left out.
+        .overlay {
+            ToastStack(model: model,
+                       leadingInset: model.showsSidebar ? sidebarClampedWidth : 0,
+                       trailingInset: model.showsPreview || model.showsChanges || model.showsPullRequests ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
         }
     }
 }
 
-/// The sidebar's width: the split view's column, remembered across
-/// launches. `clamp` keeps a stored value in range, so a bad one is safe.
-enum SidebarWidth {
-    /// The sidebar stays usable and the thread keeps enough room.
-    static let range: ClosedRange<Double> = 290...460
-    /// Where the chosen width is stored.
+/// The sidebar's top bar, shared with Settings' sidebar so its Back button
+/// sits where the chat sidebar's buttons do.
+enum SidebarMetrics {
+    /// The hidden title bar's height, so buttons line up with the traffic lights.
+    static let barHeight: CGFloat = 28
+    /// Room above the toolbar clusters so their glass does not touch the
+    /// window's top edge.
+    static let barTopInset: CGFloat = 6
+    /// Where the bar's first cluster starts, clear of the traffic lights.
+    static let barLeading: CGFloat = 80
+}
+
+/// The line between the sidebar and the chat, dragged to resize the sidebar.
+/// The chosen width is stored (`sidebarWidth`), so it comes back next launch;
+/// `clamp` keeps it in range, so an invalid stored value is safe.
+struct SidebarResizeHandle: View {
+    @Binding var width: Double
+    @State private var startWidth: Double?
+
+    /// The sidebar stays usable and the chat keeps enough room.
+    static let range: ClosedRange<Double> = 200...460
+    /// The line and the padding either side that can be grabbed.
+    static let width: CGFloat = 7
+    /// Where the chosen width is stored; Settings' sidebar reads it too.
     static let key = "sidebarWidth"
     static let defaultWidth = Double(SessionSidebar.width)
 
     static func clamp(_ width: Double) -> CGFloat {
         CGFloat(min(max(width, range.lowerBound), range.upperBound))
+    }
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.1))
+            .frame(width: 1)
+            .padding(.horizontal, (Self.width - 1) / 2)
+            .contentShape(.rect)
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { drag in
+                        let start = startWidth ?? width
+                        startWidth = start
+                        // The handle is on the sidebar's trailing edge, so
+                        // dragging right (positive translation) widens it.
+                        width = min(max(start + drag.translation.width, Self.range.lowerBound), Self.range.upperBound)
+                    }
+                    .onEnded { _ in startWidth = nil }
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+/// Moves the window from the empty parts of a top bar, as the title bar it
+/// lacks would, and acts on a double-click as the system setting says.
+///
+/// Not `isMovableByWindowBackground`: with it set, AppKit worked out the
+/// window's draggable region again on every frame, asking each hosting view
+/// whether it takes focus, which walked the whole chat. While a reply
+/// streamed that was a third of the main thread, and scrolling lagged (#2260).
+struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { DragView() }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class DragView: NSView {
+        override func mouseDown(with event: NSEvent) {
+            guard let window else { return }
+            guard event.clickCount == 2 else { return window.performDrag(with: event) }
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "Minimize": window.performMiniaturize(nil)
+            case "None": break
+            default: window.performZoom(nil)
+            }
+        }
     }
 }
 
@@ -245,6 +257,33 @@ struct ClusterButton: View {
     private static let opticalOffset: [String: CGFloat] = ["square.and.pencil": -1]
 }
 
+/// The sidebar's buttons, in one glass cluster right of the traffic
+/// lights: in the sidebar's bar while it shows, in the chat's title bar at
+/// the same spot while it is hidden, so they never move.
+struct SidebarBarButtons: View {
+    @ObservedObject var model: DesktopModel
+
+    var body: some View {
+        ToolbarCluster {
+            ClusterButton(systemImage: "sidebar.left",
+                          help: model.keybindings.help(model.showsSidebar ? "Hide sidebar" : "Show sidebar", .toggleSidebar)) {
+                model.toggleSidebar()
+            }
+            AttentionInboxButton(model: model)
+            if model.showsSidebar, model.showsArchived || !model.archivedSessions.isEmpty {
+                ClusterButton(
+                    systemImage: model.showsArchived ? "chevron.left" : "archivebox",
+                    help: model.showsArchived ? "Back to threads" : "Archived threads",
+                    isOn: model.showsArchived
+                ) {
+                    withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
+                }
+            }
+            ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New thread", .newChat)) { Task { await model.newSession() } }
+        }
+    }
+}
+
 private struct SessionSidebar: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var updater: Updater
@@ -259,11 +298,24 @@ private struct SessionSidebar: View {
     @State private var openShelves: Set<SidebarGroups.Kind> = []
     @AppStorage(DesktopModel.groupsByAttentionKey) private var groupsByAttention = true
 
+    static let barHeight = SidebarMetrics.barHeight
     /// How wide the sidebar is beside the chat.
-    static let width: CGFloat = 300
+    static let width: CGFloat = 270
+    static let barTopInset = SidebarMetrics.barTopInset
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Room for the traffic lights, then the bar's own buttons.
+            HStack(spacing: 2) {
+                SidebarBarButtons(model: model)
+                Spacer()
+            }
+            .padding(.leading, SidebarMetrics.barLeading)
+            .padding(.trailing, 10)
+            .frame(height: Self.barHeight)
+            .padding(.top, Self.barTopInset)
+            .background(WindowDragArea())
+
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search threads", text: $model.sessionFilter)
@@ -1366,6 +1418,7 @@ private struct ChatView: View {
         .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
+                header
                 if model.showsFind {
                     FindBar(model: model, find: find)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -1373,10 +1426,6 @@ private struct ChatView: View {
             }
             .animation(.snappy(duration: 0.2), value: model.showsFind)
         }
-        .toolbar { chatToolbar }
-        .navigationTitle(model.showsSettings ? "Settings" : title)
-        // Clear over a new thread's banner, which runs up behind it.
-        .toolbarBackground(showsBanner ? .hidden : .automatic, for: .windowToolbar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 10) {
                 if centersComposer {
@@ -1595,52 +1644,63 @@ private struct ChatView: View {
         }
     }
 
-    /// The thread's part of the window toolbar: its folder before the title
-    /// and its actions on the right. Settings, over the thread, has its own.
-    @ToolbarContentBuilder
-    private var chatToolbar: some ToolbarContent {
-        if !model.showsSettings {
-            ToolbarItem(placement: .navigation) {
-                ChatProjectMenu(model: model, name: projectName, path: model.chatProject.path.abbreviatingHome)
+    /// The chat's title bar: the title and project, and the sidebar buttons
+    /// beside the traffic lights while the sidebar is hidden.
+    private var header: some View {
+        HStack(spacing: 10) {
+            if !model.showsSidebar {
+                SidebarBarButtons(model: model)
+                    .padding(.leading, SidebarMetrics.barLeading - 18)
             }
-            ToolbarItemGroup(placement: .primaryAction) {
-                if model.taskPlan.isShown { TaskPlanButton(model: model, chat: chat) }
-                if let usage = chat.transcript.usage {
-                    Button { model.showContext() } label: { UsageCapsule(usage: usage) }
-                        .help("Context window")
-                        .accessibilityHint("Shows how the context window is used")
+            // `~/code / Title`: the chat's folder, a divider, its title.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                ChatProjectMenu(model: model, name: projectName, path: model.chatProject.path.abbreviatingHome)
+                Text("/")
+                    .font(.title3.weight(.light))
+                    .foregroundStyle(.quaternary)
+                    .accessibilityHidden(true)
+                Text(title).font(.headline).lineLimit(1)
+            }
+            Spacer()
+            TaskPlanButton(model: model, chat: chat)
+            if let usage = chat.transcript.usage {
+                Button { model.showContext() } label: { UsageCapsule(usage: usage) }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Shows how the context window is used")
+            }
+            if let session = model.sessions.first(where: { $0.id == model.selectedSession }) {
+                ToolbarCluster {
+                    ClusterButton(systemImage: "magnifyingglass", help: model.keybindings.help("Find in thread", .findInChat), isOn: model.showsFind) {
+                        model.showsFind.toggle()
+                    }
+                    ClusterButton(systemImage: model.pinnedSessions.contains(session.id) ? "pin.fill" : "pin",
+                                  help: model.keybindings.help(model.pinnedSessions.contains(session.id) ? "Unpin thread" : "Pin thread", .pinChat),
+                                  isOn: model.pinnedSessions.contains(session.id)) { model.togglePin(session) }
+                    ClusterButton(systemImage: "folder", help: "Show thread in Finder") {
+                        Task { await model.revealInFinder(session) }
+                    }
                 }
-                if let session = model.sessions.first(where: { $0.id == model.selectedSession }) {
-                    Button { model.showsFind.toggle() } label: {
-                        Label("Find", systemImage: "magnifyingglass")
-                    }
-                    .help(model.keybindings.help("Find in thread", .findInChat))
-                    let pinned = model.pinnedSessions.contains(session.id)
-                    Button { model.togglePin(session) } label: {
-                        Label(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.fill" : "pin")
-                    }
-                    .help(model.keybindings.help(pinned ? "Unpin thread" : "Pin thread", .pinChat))
-                    Button { Task { await model.revealInFinder(session) } } label: {
-                        Label("Show in Finder", systemImage: "folder")
-                    }
-                    .help("Show thread in Finder")
+            }
+            if model.canReadPullRequests, !model.showsPullRequests { PullRequestsButton(model: model) }
+            TerminalToolbarButton(terminal: model.terminal, keybindings: model.keybindings)
+            if !model.showsChanges {
+                ToolbarCluster {
+                    ClusterButton(systemImage: "plus.forwardslash.minus", help: "Show the project's changes") { model.toggleChanges() }
                 }
-                if model.canReadPullRequests { PullRequestsButton(model: model) }
-                TerminalToolbarButton(terminal: model.terminal, keybindings: model.keybindings)
-                if !model.showsChanges {
-                    Button { model.toggleChanges() } label: {
-                        Label("Changes", systemImage: "plus.forwardslash.minus")
-                    }
-                    .help("Show the project's changes")
-                }
-                if !model.showsPreview {
-                    Button { model.togglePreview() } label: {
-                        Label("Preview", systemImage: "globe")
-                    }
-                    .help(model.keybindings.help("Show localhost preview", .togglePreview))
+            }
+            if !model.showsPreview {
+                ToolbarCluster {
+                    ClusterButton(systemImage: "globe", help: model.keybindings.help("Show localhost preview", .togglePreview)) { model.togglePreview() }
                 }
             }
         }
+        .padding(.horizontal, 18)
+        .frame(height: SessionSidebar.barHeight)
+        .padding(.top, SessionSidebar.barTopInset)
+        .padding(.bottom, 8)
+        .background(WindowDragArea())
+        // Clear over a new thread's banner, which runs up behind it.
+        .background(Color.chatBackground.opacity(showsBanner ? 0 : 0.94))
     }
 
     private let bottomAnchor = "bottom"

@@ -149,20 +149,29 @@ final class PullRequestsStore: ObservableObject {
     }
 }
 
-/// The toolbar's Pull Requests button and its panel.
+/// The header's Pull Requests button: opens the panel beside the chat.
 struct PullRequestsButton: View {
     @ObservedObject var model: DesktopModel
-    @StateObject private var store = PullRequestsStore()
 
     var body: some View {
-        Button { model.showsPullRequests.toggle() } label: {
-            Label("Pull Requests", systemImage: "arrow.triangle.pull")
+        ToolbarCluster {
+            ClusterButton(systemImage: "arrow.triangle.pull", help: "Pull requests of \(model.chatProject.lastPathComponent)") {
+                withAnimation(.snappy(duration: 0.25)) { model.showsPullRequests = true }
+            }
         }
-        .help("Pull requests of \(model.chatProject.lastPathComponent)")
-        .popover(isPresented: $model.showsPullRequests, arrowEdge: .bottom) {
-            PullRequestsPanel(model: model, store: store) { model.showsPullRequests = false }
-                .frame(width: 560, height: 620)
-        }
+    }
+}
+
+/// The pull requests panel beside the chat, in the preview's place, like
+/// Changes.
+struct PullRequestsSidePanel: View {
+    @ObservedObject var model: DesktopModel
+    @StateObject private var store = PullRequestsStore()
+    let close: () -> Void
+
+    var body: some View {
+        PullRequestsPanel(model: model, store: store, close: close)
+            .background(Color.chatBackground)
     }
 }
 
@@ -199,40 +208,50 @@ private struct PullRequestsPanel: View {
 
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Pull Requests").font(.headline)
-                    Text(model.chatProject.lastPathComponent).foregroundStyle(.secondary)
-                    Spacer()
-                    if let fetched = store.fetchedAt {
-                        Text(fetched, format: .relative(presentation: .named))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .help("When this list was read")
-                    }
-                    Button { reload() } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.borderless)
-                        .disabled(store.phase == .loading)
-                        .help("Read again")
+            HStack(spacing: 8) {
+                Text("Pull Requests").font(.headline)
+                Text(model.chatProject.lastPathComponent).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                if let fetched = store.fetchedAt {
+                    Text(fetched, format: .relative(presentation: .named))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .help("When this list was read")
                 }
-                HStack(spacing: 8) {
-                    Picker("State", selection: $store.state) {
-                        Text("Open").tag("open")
-                        Text("Closed").tag("closed")
-                        Text("Merged").tag("merged")
-                        Text("All").tag("all")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 240)
-                    .onChange(of: store.state) { _, _ in reload() }
-                    TextField("Search, e.g. author:me or a title", text: $store.search)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { reload() }
+                ToolbarCluster {
+                    ClusterButton(systemImage: "arrow.clockwise", help: "Read again") { reload() }
+                    ClusterButton(systemImage: "xmark", help: "Hide pull requests", action: close)
                 }
             }
-            .padding(14)
-            Divider()
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+            VStack(alignment: .leading, spacing: 8) {
+                SettingsSegments("State", selection: $store.state,
+                                 options: [("open", "Open"), ("closed", "Closed"), ("merged", "Merged"), ("all", "All")])
+                    .onChange(of: store.state) { _, _ in reload() }
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search, e.g. author:me or a title", text: $store.search)
+                        .textFieldStyle(.plain)
+                        .onSubmit { reload() }
+                    if !store.search.isEmpty {
+                        Button { store.search = ""; reload() } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .font(.callout)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .glassSurface(in: .capsule)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+            Divider().opacity(0.5)
             content
         }
     }
@@ -249,8 +268,9 @@ private struct PullRequestsPanel: View {
                 HStack {
                     if error.opensConnections {
                         Button("Open Connections") { close(); model.openSettings(.connections) }
+                            .buttonStyle(PillButtonStyle())
                     }
-                    Button("Try Again") { reload() }
+                    Button("Try Again") { reload() }.buttonStyle(PillButtonStyle(prominent: true))
                 }
             }
             .padding(24)
@@ -390,19 +410,25 @@ private struct PullRequestDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Button(action: back) { Label("Pull Requests", systemImage: "chevron.left") }
-                    .buttonStyle(.borderless)
-                Spacer()
+            HStack(spacing: 8) {
+                ToolbarCluster {
+                    ClusterButton(systemImage: "chevron.left", help: "Back to the pull requests", action: back)
+                }
+                Text("#\(String(pull.number))").font(.headline).monospacedDigit()
+                Spacer(minLength: 0)
                 if let url = pull.url {
                     Button("Open on GitHub") { NSWorkspace.shared.open(url) }
+                        .buttonStyle(PillButtonStyle())
                 }
                 Button("Ask in New Thread", action: askInNewThread)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PillButtonStyle(prominent: true))
                     .help("Start a thread about this pull request; the message is written, not sent")
             }
-            .padding(12)
-            Divider()
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+            Divider().opacity(0.5)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header
@@ -500,18 +526,15 @@ private struct PullRequestDetailView: View {
                 TextField("Summary (optional for comments)", text: Binding(
                     get: { store.drafts?.summary ?? "" }, set: { store.drafts?.summary = $0 }), axis: .vertical)
                     .lineLimit(2...6)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain).padding(.horizontal, 10).padding(.vertical, 6).background(.fill.quaternary, in: .rect(cornerRadius: 10))
                 HStack {
-                    Picker("Event", selection: Binding(get: { store.drafts?.event ?? .comment },
-                                                       set: { store.drafts?.event = $0 })) {
-                        ForEach(ReviewDrafts.Event.allCases, id: \.self) { Text($0.label).tag($0) }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 320)
+                    SettingsSegments("Event", selection: Binding(get: { store.drafts?.event ?? .comment },
+                                                                 set: { store.drafts?.event = $0 }),
+                                     options: ReviewDrafts.Event.allCases.map { ($0, $0.label) })
                     Spacer()
                     if store.submitting { ProgressView().controlSize(.small) }
                     Button("Submit Review…") { confirmsSubmit = true }
+                        .buttonStyle(PillButtonStyle(prominent: true))
                         .disabled(drafts.problem != nil || store.submitting || drafts.uncertainSince != nil)
                         .help(drafts.uncertainSince != nil ? "Check whether the last submission was posted first"
                               : drafts.problem ?? "Post this review to the pull request")
@@ -699,7 +722,7 @@ private struct DraftCommentRow: View {
             Text(comment.lineText).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
             TextField("Comment", text: $text, axis: .vertical)
                 .lineLimit(1...6)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain).padding(.horizontal, 10).padding(.vertical, 6).background(.fill.quaternary, in: .rect(cornerRadius: 10))
                 .onChange(of: text) { _, new in if new != comment.body { edit(new) } }
         }
         .padding(8)
@@ -777,17 +800,18 @@ private struct PullFileDiff: View {
         VStack(alignment: .leading, spacing: 6) {
             TextField("Comment on this line (kept as a draft)", text: $text, axis: .vertical)
                 .lineLimit(2...6)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain).padding(.horizontal, 10).padding(.vertical, 6).background(.fill.quaternary, in: .rect(cornerRadius: 10))
             HStack {
                 Button("Ask in New Thread") { ask(line) }
+                    .buttonStyle(PillButtonStyle())
                     .help("Start a thread about this line; nothing is posted")
                 Spacer()
-                Button("Cancel") { commenting = nil }
+                Button("Cancel") { commenting = nil }.buttonStyle(PillButtonStyle())
                 Button("Add Draft") {
                     add(line, text)
                     commenting = nil
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PillButtonStyle(prominent: true))
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
