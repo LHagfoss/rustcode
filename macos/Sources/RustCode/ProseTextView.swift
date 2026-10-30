@@ -263,8 +263,44 @@ final class ProseNSTextView: NSTextView {
     // `Text`'s does, so only one shows at a time.
     override func resignFirstResponder() -> Bool {
         guard super.resignFirstResponder() else { return false }
-        if selectedRange().length > 0 { setSelectedRange(NSRange(location: selectedRange().location, length: 0)) }
+        if !ProseSelection.shared.isTracking { ProseSelection.shared.clear() }
         return true
+    }
+
+    // A press that starts a drag selects through the model, so the drag can
+    // carry on into the runs and messages around this one (#2440). A link,
+    // a double or triple click and a shift-click keep the text view's own
+    // handling.
+    override func mouseDown(with event: NSEvent) {
+        guard event.clickCount == 1, !event.modifierFlags.contains(.shift), run != nil,
+              !hasLink(at: event.locationInWindow) else { return super.mouseDown(with: event) }
+        ProseSelection.shared.track(from: self, press: event)
+    }
+
+    // A selection over several runs copies from the model, a blank line
+    // between runs; within one run the text view copies as it always has.
+    override func copy(_ sender: Any?) {
+        guard let text = ProseSelection.shared.textAcrossRuns() else { return super.copy(sender) }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// The UTF-16 offset a point of the window falls at, held to the text.
+    func offset(at windowPoint: NSPoint) -> Int {
+        let index = characterIndexForInsertion(at: convert(windowPoint, from: nil))
+        return min(max(index, 0), (string as NSString).length)
+    }
+
+    private func hasLink(at windowPoint: NSPoint) -> Bool {
+        guard let manager = layoutManager, let container = textContainer, let storage = textStorage,
+              storage.length > 0 else { return false }
+        let point = convert(windowPoint, from: nil)
+        var fraction: CGFloat = 0
+        let index = manager.characterIndex(for: point, in: container, fractionOfDistanceBetweenInsertionPoints: &fraction)
+        guard index < storage.length, manager.boundingRect(forGlyphRange: manager.glyphRange(
+            forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil), in: container)
+            .insetBy(dx: -2, dy: -2).contains(point) else { return false }
+        return storage.attribute(.link, at: index, effectiveRange: nil) != nil
     }
 
     // A menu of the views around it answers a right-click before the text
@@ -290,12 +326,30 @@ final class ProseSelection: NSObject, NSTextViewDelegate {
 
     private(set) var selection = TranscriptSelection()
     private let views = NSHashTable<ProseNSTextView>.weakObjects()
+    /// What each run drawn so far shows, so a copy can take in runs that
+    /// have undrawn since the drag passed them.
+    private var texts: [TranscriptSelection.Run: String] = [:]
+    /// A drag is selecting: a view losing the keyboard to it keeps the
+    /// selection.
+    private(set) var isTracking = false
     /// Set while this class changes a view's selection, so the view's
     /// notice of it is not taken for the reader's.
     private var applying = false
 
     func register(_ view: ProseNSTextView) {
         views.add(view)
+        remember(view)
+    }
+
+    private func remember(_ view: ProseNSTextView) {
+        guard let run = view.run else { return }
+        texts[run] = view.string
+        // Kept small: the runs of a long chat come and go.
+        if texts.count > 4_000, let bounds = selection.bounds {
+            texts = texts.filter { $0.key >= bounds.start.run && $0.key <= bounds.end.run }
+        } else if texts.count > 4_000 {
+            texts.removeAll()
+        }
     }
 
     func unregister(_ view: ProseNSTextView) {
@@ -308,7 +362,84 @@ final class ProseSelection: NSObject, NSTextViewDelegate {
         applying = true
         defer { applying = false }
         change()
+        remember(view)
         restore(view)
+    }
+
+    /// A press in `view` and the drag after it: the selection runs from the
+    /// press to wherever the pointer is, across every run in between, and
+    /// the chat scrolls when the pointer holds near its edge.
+    func track(from view: ProseNSTextView, press: NSEvent) {
+        guard let window = view.window, let run = view.run else { return }
+        isTracking = true
+        defer { isTracking = false }
+        window.makeFirstResponder(view)
+        clear()
+        selection.begin(at: .init(run, offset: view.offset(at: press.locationInWindow)))
+        var last = press
+        NSEvent.startPeriodicEvents(afterDelay: 0.15, withPeriod: 0.05)
+        defer { NSEvent.stopPeriodicEvents() }
+        while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .periodic]) {
+            if event.type == .leftMouseUp { break }
+            if event.type == .leftMouseDragged { last = event }
+            // Held near an edge, the periodic events keep the chat moving.
+            view.autoscroll(with: last)
+            if let position = position(at: last.locationInWindow, in: window) {
+                selection.extend(to: position)
+                showAll()
+            }
+        }
+        if selection.isEmpty { selection.clear() }
+    }
+
+    /// The place in the chat's prose a point of the window is at: in the run
+    /// under it, or, between runs, the end of the run above or the start of
+    /// the run below, whichever is nearer.
+    private func position(at point: NSPoint, in window: NSWindow) -> TranscriptSelection.Position? {
+        var best: (distance: CGFloat, position: TranscriptSelection.Position)?
+        for view in views.allObjects where view.window === window {
+            guard let run = view.run else { continue }
+            let frame = view.convert(view.bounds, to: nil)
+            let length = (view.string as NSString).length
+            let position: TranscriptSelection.Position
+            let distance: CGFloat
+            if point.y > frame.maxY {
+                // Above the run (window points grow upward): its start.
+                position = .init(run, offset: 0)
+                distance = point.y - frame.maxY
+            } else if point.y < frame.minY {
+                position = .init(run, offset: length)
+                distance = frame.minY - point.y
+            } else {
+                return .init(run, offset: view.offset(at: point))
+            }
+            if best.map({ distance < $0.distance }) ?? true { best = (distance, position) }
+        }
+        return best?.position
+    }
+
+    /// Every drawn run shows its part of the selection.
+    private func showAll() {
+        applying = true
+        defer { applying = false }
+        for view in views.allObjects {
+            let length = (view.string as NSString).length
+            if let run = view.run, let range = selection.range(in: run, length: length) {
+                let selected = NSRange(location: range.lowerBound, length: range.count)
+                if view.selectedRange() != selected { view.setSelectedRange(selected) }
+            } else if view.selectedRange().length > 0 {
+                view.setSelectedRange(NSRange(location: view.selectedRange().location, length: 0))
+            }
+        }
+    }
+
+    /// The text of a selection that spans runs, or nil for one inside a
+    /// single run, which its text view copies itself.
+    func textAcrossRuns() -> String? {
+        guard let bounds = selection.bounds, bounds.start.run != bounds.end.run else { return nil }
+        for view in views.allObjects { remember(view) }
+        let runs = texts.filter { selection.contains($0.key) }.map { (run: $0.key, text: $0.value) }
+        return selection.text(of: runs)
     }
 
     private func restore(_ view: ProseNSTextView) {
