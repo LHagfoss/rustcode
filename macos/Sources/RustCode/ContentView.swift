@@ -33,6 +33,10 @@ struct ContentView: View {
             }
             ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
+                // The chat takes its new width at once while the sidebar
+                // slides: animated, a long thread laid out its transcript
+                // again every frame and the toggle stuttered.
+                .transaction(value: model.showsSidebar) { $0.animation = nil }
                 // A subagent opens in the chat's place, the chat kept alive
                 // under it so its scroll position is there on the way back
                 // (#2492).
@@ -257,9 +261,9 @@ struct ClusterButton: View {
     private static let opticalOffset: [String: CGFloat] = ["square.and.pencil": -1]
 }
 
-/// The sidebar's buttons, in one glass cluster right of the traffic
-/// lights: in the sidebar's bar while it shows, in the chat's title bar at
-/// the same spot while it is hidden, so they never move.
+/// The sidebar's buttons, in one glass cluster: at the sidebar bar's
+/// trailing end while it shows, beside the traffic lights in the chat's
+/// title bar while it is hidden.
 struct SidebarBarButtons: View {
     @ObservedObject var model: DesktopModel
 
@@ -307,8 +311,8 @@ private struct SessionSidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             // Room for the traffic lights, then the bar's own buttons.
             HStack(spacing: 2) {
-                SidebarBarButtons(model: model)
                 Spacer()
+                SidebarBarButtons(model: model)
             }
             .padding(.leading, SidebarMetrics.barLeading)
             .padding(.trailing, 10)
@@ -1699,8 +1703,21 @@ private struct ChatView: View {
         .padding(.top, SessionSidebar.barTopInset)
         .padding(.bottom, 8)
         .background(WindowDragArea())
-        // Clear over a new thread's banner, which runs up behind it.
-        .background(Color.chatBackground.opacity(showsBanner ? 0 : 0.94))
+        // Over a new thread's banner, which runs up behind it, a frosted
+        // bar whose foot fades into the banner rather than a hard edge.
+        .background {
+            if showsBanner {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.6),
+                                                 .init(color: .clear, location: 1)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .padding(.bottom, -12)
+                    .transition(.opacity)
+            } else {
+                Color.chatBackground.opacity(0.94)
+            }
+        }
     }
 
     private let bottomAnchor = "bottom"

@@ -96,8 +96,8 @@ struct SettingsView: View {
         VStack(alignment: compact ? .center : .leading, spacing: 0) {
             // The title bar's room, beside the traffic lights, holding Back.
             HStack(spacing: 2) {
-                if !compact { barButtons }
                 Spacer()
+                if !compact { barButtons }
             }
             .padding(.leading, compact ? 0 : SidebarMetrics.barLeading)
             .padding(.trailing, 10)
