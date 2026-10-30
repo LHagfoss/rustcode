@@ -72,11 +72,42 @@ final class PullRequestsStore: ObservableObject {
     }
 
     func closeDetail() {
+        guide = nil
         detail = nil
         detailError = nil
         diffFiles = nil
         diffError = nil
         submission = nil
+    }
+
+    // MARK: Review guide (#2647)
+
+    /// The open pull request's guide, when one was made.
+    @Published var guide: ReviewGuide? {
+        didSet { saveGuide() }
+    }
+    private let guideStore = ReviewGuideStore(directory: FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("RustCode/review-guides", isDirectory: true))
+
+    /// The guide made before for `detail`, from disk.
+    func loadGuide(for detail: PullRequestDetail) {
+        guard let repository = ReviewDrafts.repository(of: detail.pull.url) else { return }
+        guide = guideStore.load(repository: repository, number: detail.pull.number)
+    }
+
+    /// Make the guide from the diff, keeping the reader's notes.
+    func makeGuide(_ connection: ACPConnection?) async {
+        guard let detail else { return }
+        await loadDiff(connection)
+        guard let files = diffFiles else { return }
+        guide = ReviewGuide.build(files: files, listed: detail.files.map(\.path), head: detail.pull.headSHA,
+                                  truncated: diffTruncated, previous: guide)
+    }
+
+    private func saveGuide() {
+        guard let guide, let detail, let repository = ReviewDrafts.repository(of: detail.pull.url) else { return }
+        try? guideStore.save(guide, repository: repository, number: detail.pull.number)
     }
 
     // MARK: Review drafts (#2646)
@@ -187,6 +218,8 @@ private struct PullRequestsPanel: View {
                     askInNewThread(detail.pull)
                 } askAboutLine: { path, line in
                     askInNewThread(detail.pull, about: (path, line))
+                } askAbout: { text in
+                    ask(text)
                 }
             } else {
                 list
@@ -314,6 +347,15 @@ private struct PullRequestsPanel: View {
     }
 
     /// A new thread in the project, its message written but not sent.
+    /// A new thread in the project with `text` written, not sent.
+    private func ask(_ text: String) {
+        close()
+        Task {
+            await model.newSession(in: model.chatProject)
+            model.draft = text
+        }
+    }
+
     private func askInNewThread(_ pull: PullRequest, about line: (path: String, line: DiffLine)? = nil) {
         close()
         var text = pull.threadDraft
@@ -402,6 +444,7 @@ private struct PullRequestDetailView: View {
     let back: () -> Void
     let askInNewThread: () -> Void
     let askAboutLine: (String, DiffLine) -> Void
+    let askAbout: (String) -> Void
     @State private var openFiles: Set<String> = []
     @State private var confirmsSubmit = false
 
@@ -441,6 +484,7 @@ private struct PullRequestDetailView: View {
                         }
                     }
                     if !detail.checks.isEmpty { checks }
+                    reviewGuide
                     files
                     if canReview { review }
                     if !detail.activity.isEmpty { activity }
@@ -449,7 +493,15 @@ private struct PullRequestDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .onAppear { if model.canReviewPullRequests { store.loadDrafts(for: detail) } }
+        .onAppear {
+            if model.canReviewPullRequests { store.loadDrafts(for: detail) }
+            store.loadGuide(for: detail)
+        }
+        .onChange(of: model.makesPullGuide) { _, make in
+            guard make else { return }
+            model.makesPullGuide = false
+            Task { await store.makeGuide(model.engineConnection) }
+        }
         .onChange(of: model.pullFileToOpen) { _, path in
             guard let path else { return }
             model.pullFileToOpen = nil
@@ -592,6 +644,67 @@ private struct PullRequestDetailView: View {
                     }
                 }
                 .font(.callout)
+            }
+        }
+    }
+
+    /// Stops through the change in reading order, each at real lines; what
+    /// it flags is analysis of the diff's text, not a verified finding.
+    private var reviewGuide: some View {
+        section("Review Guide") {
+            if let guide = store.guide {
+                VStack(alignment: .leading, spacing: 10) {
+                    if guide.isStale(head: pull.headSHA) {
+                        Callout(color: .orange, systemImage: "clock.arrow.circlepath") {
+                            Text("Made at \(String(guide.head.prefix(7))); the pull request moved on. Make it again — your notes are kept.")
+                        }
+                    }
+                    Text("Analysis of the diff at \(String(guide.head.prefix(7))): an order to read in and patterns to look at. Nothing here is verified.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if guide.truncated {
+                        Text("The diff was cut, so later files are missing from the guide.")
+                            .font(.caption).foregroundStyle(Color.attention)
+                    }
+                    ForEach(Array(guide.stops.enumerated()), id: \.element.id) { index, stop in
+                        GuideStopRow(index: index + 1, stop: stop, guide: guide,
+                                     note: Binding(get: { store.guide?.notes[stop.path] ?? "" },
+                                                   set: { store.guide?.notes[stop.path] = $0.isEmpty ? nil : $0 }),
+                                     isRead: Binding(get: { store.guide?.read.contains(stop.path) ?? false },
+                                                     set: { read in
+                                                         if read { store.guide?.read.insert(stop.path) } else { store.guide?.read.remove(stop.path) }
+                                                     })) {
+                            openFiles.insert(stop.path)
+                            Task { await store.loadDiff(model.engineConnection) }
+                        } ask: {
+                            askAbout(guide.question(about: stop, number: pull.number))
+                        }
+                    }
+                    if !guide.untestedFolders.isEmpty {
+                        Text("No test changed under: \(guide.untestedFolders.joined(separator: ", ")). Worth asking whether these changes are covered.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !guide.uncovered.isEmpty {
+                        Text("Not covered (binary, past the diff's cut, or over the guide's \(ReviewGuide.maxStops) stops): \(guide.uncovered.joined(separator: ", "))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button(guide.isStale(head: pull.headSHA) ? "Make Again" : "Refresh") {
+                        Task { await store.makeGuide(model.engineConnection) }
+                    }
+                    .buttonStyle(PillButtonStyle())
+                    .disabled(store.loadingDiff)
+                }
+            } else {
+                HStack {
+                    Text("An order to read this change in, from contracts and risky code to tests, with the lines to look at.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Make Guide") { Task { await store.makeGuide(model.engineConnection) } }
+                        .buttonStyle(PillButtonStyle())
+                        .disabled(store.loadingDiff)
+                }
+                if let error = store.diffError {
+                    Text("\(error.title): \(error.message)").font(.caption).foregroundStyle(Color.attention)
+                }
             }
         }
     }
@@ -835,6 +948,64 @@ private struct PullFileDiff: View {
         }
         .padding(8)
         .padding(.leading, 34)
+    }
+}
+
+/// One stop of a review guide: its file, why it comes here, what to look
+/// at with links to the lines, a note, and a way to ask the agent.
+private struct GuideStopRow: View {
+    let index: Int
+    let stop: ReviewGuide.Stop
+    let guide: ReviewGuide
+    @Binding var note: String
+    @Binding var isRead: Bool
+    let open: () -> Void
+    let ask: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Button { isRead.toggle() } label: {
+                    Image(systemName: isRead ? "checkmark.circle.fill" : "\(min(index, 50)).circle")
+                        .foregroundStyle(isRead ? Color.green : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isRead ? "Mark unread" : "Mark read")
+                Button(action: open) {
+                    Text(stop.path).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                }
+                .buttonStyle(.plain)
+                .help("Open this file's diff")
+                Spacer(minLength: 4)
+                Text("+\(stop.added)").foregroundStyle(.green).font(.caption.monospacedDigit())
+                Text("−\(stop.removed)").foregroundStyle(.red).font(.caption.monospacedDigit())
+                Button("Ask", action: ask)
+                    .buttonStyle(PillButtonStyle())
+                    .help("Start a thread asking the agent about this file, with its lines; written, not sent")
+            }
+            Text("\(stop.kind.title): \(stop.kind.reason)").font(.caption).foregroundStyle(.secondary)
+            if let first = stop.first {
+                Text("Starts at \(first.label)").font(.caption.monospaced()).foregroundStyle(.secondary)
+            }
+            ForEach(Array(stop.flags.enumerated()), id: \.offset) { _, flag in
+                Label {
+                    Text(flag.anchor.map { "\(flag.message) — \($0.label): \($0.text)" } ?? flag.message)
+                        .lineLimit(2)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(Color.attention)
+                }
+                .font(.caption)
+            }
+            TextField("Note", text: $note, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.primary.opacity(0.05), in: .rect(cornerRadius: 8))
+        }
+        .padding(10)
+        .background(Color.primary.opacity(isRead ? 0.02 : 0.04), in: .rect(cornerRadius: 12))
+        .opacity(isRead ? 0.7 : 1)
     }
 }
 

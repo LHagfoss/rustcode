@@ -576,6 +576,8 @@ enum DebugDriver {
             // `pulls [number]`: open the pull requests panel, or one of them.
             model.showsPullRequests = true
             if parts.count > 1 { model.pullToOpen = Int(parts[1]) }
+        case "pullguide":
+            model.makesPullGuide = true
         case "watchpull":
             // `watchpull <number>`: watch it from the shown thread.
             if parts.count > 1, let number = Int(parts[1]) { await model.watchPull(number) }

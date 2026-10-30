@@ -776,6 +776,8 @@ final class DesktopModel: ObservableObject {
     @Published var pullToOpen: Int?
     /// A file of the open pull request whose diff the panel should open.
     @Published var pullFileToOpen: String?
+    /// Set by DebugDriver's `pullguide`: make the open pull request's review guide.
+    @Published var makesPullGuide = false
 
     /// Threads whose suggested folder (`FolderSuggestion`) the user dismissed,
     /// as `id|path`, so it is not offered again.
