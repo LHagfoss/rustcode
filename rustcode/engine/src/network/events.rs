@@ -314,7 +314,7 @@ pub(crate) fn classify_response(
 /// this type is the migration seam for the event-driven loop.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
-pub enum AgentEvent {
+pub(crate) enum AgentEvent {
     TextDelta(String),
     ToolCall(ToolCall),
     ToolResult(ToolResult),

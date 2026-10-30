@@ -186,7 +186,7 @@ fn display_detail(name: &str, action: &str, target: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-pub fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
+pub(crate) fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
     match event {
         AgentEvent::TextDelta(text) => Some(AgentUiEvent::TextDelta { text }),
         AgentEvent::ToolCall(call) => Some(AgentUiEvent::ToolStarted {
