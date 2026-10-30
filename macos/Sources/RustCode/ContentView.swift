@@ -270,6 +270,7 @@ private struct SessionSidebar: View {
             HStack(spacing: 2) {
                 Spacer()
                 ToolbarCluster {
+                    AttentionInboxButton(model: model)
                     ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Hide sidebar", .toggleSidebar)) { model.toggleSidebar() }
                     if model.showsArchived || !model.archivedSessions.isEmpty {
                         ClusterButton(

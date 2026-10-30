@@ -207,7 +207,9 @@ final class DesktopModel: ObservableObject {
         set { chat.transcript = newValue }
         _modify { yield &chat.transcript }
     }
-    @Published var sessions: [SessionSummary] = []
+    @Published var sessions: [SessionSummary] = [] {
+        didSet { refreshAttention() }
+    }
     @Published var selectedSession: String? {
         didSet {
             if let selectedSession { unseenReplies.remove(selectedSession) }
@@ -221,7 +223,16 @@ final class DesktopModel: ObservableObject {
     }
     /// Chats whose turn finished while another chat was on screen, marked
     /// with a dot in the sidebar until opened.
-    @Published private(set) var unseenReplies: Set<String> = []
+    @Published private(set) var unseenReplies: Set<String> = [] {
+        didSet { refreshAttention() }
+    }
+    /// Everything across threads that wants the reader, in reading order (#2636).
+    @Published var attentionEntries: [AttentionEntry] = []
+    /// False while no engine answers: the inbox then says it cannot list requests.
+    @Published private(set) var engineConnected = false
+    var attentionInbox = AttentionInbox()
+    /// The inbox popover is open.
+    @Published var showsInbox = false
     /// The default project: new chats start here unless one is given its own
     /// folder. Set in Settings; the engine and preview run in it.
     @Published var workspace: URL {
@@ -472,7 +483,10 @@ final class DesktopModel: ObservableObject {
     /// Every unanswered permission or question request, oldest first. The
     /// engine blocks until each one is answered, so none may be dropped.
     @Published var permissionQueue: [PermissionRequest] = [] {
-        didSet { TurnNotifier.shared.setBadge(permissionQueue.count) }
+        didSet {
+            TurnNotifier.shared.setBadge(permissionQueue.count)
+            refreshAttention()
+        }
     }
     @Published var models = ModelOptions.empty
     /// The plan's 5-hour and weekly windows for the shown chat's account, when
@@ -627,7 +641,9 @@ final class DesktopModel: ObservableObject {
     /// Inbound messages handled from the running engine, and who waits for a count.
     private var handledInbound = 0
     private var inboundWaiters: [(count: Int, resume: CheckedContinuation<Void, Never>)] = []
-    private var capabilities: AgentInfo?
+    private var capabilities: AgentInfo? {
+        didSet { engineConnected = capabilities != nil }
+    }
     /// Whether the running engine was told Smart UI is on; Settings offers a
     /// restart while this differs from the setting.
     @Published private(set) var engineSmartUI = false
@@ -2282,7 +2298,17 @@ final class DesktopModel: ObservableObject {
 
     /// Why each chat's last turn stopped, when the provider or the connection
     /// stopped it and `continue` picks it up.
-    @Published private(set) var stoppedTurns: [String: String] = [:]
+    @Published private(set) var stoppedTurns: [String: String] = [:] {
+        didSet { refreshAttention() }
+    }
+
+    #if DEBUG
+    /// For the debug driver: a thread whose turn stopped, and one with an unread reply.
+    func debugAttention(stopped: String?, unseen: String?) {
+        if let stopped { stoppedTurns[stopped] = "Stopped: the provider timed out" }
+        if let unseen { unseenReplies.insert(unseen) }
+    }
+    #endif
 
     /// Continue the shown chat's stopped turn where it stopped.
     func continueStoppedTurn() async {

@@ -759,6 +759,15 @@ enum DebugDriver {
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?
                 .write(to: URL(fileURLWithPath: parts.dropFirst().joined(separator: " ")))
+        case "snappop":
+            // `snappop <file.png>`: the open popover drawn to a file.
+            guard parts.count > 1,
+                  let window = NSApp.windows.last(where: { $0.isVisible && String(describing: type(of: $0)).contains("Popover") }),
+                  let view = window.contentView?.superview ?? window.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: parts.dropFirst().joined(separator: " ")))
         case "chatfolder":
             // `chatfolder <path>`: a new chat in that folder, the default kept.
             await model.newSession(in: URL(fileURLWithPath: parts.dropFirst().joined(separator: " "), isDirectory: true))
@@ -1047,6 +1056,14 @@ enum DebugDriver {
             }
             model.transcript.apply(.agentText("Fixed the rules; the lint still fails on an unused import."))
             model.transcript.finishTurn(at: Date())
+        case "inbox":
+            // `inbox [demo]`: open the attention inbox; `demo` first marks the
+            // first thread stopped and the second unread.
+            if parts.count > 1, parts[1] == "demo" {
+                let ids = model.sessions.map(\.id)
+                model.debugAttention(stopped: ids.first, unseen: ids.dropFirst().first)
+            }
+            model.showsInbox = true
         case "changes":
             // `changes`: show or hide the Changes panel.
             model.toggleChanges()
