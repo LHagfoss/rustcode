@@ -5,6 +5,9 @@ use agent_client_protocol::schema::v1::{
 
 pub(crate) struct AcpEventStream {
     streamed_prose: String,
+    /// Prose sent since the last tool call or notice: the start of the
+    /// answer the turn's final content repeats in full.
+    answer_prose: String,
     pending: String,
     in_thought: bool,
     /// The open thought has shown text; whitespace before that is dropped,
@@ -25,6 +28,7 @@ impl AcpEventStream {
     pub fn new() -> Self {
         Self {
             streamed_prose: String::new(),
+            answer_prose: String::new(),
             pending: String::new(),
             in_thought: false,
             thought_has_text: false,
@@ -101,9 +105,18 @@ impl AcpEventStream {
                 updates.extend(self.thought_update(pending));
             } else {
                 self.streamed_prose.push_str(&pending);
+                self.answer_prose.push_str(&pending);
                 updates.push(Self::text_update(pending));
             }
         }
+        updates
+    }
+
+    /// Flush, then start a new answer: prose after a tool call or notice is
+    /// not the start of the final content.
+    fn flush_answer(&mut self) -> Vec<SessionUpdate> {
+        let updates = self.flush();
+        self.answer_prose.clear();
         updates
     }
 
@@ -141,6 +154,7 @@ impl AcpEventStream {
                 let prose = self.pending[..idx].to_string();
                 if !prose.is_empty() {
                     self.streamed_prose.push_str(&prose);
+                    self.answer_prose.push_str(&prose);
                     updates.push(Self::text_update(prose));
                 }
                 self.pending.drain(..idx + OPEN_TAG.len());
@@ -157,6 +171,7 @@ impl AcpEventStream {
                 if emit_len > 0 {
                     let prose: String = self.pending.drain(..emit_len).collect();
                     self.streamed_prose.push_str(&prose);
+                    self.answer_prose.push_str(&prose);
                     updates.push(Self::text_update(prose));
                 }
                 break;
@@ -179,7 +194,7 @@ impl AcpEventStream {
                 detail,
                 summary,
             } => {
-                let mut updates = self.flush();
+                let mut updates = self.flush_answer();
                 let mut call = AcpToolCall::new(id, name).status(ToolCallStatus::InProgress);
                 // What the call acts on (a command, a path) and what the model
                 // said it does, so a client can say what is running before it
@@ -200,7 +215,7 @@ impl AcpEventStream {
             crate::network::AgentUiEvent::ToolOutput { id, text } => {
                 // A delta to append, not ACP `content` (which replaces), so
                 // a long command does not resend everything it printed.
-                let mut updates = self.flush();
+                let mut updates = self.flush_answer();
                 updates.push(SessionUpdate::ToolCallUpdate(
                     ToolCallUpdate::new(id, ToolCallUpdateFields::new())
                         .meta(rustcode_meta(serde_json::json!({ "outputDelta": text }))),
@@ -223,7 +238,7 @@ impl AcpEventStream {
                     &result.metadata.changed_paths,
                     self.cwd.as_deref(),
                 );
-                let mut updates = self.flush();
+                let mut updates = self.flush_answer();
                 let mut fields = ToolCallUpdateFields::new().status(status);
                 if !diffs.is_empty() {
                     fields = fields.content(diffs);
@@ -243,14 +258,14 @@ impl AcpEventStream {
             }
             #[cfg(test)]
             crate::network::AgentUiEvent::TurnRecovered { message } => {
-                let mut updates = self.flush();
+                let mut updates = self.flush_answer();
                 updates.extend(self.thought_update(message));
                 updates
             }
             crate::network::AgentUiEvent::ProviderError { message } => {
                 // The provider's own words stand in for the stop notice;
                 // `continue` retries the request, as for any provider stop.
-                let mut updates = self.flush();
+                let mut updates = self.flush_answer();
                 self.provider_error_sent = true;
                 updates.push(SessionUpdate::AgentMessageChunk(
                     ContentChunk::new(ContentBlock::Text(TextContent::new(message))).meta(
@@ -263,7 +278,7 @@ impl AcpEventStream {
                 updates
             }
             crate::network::AgentUiEvent::Notice { message } => {
-                let mut updates = self.flush();
+                let mut updates = self.flush_answer();
                 updates.push(SessionUpdate::AgentMessageChunk(
                     ContentChunk::new(ContentBlock::Text(TextContent::new(message))).meta(
                         rustcode_meta(serde_json::json!({
@@ -306,12 +321,25 @@ impl AcpEventStream {
                 // `thought` markers into `<think>` spans (`turn::run_round`).
                 let prose = rustcode_tool_protocol::text::strip_think_blocks(&content);
                 let trimmed_prose = prose.trim();
-                if !trimmed_prose.is_empty()
-                    && !self.streamed_prose.ends_with(&prose)
-                    && !self.streamed_prose.ends_with(trimmed_prose)
+                if trimmed_prose.is_empty()
+                    || self.streamed_prose.ends_with(&prose)
+                    || self.streamed_prose.ends_with(trimmed_prose)
                 {
-                    self.streamed_prose.push_str(&prose);
-                    updates.push(Self::text_update(prose));
+                    return updates;
+                }
+                // Only the start of the answer streamed: send the rest, not
+                // the whole answer again after its own beginning (#2629).
+                let streamed = self.answer_prose.trim_start();
+                let rest = if streamed.is_empty() {
+                    None
+                } else {
+                    prose.trim_start().strip_prefix(streamed)
+                };
+                let text = rest.map_or(prose.clone(), str::to_owned);
+                if !text.is_empty() {
+                    self.streamed_prose.push_str(&text);
+                    self.answer_prose.push_str(&text);
+                    updates.push(Self::text_update(text));
                 }
                 updates
             }
@@ -319,7 +347,7 @@ impl AcpEventStream {
             crate::network::AgentUiEvent::Compacted { stats, summary } => {
                 // The card goes between the text before the compaction and
                 // the text after it.
-                let mut updates = self.flush();
+                let mut updates = self.flush_answer();
                 updates.push(crate::acp::usage::compaction_card(
                     Some(&stats),
                     summary.as_deref(),
