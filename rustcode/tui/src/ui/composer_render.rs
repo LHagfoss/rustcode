@@ -1365,6 +1365,7 @@ fn footer_branch_and_path(state: &RenderSnapshot) -> (String, String) {
     (branch, path.to_owned())
 }
 
+#[cfg(test)]
 pub(super) fn footer_location(state: &RenderSnapshot) -> String {
     let (branch, path) = footer_branch_and_path(state);
     format!("{branch} · {path}")
