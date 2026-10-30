@@ -70,6 +70,29 @@ final class SessionFlowTests: XCTestCase {
         model.stop()
     }
 
+    /// #2652: ⌘⇧⏎ starts the message as a new chat off screen. The draft on
+    /// screen stays a fresh, empty new chat; launching twice in a row makes
+    /// two chats; a command is not launched.
+    func testLaunchingInTheBackgroundKeepsTheComposerFree() async throws {
+        let model = try await started()
+        await model.newSession()
+        let before = Set(model.sessions.map(\.id))
+        model.draft = "first task"
+        await model.launchInBackground()
+        model.draft = "second task"
+        await model.launchInBackground()
+        XCTAssertNil(model.selectedSession, "the composer stays on a new chat")
+        XCTAssertEqual(model.draft, "")
+        XCTAssertTrue(model.transcript.items.isEmpty)
+        try await until { Set(model.sessions.map(\.id)).subtracting(before).count == 2 }
+        try await until { model.runningSessions.isEmpty }
+        XCTAssertNil(model.error)
+
+        model.draft = "/compact"
+        XCTAssertFalse(model.canLaunchInBackground)
+        model.stop()
+    }
+
     /// A follow-up typed while the first answer streams queues, runs, and
     /// still leaves the chat idle.
     func testQueuedFollowUpLeavesNoSpinner() async throws {
