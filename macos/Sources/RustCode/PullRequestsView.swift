@@ -74,6 +74,78 @@ final class PullRequestsStore: ObservableObject {
     func closeDetail() {
         detail = nil
         detailError = nil
+        diffFiles = nil
+        diffError = nil
+        submission = nil
+    }
+
+    // MARK: Review drafts (#2646)
+
+    /// The open pull request's files with their diff rows, once read.
+    @Published private(set) var diffFiles: [GitFileChange]?
+    @Published private(set) var diffTruncated = false
+    @Published private(set) var diffError: PullRequestError?
+    @Published private(set) var loadingDiff = false
+    /// The review being written for the open pull request.
+    @Published var drafts: ReviewDrafts? {
+        didSet { if let drafts { try? draftStore.save(drafts) } }
+    }
+    @Published private(set) var submitting = false
+    @Published var submission: ReviewSubmission?
+
+    private let draftStore = ReviewDraftStore(directory: FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("RustCode/review-drafts", isDirectory: true))
+
+    /// The drafts of `detail`'s pull request, from disk.
+    func loadDrafts(for detail: PullRequestDetail) {
+        guard let repository = ReviewDrafts.repository(of: detail.pull.url) else { return }
+        drafts = draftStore.load(repository: repository, number: detail.pull.number)
+    }
+
+    func loadDiff(_ connection: ACPConnection?) async {
+        guard diffFiles == nil, !loadingDiff, let connection, let folder, let number = detail?.pull.number else { return }
+        loadingDiff = true
+        defer { loadingDiff = false }
+        do {
+            let result = try await connection.request(
+                ACPMethod.pullDiff, params: ACPRequests.pullView(cwd: folder, number: number), timeout: .seconds(40))
+            if let error = result["error"], let code = error["code"]?.stringValue {
+                diffError = PullRequestError(code: code, message: error["message"]?.stringValue ?? "")
+                return
+            }
+            diffFiles = UnifiedDiff.parse(result["diff"]?.stringValue ?? "")
+            diffTruncated = result["truncated"]?.boolValue ?? false
+        } catch {
+            diffError = PullRequestError(code: "failed", message: "\(error)")
+        }
+    }
+
+    /// Post the drafts as one review at the pull request's current commit.
+    /// Posted, they are gone; refused, they stay; with no answer, they stay
+    /// and say the review may have been posted.
+    func submit(_ connection: ACPConnection?) async {
+        guard let connection, let folder, var drafts, let head = detail?.pull.headSHA, !submitting else { return }
+        submitting = true
+        defer { submitting = false }
+        let outcome: ReviewSubmission
+        do {
+            let result = try await connection.request(
+                ACPMethod.pullReview, params: drafts.request(cwd: folder, head: head), timeout: .seconds(60))
+            outcome = ReviewSubmission(result: result)
+        } catch {
+            outcome = .uncertain("\(error)")
+        }
+        switch outcome {
+        case .posted:
+            drafts = ReviewDrafts(repository: drafts.repository, number: drafts.number)
+        case .uncertain:
+            drafts.uncertainSince = Date()
+        case .failed:
+            break
+        }
+        self.drafts = drafts
+        submission = outcome
     }
 }
 
@@ -102,8 +174,10 @@ private struct PullRequestsPanel: View {
     var body: some View {
         Group {
             if let detail = store.detail {
-                PullRequestDetailView(detail: detail, back: store.closeDetail) {
+                PullRequestDetailView(model: model, store: store, detail: detail, back: store.closeDetail) {
                     askInNewThread(detail.pull)
+                } askAboutLine: { path, line in
+                    askInNewThread(detail.pull, about: (path, line))
                 }
             } else {
                 list
@@ -220,11 +294,16 @@ private struct PullRequestsPanel: View {
     }
 
     /// A new thread in the project, its message written but not sent.
-    private func askInNewThread(_ pull: PullRequest) {
+    private func askInNewThread(_ pull: PullRequest, about line: (path: String, line: DiffLine)? = nil) {
         close()
+        var text = pull.threadDraft
+        if let line {
+            let number = line.line.number.map(String.init) ?? "?"
+            text += "\nAbout \(line.path) line \(number):\n```\n\(line.line.text)\n```\n"
+        }
         Task {
             await model.newSession(in: model.chatProject)
-            model.draft = pull.threadDraft
+            model.draft = text
         }
     }
 }
@@ -297,11 +376,17 @@ private struct Badge: View {
 }
 
 private struct PullRequestDetailView: View {
+    @ObservedObject var model: DesktopModel
+    @ObservedObject var store: PullRequestsStore
     let detail: PullRequestDetail
     let back: () -> Void
     let askInNewThread: () -> Void
+    let askAboutLine: (String, DiffLine) -> Void
+    @State private var openFiles: Set<String> = []
+    @State private var confirmsSubmit = false
 
     private var pull: PullRequest { detail.pull }
+    private var canReview: Bool { model.canReviewPullRequests && store.drafts != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -320,21 +405,7 @@ private struct PullRequestDetailView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            PullStateIcon(pull: pull)
-                            Text(pull.title).font(.title3.weight(.semibold)).textSelection(.enabled)
-                        }
-                        Text("#\(String(pull.number)) by \(pull.author) · \(pull.headRef) → \(pull.baseRef)")
-                            .font(.callout).foregroundStyle(.secondary)
-                        HStack(spacing: 6) {
-                            Text("Commit \(pull.shortSHA)").font(.caption.monospaced())
-                            Button { Clipboard.copy(pull.headSHA) } label: { Image(systemName: "doc.on.doc") }
-                                .buttonStyle(.borderless).help("Copy the full commit")
-                            if let review = pull.reviewLabel { Badge(text: review, color: .secondary) }
-                        }
-                        .foregroundStyle(.secondary)
-                    }
+                    header
                     section("Description") {
                         if detail.body.isEmpty {
                             Text("No description.").foregroundStyle(.secondary)
@@ -342,55 +413,223 @@ private struct PullRequestDetailView: View {
                             MarkdownText(text: detail.body)
                         }
                     }
-                    if !detail.checks.isEmpty {
-                        section("Checks") {
-                            ForEach(detail.checks) { check in
-                                HStack(spacing: 8) {
-                                    Image(systemName: Self.icon(check.status)).foregroundStyle(Self.color(check.status))
-                                    Text(check.name)
-                                    Spacer()
-                                    if let url = check.url {
-                                        Button("Details") { NSWorkspace.shared.open(url) }.buttonStyle(.link)
-                                    }
-                                }
-                                .font(.callout)
-                            }
-                        }
-                    }
-                    section("Files (\(detail.files.count))") {
-                        ForEach(detail.files) { file in
-                            HStack {
-                                Text(file.path).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
-                                Spacer()
-                                Text("+\(file.additions)").foregroundStyle(.green)
-                                Text("−\(file.deletions)").foregroundStyle(.red)
-                            }
-                            .font(.caption.monospacedDigit())
-                        }
-                    }
-                    if !detail.activity.isEmpty {
-                        section("Activity") {
-                            ForEach(detail.activity) { item in
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack(spacing: 6) {
-                                        Text(item.author).font(.callout.weight(.medium))
-                                        Text(item.kind.replacingOccurrences(of: "_", with: " ")).foregroundStyle(.secondary)
-                                        Spacer()
-                                        if let at = item.at {
-                                            Text(at, format: .relative(presentation: .named)).foregroundStyle(.tertiary)
-                                        }
-                                    }
-                                    .font(.caption)
-                                    if !item.body.isEmpty {
-                                        MarkdownText(text: item.body)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    if !detail.checks.isEmpty { checks }
+                    files
+                    if canReview { review }
+                    if !detail.activity.isEmpty { activity }
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .onAppear { if model.canReviewPullRequests { store.loadDrafts(for: detail) } }
+        .onChange(of: model.pullFileToOpen) { _, path in
+            guard let path else { return }
+            model.pullFileToOpen = nil
+            openFiles.insert(path)
+            Task { await store.loadDiff(model.engineConnection) }
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                PullStateIcon(pull: pull)
+                Text(pull.title).font(.title3.weight(.semibold)).textSelection(.enabled)
+            }
+            Text("#\(String(pull.number)) by \(pull.author) · \(pull.headRef) → \(pull.baseRef)")
+                .font(.callout).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text("Commit \(pull.shortSHA)").font(.caption.monospaced())
+                Button { Clipboard.copy(pull.headSHA) } label: { Image(systemName: "doc.on.doc") }
+                    .buttonStyle(.borderless).help("Copy the full commit")
+                if let review = pull.reviewLabel { Badge(text: review, color: .secondary) }
+            }
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: Review
+
+    /// The review being written: drafts stay on this Mac until Submit.
+    @ViewBuilder
+    private var review: some View {
+        if let drafts = store.drafts {
+            section("Your review (not posted)") {
+                if let since = drafts.uncertainSince {
+                    Callout(color: .orange, systemImage: "questionmark.circle") {
+                        Text("A submission \(since.formatted(.relative(presentation: .named))) got no answer and may have been posted. Check the pull request before submitting again.")
+                        HStack {
+                            if let url = pull.url { Button("Open on GitHub") { NSWorkspace.shared.open(url) } }
+                            Button("It Was Not Posted") { store.drafts?.uncertainSince = nil }
+                        }
+                    }
+                }
+                switch store.submission {
+                case .posted(let url):
+                    Callout(color: .green, systemImage: "checkmark.circle") {
+                        Text("Review posted.")
+                        if let url { Button("Open") { NSWorkspace.shared.open(url) }.buttonStyle(.link) }
+                    }
+                case .failed(let message):
+                    Callout(color: .red, systemImage: "xmark.octagon") {
+                        Text("Not posted: \(message). Your drafts are kept.").textSelection(.enabled)
+                    }
+                default: EmptyView()
+                }
+                let stale = drafts.stale(head: pull.headSHA)
+                if !stale.isEmpty {
+                    Callout(color: .orange, systemImage: "exclamationmark.triangle") {
+                        Text("\(stale.count) comment(s) were written at an earlier commit. The pull request has changed since, so their lines may have moved.")
+                    }
+                }
+                if drafts.comments.isEmpty {
+                    Text("Open a file below and click a line to draft a comment on it.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(drafts.comments) { comment in
+                        DraftCommentRow(comment: comment, isStale: comment.commit != pull.headSHA) { body in
+                            if let index = store.drafts?.comments.firstIndex(where: { $0.id == comment.id }) {
+                                store.drafts?.comments[index].body = body
+                            }
+                        } delete: {
+                            store.drafts?.comments.removeAll { $0.id == comment.id }
+                        }
+                    }
+                }
+                TextField("Summary (optional for comments)", text: Binding(
+                    get: { store.drafts?.summary ?? "" }, set: { store.drafts?.summary = $0 }), axis: .vertical)
+                    .lineLimit(2...6)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Picker("Event", selection: Binding(get: { store.drafts?.event ?? .comment },
+                                                       set: { store.drafts?.event = $0 })) {
+                        ForEach(ReviewDrafts.Event.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 320)
+                    Spacer()
+                    if store.submitting { ProgressView().controlSize(.small) }
+                    Button("Submit Review…") { confirmsSubmit = true }
+                        .disabled(drafts.problem != nil || store.submitting || drafts.uncertainSince != nil)
+                        .help(drafts.uncertainSince != nil ? "Check whether the last submission was posted first"
+                              : drafts.problem ?? "Post this review to the pull request")
+                }
+                .confirmationDialog(submitTitle(drafts), isPresented: $confirmsSubmit) {
+                    Button("Post Review") { Task { await store.submit(model.engineConnection) } }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text(submitMessage(drafts))
+                }
+            }
+        }
+    }
+
+    private func submitTitle(_ drafts: ReviewDrafts) -> String {
+        "Post a review to #\(String(pull.number))?"
+    }
+
+    private func submitMessage(_ drafts: ReviewDrafts) -> String {
+        var text = "\(drafts.event.label) with \(drafts.comments.count) line comment(s), at commit \(pull.shortSHA). Everyone with access to the pull request will see it."
+        let stale = drafts.stale(head: pull.headSHA).count
+        if stale > 0 { text += " \(stale) comment(s) were written at an earlier commit." }
+        return text
+    }
+
+    // MARK: Sections
+
+    private var checks: some View {
+        section("Checks") {
+            ForEach(detail.checks) { check in
+                HStack(spacing: 8) {
+                    Image(systemName: Self.icon(check.status)).foregroundStyle(Self.color(check.status))
+                    Text(check.name)
+                    Spacer()
+                    if let url = check.url {
+                        Button("Details") { NSWorkspace.shared.open(url) }.buttonStyle(.link)
+                    }
+                }
+                .font(.callout)
+            }
+        }
+    }
+
+    private var files: some View {
+        section("Files (\(detail.files.count))") {
+            if store.diffTruncated {
+                Text("The diff is too long to show whole; later files may be missing.")
+                    .font(.caption).foregroundStyle(Color.attention)
+            }
+            if let error = store.diffError {
+                Text("\(error.title): \(error.message)").font(.caption).foregroundStyle(Color.attention)
+            }
+            ForEach(detail.files) { file in
+                VStack(alignment: .leading, spacing: 4) {
+                    Button {
+                        if openFiles.contains(file.path) { openFiles.remove(file.path) } else {
+                            openFiles.insert(file.path)
+                            Task { await store.loadDiff(model.engineConnection) }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: openFiles.contains(file.path) ? "chevron.down" : "chevron.right")
+                                .font(.caption2).frame(width: 10)
+                            Text(file.path).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            let count = store.drafts?.comments.filter { $0.path == file.path }.count ?? 0
+                            if count > 0 { Badge(text: "\(count) draft\(count == 1 ? "" : "s")", color: .orange) }
+                            Text("+\(file.additions)").foregroundStyle(.green)
+                            Text("−\(file.deletions)").foregroundStyle(.red)
+                        }
+                        .font(.caption.monospacedDigit())
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    if openFiles.contains(file.path) { fileDiff(file.path) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func fileDiff(_ path: String) -> some View {
+        if let files = store.diffFiles {
+            if let change = files.first(where: { $0.path == path }) {
+                PullFileDiff(change: change, comments: store.drafts?.comments.filter { $0.path == path } ?? [],
+                             canComment: canReview) { line, body in
+                    if let comment = ReviewDrafts.Comment(path: path, line: line, body: body, commit: pull.headSHA) {
+                        store.drafts?.comments.append(comment)
+                    }
+                } ask: { line in
+                    askAboutLine(path, line)
+                }
+            } else {
+                Text("No diff for this file (binary, renamed, or past the shown part).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } else if store.loadingDiff {
+            ProgressView().controlSize(.small)
+        }
+    }
+
+    private var activity: some View {
+        section("Activity") {
+            ForEach(detail.activity) { item in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(item.author).font(.callout.weight(.medium))
+                        Text(item.kind.replacingOccurrences(of: "_", with: " ")).foregroundStyle(.secondary)
+                        Spacer()
+                        if let at = item.at {
+                            Text(at, format: .relative(presentation: .named)).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .font(.caption)
+                    if !item.body.isEmpty {
+                        MarkdownText(text: item.body)
+                    }
+                }
             }
         }
     }
@@ -418,5 +657,141 @@ private struct PullRequestDetailView: View {
         case "skipped": .secondary
         default: .orange
         }
+    }
+}
+
+/// A note in the review section, tinted by what it says.
+private struct Callout<Content: View>: View {
+    let color: Color
+    let systemImage: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage).foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 6) { content }
+                .font(.callout)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.1), in: .rect(cornerRadius: 8))
+    }
+}
+
+/// A drafted line comment: its line, its text to edit, and Delete.
+private struct DraftCommentRow: View {
+    let comment: ReviewDrafts.Comment
+    let isStale: Bool
+    let edit: (String) -> Void
+    let delete: () -> Void
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("\(comment.path):\(String(comment.line))").font(.caption.monospaced())
+                if comment.side == .left { Badge(text: "removed line", color: .red) }
+                if isStale { Badge(text: "earlier commit", color: .orange) }
+                Spacer()
+                Button(role: .destructive, action: delete) { Image(systemName: "trash") }
+                    .buttonStyle(.borderless).help("Delete this draft")
+            }
+            Text(comment.lineText).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+            TextField("Comment", text: $text, axis: .vertical)
+                .lineLimit(1...6)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: text) { _, new in if new != comment.body { edit(new) } }
+        }
+        .padding(8)
+        .background(.fill.quaternary, in: .rect(cornerRadius: 8))
+        .onAppear { text = comment.body }
+    }
+}
+
+/// One file's diff, a line at a time: a click on a line opens a draft
+/// comment for it; drafts show under their lines.
+private struct PullFileDiff: View {
+    let change: GitFileChange
+    let comments: [ReviewDrafts.Comment]
+    let canComment: Bool
+    let add: (DiffLine, String) -> Void
+    let ask: (DiffLine) -> Void
+    @State private var commenting: Int?
+    @State private var text = ""
+    @State private var showsAll = false
+
+    private static let shownRows = 400
+
+    var body: some View {
+        let rows = Array(change.rows.enumerated())
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(showsAll ? rows : Array(rows.prefix(Self.shownRows)), id: \.offset) { index, row in
+                switch row {
+                case .gap:
+                    Text("⋯").font(.caption.monospaced()).foregroundStyle(.tertiary).padding(.vertical, 2)
+                case .line(let line):
+                    lineRow(index, line)
+                    ForEach(comments.filter { matches($0, line) }) { comment in
+                        Text(comment.body).font(.caption).padding(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.orange.opacity(0.12), in: .rect(cornerRadius: 6))
+                            .padding(.leading, 40).padding(.vertical, 2)
+                    }
+                    if commenting == index { composer(line) }
+                }
+            }
+            if rows.count > Self.shownRows, !showsAll {
+                Button("Show all \(rows.count) lines") { showsAll = true }.buttonStyle(.link).font(.caption)
+            }
+        }
+        .padding(6)
+        .background(.fill.quinary, in: .rect(cornerRadius: 8))
+    }
+
+    private func matches(_ comment: ReviewDrafts.Comment, _ line: DiffLine) -> Bool {
+        comment.side == .left ? (line.kind == .removed && comment.line == line.oldNumber)
+            : (line.kind != .removed && comment.line == line.newNumber)
+    }
+
+    private func lineRow(_ index: Int, _ line: DiffLine) -> some View {
+        Button {
+            guard canComment else { return }
+            text = ""
+            commenting = commenting == index ? nil : index
+        } label: {
+            HStack(alignment: .top, spacing: 6) {
+                Text(line.number.map(String.init) ?? "").frame(width: 34, alignment: .trailing).foregroundStyle(.tertiary)
+                Text(line.kind == .added ? "+" : line.kind == .removed ? "−" : " ").foregroundStyle(.secondary)
+                Text(line.text).frame(maxWidth: .infinity, alignment: .leading).lineLimit(nil)
+            }
+            .font(.caption.monospaced())
+            .padding(.vertical, 1)
+            .background(line.kind == .added ? Color.green.opacity(0.1) : line.kind == .removed ? Color.red.opacity(0.1) : .clear)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(canComment ? "Draft a comment on this line" : "")
+    }
+
+    private func composer(_ line: DiffLine) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("Comment on this line (kept as a draft)", text: $text, axis: .vertical)
+                .lineLimit(2...6)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Ask in New Thread") { ask(line) }
+                    .help("Start a thread about this line; nothing is posted")
+                Spacer()
+                Button("Cancel") { commenting = nil }
+                Button("Add Draft") {
+                    add(line, text)
+                    commenting = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(8)
+        .padding(.leading, 34)
     }
 }

@@ -57,6 +57,9 @@ public struct AgentInfo: Equatable, Sendable {
     public var sessionMove: Bool
     /// The engine reads a project's pull requests (`_rustcode/pulls`, #2645).
     public var pullRequests: Bool
+    /// The engine also reads a pull request's diff and posts a review the
+    /// user submits (`_rustcode/pulls/diff`, `/review`, #2646).
+    public var pullRequestReviews: Bool
 
     public init(initializeResult result: JSONValue) throws {
         guard let version = result["protocolVersion"]?.intValue else {
@@ -78,6 +81,7 @@ public struct AgentInfo: Equatable, Sendable {
         rewind = capabilities?["_meta"]?["rustcode"]?["rewind"]?.intValue != nil
         sessionMove = capabilities?["_meta"]?["rustcode"]?["sessionMove"]?.intValue != nil
         pullRequests = capabilities?["_meta"]?["rustcode"]?["pullRequests"]?.intValue != nil
+        pullRequestReviews = (capabilities?["_meta"]?["rustcode"]?["pullRequests"]?.intValue ?? 0) >= 2
     }
 }
 

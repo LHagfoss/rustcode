@@ -173,15 +173,40 @@ pub async fn view(cwd: &Path, number: u64) -> Result<PullDetail, PullError> {
 }
 
 async fn gh_json(cwd: &Path, args: &[&str]) -> Result<Value, PullError> {
+    let output = gh(cwd, args, None).await?;
+    serde_json::from_slice(&output).map_err(|error| PullError {
+        code: "failed",
+        message: format!("gh answered with unreadable JSON: {error}"),
+    })
+}
+
+/// Run `gh` in `cwd`, `stdin` written to it when given, and return what it
+/// printed, or its error.
+async fn gh(cwd: &Path, args: &[&str], stdin: Option<Vec<u8>>) -> Result<Vec<u8>, PullError> {
+    use tokio::io::AsyncWriteExt;
     let mut command = tokio::process::Command::new(crate::platform::resolve_bin("gh"));
     command
         .args(args)
         .current_dir(cwd)
         .env("GH_PROMPT_DISABLED", "1")
         .env("NO_COLOR", "1")
-        .stdin(std::process::Stdio::null())
+        .stdin(if stdin.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let output = match tokio::time::timeout(TIMEOUT, command.output()).await {
+    let run = async {
+        let mut child = command.spawn()?;
+        if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
+            pipe.write_all(&input).await?;
+            drop(pipe);
+        }
+        child.wait_with_output().await
+    };
+    let output = match tokio::time::timeout(TIMEOUT, run).await {
         Err(_) => {
             return Err(PullError {
                 code: "timed_out",
@@ -206,11 +231,147 @@ async fn gh_json(cwd: &Path, args: &[&str]) -> Result<Value, PullError> {
         Ok(Ok(output)) => output,
     };
     if !output.status.success() {
-        return Err(classify(&String::from_utf8_lossy(&output.stderr)));
+        // `gh api` prints the provider's answer on stdout and a summary on
+        // stderr; both say why.
+        let mut error = classify(&String::from_utf8_lossy(&output.stderr));
+        let body = String::from_utf8_lossy(&output.stdout);
+        if let Some(message) = serde_json::from_str::<Value>(&body).ok().and_then(|value| {
+            value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        }) {
+            error.message = format!("{} ({message})", error.message);
+        }
+        return Err(error);
     }
-    serde_json::from_slice(&output.stdout).map_err(|error| PullError {
-        code: "failed",
-        message: format!("gh answered with unreadable JSON: {error}"),
+    Ok(output.stdout)
+}
+
+/// The most diff text one answer carries; a larger diff is cut there.
+pub const MAX_DIFF_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullDiff {
+    /// The pull request's unified diff, as `gh pr diff` prints it.
+    pub diff: String,
+    /// The diff was longer than [`MAX_DIFF_BYTES`] and was cut.
+    pub truncated: bool,
+}
+
+/// The pull request's diff against its base.
+pub async fn diff(cwd: &Path, number: u64) -> Result<PullDiff, PullError> {
+    let number = number.to_string();
+    let output = gh(cwd, &["pr", "diff", &number], None).await?;
+    let mut diff = String::from_utf8_lossy(&output).into_owned();
+    let truncated = diff.len() > MAX_DIFF_BYTES;
+    if truncated {
+        let mut end = MAX_DIFF_BYTES;
+        while !diff.is_char_boundary(end) {
+            end -= 1;
+        }
+        diff.truncate(end);
+    }
+    Ok(PullDiff { diff, truncated })
+}
+
+/// One line comment of a review: `line` in the file on `side` (`RIGHT`
+/// for the pull request's version, `LEFT` for the base).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, Serialize)]
+pub struct ReviewComment {
+    pub path: String,
+    pub line: u64,
+    pub side: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PostedReview {
+    pub url: Option<String>,
+}
+
+/// The provider's review request: one review at `commit_id`, with its
+/// comments, so a review is posted whole or not at all.
+pub fn review_payload(
+    commit_id: &str,
+    event: &str,
+    body: &str,
+    comments: &[ReviewComment],
+) -> Result<Value, PullError> {
+    let event = match event {
+        "APPROVE" | "REQUEST_CHANGES" | "COMMENT" => event,
+        other => {
+            return Err(PullError {
+                code: "failed",
+                message: format!("unknown review event {other}"),
+            });
+        }
+    };
+    if commit_id.is_empty() {
+        return Err(PullError {
+            code: "failed",
+            message: "the review names no commit".to_owned(),
+        });
+    }
+    for comment in comments {
+        if !matches!(comment.side.as_str(), "LEFT" | "RIGHT") || comment.line == 0 {
+            return Err(PullError {
+                code: "failed",
+                message: format!("{} has no line to comment on", comment.path),
+            });
+        }
+    }
+    Ok(serde_json::json!({
+        "commit_id": commit_id,
+        "event": event,
+        "body": body,
+        "comments": comments,
+    }))
+}
+
+/// Post one review. A review the provider refuses comes back as `failed`
+/// with its message; one whose answer never arrived as `uncertain`, which
+/// the app does not retry by itself, since it may have been posted.
+pub async fn post_review(
+    cwd: &Path,
+    repository: &str,
+    number: u64,
+    payload: &Value,
+) -> Result<PostedReview, PullError> {
+    let valid = repository.split('/').count() == 2
+        && repository
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'));
+    if !valid {
+        return Err(PullError {
+            code: "failed",
+            message: format!("{repository} is not an owner/name repository"),
+        });
+    }
+    let endpoint = format!("repos/{repository}/pulls/{number}/reviews");
+    let input = serde_json::to_vec(payload).unwrap_or_default();
+    let output = match gh(
+        cwd,
+        &["api", "--method", "POST", &endpoint, "--input", "-"],
+        Some(input),
+    )
+    .await
+    {
+        Err(error) if error.code == "timed_out" => {
+            return Err(PullError {
+                code: "uncertain",
+                message: "GitHub did not answer in time; the review may have been posted. Check the pull request before submitting again.".to_owned(),
+            });
+        }
+        other => other?,
+    };
+    let answer: Value = serde_json::from_slice(&output).unwrap_or(Value::Null);
+    Ok(PostedReview {
+        url: answer
+            .get("html_url")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -477,6 +638,40 @@ mod tests {
         assert_eq!(classify("no git remotes found").code, "not_a_repository");
         let other = classify("HTTP 502\n");
         assert_eq!((other.code, other.message.as_str()), ("failed", "HTTP 502"));
+    }
+
+    #[test]
+    fn a_review_payload_is_one_review_at_one_commit() {
+        let comments = vec![ReviewComment {
+            path: "a.rs".into(),
+            line: 12,
+            side: "RIGHT".into(),
+            body: "Why?".into(),
+        }];
+        let payload = review_payload("da4593b", "COMMENT", "Looks fine.", &comments).unwrap();
+        assert_eq!(payload["commit_id"], "da4593b");
+        assert_eq!(payload["event"], "COMMENT");
+        assert_eq!(payload["comments"][0]["line"], 12);
+        assert_eq!(payload["comments"][0]["side"], "RIGHT");
+        assert!(review_payload("da4593b", "MERGE", "", &[]).is_err());
+        assert!(review_payload("", "COMMENT", "x", &[]).is_err());
+        let mut bad = comments.clone();
+        bad[0].side = "MIDDLE".into();
+        assert!(review_payload("da4593b", "COMMENT", "", &bad).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_review_to_a_malformed_repository_is_refused_before_gh_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = post_review(dir.path(), "owner/name/extra", 1, &json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "failed");
+        assert!(
+            post_review(dir.path(), "own er/x", 1, &json!({}))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
