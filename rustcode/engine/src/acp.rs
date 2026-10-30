@@ -316,6 +316,18 @@ fn replay_history_updates_with_compaction(
                 let stats = compaction.filter(|_| Some(index) == latest_boundary);
                 updates.push(usage::compaction_card(stats, summary, None));
             }
+            // A stop the user made is stored as a system marker; it
+            // replays as the empty reply that carries the turn's "Stopped
+            // after" timing, as the assistant-role marker does.
+            "system" if crate::network::lifecycle::is_turn_cancelled_marker(&message.content) => {
+                let mut replayed = vec![SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                    ContentBlock::Text(TextContent::new(String::new())),
+                ))];
+                if let Some(turn) = &message.turn {
+                    streaming::attach_turn_timing(&mut replayed, turn);
+                }
+                updates.extend(replayed);
+            }
             "user" if !message.content.is_empty() => {
                 let mut chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(
                     message.content.clone(),
@@ -2898,6 +2910,31 @@ mod tests {
     // #2307: a replayed turn's last reply carries how long the turn took
     // and when it ended, so the Mac app shows them as it did live. A turn
     // with no end, as one still open, carries nothing.
+    #[test]
+    fn replayed_system_cancel_marker_is_a_timed_empty_reply() {
+        let turn = crate::app::TurnTiming {
+            turn_id: "t1".into(),
+            started_at: Some("2026-10-30T12:42:27Z".into()),
+            ended_at: Some("2026-10-30T12:42:37Z".into()),
+            elapsed_work_ms: Some(9_770),
+            outcome: Some(crate::app::TurnOutcome::Cancelled),
+        };
+        let mut note = crate::app::ChatMessage::new("system", "Request cancelled by user");
+        note.turn = Some(turn.clone());
+        let mut marker =
+            crate::app::ChatMessage::new("system", "[harness: turn stopped — cancelled]");
+        marker.turn = Some(turn);
+        let updates = replay_history_updates(&[note, marker], None);
+        let [SessionUpdate::AgentMessageChunk(chunk)] = updates.as_slice() else {
+            panic!("expected one empty reply, got {updates:?}");
+        };
+        assert!(matches!(&chunk.content, ContentBlock::Text(text) if text.text.is_empty()));
+        assert_eq!(
+            chunk.meta.as_ref().unwrap()["rustcode"]["turn"]["outcome"],
+            "cancelled"
+        );
+    }
+
     #[test]
     fn replayed_stop_marker_is_a_timed_empty_reply_or_its_notice() {
         let mut cancelled =
