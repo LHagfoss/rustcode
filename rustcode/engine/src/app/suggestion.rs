@@ -15,7 +15,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/change_title",
-        desc: "Rename the current session title",
+        desc: "Rename the current thread title",
     },
     CommandInfo {
         name: "/clear",
@@ -31,7 +31,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/continue",
-        desc: "Continue restored pending session work",
+        desc: "Continue restored pending thread work",
     },
     CommandInfo {
         name: "/diff",
@@ -63,7 +63,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/history",
-        desc: "Pick a previous session to resume",
+        desc: "Pick a previous thread to resume",
     },
     CommandInfo {
         name: "/memory",
@@ -75,7 +75,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/model",
-        desc: "Switch this session's model: open the picker, pick a profile, or override the model",
+        desc: "Switch this thread's model: open the picker, pick a profile, or override the model",
     },
     CommandInfo {
         name: "/login",
@@ -111,7 +111,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/fork",
-        desc: "Fork the current conversation into a new session",
+        desc: "Fork the current conversation into a new thread",
     },
     CommandInfo {
         name: "/scroll-speed",
@@ -119,11 +119,11 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/export",
-        desc: "Export this session as a zip into Downloads",
+        desc: "Export this thread as a zip into Downloads",
     },
     CommandInfo {
         name: "/archive",
-        desc: "Persist the current session",
+        desc: "Persist the current thread",
     },
     CommandInfo {
         name: "/agents",
@@ -131,11 +131,11 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/delete_chat",
-        desc: "Delete current session and start fresh",
+        desc: "Delete current thread and start fresh",
     },
     CommandInfo {
         name: "/delegate",
-        desc: "Allow subagents for the next task (on/off: whole session)",
+        desc: "Allow subagents for the next task (on/off: whole thread)",
     },
     CommandInfo {
         name: "/workspace",
@@ -183,15 +183,15 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/resume",
-        desc: "Resume most recent session",
+        desc: "Resume most recent thread",
     },
     CommandInfo {
         name: "/session",
-        desc: "Show current session ID, token budget, and active model",
+        desc: "Show current thread ID, token budget, and active model",
     },
     CommandInfo {
         name: "/remote",
-        desc: "Turn remote access on: every session is shared with paired devices (pair|status|off)",
+        desc: "Turn remote access on: every thread is shared with paired devices (pair|status|off)",
     },
     CommandInfo {
         name: "/skills",
@@ -223,7 +223,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/compact",
-        desc: "Manually compact session history to save context space",
+        desc: "Manually compact thread history to save context space",
     },
     CommandInfo {
         name: "/recap",
@@ -231,7 +231,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/summarize",
-        desc: "Summarize the current chat session now",
+        desc: "Summarize the current thread now",
     },
     CommandInfo {
         name: "/sync",
@@ -263,7 +263,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/effort",
-        desc: "Show or set this session's reasoning effort (low|medium|high|off)",
+        desc: "Show or set this thread's reasoning effort (low|medium|high|off)",
     },
     CommandInfo {
         name: "/pi",
@@ -354,7 +354,7 @@ const STATIC_ARGUMENTS: &[(&str, &[(&str, &str)])] = &[
     (
         "/delegate",
         &[
-            ("on", "Allow subagents for the whole session"),
+            ("on", "Allow subagents for the whole thread"),
             ("off", "Disable subagents"),
         ],
     ),
@@ -392,8 +392,8 @@ const STATIC_ARGUMENTS: &[(&str, &[(&str, &str)])] = &[
     (
         "/remote",
         &[
-            ("status", "Show whether this session is shared"),
-            ("off", "Stop sharing this session"),
+            ("status", "Show whether this thread is shared"),
+            ("off", "Stop sharing this thread"),
         ],
     ),
     (

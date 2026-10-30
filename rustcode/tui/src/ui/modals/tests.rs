@@ -1092,7 +1092,7 @@ fn history_picker_renders_borderless_full_width_options() {
         .map(|cell| cell.symbol())
         .collect::<String>();
 
-    assert!(rendered.contains("Resume session"));
+    assert!(rendered.contains("Resume thread"));
     assert!(rendered.contains("›"));
     assert!(rendered.contains("6 msgs"));
     assert!(rendered.contains("17:35"));

@@ -181,12 +181,12 @@ fn resume_unknown_id_exits_nonzero_on_stderr_only() {
             text(&output.stdout)
         );
         assert!(
-            stderr.contains("cannot resume session") && stderr.contains(UNKNOWN_ID),
+            stderr.contains("cannot resume thread") && stderr.contains(UNKNOWN_ID),
             "`rustcode {}` stderr should name the id it could not resume: {stderr:?}",
             args.join(" ")
         );
         assert!(
-            stderr.contains("session not found"),
+            stderr.contains("thread not found"),
             "`rustcode {}` stderr should say the session is missing: {stderr:?}",
             args.join(" ")
         );
@@ -213,7 +213,7 @@ fn resume_deleted_id_exits_nonzero_on_stderr_only() {
         text(&output.stdout)
     );
     assert!(
-        stderr.contains("cannot resume session") && stderr.contains(RECENT_ID),
+        stderr.contains("cannot resume thread") && stderr.contains(RECENT_ID),
         "stderr should name the deleted id: {stderr:?}"
     );
     assert!(
@@ -240,7 +240,7 @@ fn bare_resume_still_adopts_the_most_recent_session() {
     let output = sandbox.run(&["--resume"]);
     let stderr = text(&output.stderr);
     assert!(
-        !stderr.contains("cannot resume session"),
+        !stderr.contains("cannot resume thread"),
         "a bare --resume must not fail as an explicit id: {stderr:?}"
     );
     assert_eq!(

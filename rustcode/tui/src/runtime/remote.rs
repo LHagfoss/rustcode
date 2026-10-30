@@ -312,7 +312,7 @@ impl RemoteBridge {
         #[cfg(unix)]
         if let Some(directory) = self.connector.gateway_directory() {
             return match rustcode::remote_gateway::service::disable(&directory).await {
-                Ok(_) => "Remote access is off for every session on this machine. Running turns are not affected.\n\
+                Ok(_) => "Remote access is off for every thread on this machine. Running turns are not affected.\n\
                           Paired devices stay paired; /remote turns it back on."
                     .to_owned(),
                 Err(error) => {
@@ -321,10 +321,10 @@ impl RemoteBridge {
             };
         }
         if was_shared {
-            "Remote sharing is off. This session is private again; a running turn is not affected."
+            "Remote sharing is off. This thread is private again; a running turn is not affected."
                 .to_owned()
         } else {
-            "This session is not shared.".to_owned()
+            "This thread is not shared.".to_owned()
         }
     }
 
@@ -409,25 +409,25 @@ impl RemoteBridge {
             Err(error @ OwnerLinkError::NoGateway) => {
                 return format!(
                     "Remote sharing is not available: {error}.\n\
-                     This session stays private. The remote gateway runs on macOS and Linux."
+                     This thread stays private. The remote gateway runs on macOS and Linux."
                 );
             }
             Err(error) => {
                 return format!(
-                    "Remote sharing could not start: {error}.\nThis session stays private."
+                    "Remote sharing could not start: {error}.\nThis thread stays private."
                 );
             }
         };
         let (publisher, register) = {
             let state = app_state.lock().await;
             if state.active_session_id != registration.session_id {
-                return "Remote sharing could not start: the session changed. Run /remote again."
+                return "Remote sharing could not start: the thread changed. Run /remote again."
                     .to_owned();
             }
             SessionPublisher::register(&state, registration, self.turn_stream_open)
         };
         if link.outbound.try_send(register).is_err() {
-            return "Remote sharing could not start: the gateway link closed.\nThis session stays private."
+            return "Remote sharing could not start: the gateway link closed.\nThis thread stays private."
                 .to_owned();
         }
         self.share = Some(Share {
@@ -533,7 +533,7 @@ impl RemoteBridge {
                 state.show_command_panel(
                     PANEL_TITLE,
                     format!(
-                        "Device '{device_name}' asks to share this session.\nPress y to share it, n to decline."
+                        "Device '{device_name}' asks to share this thread.\nPress y to share it, n to decline."
                     ),
                 );
                 *needs_redraw = true;
@@ -556,7 +556,7 @@ impl RemoteBridge {
             } else {
                 app_state.lock().await.show_command_panel(
                     PANEL_TITLE,
-                    "Share request declined. This session stays private.",
+                    "Share request declined. This thread stays private.",
                 );
             }
             *needs_redraw = true;
@@ -597,7 +597,7 @@ impl RemoteBridge {
     /// gateway's own detail.
     fn session_status(&self) -> String {
         let Some(share) = self.share.as_ref() else {
-            return "This session is private. Run /remote to turn remote access on for every session."
+            return "This thread is private. Run /remote to turn remote access on for every thread."
                 .to_owned();
         };
         let registration = share.publisher.registration();
@@ -611,7 +611,7 @@ impl RemoteBridge {
         let gateway = match &share.gateway {
             None => "Gateway  connecting…".to_owned(),
             Some(gateway) if !gateway.connected => {
-                "Gateway  unreachable; looking for it again. Devices cannot see this session meanwhile."
+                "Gateway  unreachable; looking for it again. Devices cannot see this thread meanwhile."
                     .to_owned()
             }
             Some(gateway) => format!(
@@ -629,12 +629,12 @@ impl RemoteBridge {
             ),
         };
         format!(
-            "This session is shared with the remote gateway.\n\
-             Session  {}\n\
+            "This thread is shared with the remote gateway.\n\
+             Thread  {}\n\
              Epoch  {}\n\
              {gateway}\n\
              Published  {} updates{}\n\
-             Run /remote off to turn remote access off for every session.",
+             Run /remote off to turn remote access off for every thread.",
             registration.session_id,
             registration.registration_epoch,
             share.publisher.sequence(),
@@ -747,7 +747,7 @@ impl RemoteBridge {
                         return;
                     }
                     closed = Some(
-                        "Remote sharing stopped: the session changed. Run /remote to share this one."
+                        "Remote sharing stopped: the thread changed. Run /remote to share this one."
                             .to_owned(),
                     );
                 }
@@ -780,7 +780,7 @@ impl RemoteBridge {
             self.stopped = Some(notice.clone());
             let mut state = app_state.lock().await;
             // The panel may still say that sharing is starting.
-            state.update_command_panel(PANEL_TITLE, format!("{notice}\nThis session is private."));
+            state.update_command_panel(PANEL_TITLE, format!("{notice}\nThis thread is private."));
             state.set_transient_notice(notice);
             *needs_redraw = true;
         } else if self.show_pairing_details(app_state).await {
@@ -948,7 +948,7 @@ fn reject_stale(request: RemoteRequest, reply: OwnerReply) {
         request.request_id,
         RemoteError::new(
             RemoteErrorCode::StaleSession,
-            "the session is no longer shared under this registration",
+            "the thread is no longer shared under this registration",
         ),
     );
     reply.send(if request.operation.is_mutation() {
@@ -1337,7 +1337,7 @@ mod tests {
             state.command_panel = Some(rustcode::controller::CommandPanel {
                 title: "Remote",
                 content: format!(
-                    "{}\n\nThis session is shared with the remote gateway.\nSession  test-session\nAttached devices  none",
+                    "{}\n\nThis thread is shared with the remote gateway.\nThread  test-session\nAttached devices  none",
                     format_offer(&offer, QrStyle::Panel)
                 ),
             });
@@ -1403,7 +1403,7 @@ mod tests {
 
         enter(&mut runtime, "/remote status").await;
         runtime.run_remote_iteration().await;
-        assert!(panel(&runtime).await.contains("This session is private"));
+        assert!(panel(&runtime).await.contains("This thread is private"));
 
         enter(&mut runtime, "/remote off").await;
         runtime.run_remote_iteration().await;
@@ -1473,7 +1473,7 @@ mod tests {
         // `/remote` answers at once; the gateway is reached from its own task.
         enter(&mut runtime, "/remote").await;
         runtime.run_remote_iteration().await;
-        assert!(panel(&runtime).await.contains("This session is shared"));
+        assert!(panel(&runtime).await.contains("This thread is shared"));
         let report = panel_until(&mut runtime, |report| report.contains("code:")).await;
         assert!(report.contains(&format!("Gateway  {address}")), "{report}");
         assert!(report.contains(&format!("address:  {address}")), "{report}");
@@ -1514,7 +1514,7 @@ mod tests {
             .await
             .unwrap()
             .expect("gateway is running");
-        let sessions = status.sessions.expect("the gateway routes sessions");
+        let sessions = status.sessions.expect("the gateway routes threads");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, session_id);
 
@@ -1525,7 +1525,7 @@ mod tests {
             report.contains("code:") && !report.contains(&offer_code)
         })
         .await;
-        assert!(again.contains("This session is shared"));
+        assert!(again.contains("This thread is shared"));
         assert_eq!(runtime.remote.registration().cloned(), registration);
         assert_eq!(
             lifecycle
@@ -1567,7 +1567,7 @@ mod tests {
         runtime
             .handle_event(AppEvent::NewSession)
             .await
-            .expect("new session");
+            .expect("new thread");
         let new_session_id = runtime.app_state().await.active_session_id.clone();
         assert_ne!(new_session_id, session_id);
         tokio::time::timeout(WAIT, async {
@@ -1581,7 +1581,7 @@ mod tests {
             }
         })
         .await
-        .expect("the new session is shared by itself");
+        .expect("the new thread is shared by itself");
         assert!(!panel(&runtime).await.contains("code:"));
 
         // `/remote off` switches remote access off for the machine: the
@@ -1591,7 +1591,7 @@ mod tests {
         assert!(
             panel(&runtime)
                 .await
-                .contains("Remote access is off for every session")
+                .contains("Remote access is off for every thread")
         );
         assert!(!rustcode::remote_gateway::service::enabled(&dir));
         tokio::time::timeout(WAIT, async {
@@ -1614,7 +1614,7 @@ mod tests {
         enter(&mut runtime, "/remote").await;
         let stopped = panel_until(&mut runtime, |report| report.contains("stopped")).await;
         assert!(stopped.contains("rustcode remote serve"), "{stopped}");
-        assert!(stopped.contains("This session is private"), "{stopped}");
+        assert!(stopped.contains("This thread is private"), "{stopped}");
         assert!(runtime.remote.registration().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1630,7 +1630,7 @@ mod tests {
         runtime.run_remote_iteration().await;
         assert!(gateway.accept().is_none(), "no second link is opened");
         assert_eq!(runtime.remote.registration(), Some(&registration));
-        assert!(panel(&runtime).await.contains("This session is shared"));
+        assert!(panel(&runtime).await.contains("This thread is shared"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2154,12 +2154,12 @@ mod tests {
         let (registration, mut link, _) = share(&mut runtime, &gateway).await;
 
         let queued = link
-            .try_request(request(&registration, submit("for the old session")))
+            .try_request(request(&registration, submit("for the old thread")))
             .expect("queued");
         runtime
             .handle_event(AppEvent::NewSession)
             .await
-            .expect("the terminal starts a new session");
+            .expect("the terminal starts a new thread");
         let new_session = runtime.app_state().await.active_session_id.clone();
         assert_ne!(new_session, registration.session_id);
         runtime.run_remote_iteration().await;
@@ -2190,7 +2190,7 @@ mod tests {
         assert!(gateway.accept().is_none());
         enter(&mut runtime, "/remote status").await;
         runtime.run_remote_iteration().await;
-        assert!(panel(&runtime).await.contains("This session is private"));
+        assert!(panel(&runtime).await.contains("This thread is private"));
 
         let (again, _link, snapshot) = share(&mut runtime, &gateway).await;
         assert_eq!(again.session_id, new_session);

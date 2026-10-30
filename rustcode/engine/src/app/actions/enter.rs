@@ -231,7 +231,7 @@ async fn handle_enter_inner(
                     s.delegation_sticky = true;
                     s.show_command_panel(
                         "Subagents",
-                        "Subagents enabled for this session. Use /delegate off to disable.",
+                        "Subagents enabled for this thread. Use /delegate off to disable.",
                     );
                 } else {
                     s.delegation_sticky = false;
@@ -550,8 +550,8 @@ async fn handle_enter_inner(
                 if let Some(value) = value {
                     s.set_active_reasoning_effort(value.clone());
                     let label = match value {
-                        Some(ref e) => format!("Reasoning effort set to '{e}' for this session."),
-                        None => "Reasoning effort cleared (default) for this session.".to_string(),
+                        Some(ref e) => format!("Reasoning effort set to '{e}' for this thread."),
+                        None => "Reasoning effort cleared (default) for this thread.".to_string(),
                     };
                     s.set_transient_notice(label);
                 }
@@ -652,7 +652,7 @@ async fn handle_enter_inner(
                         &error,
                         crate::app::session_controller::SessionError::NoSessionToResume
                     ) {
-                        s.set_transient_notice("No previous session to resume");
+                        s.set_transient_notice("No previous thread to resume");
                     } else {
                         s.history
                             .push(ChatMessage::new("system", error.to_string()));
@@ -662,16 +662,16 @@ async fn handle_enter_inner(
             "/continue" => {
                 let queued = crate::app::actions::session::queue_restored_segment(&mut s);
                 let message = if queued {
-                    "Queued the pending session work."
+                    "Queued the pending thread work."
                 } else {
-                    "No pending session work is available to continue."
+                    "No pending thread work is available to continue."
                 };
                 s.set_transient_notice(message);
             }
             "/history" => {
                 let (sessions, truncated) = build_session_list_with_truncation(&s);
                 if sessions.is_empty() {
-                    s.show_command_panel("History", "No saved sessions found.");
+                    s.show_command_panel("History", "No saved threads found.");
                 } else {
                     s.history_picker_sessions = sessions;
                     s.history_picker_index = 0;
@@ -882,7 +882,7 @@ async fn handle_enter_inner(
                         s.show_command_panel(
                             "Model",
                             format!(
-                                "Switched this session to model profile '{name}'. New sessions \
+                                "Switched this thread to model profile '{name}'. New threads \
                                  keep the default model."
                             ),
                         );
@@ -1117,7 +1117,7 @@ async fn handle_enter_inner(
                 });
                 match crate::config::export_session(&session_id, destination.as_deref()) {
                     Ok(path) => {
-                        s.set_transient_notice(format!("Exported session to {}", path.display()))
+                        s.set_transient_notice(format!("Exported thread to {}", path.display()))
                     }
                     Err(error) => s.show_command_panel("Export", error),
                 }
@@ -1125,14 +1125,14 @@ async fn handle_enter_inner(
             "/change_title" => {
                 if tokens.len() < 2 {
                     s.show_command_panel(
-                        "Session title",
-                        "Usage:\n  /change_title <title> - Rename the current session",
+                        "Thread title",
+                        "Usage:\n  /change_title <title> - Rename the current thread",
                     );
                 } else {
                     let new_title = tokens[1..].join(" ");
                     crate::config::save_session_title(&s.active_session_id, &new_title);
                     s.invalidate_session_title_cache();
-                    s.set_transient_notice(format!("Session title renamed to \"{}\"", new_title));
+                    s.set_transient_notice(format!("Thread title renamed to \"{}\"", new_title));
                 }
             }
             _ => {

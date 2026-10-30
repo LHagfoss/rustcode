@@ -2,17 +2,24 @@ use super::*;
 
 const STATUS_PANEL_MIN_WIDTH: usize = 40;
 
+/// Lowercase `text` with "thread" read as "session", so the headings the
+/// engine writes now ("Thread usage", "Resumed thread …") and the ones stored
+/// in older transcripts ("Session usage") match the same rules (#2632).
+fn legacy_heading(text: &str) -> String {
+    text.to_ascii_lowercase().replace("thread", "session")
+}
+
 fn status_panel_title(content: &str) -> Option<&'static str> {
     let first_line = content.lines().find(|line| !line.trim().is_empty())?;
     let first_line = first_line.trim().trim_end_matches(':');
-    let lower = first_line.to_ascii_lowercase();
+    let lower = legacy_heading(first_line);
 
     if lower.starts_with("session usage") {
         Some("Usage")
     } else if lower.starts_with("session status") {
         Some("Status")
     } else if lower.starts_with("session id") {
-        Some("Session")
+        Some("Thread")
     } else if lower == "rustcode info" || lower.starts_with("about rustcode") {
         Some("Info")
     } else if lower.starts_with("available commands")
@@ -32,7 +39,7 @@ fn status_panel_title(content: &str) -> Option<&'static str> {
 }
 
 fn is_status_panel_heading(line: &str, title: Option<&str>) -> bool {
-    let normalized = line.trim().trim_end_matches(':').to_ascii_lowercase();
+    let normalized = legacy_heading(line.trim().trim_end_matches(':'));
     match title {
         Some("Usage") => normalized == "session usage",
         Some("Info") => normalized == "rustcode info" || normalized == "about rustcode",
@@ -206,10 +213,10 @@ pub(super) fn render_status_panel<'a>(
     show_picker: bool,
     lines: &mut Vec<Line<'a>>,
 ) {
-    let lower = content.to_ascii_lowercase();
+    let lower = legacy_heading(content);
 
     if lower.starts_with("resumed session") {
-        push_centered_separator(lines, "Resumed Session", width, show_picker);
+        push_centered_separator(lines, "Resumed Thread", width, show_picker);
         return;
     }
     if lower.contains("new chat started") {
@@ -357,6 +364,7 @@ pub(super) fn render_status_panel<'a>(
             || trimmed.starts_with("📦")
             || trimmed.starts_with("🎨")
             || trimmed.starts_with("Core & Session")
+            || trimmed.starts_with("Core & Thread")
             || trimmed.starts_with("Help & Commands")
             || trimmed.starts_with("Discovered Skills");
 
@@ -549,7 +557,7 @@ pub(crate) fn build_claude_startup_banner_snapshot(
     let session_id = fit_to_width(state.active_session_id(), inner_w.saturating_sub(label_w));
     banner.push(make_row(vec![
         Span::styled(
-            fit_to_width(&label("session"), label_w),
+            fit_to_width(&label("thread"), label_w),
             Style::default().fg(muted_c).bg(reset_bg),
         ),
         Span::styled(

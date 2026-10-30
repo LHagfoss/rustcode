@@ -500,7 +500,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 };
                 println!(
-                    "{} {} legacy session(s): {} migrated, {} skipped, {} error(s).",
+                    "{} {} legacy thread(s): {} migrated, {} skipped, {} error(s).",
                     if *dry_run {
                         "Would migrate"
                     } else {
@@ -858,7 +858,7 @@ fn resolve_startup_resume(
                 if !queued {
                     state.history.push(rustcode::app::ChatMessage::new(
                         "system",
-                        "No pending session work is available to continue.",
+                        "No pending thread work is available to continue.",
                     ));
                 }
             }
@@ -878,7 +878,7 @@ fn resolve_startup_resume(
                 &error,
                 rustcode::app::session_controller::SessionError::NoSessionToResume
             ) {
-                "No previous session to resume.".to_owned()
+                "No previous thread to resume.".to_owned()
             } else {
                 error.to_string()
             };
@@ -992,7 +992,7 @@ fn run_sessions_list(show_all: bool) {
         }
     }
     if truncated {
-        eprintln!("Showing the {LIMIT} most recent sessions; use --all to see every workspace.");
+        eprintln!("Showing the {LIMIT} most recent threads; use --all to see every workspace.");
     }
 }
 
@@ -1061,7 +1061,7 @@ async fn run_interactive(
         cli_args.continue_session.as_deref(),
         cli_args.all,
     ) {
-        eprintln!("rustcode: cannot resume session '{id}': {error}");
+        eprintln!("rustcode: cannot resume thread '{id}': {error}");
         std::process::exit(1);
     }
     // `--yolo` and the `yolo` config default start the terminal in YOLO. The
@@ -1279,7 +1279,7 @@ fn write_exit_summary(out: &mut dyn Write, summary: &ExitSummary, color: bool, w
         let _ = writeln!(out, "{usage}");
     }
     if !summary.session_id.is_empty() {
-        let _ = writeln!(out, "Session   {}", summary.session_id);
+        let _ = writeln!(out, "Thread    {}", summary.session_id);
         let _ = writeln!(out, "Continue  rustcode --resume {}", summary.session_id);
     }
     if !summary.warnings.is_empty() {
@@ -1332,7 +1332,7 @@ mod tests {
             outcome,
             StartupResume::Failed {
                 id: UNKNOWN_ID.to_owned(),
-                error: format!("session not found: {UNKNOWN_ID}"),
+                error: format!("thread not found: {UNKNOWN_ID}"),
             }
         );
         // A regression that downgraded this to an in-TUI system message is
@@ -1344,12 +1344,12 @@ mod tests {
     #[test]
     fn malformed_resume_id_reports_the_invalid_id() {
         let mut state = AppState::new();
-        let outcome = resolve_startup_resume(&mut state, Some("not a session id"), None, false);
+        let outcome = resolve_startup_resume(&mut state, Some("not a thread id"), None, false);
         assert_eq!(
             outcome,
             StartupResume::Failed {
-                id: "not a session id".to_owned(),
-                error: "invalid session id: not a session id".to_owned(),
+                id: "not a thread id".to_owned(),
+                error: "invalid thread id: not a thread id".to_owned(),
             }
         );
         assert_eq!(system_messages(&state), Vec::<&str>::new());
@@ -1362,7 +1362,7 @@ mod tests {
             resolve_startup_resume(&mut state, None, Some(UNKNOWN_ID), false),
             StartupResume::Failed {
                 id: UNKNOWN_ID.to_owned(),
-                error: format!("session not found: {UNKNOWN_ID}"),
+                error: format!("thread not found: {UNKNOWN_ID}"),
             }
         );
         assert_eq!(system_messages(&state), Vec::<&str>::new());
@@ -1391,7 +1391,7 @@ mod tests {
         let rendered = String::from_utf8(sink).expect("handoff is utf-8");
 
         assert!(
-            rendered.contains("Session   01a0f0c9-8ebe-7000-9e19-31da83800034"),
+            rendered.contains("Thread    01a0f0c9-8ebe-7000-9e19-31da83800034"),
             "{rendered}"
         );
         assert!(
