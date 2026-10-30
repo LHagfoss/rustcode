@@ -61,7 +61,7 @@ struct SettingsView: View {
                     .overlay(alignment: .topLeading) {
                         if !showsSidebar, !layout.compact {
                             barButtons
-                                .padding(.leading, 80)
+                                .padding(.leading, SidebarMetrics.barLeading)
                                 .frame(height: SidebarMetrics.barHeight)
                                 .padding(.top, SidebarMetrics.barTopInset)
                         }
@@ -96,10 +96,10 @@ struct SettingsView: View {
         VStack(alignment: compact ? .center : .leading, spacing: 0) {
             // The title bar's room, beside the traffic lights, holding Back.
             HStack(spacing: 2) {
-                Spacer()
                 if !compact { barButtons }
+                Spacer()
             }
-            .padding(.leading, compact ? 0 : 80)
+            .padding(.leading, compact ? 0 : SidebarMetrics.barLeading)
             .padding(.trailing, 10)
             .frame(height: SidebarMetrics.barHeight)
             .padding(.top, SidebarMetrics.barTopInset)

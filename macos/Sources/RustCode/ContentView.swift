@@ -122,6 +122,8 @@ enum SidebarMetrics {
     /// Room above the toolbar clusters so their glass does not touch the
     /// window's top edge.
     static let barTopInset: CGFloat = 6
+    /// Where the bar's first cluster starts, clear of the traffic lights.
+    static let barLeading: CGFloat = 80
 }
 
 /// The line between the sidebar and the chat, dragged to resize the sidebar.
@@ -255,6 +257,33 @@ struct ClusterButton: View {
     private static let opticalOffset: [String: CGFloat] = ["square.and.pencil": -1]
 }
 
+/// The sidebar's buttons, in one glass cluster right of the traffic
+/// lights: in the sidebar's bar while it shows, in the chat's title bar at
+/// the same spot while it is hidden, so they never move.
+struct SidebarBarButtons: View {
+    @ObservedObject var model: DesktopModel
+
+    var body: some View {
+        ToolbarCluster {
+            ClusterButton(systemImage: "sidebar.left",
+                          help: model.keybindings.help(model.showsSidebar ? "Hide sidebar" : "Show sidebar", .toggleSidebar)) {
+                model.toggleSidebar()
+            }
+            AttentionInboxButton(model: model)
+            if model.showsSidebar, model.showsArchived || !model.archivedSessions.isEmpty {
+                ClusterButton(
+                    systemImage: model.showsArchived ? "chevron.left" : "archivebox",
+                    help: model.showsArchived ? "Back to threads" : "Archived threads",
+                    isOn: model.showsArchived
+                ) {
+                    withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
+                }
+            }
+            ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New thread", .newChat)) { Task { await model.newSession() } }
+        }
+    }
+}
+
 private struct SessionSidebar: View {
     @ObservedObject var model: DesktopModel
     @ObservedObject var updater: Updater
@@ -278,23 +307,10 @@ private struct SessionSidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             // Room for the traffic lights, then the bar's own buttons.
             HStack(spacing: 2) {
+                SidebarBarButtons(model: model)
                 Spacer()
-                ToolbarCluster {
-                    ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Hide sidebar", .toggleSidebar)) { model.toggleSidebar() }
-                    AttentionInboxButton(model: model)
-                    if model.showsArchived || !model.archivedSessions.isEmpty {
-                        ClusterButton(
-                            systemImage: model.showsArchived ? "chevron.left" : "archivebox",
-                            help: model.showsArchived ? "Back to threads" : "Archived threads",
-                            isOn: model.showsArchived
-                        ) {
-                            withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
-                        }
-                    }
-                    ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New thread", .newChat)) { Task { await model.newSession() } }
-                }
             }
-            .padding(.leading, 80)
+            .padding(.leading, SidebarMetrics.barLeading)
             .padding(.trailing, 10)
             .frame(height: Self.barHeight)
             .padding(.top, Self.barTopInset)
@@ -1633,11 +1649,8 @@ private struct ChatView: View {
     private var header: some View {
         HStack(spacing: 10) {
             if !model.showsSidebar {
-                ToolbarCluster {
-                    ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Show sidebar", .toggleSidebar)) { model.toggleSidebar() }
-                    ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New thread", .newChat)) { Task { await model.newSession() } }
-                }
-                .padding(.leading, 70)
+                SidebarBarButtons(model: model)
+                    .padding(.leading, SidebarMetrics.barLeading - 18)
             }
             // `~/code / Title`: the chat's folder, a divider, its title.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
