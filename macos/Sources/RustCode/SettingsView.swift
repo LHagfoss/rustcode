@@ -510,10 +510,10 @@ private struct GeneralSettings: View {
                     }
                 }
                 if !banner.isEmpty {
-                    NewThreadBannerView(name: banner, style: bannerStyle)
+                    // As a new thread shows it, at a size that reads.
+                    NewThreadBannerView(name: banner, style: bannerStyle, height: 240)
                         .id(bannerStyle)
-                        .frame(maxHeight: 140)
-                        .clipped()
+                        .clipShape(.rect(cornerRadius: 12))
                         .padding(.horizontal, 14)
                         .padding(.bottom, 14)
                 }
