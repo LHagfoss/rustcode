@@ -1335,6 +1335,7 @@ private struct ChatView: View {
                         switch panel {
                         case .add: AddPanel(model: model)
                         case .model: ModelEffortPanel(model: model)
+                        case .agents: AgentsPanel(model: model)
                         }
                     }
                     .padding(6)

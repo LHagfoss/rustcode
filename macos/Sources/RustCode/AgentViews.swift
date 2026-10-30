@@ -2,18 +2,19 @@ import RustCodeKit
 import SwiftUI
 
 /// While the shown chat's agents work, a small pill in the composer's button
-/// row beside +: `● 2 agents working ▾`. A click lists them as chips, and a
-/// chip opens that agent's panel. Over the chat it covered the end of the
+/// row beside +: `● 2 agents working ▾`. A click lists them in a composer
+/// panel like + and the model's (#2626), and a row opens that agent's panel. Over the chat it covered the end of the
 /// transcript (#2555). It goes once every agent finished; their rows in the
 /// chat still open them (#2327).
 struct AgentPill: View {
     @ObservedObject var model: DesktopModel
-    @State private var showsList = false
     @Environment(\.chatLayout) private var layout
+
+    private var showsList: Bool { model.composerPanel == .agents }
 
     var body: some View {
         if let label = SubagentInfo.workingLabel(model.subagents) {
-            Button { showsList.toggle() } label: {
+            Button { model.composerPanel = showsList ? nil : .agents } label: {
                 HStack(spacing: 6) {
                     Circle().fill(Color.brand).frame(width: 6, height: 6)
                         .modifier(Pulse())
@@ -36,9 +37,6 @@ struct AgentPill: View {
             .help("Show the agents at work")
             .accessibilityLabel(label)
             .accessibilityHint("Lists the agents. Choose one to open its conversation.")
-            .popover(isPresented: $showsList, arrowEdge: .top) {
-                AgentList(model: model) { showsList = false }
-            }
             .transition(.opacity)
         }
     }
@@ -59,31 +57,82 @@ private struct Pulse: ViewModifier {
     }
 }
 
-/// The pill's popover: every agent of the chat, one chip each, the working
-/// ones first.
-private struct AgentList: View {
+/// The pill's panel: every agent of the chat, working ones first, in the
+/// rows and glass the composer's other panels use. Arrows, ⏎ and Esc work
+/// as there.
+struct AgentsPanel: View {
     @ObservedObject var model: DesktopModel
-    let close: () -> Void
+    @State private var highlighted = 0
+    @FocusState private var focused: Bool
+
+    private var agents: [SubagentInfo] {
+        model.subagents.filter(\.isActive) + model.subagents.filter { !$0.isActive }
+    }
 
     var body: some View {
-        let agents = model.subagents.filter(\.isActive) + model.subagents.filter { !$0.isActive }
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Agents").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(agents) { agent in
-                Button {
-                    close()
-                    model.openAgent(agent)
-                } label: { AgentChip(agent: agent) }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor()
-                    .help("\(agent.name): \(agent.task)")
-                    .accessibilityLabel("\(agent.name), \(agent.isActive ? "working" : agent.status.label)")
-                    .accessibilityHint("Opens the agent's conversation")
+        let agents = agents
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Agents")
+                .font(.callout.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
+            ForEach(Array(agents.enumerated()), id: \.element.id) { index, agent in
+                AgentsPanelRow(agent: agent, isHighlighted: index == highlighted) { open(agent) }
             }
         }
-        .padding(12)
-        .frame(minWidth: 220, alignment: .leading)
+        .panelKeys(focused: $focused, count: agents.count, highlighted: $highlighted,
+                   choose: { if agents.indices.contains(highlighted) { open(agents[highlighted]) } },
+                   close: { model.composerPanel = nil })
         .animation(.snappy(duration: 0.2), value: agents)
+    }
+
+    private func open(_ agent: SubagentInfo) {
+        model.composerPanel = nil
+        model.openAgent(agent)
+    }
+}
+
+/// An agent in the pill's panel, laid out as `PopoverRow`: how it stands,
+/// its name and the first line of its task, and how long it ran.
+private struct AgentsPanelRow: View {
+    let agent: SubagentInfo
+    let isHighlighted: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                AgentStatusMark(agent: agent).frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(agent.name).lineLimit(1).truncationMode(.middle)
+                    if !agent.taskLine.isEmpty {
+                        Text(agent.taskLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 12)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(agent.isActive ? agent.elapsed(now: context.date) ?? "" : agent.status.label)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isHighlighted ? AnyShapeStyle(Color.brand.opacity(0.2))
+                        : isHovered ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 14))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .pointingHandCursor()
+        .help("\(agent.name): \(agent.task)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(agent.name), \(agent.isActive ? "working" : agent.status.label)")
+        .accessibilityHint("Opens the agent's conversation")
     }
 }
 
@@ -163,30 +212,6 @@ private struct AgentSpawnRow: View {
         } else {
             ProgressView().controlSize(.mini)
         }
-    }
-}
-
-private struct AgentChip: View {
-    let agent: SubagentInfo
-
-    var body: some View {
-        HStack(spacing: 6) {
-            AgentStatusMark(agent: agent)
-            Text(agent.name).fontWeight(.medium)
-            if agent.agentType != "default" {
-                Text(agent.agentType).foregroundStyle(.secondary)
-            }
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                if let elapsed = agent.elapsed(now: context.date) {
-                    Text(elapsed).foregroundStyle(.tertiary).monospacedDigit()
-                }
-            }
-        }
-        .font(.caption)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(.fill.tertiary, in: .capsule)
-        .contentShape(.capsule)
     }
 }
 

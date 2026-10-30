@@ -746,9 +746,9 @@ enum DebugDriver {
             // `model <profile>`: switch the shown chat's model, as the picker does.
             if parts.count > 1 { await model.setModel(parts.dropFirst().joined(separator: " ")) }
         case "panel":
-            // `panel model|effort|add|none`: open a composer panel as its chip does;
+            // `panel model|effort|add|agents|none`: open a composer panel as its chip does;
             // `effort` opens the Model & Effort picker, which holds it now.
-            model.composerPanel = ["model": .model, "effort": .model, "add": .add][parts[1]]
+            model.composerPanel = ["model": .model, "effort": .model, "add": .add, "agents": .agents][parts[1]]
         case "snap":
             // `snap <file.png>`: the window drawn to a file, for when
             // `screencapture` cannot see the screen.

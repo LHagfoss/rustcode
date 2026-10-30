@@ -109,7 +109,7 @@ struct RustCodeApp: App {
 
 /// The panel open above the composer.
 /// `model` is the Model & Effort picker: model, reasoning effort and Fast.
-enum ComposerPanel { case add, model }
+enum ComposerPanel { case add, model, agents }
 
 /// The shown chat's transcript, observed apart from the rest of the model.
 /// Streamed chunks arrive far faster than the screen redraws, and each one
