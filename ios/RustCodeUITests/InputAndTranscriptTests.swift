@@ -6,7 +6,7 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testAttachmentMenuDismissalPreservesDraftAndComposerControls() {
         let app = launchChat(draft: "Keep my attachment menu draft")
-        app.buttons["Chat actions"].tap()
+        app.buttons["Thread actions"].tap()
         XCTAssertTrue(app.buttons["Camera"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Photos"].isHittable)
         XCTAssertTrue(app.buttons["Files"].isHittable)
@@ -15,14 +15,14 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(menu.frame.width, 240)
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         XCTAssertGreaterThanOrEqual(menu.frame.height, 240)
-        XCTAssertLessThan(menu.frame.maxY, app.buttons["Chat actions"].frame.minY)
+        XCTAssertLessThan(menu.frame.maxY, app.buttons["Thread actions"].frame.minY)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Compact attachment menu above the composer"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         app.buttons["More"].tap()
         XCTAssertTrue(app.buttons["Slash Commands"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["New Session in Folder"].isHittable)
+        XCTAssertTrue(app.buttons["New Thread in Folder"].isHittable)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.2)).tap()
         XCTAssertTrue(app.buttons["Photos"].waitForNonExistence(timeout: 3))
         XCTAssertEqual(composer(in: app).value as? String, "Keep my attachment menu draft")
@@ -32,7 +32,7 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testImageFilePickerCancellationPreservesDraft() {
         let app = launchChat(draft: "Keep my file draft")
-        app.buttons["Chat actions"].tap()
+        app.buttons["Thread actions"].tap()
         let files = app.buttons["Files"]
         XCTAssertTrue(files.waitForExistence(timeout: 3))
         files.tap()
@@ -46,7 +46,7 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testUnavailableCameraExplainsAlternativesWithoutLosingDraft() {
         let app = launchChat(draft: "Keep my camera draft")
-        app.buttons["Chat actions"].tap()
+        app.buttons["Thread actions"].tap()
         let camera = app.buttons["Camera"]
         XCTAssertTrue(camera.waitForExistence(timeout: 3))
         camera.tap()
@@ -61,23 +61,23 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
         app.launch()
-        XCTAssertTrue(app.buttons["Start a new session"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Show sessions"].isHittable)
-        XCTAssertFalse(app.navigationBars["Sessions"].isHittable)
+        XCTAssertTrue(app.buttons["Start a new thread"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Show threads"].isHittable)
+        XCTAssertFalse(app.navigationBars["Threads"].isHittable)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Chat landing without an automatic sidebar"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        app.buttons["Show sessions"].tap()
-        XCTAssertTrue(app.navigationBars["Sessions"].waitForExistence(timeout: 3))
-        app.navigationBars["Sessions"].buttons["Close sessions"].tap()
-        XCTAssertTrue(app.buttons["Start a new session"].isHittable)
+        app.buttons["Show threads"].tap()
+        XCTAssertTrue(app.navigationBars["Threads"].waitForExistence(timeout: 3))
+        app.navigationBars["Threads"].buttons["Close threads"].tap()
+        XCTAssertTrue(app.buttons["Start a new thread"].isHittable)
     }
 
     func testSidebarSearchStaysAboveResultsAndDismissesWithTheDrawer() {
         let app = launchChat(draft: "Keep my search draft")
-        app.buttons["Show sessions"].tap()
-        let search = app.textFields["Search sessions"]
+        app.buttons["Show threads"].tap()
+        let search = app.textFields["Search threads"]
         XCTAssertTrue(search.waitForExistence(timeout: 3))
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Draft release notes")).firstMatch
         XCTAssertLessThan(search.frame.maxY, row.frame.minY)
@@ -89,15 +89,15 @@ final class InputAndTranscriptTests: XCTestCase {
         screenshot.name = "Sidebar search above filtered sessions with keyboard"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        app.navigationBars["Sessions"].buttons["Close sessions"].tap()
+        app.navigationBars["Threads"].buttons["Close threads"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertEqual(composer(in: app).value as? String, "Keep my search draft")
     }
 
     func testTappingOutsideTheDrawerReturnsToTheSameChat() {
         let app = launchChat(draft: "Keep my backdrop draft")
-        app.buttons["Show sessions"].tap()
-        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        app.buttons["Show threads"].tap()
+        let close = app.navigationBars["Threads"].buttons["Close threads"]
         XCTAssertTrue(close.waitForExistence(timeout: 3))
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         XCTAssertTrue(close.waitForNonExistence(timeout: 3))
@@ -109,8 +109,8 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = launchChat(draft: "Keep my pushed chat draft")
         let chatBar = app.navigationBars["Draft release notes"]
         let originalX = chatBar.frame.minX
-        app.buttons["Show sessions"].tap()
-        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        app.buttons["Show threads"].tap()
+        let close = app.navigationBars["Threads"].buttons["Close threads"]
         XCTAssertTrue(close.waitForExistence(timeout: 3))
         XCTAssertGreaterThan(chatBar.frame.minX - originalX, app.frame.width * 0.75)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
@@ -493,7 +493,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let app = launchChat(draft: "Keep this draft")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Done"].exists)
-        app.buttons["Chat actions"].tap()
+        app.buttons["Thread actions"].tap()
         app.buttons["More"].tap()
         app.buttons["Dismiss Keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
@@ -517,14 +517,14 @@ final class InputAndTranscriptTests: XCTestCase {
         screenshot.name = "Expanded composer with keyboard"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        app.buttons["Chat actions"].tap()
+        app.buttons["Thread actions"].tap()
         app.buttons["More"].tap()
         app.buttons["Dismiss Keyboard"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertTrue(field.waitForExistence(timeout: 3))
         let compactHeight = app.buttons["Send message"].frame.maxY - field.frame.minY
         XCTAssertLessThan(compactHeight, expandedHeight)
-        let actions = app.buttons["Chat actions"].frame
+        let actions = app.buttons["Thread actions"].frame
         let send = app.buttons["Send message"].frame
         XCTAssertEqual(actions.minY, send.minY, accuracy: 1)
         XCTAssertEqual(actions.minX - 12, app.frame.maxX - 12 - send.maxX, accuracy: 1)
@@ -611,7 +611,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let field = composer(in: app)
         field.typeText("First line\nSecond line")
         XCTAssertEqual(field.value as? String, "First line\nSecond line")
-        let actions = app.buttons["Chat actions"]
+        let actions = app.buttons["Thread actions"]
         let send = app.buttons["Send message"]
         XCTAssertGreaterThanOrEqual(actions.frame.minY, field.frame.maxY - 1)
         XCTAssertGreaterThanOrEqual(send.frame.minY, field.frame.maxY - 1)
@@ -853,10 +853,10 @@ final class InputAndTranscriptTests: XCTestCase {
         let create = app.buttons["New"]
         XCTAssertTrue(create.waitForExistence(timeout: 5))
         create.tap()
-        XCTAssertTrue(app.navigationBars["New Session"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["New Thread"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Home Folder"].exists)
         XCTAssertTrue(app.searchFields.firstMatch.exists, "Folders can be filtered or opened by path")
-        let start = app.buttons["Start session in selected folder"]
+        let start = app.buttons["Start thread in selected folder"]
         XCTAssertTrue(start.waitForExistence(timeout: 5))
         XCTAssertTrue(start.isHittable, "Start stays in reach at the bottom")
         XCTAssertEqual(start.value as? String, "/Users/demo")
@@ -864,13 +864,13 @@ final class InputAndTranscriptTests: XCTestCase {
         app.buttons["Projects"].tap()
         XCTAssertTrue(app.buttons["Back to demo"].waitForExistence(timeout: 5))
         XCTAssertEqual(start.value as? String, "/Users/demo/Projects")
-        XCTAssertEqual(start.label, "Start session in selected folder")
+        XCTAssertEqual(start.label, "Start thread in selected folder")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "New session folder picker"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         start.tap()
-        XCTAssertTrue(app.navigationBars["New Session"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["New Thread"].waitForNonExistence(timeout: 5))
         XCTAssertTrue(modelButton(in: app).exists, "The new session opens in the chat")
     }
 
@@ -885,16 +885,16 @@ final class InputAndTranscriptTests: XCTestCase {
         let create = app.buttons["New"]
         XCTAssertTrue(create.waitForExistence(timeout: 5))
         create.tap()
-        let start = app.buttons["Start session in selected folder"]
+        let start = app.buttons["Start thread in selected folder"]
         XCTAssertTrue(start.waitForExistence(timeout: 5))
         start.tap()
 
         // The unconfirmed request is named, with the host's words, and can be given up.
-        XCTAssertTrue(app.staticTexts["Unconfirmed Session"].waitForExistence(timeout: 5) || app.staticTexts["UNCONFIRMED SESSION"].exists)
+        XCTAssertTrue(app.staticTexts["Unconfirmed Thread"].waitForExistence(timeout: 5) || app.staticTexts["UNCONFIRMED THREAD"].exists)
         XCTAssertTrue(app.staticTexts["session is starting; retry with the same request identifier to check it"].exists)
         XCTAssertTrue(app.buttons["Check Again"].exists)
         XCTAssertTrue(app.buttons["Cancel Request"].exists)
-        XCTAssertTrue(app.navigationBars["New Session"].buttons["Cancel"].isEnabled, "The sheet can always be left")
+        XCTAssertTrue(app.navigationBars["New Thread"].buttons["Cancel"].isEnabled, "The sheet can always be left")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Unconfirmed new session"
         screenshot.lifetime = .keepAlways
@@ -912,16 +912,16 @@ final class InputAndTranscriptTests: XCTestCase {
         let replace = app.buttons["Start in Projects"]
         XCTAssertTrue(replace.waitForExistence(timeout: 5))
         replace.tap()
-        XCTAssertTrue(app.navigationBars["New Session"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["New Thread"].waitForNonExistence(timeout: 5))
         XCTAssertTrue(modelButton(in: app).exists, "The new session opens in the chat")
     }
 
     func testSessionsDrawerDismissesWithoutLosingDraftAndSelectsAnotherSession() {
         let app = launchChat(draft: "Keep my sidebar draft")
-        let show = app.buttons["Show sessions"]
+        let show = app.buttons["Show threads"]
         XCTAssertTrue(show.waitForExistence(timeout: 5))
         show.tap()
-        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        let close = app.navigationBars["Threads"].buttons["Close threads"]
         XCTAssertTrue(close.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["New"].isHittable)
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
@@ -949,10 +949,10 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testDetachUsesRightSwipeAndKeepsSidebarOpen() {
         let app = launchChat(draft: "Detach test")
-        let show = app.buttons["Show sessions"]
+        let show = app.buttons["Show threads"]
         XCTAssertTrue(show.waitForExistence(timeout: 5))
         show.tap()
-        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        let close = app.navigationBars["Threads"].buttons["Close threads"]
         XCTAssertTrue(close.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["New"].isHittable)
 
@@ -968,8 +968,8 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testSessionListCopiesSessionIDNotTitle() {
         let app = launchChat(draft: "Copy ID test")
-        let show = app.buttons["Show sessions"]
-        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        let show = app.buttons["Show threads"]
+        let close = app.navigationBars["Threads"].buttons["Close threads"]
         XCTAssertTrue(show.waitForExistence(timeout: 5))
         show.tap()
         XCTAssertTrue(close.waitForExistence(timeout: 3))
@@ -979,7 +979,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let live = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Page the session store")).firstMatch
         XCTAssertTrue(live.waitForExistence(timeout: 3))
         live.press(forDuration: 1)
-        let copy = app.buttons["Copy Session ID"]
+        let copy = app.buttons["Copy Thread ID"]
         XCTAssertTrue(copy.waitForExistence(timeout: 3))
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertTrue(copy.waitForNonExistence(timeout: 3))
@@ -1010,8 +1010,8 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testSavedSessionsOpenElsewhereSayWhereTheyAreOpen() {
         let app = launchChat(draft: "Where is it open")
-        app.buttons["Show sessions"].tap()
-        XCTAssertTrue(app.navigationBars["Sessions"].waitForExistence(timeout: 3))
+        app.buttons["Show threads"].tap()
+        XCTAssertTrue(app.navigationBars["Threads"].waitForExistence(timeout: 3))
         func row(_ title: String) -> XCUIElement {
             let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
             for _ in 0..<4 where !row.exists || !row.isHittable { app.swipeUp() }
@@ -1032,12 +1032,12 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testChatActionsCopySessionID() {
         let app = launchChat(draft: "Copy ID from chat")
-        app.buttons["Chat actions"].tap()
+        app.buttons["Thread actions"].tap()
         app.buttons["More"].tap()
-        let copy = app.buttons["Copy Session ID"]
+        let copy = app.buttons["Copy Thread ID"]
         XCTAssertTrue(copy.waitForExistence(timeout: 3))
         copy.tap()
-        XCTAssertTrue(app.staticTexts["Session ID Copied"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Thread ID Copied"].waitForExistence(timeout: 3))
         XCTAssertEqual(composer(in: app).value as? String, "Copy ID from chat")
         XCTAssertEqual(pasteIntoEmptyComposer(app), "demo-notes")
     }
@@ -1066,15 +1066,15 @@ final class InputAndTranscriptTests: XCTestCase {
         XCTAssertTrue(app.buttons["Model and effort"].exists)
         XCTAssertTrue(app.buttons["Send message"].exists)
         XCTAssertFalse(app.buttons["thinkingEffortPicker"].exists)
-        app.buttons["Chat actions"].tap()
+        app.buttons["Thread actions"].tap()
         app.buttons["More"].tap()
         app.buttons["Slash Commands"].tap()
         XCTAssertEqual(composer(in: app).value as? String, "Keep my actions draft")
         app.terminate()
         app.launchArguments = ["-demo", "-demoSession", "idle"]
         app.launch()
-        XCTAssertTrue(app.buttons["Chat actions"].waitForExistence(timeout: 5))
-        app.buttons["Chat actions"].tap()
+        XCTAssertTrue(app.buttons["Thread actions"].waitForExistence(timeout: 5))
+        app.buttons["Thread actions"].tap()
         app.buttons["More"].tap()
         app.buttons["Slash Commands"].tap()
         XCTAssertEqual(composer(in: app).value as? String, "/")
@@ -1087,7 +1087,7 @@ final class InputAndTranscriptTests: XCTestCase {
         let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.015, dy: 0.5))
         let open = app.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5))
         edge.press(forDuration: 0.05, thenDragTo: open)
-        let close = app.navigationBars["Sessions"].buttons["Close sessions"]
+        let close = app.navigationBars["Threads"].buttons["Close threads"]
         XCTAssertTrue(close.waitForExistence(timeout: 4))
         XCTAssertTrue(close.isHittable)
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
@@ -1108,7 +1108,7 @@ final class InputAndTranscriptTests: XCTestCase {
 
     func testImagePickerCancellationPreservesMessageDraft() {
         let app = launchChat(draft: "Keep my image draft")
-        app.buttons["Chat actions"].tap()
+        app.buttons["Thread actions"].tap()
         XCTAssertTrue(app.buttons["Photos"].waitForExistence(timeout: 3))
         app.buttons["Photos"].tap()
         let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Close"])).firstMatch

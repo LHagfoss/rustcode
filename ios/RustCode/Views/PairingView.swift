@@ -72,7 +72,7 @@ struct PairingView: View {
                         Task { await store.startDemo(deviceName: UIDevice.current.name) }
                     }
                     .accessibilityLabel("Try the Demo")
-                    .accessibilityHint("Opens sample sessions without connecting to a Mac")
+                    .accessibilityHint("Opens sample threads without connecting to a Mac")
                     .disabled(isPairing)
                 }
             }

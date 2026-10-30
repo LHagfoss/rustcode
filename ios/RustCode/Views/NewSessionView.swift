@@ -51,13 +51,13 @@ struct NewSessionView: View {
                             Button { start(in: folder) } label: {
                                 FolderRow(name: Self.name(of: folder), detail: folder, symbol: "clock.arrow.circlepath", trailing: "plus.circle")
                             }
-                            .accessibilityLabel("Start session in \(Self.name(of: folder))")
+                            .accessibilityLabel("Start thread in \(Self.name(of: folder))")
                             .accessibilityHint(folder)
                         }
                     } header: {
                         Text("Recent Folders")
                     } footer: {
-                        Text("Tap a recent folder to start a session there.")
+                        Text("Tap a recent folder to start a thread there.")
                     }
                 }
                 if let listing {
@@ -100,7 +100,7 @@ struct NewSessionView: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .onSubmit(of: .search) { if isPathQuery { open(query) } }
-            .navigationTitle("New Session")
+            .navigationTitle("New Thread")
             .navigationBarTitleDisplayMode(.inline)
             .softNavigationChrome()
             .toolbar {
@@ -121,7 +121,7 @@ struct NewSessionView: View {
                 Button("Start in \(Self.name(of: folder))") { create(in: folder) }
                 Button("Keep Waiting", role: .cancel) {}
             } message: { _ in
-                Text("This abandons the request for \(pendingFolderName). If the Mac still finishes starting it, that session appears in the session list.")
+                Text("This abandons the request for \(pendingFolderName). If the Mac still finishes starting it, that thread appears in the thread list.")
             }
             .onAppear { if listing == nil { load(nil) } }
             .onDisappear { browseTask?.cancel() }
@@ -163,9 +163,9 @@ struct NewSessionView: View {
             }
             Button("Cancel Request", role: .destructive) { store.cancelPendingCreation() }
         } header: {
-            Text("Unconfirmed Session")
+            Text("Unconfirmed Thread")
         } footer: {
-            Text("Checking again reuses this request, so it cannot start a second session. Cancelling only stops waiting here: if the Mac still finishes starting the session, it appears in the session list.")
+            Text("Checking again reuses this request, so it cannot start a second thread. Cancelling only stops waiting here: if the Mac still finishes starting the thread, it appears in the thread list.")
         }
     }
 
@@ -186,7 +186,7 @@ struct NewSessionView: View {
         .brandProminentButtonStyle()
         .controlSize(.large)
         .disabled(listing == nil || isLoading || starting || store.connection != .connected)
-        .accessibilityLabel("Start session in selected folder")
+        .accessibilityLabel("Start thread in selected folder")
         .accessibilityValue(listing?.path ?? "")
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -224,7 +224,7 @@ struct NewSessionView: View {
                 error = notice
                 store.notice = nil
             } else if store.connection != .connected {
-                error = "The session could not be started. Check your connection and try again."
+                error = "The thread could not be started. Check your connection and try again."
             }
         }
     }

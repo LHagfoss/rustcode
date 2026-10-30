@@ -266,7 +266,7 @@ struct ApprovalSheet: View {
                             }
                         }
                     }
-                    Text("Approving lets the session run exactly what is shown above, under its existing policy.")
+                    Text("Approving lets the thread run exactly what is shown above, under its existing policy.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

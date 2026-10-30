@@ -101,23 +101,23 @@ struct TranscriptView: View {
             } else if let snapshot = store.attached {
                 transcript(snapshot)
             } else if store.connection == .connected {
-                ProgressView("Loading session…")
+                ProgressView("Loading thread…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView(
                     "Not Connected",
                     systemImage: "wifi.slash",
-                    description: Text("The session loads again once the host is reachable.")
+                    description: Text("The thread loads again once the host is reachable.")
                 )
             }
         }
-        .navigationTitle(store.selectedSession?.displayTitle ?? "Session")
+        .navigationTitle(store.selectedSession?.displayTitle ?? "Thread")
         .workspaceSubtitle(store.selectedSession?.workspace)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden()
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button("Show sessions", systemImage: "line.3.horizontal") { isComposerFocused = false; openSessions(toggle: true) }
+                Button("Show threads", systemImage: "line.3.horizontal") { isComposerFocused = false; openSessions(toggle: true) }
                     .accessibilityHidden(isChatObscured)
             }
             if let session = store.selectedSession {
@@ -144,7 +144,7 @@ struct TranscriptView: View {
         .alert("Update RustCode on your Mac", isPresented: $showsHostUpdate) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("This host isn’t providing model or effort controls. Update RustCode on your Mac and reopen its session. Current versions update the background service automatically.")
+            Text("This host isn’t providing model or effort controls. Update RustCode on your Mac and reopen its thread. Current versions update the background service automatically.")
         }
         .sheet(item: $selectable) { selectable in
             SelectTextSheet(text: selectable.text)
@@ -236,7 +236,7 @@ struct TranscriptView: View {
                 }
             }
         } label: {
-            Label("Session", systemImage: "ellipsis")
+            Label("Thread", systemImage: "ellipsis")
         }
     }
 
@@ -366,7 +366,7 @@ struct TranscriptView: View {
                                 Color.clear
                                     .contentShape(.rect)
                                     .onTapGesture { showsChatActions = false }
-                                    .accessibilityLabel("Dismiss chat actions")
+                                    .accessibilityLabel("Dismiss thread actions")
                                     .accessibilityAddTraits(.isButton)
                                 ChatActionsMenu(hadKeyboard: isComposerFocused, isRunning: snapshot.isRunning) { action in
                                     nextChatAction = action

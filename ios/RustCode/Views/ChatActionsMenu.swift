@@ -35,10 +35,10 @@ struct ChatActionsMenu: View {
                     }
                     .buttonStyle(ComposerPressStyle())
                     .accessibilityLabel("Back to attachments")
-                    action("New Session", symbol: "square.and.pencil", .newSession)
+                    action("New Thread", symbol: "square.and.pencil", .newSession)
                     action("Slash Commands", symbol: "command", .commands)
-                    action("New Session in Folder", symbol: "folder.badge.plus", .folder)
-                    action("Copy Session ID", symbol: "number", .copySessionID)
+                    action("New Thread in Folder", symbol: "folder.badge.plus", .folder)
+                    action("Copy Thread ID", symbol: "number", .copySessionID)
                     if isRunning { action("Stop the running turn", symbol: "stop.circle", .stop) }
                     if hadKeyboard { action("Dismiss Keyboard", symbol: "keyboard.chevron.compact.down", .dismissKeyboard) }
                 } else {
