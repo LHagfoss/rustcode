@@ -684,6 +684,88 @@ final class DesktopModel: ObservableObject {
     var canReadPullRequests: Bool { capabilities?.pullRequests == true }
     /// The engine posts a review the user writes (#2646).
     var canReviewPullRequests: Bool { capabilities?.pullRequestReviews == true }
+    var canWatchPullRequests: Bool { capabilities?.pullWatches == true }
+    /// Every thread's pull request watches, as the engine last said.
+    @Published private(set) var pullWatches: [PullWatch] = []
+
+    func pullWatches(in session: String?) -> [PullWatch] {
+        guard let session else { return [] }
+        return pullWatches.filter { $0.sessionId == session }
+    }
+
+    /// Asked once the engine is up: watches from before a restart carry on.
+    func loadPullWatches() async {
+        guard canWatchPullRequests, let connection = engineConnection,
+              let result = try? await connection.request(ACPMethod.pullWatches, params: [:], timeout: .seconds(10)) else { return }
+        pullWatches = PullWatch.list(result: result)
+    }
+
+    /// Watch `number` from the shown thread, in its folder.
+    func watchPull(_ number: Int) async {
+        guard let session = selectedSession, let connection = engineConnection else { return }
+        do {
+            let result = try await connection.request(ACPMethod.pullWatchStart,
+                                                      params: ACPRequests.pullWatchStart(session: session, cwd: chatProject, number: number),
+                                                      timeout: .seconds(10))
+            if let watch = result["watch"].flatMap(PullWatch.init(json:)) {
+                replace(watch)
+                showToast(Toast(style: .success, systemImage: "eye", title: "Watching #\(number)",
+                                message: "This thread hears when checks, reviews or conflicts change."))
+            } else {
+                showToast(Toast(style: .warning, systemImage: "eye.slash", title: "Could not watch #\(number)",
+                                message: result["error"]?["message"]?.stringValue))
+            }
+        } catch {
+            showToast(Toast(style: .warning, systemImage: "eye.slash", title: "Could not watch #\(number)", message: String(describing: error)))
+        }
+    }
+
+    /// Stop a watch; `remove` also takes it off the thread.
+    func stopWatching(_ watch: PullWatch, remove: Bool = false) async {
+        guard let connection = engineConnection else { return }
+        _ = try? await connection.request(ACPMethod.pullWatchStop,
+                                          params: ACPRequests.pullWatchStop(session: watch.sessionId, number: watch.number, remove: remove),
+                                          timeout: .seconds(10))
+        if remove {
+            pullWatches.removeAll { $0.id == watch.id }
+        } else {
+            var stopped = watch
+            stopped.isWatching = false
+            stopped.stopReason = "stopped by you"
+            replace(stopped)
+        }
+    }
+
+    /// Hand the watch's latest events to the composer, for the reader to send.
+    func askAgent(about watch: PullWatch) {
+        if selectedSession != watch.sessionId, let session = sessions.first(where: { $0.id == watch.sessionId }) {
+            Task { await select(session); draft = watch.draft(for: Array(watch.events.suffix(5))) }
+        } else {
+            draft = watch.draft(for: Array(watch.events.suffix(5)))
+        }
+    }
+
+    private func replace(_ watch: PullWatch) {
+        if let index = pullWatches.firstIndex(where: { $0.id == watch.id }) {
+            pullWatches[index] = watch
+        } else {
+            pullWatches.append(watch)
+        }
+    }
+
+    /// The engine checked a watch. New events are told once: over the chat,
+    /// and as a notification while RustCode is in the background.
+    private func applyPullWatch(_ update: PullWatchUpdate) {
+        replace(update.watch)
+        guard let latest = update.events.last else { return }
+        let session = update.watch.sessionId
+        let text = update.events.map(\.message).joined(separator: " · ")
+        showToast(Toast(style: update.events.contains(where: \.needsAttention) ? .warning : .info,
+                        systemImage: latest.systemImage, title: "#\(update.watch.number): \(text)",
+                        message: session == selectedSession ? nil : chatTitle(session),
+                        session: session == selectedSession ? nil : session))
+        TurnNotifier.shared.notify(session: session, title: "Pull request #\(update.watch.number)", body: text)
+    }
     /// The pull requests panel is open beside the chat, in the preview's
     /// place.
     @Published var showsPullRequests = false {
@@ -1129,6 +1211,7 @@ final class DesktopModel: ObservableObject {
             // Show the last known options at once, then read current ones: the
             // models and their effort levels change with config and engine.
             restoreLastConfig()
+            await loadPullWatches()
             await loadModelDefaults()
             if selectedSession == nil, modelDefaults == nil { await fetchModelOptions() }
         } catch { self.error = String(describing: error) }
@@ -2887,6 +2970,8 @@ final class DesktopModel: ObservableObject {
             && params["update"]?["sessionUpdate"]?.stringValue == "available_commands_update":
             // Commands are the same for every session, so take them from any.
             if case .availableCommands(let list) = SessionUpdate(notificationParams: params) { commands = SlashCommand.withAppCommands(list) }
+        case .notification(let method, let params) where method == ACPMethod.pullWatch:
+            if let update = PullWatchUpdate(params: params) { applyPullWatch(update) }
         case .notification(let method, let params) where method == ACPMethod.sessionUpdate:
             guard let sessionId = params["sessionId"]?.stringValue else { return }
             if SessionUpdate.isReport(notificationParams: params), let input = pendingReports.answer(in: sessionId) {
