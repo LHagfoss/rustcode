@@ -448,7 +448,7 @@ async fn summarize_session_inner(
             dbg_log!("[SUMMARIZE] empty response after {:.1}s", elapsed);
             s.history.push(ChatMessage::new(
                 "system",
-                format!("Summarization failed: the model returned an empty response ({model_name}, {elapsed:.1}s). It may be rate-limited or rejecting the request — check this session's logs/debug.log."),
+                format!("Summarization failed: the model returned an empty response ({model_name}, {elapsed:.1}s). It may be rate-limited or rejecting the request — check this thread's logs/debug.log."),
             ));
         }
         Err(e) => {
@@ -475,7 +475,7 @@ pub fn build_info_text() -> String {
         • Repository:   https://github.com/LHagfoss/rustcode\n\n\
         Quick Commands:\n\
         • /help        - View full command list & keybindings\n\
-        • /status      - View active session status & model info\n\
+        • /status      - View active thread status & model info\n\
         • /update      - Upgrade rustcode via Homebrew tap\n\
         • /changelog   - View recent version releases",
         env!("CARGO_PKG_VERSION")
@@ -486,28 +486,28 @@ pub fn build_help_text() -> String {
     let mut help = String::from("Available Commands:\n\n");
     let categories: &[(&str, &[(&str, &str)])] = &[
         (
-            "Core & Session:",
+            "Core & Thread:",
             &[
                 ("/help", "Show help and commands"),
-                ("/status", "Show session status and model quota"),
+                ("/status", "Show thread status and model quota"),
                 ("/info", "Show version and system info"),
                 ("/clear", "Clear conversation history"),
                 ("/new", "Start a new conversation"),
-                ("/fork", "Fork the current conversation into a new session"),
-                ("/archive", "Persist the current session"),
-                ("/export", "Export this session as a zip into Downloads"),
-                ("/continue", "Continue restored pending session work"),
+                ("/fork", "Fork the current conversation into a new thread"),
+                ("/archive", "Persist the current thread"),
+                ("/export", "Export this thread as a zip into Downloads"),
+                ("/continue", "Continue restored pending thread work"),
                 ("/workspace", "Manage an isolated task workspace"),
                 ("/pwd", "Show the effective workspace path"),
                 ("/diff", "Show staged and unstaged Git changes"),
                 ("/agents", "Browse subagent conversation contexts"),
-                ("/delete_chat", "Delete current session and start fresh"),
-                ("/history", "Pick a previous session to resume"),
+                ("/delete_chat", "Delete current thread and start fresh"),
+                ("/history", "Pick a previous thread to resume"),
                 (
                     "/adopt",
-                    "Take over a phone-created session from this terminal",
+                    "Take over a phone-created thread from this terminal",
                 ),
-                ("/change_title", "Rename current session title"),
+                ("/change_title", "Rename current thread title"),
                 ("/cancel", "Cancel active stream or queued prompt"),
                 ("/exit", "Exit the app"),
             ],
@@ -515,7 +515,7 @@ pub fn build_help_text() -> String {
         (
             "Model & Configuration:",
             &[
-                ("/model", "Switch this session's model profile"),
+                ("/model", "Switch this thread's model profile"),
                 ("/quota", "Show provider quota and remaining limits"),
                 (
                     "/login",
@@ -540,7 +540,7 @@ pub fn build_help_text() -> String {
                 ("/goal", "Run a task in continuous autoloop mode"),
                 (
                     "/delegate",
-                    "Allow subagents for next task (on/off: session)",
+                    "Allow subagents for next task (on/off: thread)",
                 ),
                 ("/yolo", "Show or set tool confirmation mode"),
                 ("/sandbox", "Show or set OS-enforced shell permissions"),
@@ -560,7 +560,7 @@ pub fn build_help_text() -> String {
                 ("/stop", "Stop all running tasks"),
                 (
                     "/remote",
-                    "Turn remote access on: every session is shared with paired devices (pair|status|off)",
+                    "Turn remote access on: every thread is shared with paired devices (pair|status|off)",
                 ),
                 ("/changelog", "Show recent changelog updates"),
             ],
@@ -692,7 +692,7 @@ pub fn select_picker_model(s: &mut AppState) {
         s.config.use_profile_for_session(profile.name.clone());
         s.record_session_model();
         s.set_transient_notice(format!(
-            "Switched this session to model profile '{}'",
+            "Switched this thread to model profile '{}'",
             profile.name
         ));
     }
@@ -1024,7 +1024,7 @@ pub(crate) async fn compact_history(
                     &active_session_id,
                     s.history.as_mut_vec(),
                 );
-                return "History compaction discarded as stale: the active session or history changed while compaction was running.".to_owned();
+                return "History compaction discarded as stale: the active thread or history changed while compaction was running.".to_owned();
             }
             // Compaction can fold the first prompt into a summary; name the
             // session after it first so its title does not move.
@@ -1054,7 +1054,7 @@ pub(crate) async fn compact_history(
                     &active_session_id,
                     s.history.as_mut_vec(),
                 );
-                return "History compaction discarded as stale: the active session or history changed while compaction was running.".to_owned();
+                return "History compaction discarded as stale: the active thread or history changed while compaction was running.".to_owned();
             }
             format!("History compaction failed: {error}")
         }

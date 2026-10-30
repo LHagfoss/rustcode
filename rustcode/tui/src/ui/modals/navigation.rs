@@ -162,7 +162,7 @@ pub(in crate::ui) fn render_history_picker_modal(
             .split(inner_area);
 
         let header_line = Line::from(vec![Span::styled(
-            "⚠ Delete session?",
+            "⚠ Delete thread?",
             Style::default()
                 .fg(COLOR_PRIMARY())
                 .add_modifier(Modifier::BOLD),
@@ -174,7 +174,7 @@ pub(in crate::ui) fn render_history_picker_modal(
 
         if let Some(meta) = state.history_picker_sessions().get(del_idx) {
             let title_line = Line::from(vec![
-                Span::styled("  session  ", Style::default().fg(COLOR_MUTED())),
+                Span::styled("  thread   ", Style::default().fg(COLOR_MUTED())),
                 Span::styled(
                     &meta.title,
                     Style::default()
@@ -251,7 +251,7 @@ pub(in crate::ui) fn render_history_picker_modal(
         ])
         .split(inner_area);
 
-    let title_text = "Resume session";
+    let title_text = "Resume thread";
     let right_esc = "esc";
     let padding_header = picker_header_padding(inner_area.width as usize, &title_text, right_esc);
     let header_line = Line::from(vec![
@@ -334,7 +334,7 @@ pub(in crate::ui) fn render_history_picker_modal(
     ];
     if state.history_picker_truncated() {
         footer_spans.push(Span::styled(
-            "   (Truncated to 50 sessions. Use /delete_chat to clean up.)",
+            "   (Truncated to 50 threads. Use /delete_chat to clean up.)",
             Style::default()
                 .fg(COLOR_PRIMARY())
                 .add_modifier(Modifier::BOLD),
@@ -936,32 +936,32 @@ pub struct PaletteItem {
 
 pub const PALETTE_ITEMS: &[PaletteItem] = &[
     PaletteItem {
-        group: "Session",
-        name: "New session",
+        group: "Thread",
+        name: "New thread",
         shortcut: "/new",
     },
     PaletteItem {
-        group: "Session",
-        name: "Fork session",
+        group: "Thread",
+        name: "Fork thread",
         shortcut: "/fork",
     },
     PaletteItem {
-        group: "Session",
-        name: "Archive session",
+        group: "Thread",
+        name: "Archive thread",
         shortcut: "/archive",
     },
     PaletteItem {
-        group: "Session",
-        name: "Resume session",
+        group: "Thread",
+        name: "Resume thread",
         shortcut: "/resume",
     },
     PaletteItem {
-        group: "Session",
+        group: "Thread",
         name: "Continue pending work",
         shortcut: "/continue",
     },
     PaletteItem {
-        group: "Session",
+        group: "Thread",
         name: "Copy last reply",
         shortcut: "/copy",
     },
@@ -981,8 +981,8 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         shortcut: "/context",
     },
     PaletteItem {
-        group: "Session",
-        name: "Show session status",
+        group: "Thread",
+        name: "Show thread status",
         shortcut: "/status",
     },
     PaletteItem {
@@ -1021,22 +1021,22 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         shortcut: "/scroll-speed",
     },
     PaletteItem {
-        group: "Session",
-        name: "Change session title",
+        group: "Thread",
+        name: "Change thread title",
         shortcut: "/change_title",
     },
     PaletteItem {
-        group: "Session",
-        name: "Export session to Downloads",
+        group: "Thread",
+        name: "Export thread to Downloads",
         shortcut: "/export",
     },
     PaletteItem {
-        group: "Session",
+        group: "Thread",
         name: "Clear conversation",
         shortcut: "/clear",
     },
     PaletteItem {
-        group: "Session",
+        group: "Thread",
         name: "Cancel active stream",
         shortcut: "/cancel",
     },

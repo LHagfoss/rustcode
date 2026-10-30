@@ -964,7 +964,7 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    let visible_commands = ["New session", "Fork session", "Archive session"]
+    let visible_commands = ["New thread", "Fork thread", "Archive thread"]
         .iter()
         .filter(|command| rendered.contains(**command))
         .count();
@@ -1229,7 +1229,7 @@ fn busy_command_surfaces_stay_above_input_without_an_activity_row() {
                     .unwrap_or_else(|| panic!("missing {text:?}: {rendered}"))
             };
             let surface = if panel {
-                "Session status"
+                "Thread status"
             } else {
                 "Show or set verbosity"
             };
@@ -1486,7 +1486,7 @@ fn status_screen_uses_the_viewport_above_the_composer() {
     state.show_status_modal = true;
     state.active_session_id = "status-test".to_owned();
     let rendered = render_state_to_text(&mut state, 80, 24);
-    assert!(rendered.contains("Session status"));
+    assert!(rendered.contains("Thread status"));
     assert!(rendered.contains("status-test"));
     // A read-only panel takes no typed input, so the composer row is blank.
     assert!(!rendered.contains("Ask RustCode to do anything"));
@@ -1523,7 +1523,7 @@ fn pickers_type_their_search_into_the_composer_and_other_panels_blank_it() {
     state.show_model_picker = false;
     state.show_session_modal = true;
     let read_only = render_state_to_text(&mut state, 80, 24);
-    assert!(read_only.contains("Session"), "{read_only}");
+    assert!(read_only.contains("Thread"), "{read_only}");
     assert!(!read_only.contains('›'), "{read_only}");
     assert!(!read_only.contains("half-written draft"), "{read_only}");
 
@@ -1560,7 +1560,7 @@ fn usage_panel_draws_a_bar_per_reported_subscription_window() {
             .position(|line| line.contains(text))
             .unwrap_or_else(|| panic!("missing {text:?}: {usage}"))
     };
-    assert_eq!(row("9% used"), row("Current session (5h)") + 1, "{usage}");
+    assert_eq!(row("9% used"), row("Current thread (5h)") + 1, "{usage}");
     assert_eq!(row("Reset time not reported"), row("9% used") + 1);
     assert_eq!(row("33% used"), row("Current week (all models)") + 1);
     let reset = usage.lines().nth(row("33% used") + 1).expect("reset row");
@@ -1569,7 +1569,7 @@ fn usage_panel_draws_a_bar_per_reported_subscription_window() {
         "{reset}"
     );
     // The taller panel still has room for the local totals under the bars.
-    assert!(row("Session turn") > row("33% used"), "{usage}");
+    assert!(row("Thread turn") > row("33% used"), "{usage}");
     assert!(
         usage.contains("Local token totals are not provider billing totals."),
         "{usage}"
@@ -1607,7 +1607,7 @@ fn status_and_usage_show_bound_provider_identity_and_usage_guidance() {
     state.current_turn_token_usage_is_estimated = true;
     state.show_status_modal = true;
     let status = render_state_to_text(&mut state, 100, 30);
-    assert!(status.contains("Session status"), "{status:?}");
+    assert!(status.contains("Thread status"), "{status:?}");
     assert!(status.contains("ChatGPT"), "{status:?}");
     assert!(status.contains(account_id), "{status:?}");
     assert!(status.contains("Method:"), "{status:?}");
@@ -1643,7 +1643,7 @@ fn slash_command_modal_leaves_the_transcript_visible_above_it() {
     let cases: [(fn(&mut RenderState), &str); 5] = [
         (
             |state: &mut RenderState| state.show_status_modal = true,
-            "Session status",
+            "Thread status",
         ),
         (
             |state: &mut RenderState| state.show_model_picker = true,
@@ -1659,7 +1659,7 @@ fn slash_command_modal_leaves_the_transcript_visible_above_it() {
         ),
         (
             |state: &mut RenderState| state.show_session_modal = true,
-            "Session",
+            "Thread",
         ),
     ];
 
@@ -1760,7 +1760,7 @@ fn footer_stats_and_session_show_the_context_budget_and_session_total() {
     let stats = render_state_to_text(&mut state, 100, 40);
     let total = stats
         .lines()
-        .find(|line| line.contains("Session total"))
+        .find(|line| line.contains("Thread total"))
         .unwrap_or_else(|| panic!("no session total: {stats}"));
     assert!(
         total.contains("22,000 prompt + 545 completion = 22,545 tokens · 4,000 cached"),
@@ -2188,7 +2188,7 @@ fn welcome_banner_renders_without_a_conversation() {
         "the welcome banner header must include '>_ RustCode': {rendered:?}"
     );
     assert!(
-        rendered.contains("session:") && rendered.contains(&state.active_session_id),
+        rendered.contains("thread:") && rendered.contains(&state.active_session_id),
         "the welcome banner must include the active session ID: {rendered:?}"
     );
     assert!(
@@ -2302,7 +2302,7 @@ fn welcome_banner_pads_above_session_and_groups_session_with_model() {
     let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
     let session = rendered
         .iter()
-        .position(|line| line.contains("session:"))
+        .position(|line| line.contains("thread:"))
         .expect("banner has a session row");
     let model = rendered
         .iter()
@@ -2339,7 +2339,7 @@ fn welcome_banner_has_no_wordmark_and_no_gap_in_its_place() {
         rendered[1].trim_matches(['│', ' ']).is_empty(),
         "one blank row pads the top: {rendered:?}"
     );
-    assert!(rendered[2].contains("session:"), "{rendered:?}");
+    assert!(rendered[2].contains("thread:"), "{rendered:?}");
 }
 
 #[test]
@@ -2382,10 +2382,10 @@ fn welcome_banner_places_hints_beside_values_and_help_on_its_own_row() {
 
     let session_row = rendered
         .iter()
-        .find(|line| line.contains("session:"))
+        .find(|line| line.contains("thread:"))
         .expect("banner session row");
     assert_eq!(
-        session_row.chars().position(|character| character == 's'),
+        session_row.chars().position(|character| character == 't'),
         Some(5),
         "welcome content should have comfortable left padding: {rendered:?}"
     );
@@ -6892,7 +6892,7 @@ fn resumed_session_separator_spans_width_and_centers_label() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0].width(), 0);
     assert_eq!(lines[1].width(), 60);
-    assert_eq!(lines[1].spans[1].content, " Resumed Session ");
+    assert_eq!(lines[1].spans[1].content, " Resumed Thread ");
     assert!(
         lines[1]
             .spans
@@ -6933,7 +6933,7 @@ fn resumed_session_committed_block_has_top_and_bottom_padding() {
     let block = super::render_committed_history_block(&state, 0, 60);
     assert_eq!(block.len(), 3);
     assert!(block[0].to_string().is_empty());
-    assert!(block[1].to_string().contains("Resumed Session"));
+    assert!(block[1].to_string().contains("Resumed Thread"));
     assert!(block[2].to_string().is_empty());
 }
 
@@ -7006,7 +7006,7 @@ fn session_command_uses_the_bordered_status_panel() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert!(rendered[0].contains(">_ RustCode · Session"));
+    assert!(rendered[0].contains(">_ RustCode · Thread"));
     assert!(rendered.iter().any(|line| line.contains("session-123")));
 }
 
@@ -10987,7 +10987,7 @@ fn the_return_to_latest_control_stays_above_the_input_and_hides_for_panels() {
 
     state.show_session_modal = true;
     let panel = render_state_to_text_with_transcript(&mut state, &mut transcript, 80, 20);
-    assert!(panel.contains("Session"), "{panel}");
+    assert!(panel.contains("Thread"), "{panel}");
     assert_eq!(
         transcript.follow_control().area(),
         None,

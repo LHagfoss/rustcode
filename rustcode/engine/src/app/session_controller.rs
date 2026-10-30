@@ -37,8 +37,8 @@ impl fmt::Display for SessionError {
         match self {
             Self::EmptySession => f.write_str("the session has no conversation to save"),
             Self::NoSessionToResume => f.write_str("no saved session is available to resume"),
-            Self::InvalidSessionId(id) => write!(f, "invalid session id: {id}"),
-            Self::SessionNotFound(id) => write!(f, "session not found: {id}"),
+            Self::InvalidSessionId(id) => write!(f, "invalid thread id: {id}"),
+            Self::SessionNotFound(id) => write!(f, "thread not found: {id}"),
         }
     }
 }

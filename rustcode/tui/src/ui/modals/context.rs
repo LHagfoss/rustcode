@@ -116,12 +116,12 @@ pub(in crate::ui) fn render_status_modal(
         .filter(|m| m.role == "assistant")
         .count();
     let tool_count = state.history().iter().filter(|m| m.role == "tool").count();
-    let mut lines = vec![modal_header("Session status"), Line::default()];
+    let mut lines = vec![modal_header("Thread status"), Line::default()];
     lines.extend(provider_summary_lines(state.config(), inner.width as usize));
     lines.extend([
         panel_line("Model       ", state.model_name(), PanelEmphasis::Normal),
         panel_line(
-            "Session     ",
+            "Thread      ",
             state.active_session_id(),
             PanelEmphasis::Normal,
         ),
@@ -190,7 +190,7 @@ pub(in crate::ui) fn render_stats_modal(
                 ""
             };
             lines.push(panel_line(
-                "Session turn  ",
+                "Thread turn  ",
                 &format!(
                     "{} prompt + {} completion = {} tokens{estimate}",
                     usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
@@ -199,13 +199,13 @@ pub(in crate::ui) fn render_stats_modal(
             ));
         }
         None => lines.push(panel_line(
-            "Session turn  ",
+            "Thread turn  ",
             "no token data yet",
             PanelEmphasis::Normal,
         )),
     }
     lines.push(panel_line(
-        "Session total ",
+        "Thread total ",
         &session_total_summary(state),
         PanelEmphasis::Normal,
     ));
@@ -276,7 +276,7 @@ pub(in crate::ui) fn render_session_modal(
         crate::ui::context_usage::ContextUsageSource::HistoryEstimate => "estimated",
     };
     let lines = vec![
-        modal_header("Session"),
+        modal_header("Thread"),
         Line::default(),
         panel_line(
             "ID         ",
@@ -483,10 +483,10 @@ fn quota_window_label(window_minutes: Option<u64>, short: bool) -> String {
             } else {
                 format!("{minutes}m")
             };
-            format!("Current session ({span})")
+            format!("Current thread ({span})")
         }
         Some(minutes) => format!("Current {}-day window", minutes.div_ceil(DAY)),
-        None if short => "Current session".to_owned(),
+        None if short => "Current thread".to_owned(),
         None => "Current week (all models)".to_owned(),
     }
 }

@@ -45,7 +45,7 @@ pub(super) fn report_stale_compaction(
 
     history.push(ChatMessage::new(
         "system",
-        "History compaction discarded as stale: the active session or history changed while compaction was running.",
+        "History compaction discarded as stale: the active thread or history changed while compaction was running.",
     ));
 }
 
@@ -589,7 +589,7 @@ pub fn resume_latest_session(s: &mut AppState) {
             load_session_into(s, &meta);
         }
         None => {
-            s.set_transient_notice("No previous session to resume");
+            s.set_transient_notice("No previous thread to resume");
         }
     }
 }
@@ -600,15 +600,15 @@ pub fn resume_latest_session(s: &mut AppState) {
 pub fn adopt_detached_session(s: &mut AppState, session_id: &str) -> String {
     let session_id = session_id.trim();
     if !rustcode_session::valid_session_id(session_id) {
-        return "Usage: /adopt <session-id>  Take over a phone-created session".to_owned();
+        return "Usage: /adopt <session-id>  Take over a phone-created thread".to_owned();
     }
     if session_id == s.active_session_id {
-        return "That session is already open here.".to_owned();
+        return "That thread is already open here.".to_owned();
     }
     let Some(meta) = build_session_list(s).into_iter().find(|meta| {
         crate::config::session_id_from_path(&meta.path).as_deref() == Some(session_id)
     }) else {
-        return format!("No saved session '{session_id}' found.");
+        return format!("No saved thread '{session_id}' found.");
     };
     let Some(config_dir) = crate::config::get_config_dir() else {
         return "No configuration directory is available.".to_owned();
@@ -619,11 +619,11 @@ pub fn adopt_detached_session(s: &mut AppState, session_id: &str) -> String {
     }
     if load_session_into(s, &meta) {
         format!(
-            "Adopted \"{}\" from its phone session. Run /remote to share it again.",
+            "Adopted \"{}\" from its phone thread. Run /remote to share it again.",
             meta.title
         )
     } else {
-        format!("The owner exited but the session '{session_id}' could not be loaded.")
+        format!("The owner exited but the thread '{session_id}' could not be loaded.")
     }
 }
 
@@ -634,17 +634,17 @@ pub fn adopt_detached_session(s: &mut AppState, session_id: &str) -> String {
 fn stop_detached_owner(owners: &std::path::Path, session_id: &str) -> Result<(), String> {
     if !crate::remote_gateway::workspace::owner_alive(owners, session_id) {
         return Err(format!(
-            "Session '{session_id}' has no running owner; resume it from /history instead."
+            "Thread '{session_id}' has no running owner; resume it from /history instead."
         ));
     }
     let Some(pid) = crate::remote_gateway::workspace::owner_pid(owners, session_id) else {
         return Err(format!(
-            "Session '{session_id}' is owned but recorded no process; stop it on the device or with kill, then resume from /history."
+            "Thread '{session_id}' is owned but recorded no process; stop it on the device or with kill, then resume from /history."
         ));
     };
     if !owner_pid_is_rustcode(pid) {
         return Err(format!(
-            "Session '{session_id}' names pid {pid}, which is not this rustcode binary; refusing to signal it."
+            "Thread '{session_id}' names pid {pid}, which is not this rustcode binary; refusing to signal it."
         ));
     }
     // SAFETY: pid was just validated as a live rustcode process holding this
@@ -673,7 +673,7 @@ fn stop_detached_owner(owners: &std::path::Path, session_id: &str) -> Result<(),
 
 #[cfg(not(unix))]
 fn stop_detached_owner(_owners: &std::path::Path, _session_id: &str) -> Result<(), String> {
-    Err("Adopting a phone session is only supported on macOS and Linux.".to_owned())
+    Err("Adopting a phone thread is only supported on macOS and Linux.".to_owned())
 }
 
 /// True when `pid` is a live process running this same binary. Guards `/adopt`
@@ -699,7 +699,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     if loaded.is_empty() {
         s.history.push(ChatMessage::new(
             "system",
-            format!("Could not load session '{}'", meta.title),
+            format!("Could not load thread '{}'", meta.title),
         ));
         return false;
     }
@@ -751,11 +751,11 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     if workspace_switched && let Some(cwd) = s.task_working_directory.as_deref() {
         s.history.push(ChatMessage::new(
             "system",
-            format!("Switched to the session's workspace {}", cwd.display()),
+            format!("Switched to the thread's workspace {}", cwd.display()),
         ));
     }
     crate::config::save_session_history(&s.active_session_id, &s.history);
-    s.set_transient_notice(format!("Resumed session \"{}\"", meta.title));
+    s.set_transient_notice(format!("Resumed thread \"{}\"", meta.title));
     true
 }
 
@@ -874,12 +874,12 @@ mod adopt_tests {
         state.active_session_id = "abc123".to_owned();
         assert_eq!(
             adopt_detached_session(&mut state, "abc123"),
-            "That session is already open here."
+            "That thread is already open here."
         );
         // Valid format, never saved: must stop before touching processes.
         assert!(
             adopt_detached_session(&mut state, "adopt-missing-session-xyz")
-                .starts_with("No saved session"),
+                .starts_with("No saved thread"),
             "unknown id stops before signalling anything"
         );
     }
@@ -969,7 +969,7 @@ mod workspace_tests {
         rustcode_session::flush_history();
         store
             .session_meta_by_id(session_id)
-            .expect("stored session meta")
+            .expect("stored thread meta")
     }
 
     #[test]
@@ -1014,7 +1014,7 @@ mod workspace_tests {
         rustcode_session::flush_history();
         let meta = store
             .session_meta_by_id("adopt-legacy")
-            .expect("stored session meta");
+            .expect("stored thread meta");
         assert!(meta.workspace_cwd.is_none());
         assert!(!adopt_session_workspace(&mut state, &meta));
         assert_eq!(state.task_working_directory, None);

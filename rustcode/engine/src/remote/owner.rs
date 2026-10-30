@@ -61,7 +61,7 @@ impl SharingCommand {
             ["pair"] => Ok(Self::Pair),
             ["status"] => Ok(Self::Status),
             ["off"] => Ok(Self::Off),
-            _ => Err("Usage:\n  /remote  Turn remote access on: every session is shared with paired devices\n  /remote on  Same as /remote\n  /remote pair  Show a code to pair another device\n  /remote status  Show whether this session is shared\n  /remote off  Turn remote access off for every session".to_owned()),
+            _ => Err("Usage:\n  /remote  Turn remote access on: every thread is shared with paired devices\n  /remote on  Same as /remote\n  /remote pair  Show a code to pair another device\n  /remote status  Show whether this thread is shared\n  /remote off  Turn remote access off for every thread".to_owned()),
         }
     }
 }

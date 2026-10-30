@@ -2716,7 +2716,7 @@ async fn session_model_and_effort_leave_the_default_for_new_sessions_alone() {
             .map(|panel| panel.content.clone())
             .or_else(|| s.active_transient_notice().map(str::to_owned))
             .unwrap_or_default();
-        assert!(feedback.contains("this session"), "{command}: {feedback}");
+        assert!(feedback.contains("this thread"), "{command}: {feedback}");
     }
     {
         let mut s = state.lock().await;
