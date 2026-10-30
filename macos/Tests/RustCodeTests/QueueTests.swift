@@ -18,12 +18,28 @@ final class QueueTests: XCTestCase {
 }
 
 final class SidebarEntryTests: XCTestCase {
+    private func entries(pinned: Set<String>, lifecycle: SidebarLifecycle = SidebarLifecycle(),
+                         open: Set<SidebarGroups.Kind> = []) -> [String] {
+        let sessions = ["a", "b", "c"].map { SessionSummary(id: $0, cwd: "/p") }
+        let groups = SidebarGroups(ids: sessions.map(\.id), pinned: pinned, lifecycle: lifecycle, now: Date(),
+                                   byAttention: true) { _ in .idle }
+        return SidebarEntry.entries(groups, sessions: Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) }),
+                                    openShelves: open).map(\.id)
+    }
+
     /// One list keyed by chat, so pinning moves a row instead of making a new one.
     func testPinnedChatsComeFirstUnderTheirHeader() {
-        let a = SessionSummary(id: "a", cwd: "/p"), b = SessionSummary(id: "b", cwd: "/p")
-        XCTAssertEqual(SidebarEntry.entries(pinned: [], unpinned: [a, b]).map(\.id), ["a", "b"])
-        let ids = SidebarEntry.entries(pinned: [b], unpinned: [a]).map(\.id)
-        XCTAssertEqual(ids.filter { !$0.hasPrefix("\u{0}") }, ["b", "a"])
+        XCTAssertEqual(entries(pinned: []), ["a", "b", "c"])
+        let ids = entries(pinned: ["b"])
+        XCTAssertEqual(ids.filter { !$0.hasPrefix("\u{0}") }, ["b", "a", "c"])
         XCTAssertEqual(Set(ids).count, ids.count)
+    }
+
+    /// A folded shelf shows only its heading; unfolded, its chats follow it.
+    func testAFoldedShelfHidesItsChats() {
+        var lifecycle = SidebarLifecycle()
+        lifecycle.markDone("c", at: Date())
+        XCTAssertEqual(entries(pinned: [], lifecycle: lifecycle).filter { !$0.hasPrefix("\u{0}") }, ["a", "b"])
+        XCTAssertEqual(entries(pinned: [], lifecycle: lifecycle, open: [.done]).last, "c")
     }
 }

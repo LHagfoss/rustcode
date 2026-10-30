@@ -440,6 +440,7 @@ private struct GeneralSettings: View {
     @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
     @AppStorage(ComposerPredictions.key) private var predictions = true
     @AppStorage(SmartUI.enabledKey) private var smartUI = false
+    @AppStorage(DesktopModel.groupsByAttentionKey) private var groupsByAttention = true
 
     private var verbositySubtitle: String {
         switch verbosity {
@@ -511,6 +512,13 @@ private struct GeneralSettings: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                     }
+                }
+                RowDivider()
+                SettingsRow(title: "Group chats by attention",
+                            subtitle: "Chats that need you, are working or have a reply to read go to the top of the sidebar. Off keeps newest first") {
+                    Toggle("Group chats by attention", isOn: $groupsByAttention)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
                 RowDivider()
                 SettingsRow(title: "Tool calls", subtitle: verbositySubtitle) {
@@ -1135,7 +1143,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     /// section it lives in, not only one named like it (#2625).
     var keywords: [String] {
         switch self {
-        case .general: ["appearance", "theme", "dark", "light", "notifications", "project", "folder", "fade",
+        case .general: ["appearance", "theme", "dark", "light", "notifications", "project", "folder", "fade", "sidebar", "group",
                         "predictions", "smart ui", "tool calls", "verbosity", "auto-approve", "yolo",
                         "discord", "rich presence", "model", "effort", "reasoning", "new chats"]
         case .keybinds: ["keyboard", "shortcuts", "hotkeys", "keys"]

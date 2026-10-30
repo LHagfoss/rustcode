@@ -377,6 +377,14 @@ final class DesktopModel: ObservableObject {
     /// the retention sweep moves it to the Trash (`SessionRetention`).
     private var archivedDates: [String: Date] = (UserDefaults.standard.dictionary(forKey: "archivedSessionDates") as? [String: Date]) ?? [:]
     private var sweepingRetention = false
+    /// Chats marked done or snoozed, kept on this Mac (#2634, #2635).
+    @Published var lifecycle: SidebarLifecycle = (UserDefaults.standard.data(forKey: SidebarLifecycle.defaultsKey))
+        .flatMap { try? JSONDecoder().decode(SidebarLifecycle.self, from: $0) } ?? SidebarLifecycle() {
+        didSet {
+            guard lifecycle != oldValue else { return }
+            UserDefaults.standard.set(try? JSONEncoder().encode(lifecycle), forKey: SidebarLifecycle.defaultsKey)
+        }
+    }
     @Published var showsArchived = false {
         didSet { if showsArchived { readAllSessionsForFilter() } }
     }
@@ -955,7 +963,7 @@ final class DesktopModel: ObservableObject {
     }
 
     /// A small confirmation of something just done.
-    private func confirm(_ title: String, systemImage: String) {
+    func confirm(_ title: String, systemImage: String) {
         showToast(Toast(style: .success, systemImage: systemImage, title: title))
     }
 
@@ -1380,6 +1388,7 @@ final class DesktopModel: ObservableObject {
         } else {
             archivedSessions.insert(session.id)
             archivedDates[session.id] = Date()
+            lifecycle.forget(session.id)
             confirm("Archived", systemImage: "archivebox.fill")
             pinnedSessions.remove(session.id)
             UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
@@ -1446,6 +1455,7 @@ final class DesktopModel: ObservableObject {
         UserDefaults.standard.set(Array(pinnedSessions), forKey: "pinnedSessions")
         archivedSessions.remove(id)
         archivedDates[id] = nil
+        lifecycle.forget(id)
         sessions.removeAll { $0.id == id }
         sessionPages.remove(id)
         startedSessions[id] = nil
