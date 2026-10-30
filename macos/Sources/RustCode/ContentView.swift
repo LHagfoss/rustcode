@@ -1065,6 +1065,8 @@ private struct ChatView: View {
     @State private var centersComposer = false
     /// The banner and composer together, measured while centered.
     @State private var centeredHeight: CGFloat = 0
+    /// Where this thread's work mostly runs, when that is not its folder.
+    @State private var suggestedFolder: URL?
     @AppStorage(NewThreadBanner.key) private var newThreadBanner = ""
     @AppStorage(NewThreadBanner.styleKey) private var newThreadBannerStyle = "ascii"
     /// The chat keeps the newest output in view. Scrolling up hands control to
@@ -1406,6 +1408,15 @@ private struct ChatView: View {
                         .transition(.opacity.combined(with: .offset(y: -30)))
                 }
                 if let error = model.error, !error.isEmpty { ErrorBanner(text: error) { model.error = nil } }
+                if let folder = suggestedFolder, let session = model.selectedSession,
+                   !model.dismissedFolderSuggestions.contains("\(session)|\(folder.path)") {
+                    FolderSuggestionCard(folder: folder, current: model.chatProject, canMove: !model.isTurnRunning) {
+                        Task { await model.moveChatProject(to: folder) }
+                    } dismiss: {
+                        model.dismissFolderSuggestion(folder, for: session)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
                 if let permission = model.pendingPermission {
                     if permission.question != nil {
                         QuestionCard(model: model, request: permission).id(permission.id)
@@ -1453,6 +1464,20 @@ private struct ChatView: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.4), value: showsBanner)
         }
         .task { NewThreadBanner.preload() }
+        // Looked at again as the thread grows, never while a turn streams.
+        .task(id: FolderSuggestionKey(session: model.selectedSession, folder: model.chatProject,
+                                      count: model.isTurnRunning ? -1 : chat.transcript.items.count)) {
+            guard model.canMoveChat, model.selectedSession != nil, !model.isTurnRunning else {
+                if model.selectedSession == nil { suggestedFolder = nil }
+                return
+            }
+            let items = chat.transcript.items, folder = model.chatProject
+            let found = await Task.detached(priority: .utility) {
+                FolderSuggestion.suggest(items: items, folder: folder) { FolderSuggestion.projectRoot(of: $0) }
+            }.value
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy(duration: 0.2)) { suggestedFolder = found }
+        }
         .onChange(of: isFresh, initial: true) { _, fresh in
             guard fresh != centersComposer else { return }
             // A thread opening or one already open does not move the
@@ -2451,6 +2476,44 @@ extension View {
             .padding(.horizontal, 10)
             .frame(height: 26)
             .contentShape(.rect(cornerRadius: FooterHover.radius))
+    }
+}
+
+private struct FolderSuggestionKey: Equatable {
+    var session: String?
+    var folder: URL
+    var count: Int
+}
+
+/// Over the composer when the thread works mostly in another folder: move
+/// it there, so subagents and plain commands start where the work is.
+private struct FolderSuggestionCard: View {
+    let folder: URL
+    let current: URL
+    let canMove: Bool
+    let move: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "folder.badge.questionmark").foregroundStyle(Color.brand)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This thread works in \(folder.lastPathComponent)").font(.callout.weight(.medium))
+                Text("Its tools ran in \(folder.path.abbreviatingHome), not \(current.path.abbreviatingHome). Subagents and commands without a folder still start in \(current.lastPathComponent).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button("Not Now", action: dismiss).buttonStyle(.borderless)
+            Button("Move Thread", action: move)
+                .buttonStyle(.borderedProminent)
+                .disabled(!canMove)
+                .help(canMove ? "Move this thread to \(folder.path.abbreviatingHome)" : "Stop the running turn first")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .floatingSurface(in: .rect(cornerRadius: 14))
     }
 }
 
