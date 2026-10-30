@@ -572,6 +572,10 @@ enum DebugDriver {
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
         case "sidebar": model.toggleSidebar()
+        case "pulls":
+            // `pulls [number]`: open the pull requests panel, or one of them.
+            model.showsPullRequests = true
+            if parts.count > 1 { model.pullToOpen = Int(parts[1]) }
         case "banner":
             // `banner <path> [picture]` or `banner none`: the new thread
             // banner as Settings sets it, from a picture on disk.

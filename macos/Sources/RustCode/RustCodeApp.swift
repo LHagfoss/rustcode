@@ -682,6 +682,13 @@ final class DesktopModel: ObservableObject {
     @Published private(set) var engineSmartUI = false
     /// The engine can move a chat to another folder (#2459).
     var canMoveChat: Bool { capabilities?.sessionMove == true && capabilities?.closeSession == true }
+    /// The engine reads the project's pull requests (#2645).
+    var canReadPullRequests: Bool { capabilities?.pullRequests == true }
+    /// The pull requests panel is open.
+    @Published var showsPullRequests = false
+    /// A pull request the panel should open, set from outside it (the
+    /// debug driver).
+    @Published var pullToOpen: Int?
 
     /// Threads whose suggested folder (`FolderSuggestion`) the user dismissed,
     /// as `id|path`, so it is not offered again.

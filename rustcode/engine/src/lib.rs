@@ -31,6 +31,7 @@ mod platform;
 pub mod preview;
 pub mod prompt_commands;
 pub mod provider_auth;
+pub mod pull_requests;
 pub mod raw_cli;
 pub mod remote;
 pub mod serve;
