@@ -43,6 +43,7 @@ final class ChatScrollState: ObservableObject {
     func chatChanged() {
         map.forgetHeights()
         drawnRows.invalidate()
+        openingPasses = Self.openingPassLimit
         clipShift = nil
         // Owed for the last chat's older rows, which never join this one.
         pendingShift = nil
@@ -237,10 +238,19 @@ final class ChatScrollState: ObservableObject {
             // Rows were just scrolled back, so their frames are stale, and a
             // chat that just opened has no clip shift yet to fall back on.
             // Without another pass nothing redraws until the reader scrolls,
-            // and the older rows stay blank stand-ins (#2508).
-            if movedRows { setNeedsUpdate() }
+            // and the older rows stay blank stand-ins (#2508). A chat just
+            // opened tries again too, a bounded number of passes, until its
+            // rows report where they are.
+            if movedRows {
+                setNeedsUpdate()
+            } else if openingPasses > 0 {
+                openingPasses -= 1
+                // A frame later, after the rows have been laid out.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { [weak self] in self?.setNeedsUpdate() }
+            }
             return
         }
+        openingPasses = 0
         if drawnRows.update(map: &map, offset: offset, visible: visible) {
             drawn.ids = drawnRows.ids
         }
@@ -504,6 +514,11 @@ final class ChatScrollState: ObservableObject {
 
     /// Rows report one by one as a frame lays out; place the knob once they
     /// all have.
+    /// Passes a chat just opened may take to find its place before the
+    /// drawn rows wait for the reader to scroll: about half a second of frames.
+    static let openingPassLimit = 30
+    private var openingPasses = 0
+
     private func setNeedsUpdate() {
         guard !updatePending else { return }
         updatePending = true
