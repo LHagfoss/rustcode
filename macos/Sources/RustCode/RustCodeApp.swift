@@ -521,6 +521,18 @@ final class DesktopModel: ObservableObject {
     private var engine: EngineProcess?
     /// The running engine's connection, for Settings' skills and MCP pages.
     var engineConnection: ACPConnection? { engine?.connection }
+    /// The engine already asked to start its MCP servers.
+    private var warmedEngine: ObjectIdentifier?
+
+    /// A message is being written: have the engine start its MCP servers
+    /// while it is, instead of when it is sent (they took 1.8 s of a first
+    /// turn). Once per engine; an engine without the request ignores it.
+    func warmEngine() {
+        guard let connection = engineConnection, warmedEngine != ObjectIdentifier(connection),
+              !composer.text.isEmpty else { return }
+        warmedEngine = ObjectIdentifier(connection)
+        Task { _ = try? await connection.request(ACPMethod.warm, params: .object([:]), timeout: .seconds(5)) }
+    }
     /// Discord Rich Presence, as the engine last reported it.
     @Published private(set) var presence: PresenceStatus?
 
