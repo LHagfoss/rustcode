@@ -441,6 +441,7 @@ private struct GeneralSettings: View {
     @AppStorage(ComposerPredictions.key) private var predictions = true
     @AppStorage(SmartUI.enabledKey) private var smartUI = false
     @AppStorage(DesktopModel.groupsByAttentionKey) private var groupsByAttention = true
+    @AppStorage(TurnCompletionCard.enabledKey) private var showsTurnCompletion = true
 
     private var verbositySubtitle: String {
         switch verbosity {
@@ -512,6 +513,13 @@ private struct GeneralSettings: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                     }
+                }
+                RowDivider()
+                SettingsRow(title: "Turn summary",
+                            subtitle: "Under a finished answer, list the files the turn changed and the checks it ran, with how each ended") {
+                    Toggle("Turn summary", isOn: $showsTurnCompletion)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
                 RowDivider()
                 SettingsRow(title: "Group chats by attention",

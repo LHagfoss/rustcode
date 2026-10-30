@@ -68,13 +68,13 @@ public struct TurnCompletion: Equatable, Sendable {
             }
             guard tool.title == "run_command", let command = tool.inputDetail else { continue }
             if isCheck(command) {
-                let outcome: Check.Outcome = switch tool.status {
-                case .completed: .passed
-                case .failed: .failed
-                default: cancelled ? .cancelled : .unknown
+                let outcome: Check.Outcome = if tool.settledByTurnEnd || !(tool.status?.isTerminal ?? false) {
+                    cancelled ? .cancelled : .unknown
+                } else {
+                    tool.status == .failed ? .failed : .passed
                 }
                 checks.append(Check(command: command, outcome: outcome))
-            } else if tool.status == .failed {
+            } else if tool.status == .failed, !tool.settledByTurnEnd {
                 failedCommands += 1
             }
         }
