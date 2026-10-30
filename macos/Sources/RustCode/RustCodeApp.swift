@@ -728,10 +728,6 @@ final class DesktopModel: ObservableObject {
     /// The working agents of chats no longer on screen, nested under their
     /// rows in the sidebar until those chats are opened again (#2556).
     @Published private(set) var backgroundAgents = BackgroundAgents()
-    /// The agents seen working since the app started, by chat: their rows
-    /// stay under the chat once they end, so a result can still be opened
-    /// from there (#2596).
-    @Published private(set) var seenAgents: [String: Set<Int>] = [:]
     private var backgroundAgentPollTask: Task<Void, Never>?
 
     /// Another chat is on screen: its agents replace the last one's, whose
@@ -784,22 +780,14 @@ final class DesktopModel: ObservableObject {
             return
         }
         let agents = SubagentInfo.list(from: result)
-        noteWorking(agents, of: session)
         var next = backgroundAgents
         next.update(session, agents: agents)
         if next != backgroundAgents { backgroundAgents = next }
     }
 
-    /// Remember which of `session`'s agents were seen working.
-    private func noteWorking(_ agents: [SubagentInfo], of session: String) {
-        let working = Set(agents.filter(\.isActive).map(\.id))
-        guard !working.isSubset(of: seenAgents[session] ?? []) else { return }
-        seenAgents[session, default: []].formUnion(working)
-    }
-
     /// The children the sidebar nests under the shown chat.
     func sidebarChildren(of session: String) -> [SubagentInfo] {
-        SubagentInfo.sidebarChildren(subagents, viewing: viewedAgent?.id, seen: seenAgents[session] ?? [])
+        SubagentInfo.sidebarChildren(subagents, viewing: viewedAgent?.id)
     }
 
     /// Open `agent`, a working agent of `session`, from its row in the
@@ -872,7 +860,6 @@ final class DesktopModel: ObservableObject {
     /// chat, which says how it ended (#2596).
     func applyAgents(_ agents: [SubagentInfo], of session: String, askedWhileViewing asked: Int?) {
         guard selectedSession == session else { return }
-        noteWorking(agents, of: session)
         if agents != subagents { subagents = agents }
         guard let viewed = viewedAgent, viewed.id == asked,
               let now = agents.first(where: { $0.id == viewed.id }),

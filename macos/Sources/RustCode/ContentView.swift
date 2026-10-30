@@ -1908,6 +1908,20 @@ final class ChatScrollInput {
     }
 }
 
+/// What Esc does in the composer: an open panel closes, then a draft
+/// (text, command chip, files and images) clears, and only an empty composer
+/// stops the running turn, so Esc never throws away a draft and the turn
+/// together (#2631).
+enum ComposerEscape: Equatable {
+    case closePanel, clearDraft, stopTurn, ignore
+
+    static func action(panelOpen: Bool, hasDraft: Bool, busy: Bool) -> ComposerEscape {
+        if panelOpen { return .closePanel }
+        if hasDraft { return .clearDraft }
+        return busy ? .stopTurn : .ignore
+    }
+}
+
 /// Page Up, Page Down, Home and End for the chat, caught before the focused
 /// view sees them. Which keys and when is `TranscriptKeys`; this only tells
 /// it where the focus is.
@@ -2389,16 +2403,20 @@ private struct Composer: View {
                     return .handled
                 }
                 .onKeyPress(.escape) {
-                    if model.composerPanel != nil {
-                        model.composerPanel = nil
-                        return .handled
-                    }
-                    if !model.commandSuggestions.isEmpty || model.draftCommand != nil {
+                    switch ComposerEscape.action(panelOpen: model.composerPanel != nil,
+                                                 hasDraft: !model.draft.isEmpty || model.draftCommand != nil
+                                                     || !model.attachments.isEmpty || !model.images.isEmpty,
+                                                 busy: model.busy) {
+                    case .closePanel: model.composerPanel = nil
+                    case .clearDraft:
                         model.draft = ""
                         model.draftCommand = nil
-                        return .handled
+                        model.attachments = []
+                        model.images = []
+                    case .stopTurn: Task { await model.cancel() }
+                    case .ignore: return .ignored
                     }
-                    return .ignored
+                    return .handled
                 }
                 .onKeyPress(.delete) { model.unwrapCommandChip() ? .handled : .ignored }
                 .onChange(of: composer.text) { _, _ in

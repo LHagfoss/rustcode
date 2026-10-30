@@ -252,6 +252,103 @@ struct PillButtonStyle: ButtonStyle {
     }
 }
 
+/// A choice from a list, as a pill that opens a menu: the current value and
+/// an up-down chevron, in the same capsule as the page's buttons, with a
+/// check by the current value in the menu (#2631).
+struct SettingsMenu<Value: Hashable>: View {
+    let title: String
+    let selection: Value
+    let options: [(value: Value, name: String)]
+    let choose: (Value) -> Void
+
+    init(_ title: String, selection: Value, options: [(Value, String)], choose: @escaping (Value) -> Void) {
+        self.title = title
+        self.selection = selection
+        self.options = options.map { (value: $0.0, name: $0.1) }
+        self.choose = choose
+    }
+
+    var body: some View {
+        let current = options.first { $0.value == selection }?.name ?? "—"
+        Menu {
+            ForEach(options, id: \.value) { option in
+                Button { choose(option.value) } label: {
+                    if option.value == selection {
+                        Label(option.name, systemImage: "checkmark")
+                    } else {
+                        Text(option.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(current).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: 260)
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(PillButtonStyle())
+        .fixedSize()
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(current)
+    }
+}
+
+/// A few exclusive choices side by side: a capsule track whose selected
+/// segment carries a raised thumb that slides between them, in place of
+/// the boxy system segmented control (#2631).
+struct SettingsSegments<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(value: Value, name: String)]
+    @Namespace private var thumb
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(_ title: String, selection: Binding<Value>, options: [(Value, String)]) {
+        self.title = title
+        _selection = selection
+        self.options = options.map { (value: $0.0, name: $0.1) }
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.value) { option in
+                let selected = option.value == selection
+                Button {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { selection = option.value }
+                } label: {
+                    Text(option.name)
+                        .font(.callout.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? .primary : .secondary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 22)
+                        .background {
+                            if selected {
+                                Capsule()
+                                    .fill(Color(nsColor: .controlBackgroundColor))
+                                    .shadow(color: .black.opacity(0.12), radius: 1.5, y: 0.5)
+                                    .matchedGeometryEffect(id: "thumb", in: thumb)
+                            }
+                        }
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(.fill.tertiary, in: .capsule)
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+}
+
 // MARK: - Sections
 
 private struct GeneralSettings: View {
@@ -337,12 +434,8 @@ private struct GeneralSettings: View {
                 }
                 RowDivider()
                 SettingsRow(title: "Tool calls", subtitle: verbositySubtitle) {
-                    Picker("Tool calls", selection: $verbosity) {
-                        ForEach(ToolVerbosity.allCases) { Text($0.title).tag($0) }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
+                    SettingsSegments("Tool calls", selection: $verbosity,
+                                     options: ToolVerbosity.allCases.map { ($0, $0.title) })
                 }
                 RowDivider()
                 SettingsRow(title: "Auto-approve tools",
@@ -374,25 +467,19 @@ private struct GeneralSettings: View {
                 SettingsGroup(title: "New Chats",
                               footer: "New chats and new terminal UI sessions start with this model and effort. Changing the model inside a chat or a terminal session applies to that session only.") {
                     SettingsRow(title: "Model") {
-                        Picker("Model", selection: Binding(get: { defaults.model },
-                                                           set: { value in Task { await model.setModelDefaults(model: value) } })) {
-                            ForEach(defaults.models, id: \.name) { profile in Text(profile.name).tag(profile.name) }
+                        SettingsMenu("Model", selection: defaults.model,
+                                     options: defaults.models.map { ($0.name, $0.name) }) { value in
+                            Task { await model.setModelDefaults(model: value) }
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .fixedSize()
                     }
                     let efforts = defaults.efforts(for: defaults.model)
                     if !efforts.isEmpty {
                         RowDivider()
                         SettingsRow(title: "Reasoning effort") {
-                            Picker("Reasoning effort", selection: Binding(get: { defaults.effort },
-                                                                          set: { value in Task { await model.setModelDefaults(effort: value) } })) {
-                                ForEach(efforts) { effort in Text(effort.name).tag(effort.id) }
+                            SettingsMenu("Reasoning effort", selection: defaults.effort,
+                                         options: efforts.map { ($0.id, $0.name) }) { value in
+                                Task { await model.setModelDefaults(effort: value) }
                             }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .fixedSize()
                         }
                     }
                 }

@@ -91,12 +91,11 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
     }
 
     /// The children the sidebar nests under their chat (#2492): those still
-    /// working, the one open on screen, so its row stays while it is read,
-    /// and those `seen` working since the app started, so one that ended
-    /// stays there with its result to open (#2596).
-    public static func sidebarChildren(_ agents: [SubagentInfo], viewing: Int?,
-                                       seen: Set<Int> = []) -> [SubagentInfo] {
-        agents.filter { $0.isActive || $0.id == viewing || seen.contains($0.id) }
+    /// working and the one open on screen, so its row stays while it is read.
+    /// One that ended leaves, so the sidebar shows only work in progress; its
+    /// result stays in the chat's Agents list (#2631).
+    public static func sidebarChildren(_ agents: [SubagentInfo], viewing: Int?) -> [SubagentInfo] {
+        agents.filter { $0.isActive || $0.id == viewing }
     }
 
     /// Done, failed or cancelled, and no follow-up turn running: the child

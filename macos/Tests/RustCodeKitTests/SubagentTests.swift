@@ -19,18 +19,6 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(SubagentInfo.sidebarChildren([], viewing: 4).map(\.id), [])
     }
 
-    /// #2596: an agent seen working keeps its row under its chat once it
-    /// ends, so its result can still be opened from there.
-    func testAnAgentSeenWorkingKeepsItsRowOnceItEnds() {
-        let agents = SubagentInfo.list(from: ["agents": [
-            ["id": 1, "name": "running", "status": "running"],
-            ["id": 3, "name": "done", "status": "completed"],
-            ["id": 4, "name": "earlier", "status": "completed"],
-        ]])
-        XCTAssertEqual(SubagentInfo.sidebarChildren(agents, viewing: nil, seen: [3]).map(\.id), [1, 3])
-        XCTAssertEqual(SubagentInfo.sidebarChildren(agents, viewing: 4, seen: [3]).map(\.id), [1, 3, 4])
-    }
-
     /// #2596: the open agent gives the screen back to its chat only when it
     /// goes from working to done, failed or cancelled; one opened after it
     /// ended, to read its result, stays open.
