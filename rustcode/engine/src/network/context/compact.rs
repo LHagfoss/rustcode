@@ -48,9 +48,16 @@ pub(crate) fn retention_tail_start(history: &[ChatMessage], budget: usize) -> us
 const SHORTENED_TOOL_RESULT_CHARS: usize = 400;
 
 /// How far below the budget shortening goes, so it does not have to run again
-/// on the very next round (each run changes the prompt prefix and costs the
-/// provider cache).
-const SHORTENED_TARGET_SHARE: f64 = 0.75;
+/// soon (each run changes the prompt prefix and costs the provider cache). At
+/// three quarters a long turn was shortened every ten rounds or so (#2667).
+const SHORTENED_TARGET_SHARE: f64 = 0.5;
+
+/// Characters a string argument of an old tool call keeps. Edit payloads are
+/// already on disk, so only enough to recognise the edit stays.
+const SHORTENED_ARGUMENT_CHARS: usize = 200;
+
+const SHORTENED_ARGUMENT_NOTE: &str =
+    "more characters dropped to keep the turn within the context window]";
 
 const SHORTENED_TOOL_RESULT_NOTE: &str = "more characters of this result were dropped to keep the turn within the context window; run the tool again if you still need them]";
 
@@ -60,7 +67,8 @@ const SHORTENED_TOOL_RESULT_NOTE: &str = "more characters of this result were dr
 /// leaves nothing before the cut. What fills such a turn is its tool output:
 /// files read, command output, edit diffs. Results older than the recent tail
 /// are shortened in place, oldest first, to their first few hundred
-/// characters and a note saying how to get the rest, until the history is
+/// characters and a note saying how to get the rest, and the long string
+/// arguments of old calls (edit payloads) likewise, until the history is
 /// comfortably under `budget`. Messages are never removed, so every tool call
 /// keeps its result, and the recent tail stays byte-identical. `tokens` is
 /// the current estimate of the history. True when anything was shortened.
@@ -87,8 +95,16 @@ pub(crate) fn shorten_old_tool_output(
 }
 
 /// Shorten one long tool result in place to its first few hundred characters
-/// and a note saying how to get the rest. True when it changed.
+/// and a note saying how to get the rest, or the long string arguments of an
+/// assistant message's tool calls. True when it changed.
 fn shorten_tool_result(message: &mut ChatMessage) -> bool {
+    if message.role == "assistant" {
+        let mut changed = false;
+        for call in &mut message.tool_calls {
+            changed |= shorten_call_arguments(&mut call.arguments);
+        }
+        return changed;
+    }
     if message.role != "tool" || message.content.ends_with(SHORTENED_TOOL_RESULT_NOTE) {
         return false;
     }
@@ -106,6 +122,52 @@ fn shorten_tool_result(message: &mut ChatMessage) -> bool {
         length - SHORTENED_TOOL_RESULT_CHARS
     );
     true
+}
+
+/// Shorten the long string values of a call's JSON arguments, keeping the
+/// arguments valid JSON (providers reject a replayed call whose arguments do
+/// not parse). Arguments that are not JSON are left as they are.
+fn shorten_call_arguments(arguments: &mut String) -> bool {
+    fn shorten(value: &mut serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(text) => {
+                let length = text.chars().count();
+                if length <= SHORTENED_ARGUMENT_CHARS * 2 || text.ends_with(SHORTENED_ARGUMENT_NOTE)
+                {
+                    return false;
+                }
+                let kept: String = text.chars().take(SHORTENED_ARGUMENT_CHARS).collect();
+                *text = format!(
+                    "{kept}\n[… {} {SHORTENED_ARGUMENT_NOTE}",
+                    length - SHORTENED_ARGUMENT_CHARS
+                );
+                true
+            }
+            serde_json::Value::Array(items) => items
+                .iter_mut()
+                .fold(false, |changed, item| shorten(item) | changed),
+            serde_json::Value::Object(fields) => fields
+                .values_mut()
+                .fold(false, |changed, field| shorten(field) | changed),
+            _ => false,
+        }
+    }
+    if arguments.len() <= SHORTENED_ARGUMENT_CHARS * 2 {
+        return false;
+    }
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return false;
+    };
+    if !shorten(&mut value) {
+        return false;
+    }
+    match serde_json::to_string(&value) {
+        Ok(shortened) => {
+            *arguments = shortened;
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Move a cut that falls inside a turn so it splits no tool transaction: a
@@ -1620,7 +1682,7 @@ mod preserved_user_request_tests {
             result.tool_call_id = Some(format!("call-{index}"));
             history.push(result);
         }
-        let budget = 40_000;
+        let budget = 60_000;
         let tokens: usize = history.iter().map(estimate_message_tokens).sum();
         assert!(tokens > budget, "the turn must be over budget ({tokens})");
         assert!(
@@ -1645,6 +1707,59 @@ mod preserved_user_request_tests {
         );
         assert!(history[2].content.starts_with("view_file: file 0"));
         assert!(history[2].content.ends_with(SHORTENED_TOOL_RESULT_NOTE));
+        // Already short, so a second pass changes nothing.
+        let shortened = history.clone();
+        shorten_old_tool_output(&mut history, after, budget);
+        assert_eq!(history, shortened);
+    }
+
+    /// Old edit payloads are already on disk: shortening a long turn trims
+    /// their long string arguments too, keeping the arguments valid JSON and
+    /// the path that names the edit (#2667).
+    #[test]
+    fn a_long_single_turn_sheds_old_edit_arguments() {
+        let mut history = vec![ChatMessage::new("user", "rewrite the module")];
+        for index in 0..40 {
+            let arguments = serde_json::json!({
+                "path": format!("src/file_{index}.rs"),
+                "replacements": [{"target": "x".repeat(4_000), "replacement": "y".repeat(4_000)}],
+            })
+            .to_string();
+            history.push(
+                ChatMessage::new("assistant", "editing").with_tool_calls(vec![
+                    crate::app::ToolCallRef {
+                        id: format!("call-{index}"),
+                        name: "multi_replace_file_content".into(),
+                        arguments,
+                    },
+                ]),
+            );
+            history
+                .push(ChatMessage::new("tool", "edited").answering(Some(format!("call-{index}"))));
+        }
+        let budget = 40_000;
+        let tokens: usize = history.iter().map(estimate_message_tokens).sum();
+        assert!(tokens > budget, "the turn must be over budget ({tokens})");
+        let tail = recent_tail_start(&history, budget);
+        let recent = history[tail..].to_vec();
+
+        assert!(shorten_old_tool_output(&mut history, tokens, budget));
+
+        let after: usize = history.iter().map(estimate_message_tokens).sum();
+        assert!(
+            after <= (budget as f64 * SHORTENED_TARGET_SHARE) as usize,
+            "{after}"
+        );
+        assert_eq!(
+            &history[tail..],
+            recent.as_slice(),
+            "the recent tail is untouched"
+        );
+        let first: serde_json::Value =
+            serde_json::from_str(&history[1].tool_calls[0].arguments).unwrap();
+        assert_eq!(first["path"], "src/file_0.rs");
+        let target = first["replacements"][0]["target"].as_str().unwrap();
+        assert!(target.ends_with(SHORTENED_ARGUMENT_NOTE), "{target}");
         // Already short, so a second pass changes nothing.
         let shortened = history.clone();
         shorten_old_tool_output(&mut history, after, budget);
