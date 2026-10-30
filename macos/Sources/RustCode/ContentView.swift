@@ -54,6 +54,14 @@ struct ContentView: View {
                 }
                 .background(Color.chatBackground)
                 .transition(.move(edge: .trailing))
+            } else if model.showsChanges {
+                HStack(spacing: 0) {
+                    PreviewResizeHandle(width: $previewWidth)
+                    ChangesPanel(model: model) { model.toggleChanges() }
+                        .frame(width: CGFloat(previewWidth))
+                }
+                .background(Color.chatBackground)
+                .transition(.move(edge: .trailing))
             }
         }
         .background(Color.sidebarBackground)
@@ -91,7 +99,7 @@ struct ContentView: View {
         .overlay {
             ToastStack(model: model,
                        leadingInset: model.showsSidebar ? sidebarClampedWidth : 0,
-                       trailingInset: model.showsPreview ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
+                       trailingInset: model.showsPreview || model.showsChanges ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
         }
     }
 }
@@ -1480,6 +1488,11 @@ private struct ChatView: View {
                 }
             }
             TerminalToolbarButton(terminal: model.terminal, keybindings: model.keybindings)
+            if !model.showsChanges {
+                ToolbarCluster {
+                    ClusterButton(systemImage: "plus.forwardslash.minus", help: "Show the project's changes") { model.toggleChanges() }
+                }
+            }
             if !model.showsPreview {
                 ToolbarCluster {
                     ClusterButton(systemImage: "globe", help: model.keybindings.help("Show localhost preview", .togglePreview)) { model.togglePreview() }
@@ -2450,7 +2463,12 @@ private struct Composer: View {
                     // in as typed first, or the cleared field keeps the prompt.
                     MarkedText.commitInWindows()
                     // ⇧⏎ (and ⌥⏎) start a new line at the cursor; ⌘⏎ steers a
-                    // running turn.
+                    // running turn; ⌘⇧⏎ starts the message as a new chat in
+                    // the background (#2652).
+                    if press.modifiers.contains(.command), press.modifiers.contains(.shift) {
+                        if model.canLaunchInBackground { Task { await model.launchInBackground() } }
+                        return .handled
+                    }
                     if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
                         NSApp.sendAction(#selector(NSText.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
                         return .handled
@@ -2868,6 +2886,8 @@ struct AddPanel: View {
             ("Ask for a Chart, Table or Tree…", "chart.bar.xaxis", { model.showsVisualizationGuide = true }),
         ] + (model.canSendDraftElsewhere
             ? [("Send Message to Another Chat…", "paperplane", { model.chooseChatForDraft() })] : [])
+            + (model.canLaunchInBackground
+                ? [("Start as New Chat in Background  ⌘⇧⏎", "paperplane.circle", { Task { await model.launchInBackground() } })] : [])
     }
 
     var body: some View {

@@ -1047,6 +1047,9 @@ enum DebugDriver {
             }
             model.transcript.apply(.agentText("Fixed the rules; the lint still fails on an unused import."))
             model.transcript.finishTurn(at: Date())
+        case "changes":
+            // `changes`: show or hide the Changes panel.
+            model.toggleChanges()
         case "size":
             NSApp.windows.first?.setFrame(NSRect(x: 80, y: 80, width: Double(parts[1])!, height: Double(parts[2])!), display: true)
         default: break

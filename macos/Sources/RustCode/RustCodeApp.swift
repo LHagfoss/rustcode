@@ -257,7 +257,14 @@ final class DesktopModel: ObservableObject {
     /// agent can use it only through `localhost_preview`, after the user
     /// allows it for a chat (PreviewAgentBridge.swift).
     let preview = PreviewController()
-    @Published var showsPreview = false
+    @Published var showsPreview = false {
+        didSet { if showsPreview { showsChanges = false } }
+    }
+    /// The read-only Changes panel beside the chat, in the preview's place
+    /// (#2642).
+    @Published var showsChanges = false {
+        didSet { if showsChanges { showsPreview = false } }
+    }
     /// The workspace terminal, per project. The user's own shell: it never
     /// goes through the engine or reaches the agent.
     let terminal = TerminalController()
@@ -1286,6 +1293,45 @@ final class DesktopModel: ObservableObject {
         await run(prompt)
     }
 
+    /// A message, not a command, that a new chat of its own could start with.
+    var canLaunchInBackground: Bool {
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return engine?.connection != nil && draftCommand == nil && !typed.hasPrefix("/") && !typed.hasPrefix("!")
+            && (!typed.isEmpty || !attachments.isEmpty || !images.isEmpty)
+            && (images.isEmpty || capabilities?.promptImages == true)
+    }
+
+    /// ⌘⇧⏎: start the message as a new chat that works in the background,
+    /// and give the composer back empty for the next task (#2652). The new
+    /// chat takes the project, model and effort the composer shows, and the
+    /// same tool approval setting as any chat; nothing else is created (no
+    /// worktree). It shows as Working in the sidebar and asks for attention
+    /// there as any chat does. If the chat cannot be created, the message
+    /// and its attachments come back to the composer.
+    func launchInBackground() async {
+        MarkedText.commitInWindows()
+        guard canLaunchInBackground, let connection = engine?.connection else { return }
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folder = chatProject
+        let (savedDraft, savedAttachments, savedImages) = (draft, attachments, images)
+        let text = Self.prompt(typed, attaching: attachments, in: folder)
+        draft = ""
+        attachments = []
+        images = []
+        guard let id = await createSession(in: folder, on: connection, selecting: false) else {
+            draft = savedDraft
+            attachments = savedAttachments
+            images = savedImages
+            return
+        }
+        startedSessions[id] = .started(id: id, cwd: folder.path, prompt: typed, model: selectedModel)
+        await refreshSessions()
+        let model = models.choices.first { $0.id == selectedModel }?.name ?? selectedModel ?? "the default model"
+        showToast(Toast(style: .info, systemImage: "paperplane.circle", title: "Started in the background",
+                        message: "\(folder.lastPathComponent) · \(model). Working there; this composer is free.", session: id))
+        await run(QueuedPrompt(sessionId: id, typed: typed, text: text, images: savedImages))
+    }
+
     /// Commands matching the draft while its first word is being typed.
     var commandSuggestions: [SlashCommand] {
         draftCommand == nil ? SlashCommand.suggestions(for: draft, in: commands) : []
@@ -1643,6 +1689,10 @@ final class DesktopModel: ObservableObject {
         withAnimation(.snappy(duration: 0.25)) { showsPreview.toggle() }
     }
 
+    func toggleChanges() {
+        withAnimation(.snappy(duration: 0.25)) { showsChanges.toggle() }
+    }
+
     func chooseAttachments() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -1820,22 +1870,37 @@ final class DesktopModel: ObservableObject {
     /// picked for it.
     private func createSession(in folder: URL) async -> String? {
         guard let connection = engine?.connection else { return nil }
+        return await createSession(in: folder, on: connection, selecting: true)
+    }
+
+    /// `selecting` false leaves the chat on screen as it is: the new chat is
+    /// kept open off screen, with its own model list, for a background launch.
+    private func createSession(in folder: URL, on connection: ACPConnection, selecting: Bool) async -> String? {
         let wanted = DraftModelSettings(options: models, selectedModel: selectedModel)
         do {
             let result = try await connection.request(ACPMethod.sessionNew, params: ACPRequests.newSession(cwd: folder), timeout: .seconds(30))
             guard let id = result["sessionId"]?.stringValue else { throw ACPProtocolError.malformed("session/new has no sessionId") }
             sessionProjects[id] = folder.path
-            selectedSession = id
-            applyConfig(result["configOptions"])
+            var options: ModelOptions
+            if selecting {
+                selectedSession = id
+                applyConfig(result["configOptions"])
+                options = models
+            } else {
+                options = result["configOptions"].map(ModelOptions.init(configOptions:)) ?? models
+            }
             // The draft's model, effort and Fast, sent to this session by id
             // before the first prompt, so a chat picked meanwhile is untouched.
-            var options = models
             for _ in 0..<3 {
                 guard let change = wanted.nextChange(for: options),
                       let next = await send(change, to: id) else { break }
                 options = next
             }
-            stashSelectedSession()
+            if selecting {
+                stashSelectedSession()
+            } else {
+                openChats.stash(id, transcript: Transcript(), models: options, selectedModel: options.current)
+            }
             return id
         } catch {
             self.error = String(describing: error)

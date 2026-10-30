@@ -839,7 +839,7 @@ private struct FileActions {
 /// One file's changes as a unified diff: removed lines red, added lines
 /// green, numbered in the old and new file. A long diff shows its head until
 /// "Show all".
-private struct FileChangeView: View {
+struct FileChangeView: View {
     let change: FileChange
     /// Whether to name the file above its diff (the card names a lone file).
     var showsHeader: Bool

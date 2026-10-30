@@ -105,6 +105,14 @@ public struct FileChange: Equatable, Sendable, Identifiable {
         return order.map { FileChange(path: $0, diffs: byPath[$0] ?? []) }
     }
 
+    public init(path: String, rows: [DiffRow], added: Int, removed: Int, isNewFile: Bool) {
+        self.path = path
+        self.rows = rows
+        self.added = added
+        self.removed = removed
+        self.isNewFile = isNewFile
+    }
+
     init(path: String, diffs: [FileDiff]) {
         self.path = path
         isNewFile = diffs.allSatisfy { $0.oldText == nil }
