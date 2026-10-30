@@ -95,7 +95,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             if !presented { performNextAction() }
         }
         .sensoryFeedback(.selection, trigger: showsActions)
-        .copyConfirmation("Session ID Copied", trigger: copiedIDCount, alignment: .top)
+        .copyConfirmation("Thread ID Copied", trigger: copiedIDCount, alignment: .top)
         .sensoryFeedback(.success, trigger: images.count) { old, new in new > old }
         .sheet(isPresented: $showsFolder) { NewSessionView() }
         .fullScreenCover(isPresented: $showsCamera) {
@@ -132,7 +132,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
                 .frame(width: buttonSize, height: buttonSize)
                 .background(.fill.tertiary, in: .circle)
         }
-        .buttonStyle(ComposerPressStyle()).accessibilityLabel("Chat actions")
+        .buttonStyle(ComposerPressStyle()).accessibilityLabel("Thread actions")
         .disabled(isSending || isImporting)
         .anchorPreference(key: ChatActionsAnchor.self, value: .bounds) { $0 }
     }
@@ -261,12 +261,12 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         if let commands = store.attached?.commands, !commands.isEmpty { return commands }
         return [
             ("/help", "All commands", "execute"), ("/model", "Choose a model", "model_picker"),
-            ("/new", "New session", "new_session"), ("/history", "Sessions", "session_picker"),
+            ("/new", "New thread", "new_session"), ("/history", "Threads", "session_picker"),
             ("/copy", "Copy last response", "copy_response"), ("/effort", "Thinking effort", "execute"),
-            ("/cancel", "Stop the current task", "execute"), ("/status", "Session status", "execute"),
+            ("/cancel", "Stop the current task", "execute"), ("/status", "Thread status", "execute"),
             ("/context", "Context window", "execute"), ("/usage", "Token usage", "execute"),
             ("/tasks", "Background tasks", "execute"), ("/mcp", "Configured MCP servers", "execute"),
-            ("/title", "Rename session", "execute"), ("/info", "About RustCode", "execute"),
+            ("/title", "Rename thread", "execute"), ("/info", "About RustCode", "execute"),
             ("/perf", "Performance", "execute")
         ].map { SessionCommandChoice(name: $0.0, description: $0.1, insertion: $0.0, action: $0.2) }
     }
@@ -394,7 +394,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
 
     private func canAttachImage() -> Bool {
         guard store.supportsImageUpload else {
-            store.notice = "Update RustCode on your Mac to attach images to this session."
+            store.notice = "Update RustCode on your Mac to attach images to this thread."
             return false
         }
         guard images.count < 4 else {

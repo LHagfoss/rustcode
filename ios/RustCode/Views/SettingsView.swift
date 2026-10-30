@@ -57,7 +57,7 @@ struct SettingsView: View {
                         }
                     } footer: {
                         if !store.isDemo {
-                            Text("Disconnects this iPhone. Sessions keep running on your Mac.")
+                            Text("Disconnects this iPhone. Threads keep running on your Mac.")
                         }
                     }
                 }
@@ -68,8 +68,8 @@ struct SettingsView: View {
                     Text("About")
                 } footer: {
                     Text(store.supportsSavedSessions
-                        ? "Every RustCode session open in a terminal on your Mac appears here while /remote is on, and so do the sessions saved on it under Recent: tap one to reopen it on the Mac. You can also start new sessions from this app. Sessions keep running on your Mac when you close the app. Use /remote off on the Mac to turn remote access off."
-                        : "Every RustCode session open in a terminal on your Mac appears here while /remote is on, and you can start new ones from this app. Sessions keep running on your Mac when you close the app. Use /remote off on the Mac to turn remote access off.")
+                        ? "Every RustCode thread open in a terminal on your Mac appears here while /remote is on, and so do the threads saved on it under Recent: tap one to reopen it on the Mac. You can also start new threads from this app. Threads keep running on your Mac when you close the app. Use /remote off on the Mac to turn remote access off."
+                        : "Every RustCode thread open in a terminal on your Mac appears here while /remote is on, and you can start new ones from this app. Threads keep running on your Mac when you close the app. Use /remote off on the Mac to turn remote access off.")
                 }
             }
             .navigationTitle("Settings")

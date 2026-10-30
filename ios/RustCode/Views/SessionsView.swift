@@ -40,7 +40,7 @@ struct SessionsView: View {
                             SessionSidebar(showsSettings: $showsSettings, didSelect: closeSidebar)
                                 .toolbar {
                                     ToolbarItem(placement: .topBarLeading) {
-                                        Button("Close sessions", systemImage: "sidebar.left") { closeSidebar() }
+                                        Button("Close threads", systemImage: "sidebar.left") { closeSidebar() }
                                             .accessibilityFocused($sidebarFocused)
                                     }
                                 }
@@ -68,7 +68,7 @@ struct SessionsView: View {
                                     Color.black.opacity(0.16 * progress).ignoresSafeArea()
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("Close sessions")
+                                .accessibilityLabel("Close threads")
                             }
                         }
                         .clipShape(ChatScreenShape(
@@ -129,9 +129,9 @@ struct SessionsView: View {
             ContentUnavailableView {
                 Label("RustCode", systemImage: "bubble.left.and.text.bubble.right")
             } description: {
-                Text("Start a conversation on your Mac, or continue one from your sessions.")
+                Text("Start a conversation on your Mac, or continue one from your threads.")
             } actions: {
-                Button("Start a new session", systemImage: "square.and.pencil") { showsNewSession = true }
+                Button("Start a new thread", systemImage: "square.and.pencil") { showsNewSession = true }
                     .brandProminentButtonStyle()
                     .disabled(store.connection != .connected)
             }
@@ -139,7 +139,7 @@ struct SessionsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Show sessions", systemImage: "line.3.horizontal") { showsSidebar = true; columns = .all }
+                    Button("Show threads", systemImage: "line.3.horizontal") { showsSidebar = true; columns = .all }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Settings", systemImage: "gearshape") { showsSettings = true }
@@ -245,18 +245,18 @@ private struct SessionSidebar: View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search sessions", text: $query)
+                TextField("Search threads", text: $query)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
-                    .accessibilityLabel("Search sessions")
+                    .accessibilityLabel("Search threads")
                 if !query.isEmpty {
                     Button { query = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                             .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Clear session search")
+                    .accessibilityLabel("Clear thread search")
                 }
             }
             .padding(.leading, 14)
@@ -307,7 +307,7 @@ private struct SessionSidebar: View {
                             }
                         }
                     }
-                    .accessibilityAction(named: "Copy Session ID") { copySessionID(session.id) }
+                    .accessibilityAction(named: "Copy Thread ID") { copySessionID(session.id) }
                     .swipeActions(edge: .leading) {
                         // Detaching only stops following the session from this device.
                         if session.id == store.selectedSessionID {
@@ -382,9 +382,9 @@ private struct SessionSidebar: View {
             .padding(.top, 8)
             .padding(.bottom, 8)
         }
-        .copyConfirmation("Session ID Copied", trigger: copiedIDCount)
+        .copyConfirmation("Thread ID Copied", trigger: copiedIDCount)
         .background(ChatSurface.sidebar.ignoresSafeArea())
-        .navigationTitle("Sessions")
+        .navigationTitle("Threads")
         .navigationBarTitleDisplayMode(.inline)
         .softNavigationChrome()
         .toolbar {
@@ -404,7 +404,7 @@ private struct SessionSidebar: View {
 
     /// The host's session identifier, never the title or workspace shown in the row.
     private func copySessionIDButton(_ id: String) -> some View {
-        Button("Copy Session ID", systemImage: "number") { copySessionID(id) }
+        Button("Copy Thread ID", systemImage: "number") { copySessionID(id) }
     }
 
     private func copySessionID(_ id: String) {
@@ -450,7 +450,7 @@ private struct SessionSidebar: View {
             }
             copySessionIDButton(session.id)
         }
-        .accessibilityAction(named: "Copy Session ID") { copySessionID(session.id) }
+        .accessibilityAction(named: "Copy Thread ID") { copySessionID(session.id) }
         .onAppear {
             // Continue the listing as its end scrolls into view.
             if session.id == store.recentSessions.last?.id, store.hasMoreSavedSessions {
@@ -464,9 +464,9 @@ private struct SessionSidebar: View {
         switch store.connection {
         case .connected:
             ContentUnavailableView(
-                "No Sessions Yet",
+                "No Threads Yet",
                 systemImage: "terminal",
-                description: Text("Tap New to choose a folder on \(store.host?.name ?? "your Mac"), or open RustCode in a terminal on it: every open session appears here.")
+                description: Text("Tap New to choose a folder on \(store.host?.name ?? "your Mac"), or open RustCode in a terminal on it: every open thread appears here.")
             )
         case .connecting:
             ProgressView("Connecting…")
@@ -474,7 +474,7 @@ private struct SessionSidebar: View {
             ContentUnavailableView(
                 "Not Connected",
                 systemImage: "wifi.slash",
-                description: Text("Sessions appear once the host is reachable.")
+                description: Text("Threads appear once the host is reachable.")
             )
         }
     }
@@ -596,7 +596,7 @@ private struct SavedSessionRow: View {
         .opacity(session.canOpen || isOpening ? 1 : 0.6)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(session.displayTitle), \(status)\(session.updatedAt.map { ", last active \(LastActivePresentation.label(for: $0))" } ?? "")")
-        .accessibilityHint(session.canOpen ? "Reopens this session on your Mac." : "")
+        .accessibilityHint(session.canOpen ? "Reopens this thread on your Mac." : "")
     }
 
     private var detail: String {
