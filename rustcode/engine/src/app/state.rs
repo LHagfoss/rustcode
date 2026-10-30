@@ -314,6 +314,9 @@ pub struct AppState {
     /// The client's localhost preview, when it advertised one (#2138). Set
     /// once with the session state, so the tool menu and system prompt stay
     /// the same for the whole session. `None` hides `localhost_preview`.
+    /// The client that hosts other threads for `message_session` (#2637),
+    /// when it advertised one.
+    pub orchestration_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     pub preview_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     /// Screenshots taken by the current tool batch, attached to the
     /// conversation right after its results.
@@ -1781,6 +1784,7 @@ impl AppState {
             visualization_level: 0,
             smart_ui: SmartUi::Unsupported,
             preview_client: None,
+            orchestration_client: None,
             pending_preview_images: Vec::new(),
             show_mcp_config: false,
             mcp_picker_index: 0,

@@ -5470,3 +5470,41 @@ fn description_words_alone_do_not_admit_a_tool_from_a_new_server() {
         ["list_secrets"]
     );
 }
+
+#[test]
+fn thread_messaging_tools_are_offered_only_with_a_host() {
+    let names = |policy: ToolSchemaPolicy| -> Vec<String> {
+        native_tools_schema_for_context(policy, &[])
+            .0
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let offers = |policy: ToolSchemaPolicy| {
+        let names = names(policy);
+        crate::orchestration::TOOL_NAMES
+            .iter()
+            .all(|tool| names.iter().any(|name| name == tool))
+    };
+    let regular = ToolSchemaPolicy::root(true);
+    assert!(!offers(regular));
+    assert!(offers(regular.with_orchestration_tools()));
+    // Plan mode and subagents never message another thread.
+    for policy in [
+        ToolSchemaPolicy::read_only_inspection(),
+        ToolSchemaPolicy::subagent(),
+        ToolSchemaPolicy::subagent_with_delegation(),
+    ] {
+        assert!(
+            !policy
+                .with_orchestration_tools()
+                .include_orchestration_tools
+        );
+        assert!(!offers(policy.with_orchestration_tools()));
+    }
+    let mut prompt = String::new();
+    super::schema::append_preview_hint(&mut prompt, regular);
+    assert!(prompt.is_empty());
+    super::schema::append_preview_hint(&mut prompt, regular.with_orchestration_tools());
+    assert!(prompt.contains("message_session"));
+}

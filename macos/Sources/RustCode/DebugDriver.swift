@@ -581,6 +581,24 @@ enum DebugDriver {
         case "watchpull":
             // `watchpull <number>`: watch it from the shown thread.
             if parts.count > 1, let number = Int(parts[1]) { await model.watchPull(number) }
+        case "orch":
+            // `orch <tool> <json args>`: an agent's call from the shown thread,
+            // as the engine forwards it; the answer goes to `<drive>/orch.json`.
+            let rest = line.split(separator: " ", maxSplits: 2).map(String.init)
+            guard rest.count >= 2, let session = model.selectedSession,
+                  let dir = ProcessInfo.processInfo.environment["RUSTCODE_DRIVE"] else { break }
+            let args = rest.count > 2 ? (try? JSONDecoder().decode(JSONValue.self, from: Data(rest[2].utf8))) ?? [:] : [:]
+            Task { @MainActor in
+                let answer = await model.answerOrchestration(["sessionId": .string(session), "tool": .string(rest[1]), "args": args])
+                let data = (try? JSONEncoder().encode(answer)) ?? Data()
+                try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("orch.json"))
+            }
+        case "grant":
+            // `grant always|once|deny`: answer a thread's request to message another.
+            if let grant = model.threadGrant {
+                model.threadGrant = nil
+                grant.resolve(parts.count > 1 && parts[1] == "once" ? .once : parts.count > 1 && parts[1] == "deny" ? .deny : .always)
+            }
         case "pullfile":
             // `pullfile <path>`: open a file's diff in the open pull request.
             if parts.count > 1 { model.pullFileToOpen = parts[1] }
@@ -988,6 +1006,9 @@ enum DebugDriver {
         case "draft":
             // `draft <text>`: the composer's text, with `\n` for line breaks.
             model.draft = String(line.dropFirst(6)).replacingOccurrences(of: "\\n", with: "\n")
+        case "submit":
+            // Send the composer's text as ⏎ does, through the engine.
+            await model.submit()
         case "cleardraft":
             // What sending does to the composer, without sending anything.
             model.draft = ""

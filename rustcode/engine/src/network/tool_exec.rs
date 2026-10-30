@@ -1470,6 +1470,20 @@ async fn execute_tool_batch_validated(
                     None,
                     std::time::Duration::ZERO,
                 )
+            } else if crate::orchestration::is_tool(&name_clone) {
+                // Forwarded to the client that hosts the other threads, which
+                // asks the user before a message goes.
+                (
+                    crate::orchestration::execute(
+                        &state_clone,
+                        &cancel_token_clone,
+                        &name_clone,
+                        &args_clone,
+                    )
+                    .await,
+                    None,
+                    std::time::Duration::ZERO,
+                )
             } else if crate::tools::is_agent_tool(&name_clone) {
                 (
                     handle_agent_tool(

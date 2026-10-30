@@ -1492,6 +1492,9 @@ pub const TOOLS: &[Tool] = &[
     misc::ZOOM_CONTEXT,
     misc::FORGET_MEMORY,
     misc::LOCALHOST_PREVIEW,
+    misc::LIST_SESSIONS,
+    misc::MESSAGE_SESSION,
+    misc::WAIT_SESSION,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {

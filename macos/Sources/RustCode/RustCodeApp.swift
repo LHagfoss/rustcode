@@ -169,7 +169,7 @@ final class DesktopModel: ObservableObject {
     /// Chats open in this engine and chats being opened (`OpenSessions`).
     /// Only its loading set is published: a background chat's updates must
     /// not redraw the shown one.
-    private var openChats = OpenSessions() {
+    private(set) var openChats = OpenSessions() {
         didSet { if openChats.loading != loadingSessions { loadingSessions = openChats.loading } }
     }
     /// The shown chat is still being opened.
@@ -678,6 +678,12 @@ final class DesktopModel: ObservableObject {
     /// Whether the running engine was told Smart UI is on; Settings offers a
     /// restart while this differs from the setting.
     @Published private(set) var engineSmartUI = false
+    /// Whether the running engine was told threads may message each other.
+    @Published private(set) var engineOrchestration = false
+    /// Threads messaging other threads, and the grants the user gave (#2637).
+    @Published var linkBook = LinkBook.load(from: DesktopModel.linkBookURL)
+    /// A thread asks to message another one; the alert answers it.
+    @Published var threadGrant: ThreadGrantRequest?
     /// The engine can move a chat to another folder (#2459).
     var canMoveChat: Bool { capabilities?.sessionMove == true && capabilities?.closeSession == true }
     /// The engine reads the project's pull requests (#2645).
@@ -815,7 +821,7 @@ final class DesktopModel: ObservableObject {
         _ = keybindingMenuSync
     }
 
-    private func chatTitle(_ session: String) -> String {
+    func chatTitle(_ session: String) -> String {
         sessions.first { $0.id == session }?.title ?? "RustCode"
     }
 
@@ -1198,8 +1204,13 @@ final class DesktopModel: ObservableObject {
                 }
             }
             let smartUI = SmartUI.isEnabled
-            let result = try await process.connection.request(ACPMethod.initialize, params: ACPRequests.initialize(appVersion: "0.1.0", smartUI: smartUI), timeout: .seconds(10))
+            let orchestration = Orchestration.isEnabled
+            let result = try await process.connection.request(
+                ACPMethod.initialize,
+                params: ACPRequests.initialize(appVersion: "0.1.0", smartUI: smartUI, orchestration: orchestration),
+                timeout: .seconds(10))
             engineSmartUI = smartUI
+            engineOrchestration = orchestration
             capabilities = try AgentInfo(initializeResult: result)
             try await process.connection.notify("initialized", params: [:])
             await refreshSessions()
@@ -2320,7 +2331,7 @@ final class DesktopModel: ObservableObject {
 
     /// Make sure the engine has `session` open, without showing it: a chat
     /// sent a message from another one (#2527). True once it is open.
-    private func load(_ session: SessionSummary) async -> Bool {
+    func load(_ session: SessionSummary) async -> Bool {
         if session.id == selectedSession || openChats.isOpen(session.id) { return true }
         guard let connection = engine?.connection else { return false }
         if openChats.isLoading(session.id) {
@@ -2367,9 +2378,11 @@ final class DesktopModel: ObservableObject {
         let typed: String
         let text: String
         let images: [ImageAttachment]
+        /// The link of a message another thread sent (#2637).
+        var link: String?
 
         func moved(to session: String) -> QueuedPrompt {
-            QueuedPrompt(id: id, sessionId: session, typed: typed, text: text, images: images)
+            QueuedPrompt(id: id, sessionId: session, typed: typed, text: text, images: images, link: link)
         }
     }
 
@@ -2528,7 +2541,7 @@ final class DesktopModel: ObservableObject {
 
     /// Run one prompt as the chat's turn, then the chat's next queued message,
     /// unless the turn was stopped.
-    private func run(_ prompt: QueuedPrompt) async {
+    func run(_ prompt: QueuedPrompt) async {
         guard let connection = engine?.connection else { return }
         let id = prompt.sessionId
         stoppedTurns[id] = nil
@@ -2553,6 +2566,7 @@ final class DesktopModel: ObservableObject {
                 $0.appendUser(shown, at: Date())
             }
         }
+        if let link = prompt.link { linkStarted(link) }
         // Ended exactly once below however the turn ends, so the chat cannot
         // keep spinning after its answer.
         let turn = isCommand ? nil : turnActivity.begin(id)
@@ -2587,6 +2601,9 @@ final class DesktopModel: ObservableObject {
         } else if !stopped {
             notifyFinished(id)
         }
+        if let link = prompt.link { linkFinished(link, in: id, failure: failure, cancelled: cancelled) }
+        // Stopping a thread stops the work it gave others in this turn.
+        if cancelled { await stopLinks(from: id) }
         // The chat just used moves to the top at once; the list refreshes
         // behind the answer: waiting for it kept the chat spinning until the
         // engine listed every session.
@@ -3030,6 +3047,14 @@ final class DesktopModel: ObservableObject {
                     body: "\(chatTitle(request.sessionId)): \(request.question?.text ?? request.title)")
             }
             else { try? await engine?.connection.respond(id: id, error: .invalidParams(method)) }
+        case .request(let id, let method, let params) where method == Orchestration.method:
+            // Answered off the inbound loop: a message waits for the user's
+            // grant, and a wait for the other thread's turn.
+            guard let connection = engine?.connection else { return }
+            Task { [weak self] in
+                guard let result = await self?.answerOrchestration(params) else { return }
+                try? await connection.respond(id: id, result: result)
+            }
         case .request(let id, let method, let params) where method == ACPMethod.preview:
             // Show the page the agent is about to use, and answer off the
             // inbound loop: the first request waits for the user's approval.
