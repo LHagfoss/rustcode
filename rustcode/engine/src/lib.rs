@@ -27,6 +27,7 @@ mod memory;
 pub mod model_defaults;
 pub mod network;
 mod notifications;
+mod orchestration;
 mod platform;
 pub mod preview;
 pub mod prompt_commands;

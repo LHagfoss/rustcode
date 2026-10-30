@@ -258,6 +258,72 @@ pub const LOCALHOST_PREVIEW: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+fn orchestration_unavailable(_args: &Value) -> Result<String, String> {
+    Err(crate::orchestration::UNAVAILABLE_MESSAGE.to_owned())
+}
+
+/// Threads that message other threads (#2637). Offered only to root
+/// sessions whose client hosts threads; the client asks the user before a
+/// message goes, and runs it as an attributed turn of the target thread.
+pub const LIST_SESSIONS: Tool = Tool {
+    name: crate::orchestration::LIST_SESSIONS,
+    description: "List the other threads in this project: id, title, last update and whether one is working. Reads no transcripts. Use only when the user asks to involve another thread.",
+    arguments: r#"{"query": "optional words in the title"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const MESSAGE_SESSION: Tool = Tool {
+    name: crate::orchestration::MESSAGE_SESSION,
+    description: "Send another thread of this project a message; it answers in a turn of its own, with its own history and approvals. The user is asked once. Returns a link_id for wait_session; the message queues while that thread is busy. Send what it needs: it does not see this conversation.",
+    arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES}
+            },
+            "required": ["session_id", "message"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const WAIT_SESSION: Tool = Tool {
+    name: crate::orchestration::WAIT_SESSION,
+    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish. needs_user means that thread waits for the user.",
+    arguments: r#"{"link_id": "from message_session", "timeout_ms": 60000}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "link_id": {"type": "string"},
+                "link_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_WAIT_MS, "default": crate::orchestration::DEFAULT_WAIT_MS}
+            },
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 fn localhost_preview_unavailable(_args: &Value) -> Result<String, String> {
     Err(crate::preview::UNAVAILABLE_MESSAGE.to_owned())
 }

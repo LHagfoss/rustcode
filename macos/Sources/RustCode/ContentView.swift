@@ -106,6 +106,21 @@ struct ContentView: View {
         .environment(\.openImage) { [model] in model.viewedImage = $0 }
         // Centered on the chat, not the window: the sidebar and the preview
         // beside it are left out.
+        // A thread asks to message another one (#2637). Each choice answers
+        // the request once; closing the alert any other way denies it.
+        .alert(model.threadGrant.map { "Let “\($0.from)” message “\($0.to)”?" } ?? "",
+               isPresented: Binding(get: { model.threadGrant != nil }, set: { shown in
+                   guard !shown, let grant = model.threadGrant else { return }
+                   model.threadGrant = nil
+                   grant.resolve(.deny)
+               }),
+               presenting: model.threadGrant) { grant in
+            Button("Allow for This Thread") { model.threadGrant = nil; grant.resolve(.always) }
+            Button("Allow Once") { model.threadGrant = nil; grant.resolve(.once) }
+            Button("Don’t Allow", role: .cancel) { model.threadGrant = nil; grant.resolve(.deny) }
+        } message: { grant in
+            Text("Its agent wants to send this as a message there, where it runs as a turn with that thread's own history and approvals:\n\n\(String(grant.message.prefix(600)))")
+        }
         .overlay {
             ToastStack(model: model,
                        leadingInset: model.showsSidebar ? sidebarClampedWidth : 0,
@@ -2737,6 +2752,7 @@ private struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            LinkedThreads(model: model)
             if !model.selectedQueue.isEmpty {
                 QueuedPromptList(model: model)
                     .transition(.opacity)

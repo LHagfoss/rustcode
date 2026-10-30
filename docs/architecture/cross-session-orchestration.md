@@ -1,7 +1,44 @@
 # Cross-session agent orchestration
 
-Status: proposed design (#2216). This document adds no runtime. The macOS app
-is the first target; TUI parity is a later, optional follow-up.
+Status: milestone 1 is implemented (#2637, #2638); the later milestones are
+proposed. The macOS app is the first target; TUI parity is a later, optional
+follow-up.
+
+## As built (M1)
+
+M1 differs from the plan below in one place: the client that hosts the
+threads carries out the calls, not an engine-side `SessionOrchestrator`.
+
+- The engine offers `list_sessions`, `message_session` and `wait_session`
+  (`rustcode/engine/src/orchestration.rs`) only to root coding turns of a
+  session whose client advertised `_meta.rustcode.orchestration: 1`, and only
+  while delegation is on. Plan mode and subagents never get them. Each call
+  becomes a `_rustcode/orchestration` request carrying the calling session's
+  id, as `localhost_preview` does.
+- The macOS app (`ThreadMessaging.swift`, rules in RustCodeKit
+  `Orchestration.swift`) checks the rules, asks the user (*Allow for This
+  Thread*, *Allow Once*, *Don't Allow*), and delivers the message as an
+  ordinary turn of the target through the same queue a typed message uses.
+  The target thread's turn gate, sandbox and approvals apply unchanged,
+  because nothing goes around them. The message arrives as a user message
+  headed `From thread "<title>" (agent):`.
+- Enforced: same project only; a thread cannot message itself; no chains (a
+  thread working for another cannot message others); one orchestrator per
+  target; 4 active links per thread; a 32-message mailbox; 8 KiB messages and
+  answers; `wait_session` waits at most 1 h. It returns `needs_user` while the
+  target waits on an approval or a question.
+- Links and *Allow for This Thread* grants are kept in Application Support
+  (`RustCode/thread-links.json`). *Allow Once* is not kept. After a restart,
+  queued or running links are `interrupted` and nothing restarts.
+- Stopping the orchestrator's turn stops the link turns it started and drops
+  its queued messages. Turns the user started in the target keep running.
+- Off by default: Settings ▸ General ▸ *Threads can message each other*. The
+  engine learns it at `initialize`, so a change applies after the engine
+  restarts.
+- UI: chips above the composer for the threads this one messaged (state,
+  open, stop), and a *Working for "<thread>"* banner in a thread doing work
+  for another one. The sidebar badge and per-link operational events are not
+  in M1.
 
 ## Problem
 

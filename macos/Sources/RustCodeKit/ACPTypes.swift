@@ -108,13 +108,16 @@ public enum ACPRequests {
     /// `smartUI` advertises Smart UI blocks (docs/smart-ui.md). While the
     /// setting is off the app sends version 0, so the agent can point the
     /// user at the setting instead of guessing a format.
-    public static func initialize(appVersion: String, smartUI: Bool = false) -> JSONValue {
+    /// `orchestration` advertises the thread host (#2637), only while the
+    /// user has threads messaging each other turned on.
+    public static func initialize(appVersion: String, smartUI: Bool = false, orchestration: Bool = false) -> JSONValue {
         var rustcode: [String: JSONValue] = [
             "visualizations": .number(Double(Visualization.capabilityLevel)),
             "preview": .number(Double(rustcodePreviewCapabilityVersion)),
             "presence": .number(Double(rustcodePresenceCapabilityVersion)),
         ]
         rustcode["smartUi"] = .number(Double(smartUI ? SmartUI.capabilityVersion : 0))
+        if orchestration { rustcode["orchestration"] = .number(Double(Orchestration.capabilityVersion)) }
         return [
             "protocolVersion": .number(Double(acpProtocolVersion)),
             // The app offers no client-side filesystem or terminal: the engine

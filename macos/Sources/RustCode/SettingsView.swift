@@ -466,6 +466,7 @@ private struct GeneralSettings: View {
     @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
     @AppStorage(ComposerPredictions.key) private var predictions = true
     @AppStorage(SmartUI.enabledKey) private var smartUI = false
+    @AppStorage(Orchestration.enabledKey) private var threadMessaging = false
     @AppStorage(DesktopModel.groupsByAttentionKey) private var groupsByAttention = true
     @AppStorage(TurnCompletionCard.enabledKey) private var showsTurnCompletion = true
     @AppStorage(NewThreadBanner.key) private var banner = ""
@@ -567,6 +568,21 @@ private struct GeneralSettings: View {
                                 .buttonStyle(PillButtonStyle())
                         }
                         Toggle("Smart UI", isOn: $smartUI)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                }
+                RowDivider()
+                SettingsRow(title: "Threads can message each other (experimental)",
+                            subtitle: threadMessaging == model.engineOrchestration
+                                ? "An agent may ask another thread in the same project and wait for its answer. You allow each pair of threads first; the other thread keeps its own approvals"
+                                : "The agent learns this when the engine restarts; threads in progress keep running until then") {
+                    HStack(spacing: 8) {
+                        if threadMessaging != model.engineOrchestration, model.runningSessions.isEmpty {
+                            Button("Restart Engine") { Task { await model.restartEngine() } }
+                                .buttonStyle(PillButtonStyle())
+                        }
+                        Toggle("Threads can message each other", isOn: $threadMessaging)
                             .labelsHidden()
                             .toggleStyle(.switch)
                     }
