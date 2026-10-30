@@ -268,7 +268,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .toggleTerminal: return "Your own shell, below the thread"
         case .newTerminalTab: return "Open another shell in this project"
         case .closeTerminal: return "Close the selected terminal tab, and the panel with the last. The window stays"
-        case .chooseChatProject: return "A new thread's own folder. From an open thread, starts a new thread in it"
+        case .chooseChatProject: return "A new thread's own folder. From an open thread, moves that thread to another folder"
         case .chooseProject: return "Where new threads start. Open threads keep their own folder"
         case .settings: return "General, keybinds, skills and MCP"
         }
@@ -569,6 +569,7 @@ final class KeybindingMenuSync {
         "Close Terminal Tab": .closeTerminal,
         "Choose Folder for This Thread…": .chooseChatProject,
         "New Thread in Folder…": .chooseChatProject,
+        "Change Thread Folder…": .chooseChatProject,
         "Choose Default Project…": .chooseProject,
         "Settings…": .settings,
     ]

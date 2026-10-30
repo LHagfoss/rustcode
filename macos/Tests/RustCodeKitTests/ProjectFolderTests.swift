@@ -50,4 +50,11 @@ final class ProjectFolderTests: XCTestCase {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
         XCTAssertFalse(ProjectFolder.isUsable(locked))
     }
+
+    func testChooseFolderMovesAnOpenThreadInsteadOfStartingAnother() {
+        XCTAssertEqual(ProjectFolder.choice(threadOpen: false, canMove: true), .startNewThreadIn)
+        XCTAssertEqual(ProjectFolder.choice(threadOpen: true, canMove: true), .moveThread)
+        XCTAssertEqual(ProjectFolder.choice(threadOpen: true, canMove: false), .newThreadIn, "an engine that cannot move one")
+        XCTAssertEqual(ProjectFolder.Choice.moveThread.title, "Change Thread Folder…")
+    }
 }

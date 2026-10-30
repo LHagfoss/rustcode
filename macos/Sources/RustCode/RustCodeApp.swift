@@ -41,10 +41,10 @@ struct RustCodeApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Thread") { Task { await model.newSession() } }
                     .keyboardShortcut(model.keybindings.shortcut(for: .newChat))
-                // A chat with messages stays in its folder, so from one
-                // this starts a new chat; the title says which it does.
-                Button(model.selectedSession == nil ? "Choose Folder for This Thread…" : "New Thread in Folder…") {
-                    Task { await model.chooseChatProject() }
+                // From an open thread this moves it (#2677); the title says
+                // which it does.
+                Button(model.folderChoice.title) {
+                    Task { await model.chooseFolderForShownThread() }
                 }
                 .keyboardShortcut(model.keybindings.shortcut(for: .chooseChatProject))
                 Button("Choose Default Project…") { model.chooseWorkspace() }
@@ -1106,7 +1106,21 @@ final class DesktopModel: ObservableObject {
         await newSession(in: url)
     }
 
-    /// Change Project Folder… (#2459): the shown chat, and only it, works in
+    /// What Choose Folder (⌘O) does for the thread on screen.
+    var folderChoice: ProjectFolder.Choice {
+        ProjectFolder.choice(threadOpen: selectedSession != nil, canMove: canMoveChat)
+    }
+
+    /// ⌘O: a new thread's folder, or the open thread's own, kept open.
+    func chooseFolderForShownThread() async {
+        if folderChoice == .moveThread {
+            await moveChatProject()
+        } else {
+            await chooseChatProject()
+        }
+    }
+
+    /// Change Thread Folder… (#2459): the shown chat, and only it, works in
     /// the folder picked from now on; the default project and other chats
     /// keep theirs. The engine moves a closed chat, so the chat is closed,
     /// moved and opened again there. Cancelling changes nothing.
