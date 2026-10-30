@@ -1,3 +1,35 @@
+## [v0.111.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.111.0) - 2026-10-30
+
+### Features
+- Fix a final answer that sometimes appeared twice when streaming stopped partway. (#2654)
+- Esc clears the composer draft before it stops a turn; finished agents leave the sidebar; Settings model, effort and tool-call controls redrawn. (#2656)
+- Agents of other chats no longer disappear from the sidebar when one refresh fails. (#2657)
+- The Agents list opens as a composer panel matching the + and model panels. (#2658)
+- Settings has a search field that finds the section holding a setting. (#2660)
+- Smart UI guidance now loads on demand from a built-in `smart-ui` skill, trimming the root prompt. (#2659)
+- Mark threads done or snooze them onto sidebar shelves, and group threads that need you, are working or are ready to read at the top. (#2662)
+- The agent's task plan has stable step ids, a blocked state and targeted updates, and rejects invalid values. (#2661)
+- ⌘⇧⏎ starts a message as a new thread in the background and keeps the composer free for the next task. (#2663)
+- A read-only Changes panel shows the project's uncommitted or branch changes as a file list with diffs. (#2664)
+- A turn summary under each finished answer lists the files changed and the checks run, with how each ended. (#2665)
+- Long single-turn sessions compact deeper and far less often, including old edit payloads. (#2668)
+- A slow provider start (for example right after a compaction) is retried with a longer wait instead of stopping the turn. (#2670)
+- Threads are now stored in `~/.config/rustcode/threads/`; the first start moves the old `sessions/` folder there and leaves a link behind. (#2671)
+- `rustcode threads` replaces `rustcode sessions` (still accepted as an alias). (#2672)
+- The macOS app calls conversations threads. (#2673)
+- The iOS app calls conversations threads. (#2674)
+- The terminal UI calls conversations threads. (#2676)
+- An inbox in the sidebar lists approvals, questions, stopped turns and unread replies from every thread. (#2680)
+- The iPhone app and the Mac talk about threads on the wire; older apps and Macs keep working. (#2679)
+- Pick diff lines in the Changes panel and attach them to your message as a question or a change request. (#2681)
+- New threads open with the composer centered under an optional wide banner picture (drawn as colored text or as is, set in Settings), and the composer slides down when the first message is sent. (#2683)
+- The subagent panel shows the agent's tokens, tool calls and requests, and opens long agent conversations without lag. (#2682)
+- ⌘O in an open thread changes that thread's folder instead of starting a new thread. (#2684)
+- The subagent panel shows each agent's brief: who started it, where it works, what it may write, and whether its check actually passed. (#2685)
+- Threads with a multi-step plan show a progress button that opens the plan; a step jumps to where the agent last updated it. (#2686)
+- A turn's summary shows its commit, push, pull request and CI steps, each as its command actually ended. (#2687)
+- A thread opening with only its latest message drawn until scrolled is less likely: the app keeps placing its older rows until they report. (#2688)
+- `rustcode storage usage` shows how much space each kind of RustCode data takes, without changing anything. (#2690)
 ## [v0.110.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.110.0) - 2026-10-29
 
 ### Features
