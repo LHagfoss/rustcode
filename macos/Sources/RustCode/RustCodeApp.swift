@@ -684,11 +684,15 @@ final class DesktopModel: ObservableObject {
     var canMoveChat: Bool { capabilities?.sessionMove == true && capabilities?.closeSession == true }
     /// The engine reads the project's pull requests (#2645).
     var canReadPullRequests: Bool { capabilities?.pullRequests == true }
+    /// The engine posts a review the user writes (#2646).
+    var canReviewPullRequests: Bool { capabilities?.pullRequestReviews == true }
     /// The pull requests panel is open.
     @Published var showsPullRequests = false
     /// A pull request the panel should open, set from outside it (the
     /// debug driver).
     @Published var pullToOpen: Int?
+    /// A file of the open pull request whose diff the panel should open.
+    @Published var pullFileToOpen: String?
 
     /// Threads whose suggested folder (`FolderSuggestion`) the user dismissed,
     /// as `id|path`, so it is not offered again.
