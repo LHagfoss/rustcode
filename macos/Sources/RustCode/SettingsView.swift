@@ -29,6 +29,9 @@ struct SettingsView: View {
     @StateObject private var capabilities = CapabilitiesStore()
     @StateObject private var connections = ConnectionsStore()
     @AppStorage(SidebarResizeHandle.key) private var sidebarWidth = SidebarResizeHandle.defaultWidth
+    /// The sections' sidebar; hidden, the section takes the whole window and
+    /// its buttons sit beside the traffic lights, as the chat's do.
+    @AppStorage("settingsShowsSidebar") private var showsSidebar = true
     /// What the sidebar's search field holds; the sections listed match it.
     @State private var query = ""
     @State private var showsCompactSearch = false
@@ -42,17 +45,29 @@ struct SettingsView: View {
             let layout = SettingsLayout(width: proxy.size.width,
                                         sidebar: Double(SidebarResizeHandle.clamp(sidebarWidth)))
             HStack(spacing: 0) {
-                sidebar(compact: layout.compact)
-                    .frame(width: layout.sidebar)
-                    .background(Color.sidebarBackground)
-                    // The chat sidebar's edge line, so the two read as one.
-                    .overlay(alignment: .trailing) {
-                        Rectangle().fill(Color.primary.opacity(0.1)).frame(width: 1)
-                    }
+                if showsSidebar || layout.compact {
+                    sidebar(compact: layout.compact)
+                        .frame(width: layout.sidebar)
+                        .background(Color.sidebarBackground)
+                        // The chat sidebar's edge line, so the two read as one.
+                        .overlay(alignment: .trailing) {
+                            Rectangle().fill(Color.primary.opacity(0.1)).frame(width: 1)
+                        }
+                        .transition(.move(edge: .leading))
+                }
                 detail(layout)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .background(Color.chatBackground)
+                    .overlay(alignment: .topLeading) {
+                        if !showsSidebar, !layout.compact {
+                            barButtons
+                                .padding(.leading, 80)
+                                .frame(height: SidebarMetrics.barHeight)
+                                .padding(.top, SidebarMetrics.barTopInset)
+                        }
+                    }
             }
+            .animation(.snappy(duration: 0.2), value: showsSidebar)
         }
         .ignoresSafeArea()
         .tint(.brand)
@@ -82,7 +97,7 @@ struct SettingsView: View {
             // The title bar's room, beside the traffic lights, holding Back.
             HStack(spacing: 2) {
                 Spacer()
-                if !compact { backButton }
+                if !compact { barButtons }
             }
             .padding(.leading, compact ? 0 : 80)
             .padding(.trailing, 10)
@@ -191,6 +206,16 @@ struct SettingsView: View {
 
     private var backButton: some View {
         ToolbarCluster {
+            ClusterButton(systemImage: "chevron.left", help: "Back to \(chatTitle) (Esc)", action: close)
+        }
+    }
+
+    /// The sidebar's toggle left of Back, where the chat's sidebar has its own.
+    private var barButtons: some View {
+        ToolbarCluster {
+            ClusterButton(systemImage: "sidebar.left", help: showsSidebar ? "Hide sidebar" : "Show sidebar") {
+                showsSidebar.toggle()
+            }
             ClusterButton(systemImage: "chevron.left", help: "Back to \(chatTitle) (Esc)", action: close)
         }
     }
@@ -467,7 +492,7 @@ private struct GeneralSettings: View {
                 SettingsRow(title: "New thread banner",
                             subtitle: banner.isEmpty
                                 ? "A wide picture over new threads, drawn in text or as is. Cropped to at least 3:1"
-                                : "Over new threads, cropped to at least 3:1") {
+                                : "Behind the top of new threads, fading toward the message field") {
                     HStack(spacing: 8) {
                         if !banner.isEmpty {
                             SettingsSegments("Banner style", selection: $bannerStyle,

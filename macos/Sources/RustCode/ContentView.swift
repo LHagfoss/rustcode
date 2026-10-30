@@ -270,8 +270,8 @@ private struct SessionSidebar: View {
             HStack(spacing: 2) {
                 Spacer()
                 ToolbarCluster {
-                    AttentionInboxButton(model: model)
                     ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Hide sidebar", .toggleSidebar)) { model.toggleSidebar() }
+                    AttentionInboxButton(model: model)
                     if model.showsArchived || !model.archivedSessions.isEmpty {
                         ClusterButton(
                             systemImage: model.showsArchived ? "chevron.left" : "archivebox",
@@ -1065,6 +1065,8 @@ private struct ChatView: View {
     @State private var centersComposer = false
     /// The banner and composer together, measured while centered.
     @State private var centeredHeight: CGFloat = 0
+    @AppStorage(NewThreadBanner.key) private var newThreadBanner = ""
+    @AppStorage(NewThreadBanner.styleKey) private var newThreadBannerStyle = "ascii"
     /// The chat keeps the newest output in view. Scrolling up hands control to
     /// the reader and shows the Latest button; scrolling back down follows again.
     @StateObject private var following = FollowState()
@@ -1411,9 +1413,18 @@ private struct ChatView: View {
                         PermissionCard(model: model, request: permission).id(permission.id)
                     }
                 }
-                VStack(spacing: 6) {
+                VStack(spacing: 0) {
                     Composer(model: model, composer: model.composer)
+                        .zIndex(1)
+                    // A tray tucked under the composer, a little narrower,
+                    // so the footer reads as the composer's own.
                     ComposerFooter(model: model)
+                        .padding(.horizontal, 6)
+                        .padding(.top, 4)
+                        .padding(.bottom, 2)
+                        .background(Color.primary.opacity(0.06),
+                                    in: UnevenRoundedRectangle(bottomLeadingRadius: 16, bottomTrailingRadius: 16))
+                        .padding(.horizontal, 12)
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
             }
@@ -1426,6 +1437,15 @@ private struct ChatView: View {
             .padding(.horizontal, layout.padding)
             .padding(.bottom, 16 + composerLift)
             .frame(maxWidth: .infinity)
+        }
+        // A new thread's banner over the top half of the chat, behind its
+        // title bar, fading toward the composer.
+        .background(alignment: .top) {
+            if centersComposer, !newThreadBanner.isEmpty {
+                NewThreadBannerView(name: newThreadBanner, style: newThreadBannerStyle, height: chatHeight / 2)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
         }
         .onChange(of: isFresh, initial: true) { _, fresh in
             guard fresh != centersComposer else { return }
@@ -1604,7 +1624,8 @@ private struct ChatView: View {
         .padding(.top, SessionSidebar.barTopInset)
         .padding(.bottom, 8)
         .background(WindowDragArea())
-        .background(Color.chatBackground.opacity(0.94))
+        // Clear over a new thread's banner, which runs up behind it.
+        .background(Color.chatBackground.opacity(centersComposer && !newThreadBanner.isEmpty ? 0 : 0.94))
     }
 
     private let bottomAnchor = "bottom"
@@ -2240,18 +2261,15 @@ private struct EmptyChat: View {
     /// Opens the visualization guide.
     let showVisualizations: () -> Void
     @AppStorage(NewThreadBanner.key) private var banner = ""
-    @AppStorage(NewThreadBanner.styleKey) private var bannerStyle = "ascii"
 
     var body: some View {
         VStack(spacing: 14) {
             VStack(spacing: 14) {
+                // A banner is drawn behind the chat instead of the icon.
                 if banner.isEmpty {
                     Image(nsImage: NSApp.applicationIconImage)
                         .resizable()
                         .frame(width: 88, height: 88)
-                } else {
-                    NewThreadBannerView(name: banner, style: bannerStyle)
-                        .padding(.bottom, 6)
                 }
                 Text("What should we build?")
                     .font(.title2.weight(.semibold))
