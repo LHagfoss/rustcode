@@ -54,6 +54,14 @@ struct ContentView: View {
                 }
                 .background(Color.chatBackground)
                 .transition(.move(edge: .trailing))
+            } else if model.showsChanges {
+                HStack(spacing: 0) {
+                    PreviewResizeHandle(width: $previewWidth)
+                    ChangesPanel(model: model) { model.toggleChanges() }
+                        .frame(width: CGFloat(previewWidth))
+                }
+                .background(Color.chatBackground)
+                .transition(.move(edge: .trailing))
             }
         }
         .background(Color.sidebarBackground)
@@ -91,7 +99,7 @@ struct ContentView: View {
         .overlay {
             ToastStack(model: model,
                        leadingInset: model.showsSidebar ? sidebarClampedWidth : 0,
-                       trailingInset: model.showsPreview ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
+                       trailingInset: model.showsPreview || model.showsChanges ? CGFloat(previewWidth) + PreviewResizeHandle.width : 0)
         }
     }
 }
@@ -1480,6 +1488,11 @@ private struct ChatView: View {
                 }
             }
             TerminalToolbarButton(terminal: model.terminal, keybindings: model.keybindings)
+            if !model.showsChanges {
+                ToolbarCluster {
+                    ClusterButton(systemImage: "plus.forwardslash.minus", help: "Show the project's changes") { model.toggleChanges() }
+                }
+            }
             if !model.showsPreview {
                 ToolbarCluster {
                     ClusterButton(systemImage: "globe", help: model.keybindings.help("Show localhost preview", .togglePreview)) { model.togglePreview() }
