@@ -89,7 +89,10 @@ public struct TranscriptItem: Identifiable, Equatable, Sendable {
 /// The rendered conversation of one session. Streamed chunks join the item
 /// they continue, and tool updates change the card of their call in place.
 public struct Transcript: Equatable, Sendable {
-    public private(set) var items: [TranscriptItem] = []
+    public private(set) var items: [TranscriptItem] = [] { didSet { revision &+= 1 } }
+    /// Counts changes to `items`, so a view can keep what it derived from
+    /// them until they change instead of deriving it again on every pass.
+    public private(set) var revision = 0
     /// The session's latest context and token usage; it travels with the
     /// transcript so each chat keeps its own while another is shown.
     public private(set) var usage: SessionUsage?

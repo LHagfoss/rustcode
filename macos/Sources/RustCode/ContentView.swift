@@ -33,10 +33,6 @@ struct ContentView: View {
             }
             ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
-                // The chat takes its new width at once while the sidebar
-                // slides: animated, a long thread laid out its transcript
-                // again every frame and the toggle stuttered.
-                .transaction(value: model.showsSidebar) { $0.animation = nil }
                 // A subagent opens in the chat's place, the chat kept alive
                 // under it so its scroll position is there on the way back
                 // (#2492).
@@ -1146,6 +1142,40 @@ private struct ChatView: View {
         model.selectedSession.flatMap { model.stoppedTurns[$0] }
     }
 
+    /// What `shownRows` was last asked, and its answer.
+    private struct ShownRowsKey: Equatable {
+        var identity: UUID
+        var revision: Int
+        var first: Int
+        var split: Int
+        var verbosity: ToolVerbosity
+        var open: Set<Int>
+        var running: Bool
+        var stopped: Bool
+        var subagents: [SubagentInfo]
+    }
+
+    private final class ShownRowsCache {
+        var key: ShownRowsKey?
+        var rows: ShownRows?
+    }
+
+    /// Kept across passes: a resize or the sidebar sliding redraws the chat
+    /// every frame, and folding a long thread's tool calls each time
+    /// dropped frames.
+    @State private var shownRowsCache = ShownRowsCache()
+
+    private func cachedShownRows(_ transcript: Transcript, first: Int, split: Int) -> ShownRows {
+        let key = ShownRowsKey(identity: transcript.identity, revision: transcript.revision, first: first, split: split,
+                               verbosity: verbosity, open: model.openToolRuns, running: isReplyStreaming,
+                               stopped: stoppedReason != nil, subagents: model.subagents)
+        if key == shownRowsCache.key, let rows = shownRowsCache.rows { return rows }
+        let rows = shownRows(transcript, first: first, split: split)
+        shownRowsCache.key = key
+        shownRowsCache.rows = rows
+        return rows
+    }
+
     private func shownRows(_ transcript: Transcript, first: Int, split: Int) -> ShownRows {
         let folding = ToolFolding(items: transcript.items, verbosity: verbosity,
                                   open: model.openToolRuns, running: isReplyStreaming)
@@ -1180,7 +1210,7 @@ private struct ChatView: View {
         // so the part being read never changes height under the reader while
         // scrolling near the end.
         let split = ChatLayout.split(count: transcript.items.count, firstShown: first)
-        let rows = shownRows(transcript, first: first, split: split)
+        let rows = cachedShownRows(transcript, first: first, split: split)
         let expanded = model.expandedInChat
         let openTurns = Self.openTurns(rows)
         ScrollViewReader { proxy in

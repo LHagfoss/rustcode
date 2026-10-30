@@ -29,9 +29,10 @@ struct SettingsView: View {
     @StateObject private var capabilities = CapabilitiesStore()
     @StateObject private var connections = ConnectionsStore()
     @AppStorage(SidebarResizeHandle.key) private var sidebarWidth = SidebarResizeHandle.defaultWidth
-    /// The sections' sidebar; hidden, the section takes the whole window and
-    /// its buttons sit beside the traffic lights, as the chat's do.
-    @AppStorage("settingsShowsSidebar") private var showsSidebar = true
+    /// The sections' sidebar is the chat's sidebar state: hidden, the
+    /// section takes the whole window and its buttons sit beside the traffic
+    /// lights, as the chat's do, and ⌘B toggles both.
+    private var showsSidebar: Bool { model.showsSidebar }
     /// What the sidebar's search field holds; the sections listed match it.
     @State private var query = ""
     @State private var showsCompactSearch = false
@@ -67,7 +68,6 @@ struct SettingsView: View {
                         }
                     }
             }
-            .animation(.snappy(duration: 0.2), value: showsSidebar)
         }
         .ignoresSafeArea()
         .tint(.brand)
@@ -213,8 +213,9 @@ struct SettingsView: View {
     /// The sidebar's toggle left of Back, where the chat's sidebar has its own.
     private var barButtons: some View {
         ToolbarCluster {
-            ClusterButton(systemImage: "sidebar.left", help: showsSidebar ? "Hide sidebar" : "Show sidebar") {
-                showsSidebar.toggle()
+            ClusterButton(systemImage: "sidebar.left",
+                          help: model.keybindings.help(showsSidebar ? "Hide sidebar" : "Show sidebar", .toggleSidebar)) {
+                model.toggleSidebar()
             }
             ClusterButton(systemImage: "chevron.left", help: "Back to \(chatTitle) (Esc)", action: close)
         }
