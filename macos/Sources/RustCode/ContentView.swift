@@ -1426,6 +1426,18 @@ private struct ChatView: View {
             .padding(.horizontal, layout.padding)
             .padding(.bottom, 16 + composerLift)
             .frame(maxWidth: .infinity)
+            // The chat fades out under the composer, so text scrolled behind
+            // it does not show around its tray or below it.
+            .background(alignment: .bottom) {
+                if !centersComposer {
+                    LinearGradient(stops: [.init(color: Color.chatBackground.opacity(0), location: 0),
+                                           .init(color: Color.chatBackground, location: 0.4)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: composerHeight + 16 + 36)
+                        .allowsHitTesting(false)
+                        .ignoresSafeArea()
+                }
+            }
         }
         // A new thread's banner over the top half of the chat, behind its
         // title bar, fading toward the composer. Only a new thread has one:
