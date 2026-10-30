@@ -170,9 +170,9 @@ struct NewThreadBannerView: View {
             }
             // Settle a resize before drawing again.
             if art != nil { try? await Task.sleep(for: .milliseconds(120)) }
-            let columns = columns, inverted = colorScheme != .dark, aspect = aspect
+            let columns = columns, inverted = colorScheme != .dark, aspect = aspect, fill = height != nil
             let rendered = await Task.detached(priority: .userInitiated) {
-                Self.attributed(AsciiBanner.render(image, columns: columns, inverted: inverted, aspect: aspect))
+                Self.attributed(AsciiBanner.render(image, columns: columns, inverted: inverted, aspect: aspect, fill: fill))
             }.value
             guard !Task.isCancelled else { return }
             NewThreadBanner.drawings[key.cacheKey] = rendered

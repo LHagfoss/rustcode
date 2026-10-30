@@ -29,9 +29,11 @@ public struct AsciiBanner: Equatable, Sendable {
     public static let cellAspect = 2.0
 
     /// The rows of text the banner takes at `columns` for a picture
-    /// `width` by `height`, after cropping to at least `aspect`.
-    public static func rowCount(columns: Int, width: Int, height: Int, aspect: Double = minAspect) -> Int {
-        let crop = crop(width: width, height: height, aspect: aspect)
+    /// `width` by `height`, after cropping to at least `aspect` (to exactly
+    /// it with `fill`).
+    public static func rowCount(columns: Int, width: Int, height: Int, aspect: Double = minAspect,
+                                fill: Bool = false) -> Int {
+        let crop = crop(width: width, height: height, aspect: aspect, fill: fill)
         let aspect = Double(crop.width) / Double(max(crop.height, 1))
         return max(1, Int((Double(columns) / aspect / cellAspect).rounded()))
     }
@@ -40,8 +42,20 @@ public struct AsciiBanner: Equatable, Sendable {
     /// (never less than `minAspect`) wide; a picture already wide enough is
     /// kept whole. A banner across a wide window asks for a wider band, so
     /// it stays as low as it would in a narrow one.
-    public static func crop(width: Int, height: Int, aspect: Double = minAspect) -> CGRect {
+    ///
+    /// With `fill` the crop is exactly `aspect`, cutting the sides too, for
+    /// a banner that covers a room of that shape: a narrow room then shows
+    /// the picture's middle at its size instead of all of it blown up.
+    public static func crop(width: Int, height: Int, aspect: Double = minAspect, fill: Bool = false) -> CGRect {
         guard width > 0, height > 0 else { return .zero }
+        if fill, aspect > 0 {
+            let narrowest = max(Int((Double(height) * aspect).rounded(.down)), 1)
+            if width > narrowest {
+                return CGRect(x: (width - narrowest) / 2, y: 0, width: narrowest, height: height)
+            }
+            let tallest = max(Int((Double(width) / aspect).rounded(.down)), 1)
+            return CGRect(x: 0, y: (height - tallest) / 2, width: width, height: tallest)
+        }
         let tallest = Int((Double(width) / max(aspect, minAspect)).rounded(.down))
         guard height > tallest else { return CGRect(x: 0, y: 0, width: width, height: height) }
         let top = (height - tallest) / 2
@@ -52,10 +66,10 @@ public struct AsciiBanner: Equatable, Sendable {
     /// top to bottom), `columns` characters wide. `inverted` maps light to
     /// blank, for a light background.
     public static func render(rgba: [UInt8], width: Int, height: Int, columns: Int,
-                              inverted: Bool = false, aspect: Double = minAspect) -> AsciiBanner {
+                              inverted: Bool = false, aspect: Double = minAspect, fill: Bool = false) -> AsciiBanner {
         guard width > 0, height > 0, columns > 0, rgba.count >= width * height * 4 else { return AsciiBanner(rows: []) }
-        let crop = crop(width: width, height: height, aspect: aspect)
-        let rowCount = rowCount(columns: columns, width: width, height: height, aspect: aspect)
+        let crop = crop(width: width, height: height, aspect: aspect, fill: fill)
+        let rowCount = rowCount(columns: columns, width: width, height: height, aspect: aspect, fill: fill)
         let cellWidth = crop.width / Double(columns)
         let cellHeight = crop.height / Double(rowCount)
         var rows: [[Cell]] = []
@@ -66,8 +80,8 @@ public struct AsciiBanner: Equatable, Sendable {
             let y0 = Int(crop.minY + Double(row) * cellHeight)
             let y1 = max(y0 + 1, min(height, Int(crop.minY + Double(row + 1) * cellHeight)))
             for column in 0..<columns {
-                let x0 = Int(Double(column) * cellWidth)
-                let x1 = max(x0 + 1, min(width, Int(Double(column + 1) * cellWidth)))
+                let x0 = Int(crop.minX + Double(column) * cellWidth)
+                let x1 = max(x0 + 1, min(width, Int(crop.minX + Double(column + 1) * cellWidth)))
                 var red = 0.0, green = 0.0, blue = 0.0, alpha = 0.0, count = 0.0
                 for y in y0..<y1 {
                     var index = (y * width + x0) * 4
@@ -96,10 +110,12 @@ public struct AsciiBanner: Equatable, Sendable {
 
     /// The banner of `image`, `columns` characters wide.
     public static func render(_ image: CGImage, columns: Int, inverted: Bool = false,
-                              aspect: Double = minAspect) -> AsciiBanner {
+                              aspect: Double = minAspect, fill: Bool = false) -> AsciiBanner {
         // Drawn small first: a cell needs only a few pixels, and a photo
-        // straight from a camera is tens of millions.
-        let scale = min(1, Double(columns * 8) / Double(max(image.width, 1)))
+        // straight from a camera is tens of millions. A filled crop may take
+        // only the middle of a wide picture, so it is drawn larger to match.
+        let share = fill ? min(1, Double(image.height) * aspect / Double(max(image.width, 1))) : 1
+        let scale = min(1, Double(columns * 8) / (Double(max(image.width, 1)) * max(share, 0.05)))
         let width = max(1, Int(Double(image.width) * scale))
         let height = max(1, Int(Double(image.height) * scale))
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
@@ -120,7 +136,8 @@ public struct AsciiBanner: Equatable, Sendable {
                 pixels[index + channel] = UInt8(min(255, Double(pixels[index + channel]) * 255 / alpha))
             }
         }
-        return render(rgba: pixels, width: width, height: height, columns: columns, inverted: inverted, aspect: aspect)
+        return render(rgba: pixels, width: width, height: height, columns: columns, inverted: inverted, aspect: aspect,
+                      fill: fill)
     }
 
     /// The banner as plain text, a line per row.
