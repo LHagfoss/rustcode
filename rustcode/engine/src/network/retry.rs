@@ -20,6 +20,19 @@ pub const MAX_RETRIES: usize = 5;
 /// request timeout (which would kill legitimate long-running SSE streams).
 pub const HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Longest wait for headers on a retry.
+pub const MAX_HEADER_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long attempt `attempt` (0-based) waits for response headers. A prompt
+/// whose cache was just invalidated (after a compaction, say) can take the
+/// provider longer than [`HEADER_TIMEOUT`] to start on, so each retry waits
+/// longer than the last: 30, 60, 90, then 120 seconds (#2669).
+pub fn header_timeout_for_attempt(attempt: usize) -> Duration {
+    HEADER_TIMEOUT
+        .saturating_mul(u32::try_from(attempt).unwrap_or(u32::MAX).saturating_add(1))
+        .min(MAX_HEADER_TIMEOUT)
+}
+
 /// Maximum time allowed for the first meaningful SSE event after headers.
 /// This is separate from the between-event deadline so a provider that has
 /// accepted a request but never starts generation is reported distinctly.
@@ -240,6 +253,15 @@ mod tests {
             Some(Ok(body)) => assert_eq!(body, "rate limited"),
             other => panic!("expected the body read to complete normally, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn each_header_retry_waits_longer_up_to_the_cap() {
+        assert_eq!(header_timeout_for_attempt(0), HEADER_TIMEOUT);
+        assert_eq!(header_timeout_for_attempt(1), Duration::from_secs(60));
+        assert_eq!(header_timeout_for_attempt(2), Duration::from_secs(90));
+        assert_eq!(header_timeout_for_attempt(3), MAX_HEADER_TIMEOUT);
+        assert_eq!(header_timeout_for_attempt(usize::MAX), MAX_HEADER_TIMEOUT);
     }
 
     #[tokio::test(start_paused = true)]

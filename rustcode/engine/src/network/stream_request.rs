@@ -5736,14 +5736,17 @@ async fn stream_request_with_timeouts(
             );
         }
         let send_result = retry::race_cancellable(
-            tokio::time::timeout(retry::HEADER_TIMEOUT, req.send()),
+            tokio::time::timeout(retry::header_timeout_for_attempt(attempt), req.send()),
             &cancel_token,
         )
         .await;
         let send_result = match send_result {
             None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
             Some(Err(_elapsed)) => {
-                if !chatgpt_plan && attempt < retry::MAX_RETRIES {
+                // Nothing was received, so replaying is safe on every
+                // profile, plan logins included; the next attempt waits
+                // longer for a slow cold prompt (#2669).
+                if attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, 0);
                     crate::dbg_log_for_session!(
                         request_session_id,
