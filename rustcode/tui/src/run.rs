@@ -420,6 +420,33 @@ fn run_storage_command(
                 print!("{}", usage.render());
             }
         }
+        crate::cli::StorageCommands::Clean { apply, json } => {
+            let Some(config_dir) = rustcode::config::get_config_dir() else {
+                eprintln!("Configuration directory is unavailable.");
+                std::process::exit(1);
+            };
+            let plan = rustcode::storage_cleanup::plan(
+                &config_dir,
+                rustcode::storage_cleanup::Policy::default(),
+            );
+            let result = apply.then(|| rustcode::storage_cleanup::apply(&plan));
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "plan": plan,
+                        "result": result,
+                    }))?
+                );
+            } else if let Some(result) = &result {
+                print!("{}", result.render());
+            } else {
+                print!("{}", plan.render());
+            }
+            if result.is_some_and(|result| !result.errors.is_empty()) {
+                std::process::exit(1);
+            }
+        }
     }
     Ok(())
 }
