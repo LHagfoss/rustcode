@@ -81,7 +81,12 @@ final class PreviewControllerTests: XCTestCase {
     }
 
     private func makeController() -> PreviewController {
-        let defaults = UserDefaults(suiteName: "rustcode-preview-tests-\(UUID().uuidString)")!
+        // One fixed suite, emptied after each test: a suite per test leaves a
+        // plist behind in ~/Library/Preferences on every run (#2620).
+        let suite = "rustcode-preview-tests"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         return PreviewController(store: PreviewURLStore(defaults: defaults), agent: PreviewAgentGate(approvalTimeout: .seconds(10)))
     }
 

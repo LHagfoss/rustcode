@@ -11,8 +11,9 @@ final class KeybindingTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        suite = "KeybindingTests.\(UUID().uuidString)"
+        suite = "KeybindingTests"
         defaults = UserDefaults(suiteName: suite)
+        defaults.removePersistentDomain(forName: suite)
     }
 
     override func tearDown() {
