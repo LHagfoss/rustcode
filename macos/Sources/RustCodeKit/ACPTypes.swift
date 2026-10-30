@@ -11,6 +11,9 @@ public let rustcodeQuestionMetaVersion = 2
 public enum ACPMethod {
     public static let initialize = "initialize"
     public static let sessionNew = "session/new"
+    /// The user started writing: the engine starts its MCP servers now, so
+    /// the turn does not wait for them.
+    public static let warm = "_rustcode/warm"
     public static let sessionLoad = "session/load"
     public static let sessionList = "session/list"
     public static let sessionClose = "session/close"

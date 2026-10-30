@@ -901,6 +901,20 @@ async fn unregister_acp_session(server: &AcpServer, session_id: &str) {
     }
 }
 
+/// The user started writing a message: start the deferred MCP servers now,
+/// so the turn the message starts does not wait for them. Answers at once;
+/// the servers start in the background, once.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/warm", response = serde_json::Value)]
+pub(crate) struct WarmRequest {}
+
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
     let startup_state = crate::app::AppState::new();
     // Servers start on the session's first turn, not here: the app attaches
@@ -1250,6 +1264,16 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     }
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: WarmRequest, responder, connection| {
+                connection.spawn(async move {
+                    crate::mcp::start_deferred_servers().await;
+                    Ok(())
+                })?;
+                responder.respond(serde_json::json!({}))
             },
             agent_client_protocol::on_receive_request!(),
         )

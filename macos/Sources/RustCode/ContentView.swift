@@ -2682,6 +2682,7 @@ private struct Composer: View {
                 .onChange(of: composer.text) { _, _ in
                     model.commandSelection = 0
                     model.promoteTypedCommand()
+                    model.warmEngine()
                 }
             HStack(spacing: 8) {
                 addMenu
