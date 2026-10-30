@@ -99,6 +99,36 @@ enum DebugDriver {
             window?.contentView?.layoutSubtreeIfNeeded()
             window?.displayIfNeeded()
             report("synth items \(model.transcript.items.count) first frame \(ms(start, Date())) ms")
+        case "turncard":
+            // A finished turn that edited, checked and committed, to look at
+            // its summary card without a model.
+            var transcript = Transcript()
+            let start = Date()
+            transcript.appendUser("Fill in the changelog hash and commit it.")
+            transcript.beginTurn(at: start)
+            let edits = [("e1", "/p/CHANGELOG.md", "a\nb\n", "a\nc\nd\ne\n"),
+                         ("e2", "/p/levering/kompetansemaal-12.md", "x\ny\nz\n", "x\nw\nv\n")]
+            for (id, path, old, new) in edits {
+                transcript.apply(.toolCall(id: id, title: "edit_file", kind: "edit", status: .inProgress, input: nil))
+                transcript.apply(.toolCallUpdate(id: id, title: nil, status: .completed, output: "ok",
+                                                 diffs: [FileDiff(path: path, oldText: old, newText: new)]))
+            }
+            let commands: [(String, ToolStatus)] = [
+                ("git status --short --branch && git diff --check && git diff -- CHANGELOG.md levering/kompetansemaal-12.md && git add -- CHANGELOG.md", .completed),
+                ("cargo test --workspace", .completed),
+                ("npm run lint", .failed),
+                ("git diff --check && git add -- CHANGELOG.md && git commit -m 'docs(changelog): fyll inn hash for kundebehov' && git status --short --branch && git log --oneline -1", .completed),
+                ("git push -u origin docs/changelog-hash", .completed),
+            ]
+            for (index, (command, status)) in commands.enumerated() {
+                transcript.apply(.toolCall(id: "c\(index)", title: "run_command", kind: nil, status: .inProgress,
+                                           input: ["command": .string(command)]))
+                transcript.apply(.toolCallUpdate(id: "c\(index)", title: nil, status: status, output: "ok",
+                                                 exitCode: status == .completed ? 0 : 1))
+            }
+            transcript.apply(.agentText("Done. The changelog has the hash, and the change is committed and pushed."))
+            transcript.finishTurn(at: start.addingTimeInterval(89))
+            model.transcript = transcript
         case "timescroll":
             // `timescroll <steps> <points> [reader] [trace]`: scroll the chat up step by step,
             // laying out and drawing each, as a reader paging back would.

@@ -38,6 +38,8 @@ public struct GitPipeline: Equatable, Sendable {
         public var item: Int
         /// A pull request's URL, when the command printed one.
         public var link: URL?
+        /// What the step named: a commit's message, the branch a push went to.
+        public var detail: String? = nil
     }
 
     public var steps: [Step]
@@ -68,8 +70,13 @@ public struct GitPipeline: Equatable, Sendable {
                     outcome = kinds.count == 1 ? .failed : .unknown
                 }
                 let link = kind == .pullRequest ? pullRequestURL(in: tool.output) : nil
+                let detail: String? = switch kind {
+                case .commit: CommandSummary.commitMessage(in: command)
+                case .push: CommandSummary.pushTarget(in: command)
+                default: nil
+                }
                 steps.removeAll { $0.kind == kind }
-                steps.append(Step(kind: kind, outcome: outcome, item: item.id, link: link))
+                steps.append(Step(kind: kind, outcome: outcome, item: item.id, link: link, detail: detail))
             }
         }
         return steps.isEmpty ? nil : GitPipeline(steps: steps)
