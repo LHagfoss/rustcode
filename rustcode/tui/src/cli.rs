@@ -485,6 +485,12 @@ pub enum StorageCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Show how much space each store of RustCode's data takes, without changing files
+    Usage {
+        /// Print the report as JSON, with each store's paths
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -799,6 +805,17 @@ mod tests {
             cli.command,
             Some(Commands::Storage {
                 command: StorageCommands::Status { json: true }
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_storage_usage() {
+        let cli = Cli::try_parse_from(["rustcode", "storage", "usage"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Storage {
+                command: StorageCommands::Usage { json: false }
             })
         ));
     }

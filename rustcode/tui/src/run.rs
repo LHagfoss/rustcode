@@ -408,6 +408,18 @@ fn run_storage_command(
                 print!("{}", status.render());
             }
         }
+        crate::cli::StorageCommands::Usage { json } => {
+            let Some(config_dir) = rustcode::config::get_config_dir() else {
+                eprintln!("Configuration directory is unavailable.");
+                std::process::exit(1);
+            };
+            let usage = rustcode::storage_report::usage(&config_dir);
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&usage)?);
+            } else {
+                print!("{}", usage.render());
+            }
+        }
     }
     Ok(())
 }

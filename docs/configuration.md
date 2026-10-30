@@ -32,7 +32,29 @@ Inspect the state without changing anything:
 ```bash
 rustcode storage status          # pending and completed migrations
 rustcode storage status --json   # the same, for scripts and support tools
+rustcode storage usage           # how much space each store takes
+rustcode storage usage --json    # the same, with each store's paths
 ```
+
+`storage usage` reads only. It lists each store of the config directory with
+its size, file count, what it holds and how it is bounded today:
+
+| Store | Holds | Bounded by |
+| --- | --- | --- |
+| threads | each thread's history, logs and artifacts | kept; scratch threads are pruned |
+| history archive | history that compaction removed from a thread | kept |
+| tool output | full output of commands too long for the conversation | kept; referenced from thread histories |
+| attachments | images attached to messages | kept; referenced from thread histories |
+| workspaces | isolated subagent workspaces | kept |
+| backups | copies of config files taken before a change | kept |
+| logs | `debug.log` and `debug.log.1` | rotation |
+| sync history | the Git history of `rustcode sync` | kept |
+| indexes | the symbol index and saved memory | kept |
+| remote | paired devices and the gateway's state | kept |
+
+Everything else (configuration, credentials, models, locks) is listed as
+"other". The `sessions` link left by the threads rename is not counted twice.
+No store is cleaned automatically beyond what the table says.
 
 If `migrations.json` was written by a newer RustCode (a higher `format`), this
 version runs no migrations and leaves the file alone; upgrade RustCode. If the
