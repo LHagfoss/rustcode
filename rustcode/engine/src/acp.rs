@@ -2839,6 +2839,29 @@ mod tests {
     }
 
     #[test]
+    fn acp_event_stream_never_streams_a_stop_marker_as_text() {
+        // The live reply buffer carries the marker before the turn ends; a
+        // provider failure that never reached the model showed it raw.
+        let mut stream = AcpEventStream::new();
+        stream.updates(crate::network::AgentUiEvent::ProviderError {
+            message: "credential resolution failed".to_string(),
+        });
+        let streamed = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "[harness: turn stopped — provider_error]".to_string(),
+        });
+        assert!(streamed.is_empty(), "{streamed:?}");
+        let finished = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "[harness: turn stopped — provider_error]".to_string(),
+            completed: false,
+            timing: None,
+        });
+        assert!(
+            finished.is_empty(),
+            "the provider's message already said it: {finished:?}"
+        );
+    }
+
+    #[test]
     fn acp_event_stream_sends_stop_markers_as_notices_not_answers() {
         let mut stream = AcpEventStream::new();
         let cancelled = stream.updates(crate::network::AgentUiEvent::TurnFinished {
