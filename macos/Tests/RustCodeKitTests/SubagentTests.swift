@@ -258,4 +258,46 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(SubagentInfo.compact(2_400), "2.4k")
         XCTAssertEqual(SubagentInfo.compact(1_240_000), "1.2M")
     }
+
+    func testTheContractListsOnlyWhatTheChildWasGiven() throws {
+        let bare = try XCTUnwrap(SubagentInfo(json: ["id": 1, "name": "a", "verificationCommand": ""]))
+        XCTAssertEqual(bare.allowedPaths, [])
+        XCTAssertNil(bare.verificationCommand, "an empty command is none")
+        XCTAssertNil(bare.workspaceMode, "an older engine sends no contract")
+        let full = try XCTUnwrap(SubagentInfo(json: [
+            "id": 2, "name": "b", "writeAccess": true, "allowedPaths": ["src/parser", "tests"],
+            "verificationCommand": "cargo test -p parser", "workspaceMode": "isolated",
+            "workspacePath": "/tmp/ws", "contextInheritance": "evidence",
+        ]))
+        XCTAssertEqual(full.allowedPaths, ["src/parser", "tests"])
+        XCTAssertEqual(full.verificationCommand, "cargo test -p parser")
+        XCTAssertEqual(full.workspaceMode, "isolated")
+        XCTAssertEqual(full.workspacePath, "/tmp/ws")
+        XCTAssertEqual(full.contextInheritance, "evidence")
+    }
+
+    func testVerificationIsWhatTheChildsOwnRunsShowNotWhatWasPlanned() throws {
+        func agent(_ status: String) throws -> SubagentInfo {
+            try XCTUnwrap(SubagentInfo(json: ["id": 1, "name": "a", "status": .string(status),
+                                              "verificationCommand": "cargo test"]))
+        }
+        func run(_ command: String, _ status: String) -> JSONValue {
+            ["sessionUpdate": "tool_call", "toolCallId": .string(UUID().uuidString), "title": "run_command",
+             "status": .string(status), "rawInput": ["command": .string(command)]]
+        }
+        func transcript(_ updates: [JSONValue]) -> Transcript {
+            SubagentInfo.transcript(from: ["updates": .array(updates)])
+        }
+        let none = try XCTUnwrap(SubagentInfo(json: ["id": 1, "name": "a"]))
+        XCTAssertEqual(none.verification(in: transcript([run("cargo test", "completed")])), .none)
+        XCTAssertEqual(try agent("completed").verification(in: transcript([run("ls", "completed")])), .notRun)
+        XCTAssertEqual(try agent("completed").verification(in: transcript([run("cd x && cargo test", "completed")])), .passed)
+        // The latest run counts: a pass after a failure is a pass.
+        XCTAssertEqual(try agent("completed").verification(in: transcript([run("cargo test", "failed"),
+                                                                            run("cargo test", "completed")])), .passed)
+        XCTAssertEqual(try agent("completed").verification(in: transcript([run("cargo test", "completed"),
+                                                                            run("cargo test", "failed")])), .failed)
+        XCTAssertEqual(try agent("running").verification(in: transcript([run("cargo test", "in_progress")])), .running)
+        XCTAssertEqual(try agent("interrupted").verification(in: transcript([run("cargo test", "in_progress")])), .unknown)
+    }
 }

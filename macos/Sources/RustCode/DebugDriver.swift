@@ -719,7 +719,8 @@ enum DebugDriver {
                 ? ["id": 1, "name": "agent-1", "task": "Find where the ACP prompt arms delegation", "model": "gpt-6-luna",
                    "agentType": "explorer", "status": "completed", "messageCount": 3,
                    "toolCalls": 37, "requests": 12, "inputTokens": 180_000, "outputTokens": 4_200,
-                   "cachedInputTokens": 120_000,
+                   "cachedInputTokens": 120_000, "verificationCommand": "cargo test -p rustcode acp::prompt",
+                   "workspaceMode": "shared", "workspacePath": "/Users/me/code/rustcode", "contextInheritance": "evidence",
                    "startedAtMs": .number(now - 42_000), "finishedAtMs": .number(now - 3_000),
                    "completion": "`acp/prompt.rs` arms it."]
                 : ["id": 1, "name": "agent-1", "task": "Find where the ACP prompt arms delegation", "model": "gpt-6-luna",
@@ -737,6 +738,8 @@ enum DebugDriver {
                 ["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": "Looking at `acp/prompt.rs` and `acp/commands.rs`."]],
                 ["sessionUpdate": "tool_call", "toolCallId": "t1", "title": "search_files", "status": "completed",
                  "rawInput": ["pattern": "begin_task_delegation"]],
+                ["sessionUpdate": "tool_call", "toolCallId": "t2", "title": "run_command", "status": "completed",
+                 "rawInput": ["command": "cargo test -p rustcode acp::prompt"]],
             ]
             if flags.contains("long") {
                 for index in 0..<300 {

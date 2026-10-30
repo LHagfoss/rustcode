@@ -53,6 +53,17 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
     public var inputTokens: Int
     public var outputTokens: Int
     public var cachedInputTokens: Int
+    /// The delegation contract the child was started with (#2639): paths
+    /// it may write, the check it was asked to pass, and where it works.
+    /// Empty or nil when the parent set none, or an older engine sent none.
+    public var allowedPaths: [String]
+    public var verificationCommand: String?
+    /// `shared` (the thread's folder) or `isolated` (its own workspace).
+    public var workspaceMode: String?
+    public var workspacePath: String?
+    /// How much of the parent's conversation the child was given:
+    /// `minimal`, `evidence`, `recent` or `fork`.
+    public var contextInheritance: String?
 
     public var isActive: Bool { status.isActive || activeTurn }
 
@@ -78,6 +89,46 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
         inputTokens = json["inputTokens"]?.intValue ?? 0
         outputTokens = json["outputTokens"]?.intValue ?? 0
         cachedInputTokens = json["cachedInputTokens"]?.intValue ?? 0
+        allowedPaths = json["allowedPaths"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        verificationCommand = json["verificationCommand"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+        workspaceMode = json["workspaceMode"]?.stringValue
+        workspacePath = json["workspacePath"]?.stringValue
+        contextInheritance = json["contextInheritance"]?.stringValue
+    }
+
+    /// What became of the check the child was asked to pass, as its own
+    /// tool calls show it: planned is not passed.
+    public enum Verification: Equatable, Sendable {
+        /// No check was asked for.
+        case none
+        /// Asked for, and the child has not run it.
+        case notRun
+        /// Running now.
+        case running
+        /// The latest run of it, by its command's outcome.
+        case passed, failed
+        /// It ran and never reported, or the child was stopped first.
+        case unknown
+    }
+
+    /// The asked-for check's outcome in `transcript`, the child's
+    /// conversation: its latest `run_command` whose command is the one asked
+    /// for, or holds it (`cd x && cargo test`).
+    public func verification(in transcript: Transcript) -> Verification {
+        guard let asked = verificationCommand?.trimmingCharacters(in: .whitespacesAndNewlines), !asked.isEmpty else {
+            return .none
+        }
+        for item in transcript.items.reversed() {
+            guard case .tool(let tool) = item.content, tool.title == "run_command",
+                  let command = tool.inputDetail, command.contains(asked) else { continue }
+            if tool.settledByTurnEnd { return .unknown }
+            switch tool.status {
+            case .completed: return .passed
+            case .failed: return .failed
+            default: return isActive ? .running : .unknown
+            }
+        }
+        return .notRun
     }
 
     /// Input and output tokens the child used in all.

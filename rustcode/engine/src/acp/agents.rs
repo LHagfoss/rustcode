@@ -125,6 +125,16 @@ fn agent_json(agent: &SubAgent, supervisor: &crate::app::SubagentSupervisor) -> 
         "outputTokens": agent.usage.output_tokens,
         "cachedInputTokens": agent.usage.cached_input_tokens,
         "completion": agent.completion.as_deref().map(bounded),
+        // The delegation contract the child was started with (#2639).
+        "allowedPaths": agent.allowed_paths,
+        "verificationCommand": agent.verification_command.as_deref().map(bounded),
+        "workspaceMode": if agent.workspace_root.is_some() { "isolated" } else { "shared" },
+        "workspacePath": agent
+            .workspace_root
+            .as_ref()
+            .or(agent.working_directory.as_ref())
+            .map(|path| path.display().to_string()),
+        "contextInheritance": agent.context_inheritance,
     })
 }
 
@@ -271,6 +281,29 @@ mod tests {
         assert_eq!(agents[0]["agentType"], "default");
         assert_eq!(agents[0]["messageCount"], 2);
         assert_eq!(agents[1]["status"], "completed");
+        // A child started with no contract lists an empty one.
+        assert_eq!(agents[0]["allowedPaths"], json!([]));
+        assert_eq!(agents[0]["verificationCommand"], Value::Null);
+        assert_eq!(agents[0]["workspaceMode"], "shared");
+        assert_eq!(agents[0]["workspacePath"], Value::Null);
+    }
+
+    #[test]
+    fn list_names_the_contract_a_child_was_started_with() {
+        let mut state = AppState::new();
+        let mut agent = child(1, SubAgentStatus::Running);
+        agent.write_access = true;
+        agent.allowed_paths = vec!["src/parser".into()];
+        agent.verification_command = Some("cargo test -p parser".into());
+        agent.workspace_root = Some("/tmp/ws-1".into());
+        state.subagents.push(agent);
+        let listed = list(&state);
+        let agent = &listed["agents"][0];
+        assert_eq!(agent["allowedPaths"], json!(["src/parser"]));
+        assert_eq!(agent["verificationCommand"], "cargo test -p parser");
+        assert_eq!(agent["workspaceMode"], "isolated");
+        assert_eq!(agent["workspacePath"], "/tmp/ws-1");
+        assert_eq!(agent["contextInheritance"], "minimal");
     }
 
     #[test]

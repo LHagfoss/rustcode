@@ -405,6 +405,8 @@ struct AgentPanel: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
                 .textSelection(.enabled)
+            AgentContract(info: info, parentName: info.parentId.flatMap { id in model.subagents.first { $0.id == id }?.name },
+                          verification: info.verification(in: agent.transcript))
             if let totals = info.totalsLabel {
                 Label(totals, systemImage: "chart.bar.doc.horizontal")
                     .font(.caption)
@@ -421,6 +423,81 @@ struct AgentPanel: View {
                           completion: info.isActive ? nil : info.completion)
             .equatable()
             .id(info.id)
+    }
+}
+
+/// What the child was started with (#2639): who started it, where it
+/// works, what it may write and the check it was asked to pass, with that
+/// check's outcome as the child's own runs show it. A row shows only when
+/// the parent set it; nothing here grants or changes access.
+private struct AgentContract: View {
+    let info: SubagentInfo
+    let parentName: String?
+    let verification: SubagentInfo.Verification
+
+    private var writes: String {
+        guard info.writeAccess else { return "Read-only" }
+        return info.allowedPaths.isEmpty ? "May write; no paths listed" : info.allowedPaths.joined(separator: ", ")
+    }
+
+    private var workspace: String? {
+        guard let mode = info.workspaceMode else { return nil }
+        let place = info.workspacePath.map { " · \($0.abbreviatingHome)" } ?? ""
+        return (mode == "isolated" ? "Own workspace" : "The thread's folder") + place
+    }
+
+    private var check: (String, String, Color)? {
+        switch verification {
+        case .none: nil
+        case .notRun: (info.isActive ? "Not run yet" : "Not run", "circle.dashed", .secondary)
+        case .running: ("Running", "clock", .secondary)
+        case .passed: ("Passed", "checkmark.circle.fill", .green)
+        case .failed: ("Failed", "xmark.circle.fill", .red)
+        case .unknown: ("No result", "questionmark.circle", .orange)
+        }
+    }
+
+    var body: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 3) {
+            row("Started by", parentName ?? "This thread")
+            if info.workspaceMode != nil { row("Writes", writes) }
+            if let workspace { row("Works in", workspace) }
+            if let context = info.contextInheritance { row("Context", Self.contextLabel(context)) }
+            if let command = info.verificationCommand, let check {
+                GridRow {
+                    Text("Check").foregroundStyle(.tertiary)
+                    HStack(spacing: 6) {
+                        Text(command).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Label(check.0, systemImage: check.1)
+                            .foregroundStyle(check.2)
+                            .help("From \(info.name)'s own run of the command, not from what it wrote")
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Check \(command): \(check.0)")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private func row(_ title: String, _ value: String) -> some View {
+        GridRow {
+            Text(title).foregroundStyle(.tertiary)
+            Text(value).lineLimit(2).truncationMode(.middle).textSelection(.enabled).help(value)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    static func contextLabel(_ value: String) -> String {
+        switch value {
+        case "minimal": "The task only"
+        case "evidence": "The task and evidence passed to it"
+        case "recent": "The thread's recent messages"
+        case "fork": "The whole thread so far"
+        default: value
+        }
     }
 }
 
