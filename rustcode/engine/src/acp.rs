@@ -119,7 +119,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "agents": agents::AGENTS_CAPABILITY_VERSION,
                 "rewind": 1,
                 "sessionMove": 1,
-                "pullRequests": 1,
+                "pullRequests": 2,
             }),
         )]))
 }
@@ -964,6 +964,46 @@ pub(crate) struct PullViewRequest {
     pub number: u64,
 }
 
+/// A pull request's diff. Answers `{diff, truncated}` or `{error}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/pulls/diff", response = serde_json::Value)]
+pub(crate) struct PullDiffRequest {
+    pub cwd: std::path::PathBuf,
+    pub number: u64,
+}
+
+/// Post one review the user wrote and submitted (#2646). Answers
+/// `{review: {url}}` or `{error: {code, message}}`; `uncertain` means it may
+/// have been posted.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/pulls/review", response = serde_json::Value)]
+pub(crate) struct PullReviewRequest {
+    pub cwd: std::path::PathBuf,
+    pub repository: String,
+    pub number: u64,
+    pub commit_id: String,
+    pub event: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub comments: Vec<crate::pull_requests::ReviewComment>,
+}
+
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
     let startup_state = crate::app::AppState::new();
     // Servers start on the session's first turn, not here: the app attaches
@@ -1352,6 +1392,48 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let viewed = crate::pull_requests::view(&request.cwd, request.number).await;
                     responder.respond(match viewed {
                         Ok(pull) => serde_json::json!({ "pull": pull }),
+                        Err(error) => serde_json::json!({ "error": error }),
+                    })?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullDiffRequest, responder, connection| {
+                connection.spawn(async move {
+                    let diff = crate::pull_requests::diff(&request.cwd, request.number).await;
+                    responder.respond(match diff {
+                        Ok(diff) => serde_json::to_value(diff).unwrap_or_default(),
+                        Err(error) => serde_json::json!({ "error": error }),
+                    })?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullReviewRequest, responder, connection| {
+                connection.spawn(async move {
+                    let posted = match crate::pull_requests::review_payload(
+                        &request.commit_id,
+                        &request.event,
+                        &request.body,
+                        &request.comments,
+                    ) {
+                        Ok(payload) => {
+                            crate::pull_requests::post_review(
+                                &request.cwd,
+                                &request.repository,
+                                request.number,
+                                &payload,
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    };
+                    responder.respond(match posted {
+                        Ok(review) => serde_json::json!({ "review": review }),
                         Err(error) => serde_json::json!({ "error": error }),
                     })?;
                     Ok(())

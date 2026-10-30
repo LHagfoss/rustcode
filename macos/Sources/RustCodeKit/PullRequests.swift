@@ -196,6 +196,8 @@ public struct PullRequestDetail: Equatable, Sendable {
 extension ACPMethod {
     public static let pulls = "_rustcode/pulls"
     public static let pullView = "_rustcode/pulls/view"
+    public static let pullDiff = "_rustcode/pulls/diff"
+    public static let pullReview = "_rustcode/pulls/review"
 }
 
 extension ACPRequests {
