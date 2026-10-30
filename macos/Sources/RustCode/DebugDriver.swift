@@ -1103,6 +1103,31 @@ enum DebugDriver {
             model.attachCodeReference(CodeReference(intent: .change, root: model.chatProject.path, path: "src/parser.rs",
                                                     side: .new, lines: 40...44, scope: "uncommitted changes",
                                                     baseCommit: "a1b2c3d", excerpt: ["fn parse() {", "    todo!()", "}"]))
+        case "plan":
+            // `plan [open] [go]`: a turn that planned five steps (one done, one in
+            // progress, one blocked) and the plan the engine would answer;
+            // `open` shows the inspector.
+            let steps: [JSONValue] = [
+                ["id": "t1", "content": "Read how the parser handles nested blocks", "status": "completed"],
+                ["id": "t2", "content": "Fix nesting in fenced code", "status": "in_progress"],
+                ["id": "t3", "content": "Add a fixture with deep nesting", "status": "blocked",
+                 "blockedReason": "Needs a sample document from the user"],
+                ["id": "t4", "content": "Run the parser tests", "status": "pending"],
+                ["id": "t5", "content": "Update the changelog", "status": "pending"],
+            ]
+            if model.transcript.isEmpty {
+                model.transcript.appendUser("Fix nested code blocks in the parser.")
+                model.transcript.apply(.toolCall(id: "plan-1", title: "todo_write", kind: nil, status: .completed,
+                                                 input: ["todos": .array(steps)]))
+                model.transcript.apply(.agentText("Reading the parser first."))
+                model.transcript.apply(.toolCall(id: "plan-2", title: "todo_write", kind: nil, status: .completed,
+                                                 input: ["merge": true, "todos": [["id": "t2", "status": "in_progress"]]]))
+            }
+            let plan = TaskPlan(result: ["steps": .array(steps)])
+            model.debugPlan(plan)
+            model.showsTaskPlan = parts.contains("open")
+            // `go`: choose the first step, as a click on its row does.
+            if parts.contains("go") { model.revealRequest = plan.lastUpdates(in: model.transcript.items)["t1"] }
         case "inbox":
             // `inbox [demo]`: open the attention inbox; `demo` first marks the
             // first thread stopped and the second unread.

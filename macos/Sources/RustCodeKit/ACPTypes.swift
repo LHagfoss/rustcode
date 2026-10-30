@@ -46,6 +46,8 @@ public struct AgentInfo: Equatable, Sendable {
     public var steer: Bool
     /// The engine answers `_rustcode/agents`.
     public var agents: Bool
+    /// The engine answers its `plan` action: the session's task plan (#2641).
+    public var plan: Bool
     /// The engine answers `_rustcode/rewind`.
     public var rewind: Bool
     /// The engine moves a closed chat to another folder (`_rustcode/session/move`).
@@ -67,6 +69,7 @@ public struct AgentInfo: Equatable, Sendable {
         remote = capabilities?["_meta"]?["rustcode"]?["remote"]?.intValue != nil
         steer = capabilities?["_meta"]?["rustcode"]?["steer"]?.intValue != nil
         agents = capabilities?["_meta"]?["rustcode"]?["agents"]?.intValue != nil
+        plan = (capabilities?["_meta"]?["rustcode"]?["agents"]?.intValue ?? 0) >= 2
         rewind = capabilities?["_meta"]?["rustcode"]?["rewind"]?.intValue != nil
         sessionMove = capabilities?["_meta"]?["rustcode"]?["sessionMove"]?.intValue != nil
     }

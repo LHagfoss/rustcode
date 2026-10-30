@@ -233,6 +233,15 @@ final class DesktopModel: ObservableObject {
     var attentionInbox = AttentionInbox()
     /// The inbox popover is open.
     @Published var showsInbox = false
+    /// The shown thread's task plan (#2641), read from the engine when the
+    /// thread opens and after each plan update.
+    @Published var taskPlan = TaskPlan(steps: [])
+    /// The latest read of the plan got no answer; `taskPlan` is the last one read.
+    @Published var taskPlanStale = false
+    @Published var showsTaskPlan = false
+    /// A transcript row the chat should scroll to and open, as a plan step
+    /// asks; the chat clears it once done.
+    @Published var revealRequest: Int?
     /// The default project: new chats start here unless one is given its own
     /// folder. Set in Settings; the engine and preview run in it.
     @Published var workspace: URL {
@@ -481,6 +490,13 @@ final class DesktopModel: ObservableObject {
     }
     /// The debug driver's agents stand in for the engine's, which has none.
     private var debugHoldsAgents = false
+
+    /// The debug driver's stand-in for the engine's task plan.
+    func debugPlan(_ plan: TaskPlan) {
+        debugHoldsPlan = true
+        taskPlan = plan
+    }
+    private var debugHoldsPlan = false
     #endif
     @Published var error: String?
     /// Every unanswered permission or question request, oldest first. The
@@ -854,6 +870,31 @@ final class DesktopModel: ObservableObject {
 
     /// The key of `agent`'s draft in the shown chat.
     func agentDraftKey(_ agent: Int) -> String { "\(selectedSession ?? "-")/\(agent)" }
+
+    /// Read the shown thread's plan. An engine without plans, or a new
+    /// thread, has an empty one; a read that gets no answer keeps the last
+    /// plan, marked stale.
+    func refreshPlan() async {
+        #if DEBUG
+        if debugHoldsPlan { return }
+        #endif
+        guard capabilities?.plan == true, let session = selectedSession, let connection = engine?.connection else {
+            if !taskPlan.isEmpty { taskPlan = TaskPlan(steps: []) }
+            taskPlanStale = false
+            return
+        }
+        do {
+            let result = try await connection.request(ACPMethod.agents, params: ACPRequests.plan(sessionId: session),
+                                                      timeout: .seconds(10))
+            guard selectedSession == session else { return }
+            let plan = TaskPlan(result: result)
+            if plan != taskPlan { taskPlan = plan }
+            taskPlanStale = false
+        } catch {
+            guard selectedSession == session else { return }
+            taskPlanStale = !taskPlan.isEmpty
+        }
+    }
 
     /// Read the shown chat's agents once a second while its turn runs, a child
     /// is still working, or a child's panel is open; then once more, so the

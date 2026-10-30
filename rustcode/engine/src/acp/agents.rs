@@ -11,7 +11,8 @@ use tokio::sync::Mutex;
 
 use crate::app::{AppState, SubAgent, SubAgentStatus, SubagentId};
 
-pub(crate) const AGENTS_CAPABILITY_VERSION: u64 = 1;
+/// 2: the `plan` action (#2641).
+pub(crate) const AGENTS_CAPABILITY_VERSION: u64 = 2;
 
 /// Bytes of a child's task and completion the list carries.
 const SUMMARY_BYTES: usize = 600;
@@ -38,6 +39,8 @@ pub(crate) enum AgentsAction {
     Send { id: u32, text: String },
     /// Stop a child and its descendants.
     Cancel { id: u32 },
+    /// The session's task plan, as `todo_write` keeps it (#2641).
+    Plan,
 }
 
 /// Answer an `_rustcode/agents` request for the session's `state`.
@@ -52,7 +55,25 @@ pub(crate) async fn answer(
         AgentsAction::History { id } => history(&*state.lock().await, id, cwd),
         AgentsAction::Send { id, text } => send(state, client, id, text).await,
         AgentsAction::Cancel { id } => cancel(state, id).await,
+        AgentsAction::Plan => Ok(plan(&*state.lock().await)),
     }
+}
+
+/// Answer the `plan` action: the steps the agent proposed and how it marked
+/// each, in its order. Only what `todo_write` recorded; a step marked done is
+/// the agent's own claim, which a client shows as such.
+pub(crate) fn plan(state: &AppState) -> Value {
+    json!({ "steps": state
+        .todos
+        .iter()
+        .map(|todo| json!({
+            "id": todo.id,
+            "content": bounded(&todo.content),
+            "status": todo.status,
+            "priority": todo.priority,
+            "blockedReason": todo.blocked_reason.as_deref().map(bounded),
+        }))
+        .collect::<Vec<_>>() })
 }
 
 fn status_name(status: SubAgentStatus) -> &'static str {
@@ -304,6 +325,28 @@ mod tests {
         assert_eq!(agent["workspaceMode"], "isolated");
         assert_eq!(agent["workspacePath"], "/tmp/ws-1");
         assert_eq!(agent["contextInheritance"], "minimal");
+    }
+
+    #[test]
+    fn plan_lists_the_steps_todo_write_recorded() {
+        let mut state = AppState::new();
+        assert_eq!(plan(&state), json!({ "steps": [] }));
+        state.todos = crate::app::apply_todo_write(
+            &[],
+            &json!({ "todos": [
+                { "content": "Read the parser", "status": "completed", "priority": "high" },
+                { "content": "Fix nesting", "status": "blocked", "priority": "high", "blocked_reason": "needs a fixture" },
+            ] }),
+        )
+        .expect("plan");
+        let steps = plan(&state)["steps"].clone();
+        assert_eq!(steps[0]["id"], "t1");
+        assert_eq!(steps[0]["status"], "completed");
+        assert_eq!(steps[1]["id"], "t2");
+        assert_eq!(steps[1]["blockedReason"], "needs a fixture");
+        let request: AgentsRequest =
+            serde_json::from_value(json!({ "sessionId": "s", "action": "plan" })).expect("request");
+        assert_eq!(request.action, AgentsAction::Plan);
     }
 
     #[test]
