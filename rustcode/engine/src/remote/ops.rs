@@ -1313,6 +1313,7 @@ mod tests {
             completion: None,
             performance: Default::default(),
             last_activity_ms: None,
+            usage: Default::default(),
         });
         let agents = output(execute_command(&mut state, "/agents"));
         assert!(

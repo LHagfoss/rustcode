@@ -423,6 +423,26 @@ pub struct SubAgent {
     /// from one that is stuck (#2558).
     #[serde(default)]
     pub last_activity_ms: Option<u64>,
+    /// Tokens summed over every model request the child made, for the
+    /// frontends' run totals; `performance` holds only the latest request's.
+    #[serde(default)]
+    pub usage: SubAgentUsage,
+}
+
+/// Tokens a subagent used across all its requests.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SubAgentUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: u64,
+}
+
+impl SubAgentUsage {
+    pub fn add(&mut self, performance: &crate::benchmark::TurnPerformance) {
+        self.input_tokens += performance.input_tokens.unwrap_or(0);
+        self.output_tokens += performance.output_tokens.unwrap_or(0);
+        self.cached_input_tokens += performance.cached_input_tokens.unwrap_or(0);
+    }
 }
 
 /// One entry of the agent's persistent task plan, managed via the `todo_write` tool.

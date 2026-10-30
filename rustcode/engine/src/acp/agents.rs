@@ -120,6 +120,10 @@ fn agent_json(agent: &SubAgent, supervisor: &crate::app::SubagentSupervisor) -> 
         "finishedAtMs": agent.finished_at_ms,
         "lastActivityMs": agent.last_activity_ms.or(agent.started_at_ms),
         "toolCalls": agent.performance.tool_calls,
+        "requests": agent.performance.requests,
+        "inputTokens": agent.usage.input_tokens,
+        "outputTokens": agent.usage.output_tokens,
+        "cachedInputTokens": agent.usage.cached_input_tokens,
         "completion": agent.completion.as_deref().map(bounded),
     })
 }
@@ -267,6 +271,25 @@ mod tests {
         assert_eq!(agents[0]["agentType"], "default");
         assert_eq!(agents[0]["messageCount"], 2);
         assert_eq!(agents[1]["status"], "completed");
+    }
+
+    #[test]
+    fn list_sums_the_tokens_of_every_request() {
+        let mut state = AppState::new();
+        let mut agent = child(1, SubAgentStatus::Completed);
+        for (input, output) in [(1_000, 50), (1_400, 70)] {
+            agent.usage.add(&crate::benchmark::TurnPerformance {
+                input_tokens: Some(input),
+                output_tokens: Some(output),
+                cached_input_tokens: Some(800),
+                ..Default::default()
+            });
+        }
+        state.subagents.push(agent);
+        let listed = list(&state);
+        assert_eq!(listed["agents"][0]["inputTokens"], 2_400);
+        assert_eq!(listed["agents"][0]["outputTokens"], 120);
+        assert_eq!(listed["agents"][0]["cachedInputTokens"], 1_600);
     }
 
     #[test]

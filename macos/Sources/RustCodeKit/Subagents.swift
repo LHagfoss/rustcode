@@ -47,6 +47,12 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
     /// call or a status change.
     public var lastActivity: Date?
     public var toolCalls: Int
+    /// Model requests in the child's latest run.
+    public var requests: Int
+    /// Tokens over every request the child made, follow-ups included.
+    public var inputTokens: Int
+    public var outputTokens: Int
+    public var cachedInputTokens: Int
 
     public var isActive: Bool { status.isActive || activeTurn }
 
@@ -68,6 +74,37 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
         completion = json["completion"]?.stringValue
         lastActivity = json["lastActivityMs"]?.doubleValue.map { Date(timeIntervalSince1970: $0 / 1000) }
         toolCalls = json["toolCalls"]?.intValue ?? 0
+        requests = json["requests"]?.intValue ?? 0
+        inputTokens = json["inputTokens"]?.intValue ?? 0
+        outputTokens = json["outputTokens"]?.intValue ?? 0
+        cachedInputTokens = json["cachedInputTokens"]?.intValue ?? 0
+    }
+
+    /// Input and output tokens the child used in all.
+    public var totalTokens: Int { inputTokens + outputTokens }
+
+    /// The child's totals for its panel: `184k tokens (120k cached) ·
+    /// 37 tool calls · 12 requests`. Empty parts are left out; nil when an
+    /// engine sends none.
+    public var totalsLabel: String? {
+        var parts: [String] = []
+        if totalTokens > 0 {
+            let cached = cachedInputTokens > 0 ? " (\(Self.compact(cachedInputTokens)) cached)" : ""
+            parts.append("\(Self.compact(totalTokens)) tokens\(cached)")
+        }
+        if toolCalls > 0 { parts.append("\(toolCalls) tool call\(toolCalls == 1 ? "" : "s")") }
+        if requests > 0 { parts.append("\(requests) request\(requests == 1 ? "" : "s")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// `950`, `12.4k`, `1.2M`.
+    public static func compact(_ count: Int) -> String {
+        switch count {
+        case ..<1000: "\(count)"
+        case ..<10000: String(format: "%.1fk", Double(count) / 1000)
+        case ..<1_000_000: "\(count / 1000)k"
+        default: String(format: "%.1fM", Double(count) / 1_000_000)
+        }
     }
 
     /// How long a working child may go without progress before the chat says

@@ -749,6 +749,7 @@ impl SubagentController {
             completion: None,
             performance: Default::default(),
             last_activity_ms: Some(now_ms()),
+            usage: Default::default(),
         });
         state.request_redraw();
         id
