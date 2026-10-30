@@ -94,11 +94,10 @@ struct NewThreadBannerView: View {
     @State private var drawnHeight: CGFloat = 0
     @State private var image: CGImage?
     @State private var art: AttributedString?
-    /// The cells `art` was drawn at: while a resize waits for the next
-    /// drawing, the text is scaled to fill the new room, as a picture is,
-    /// so the banner follows the window live instead of leaving a gap.
-    @State private var artColumns = 0
-    @State private var artRows = 0
+    /// The size `art` draws at: while a resize waits for the next drawing,
+    /// the text is scaled to fill the new room, as a picture is, so the
+    /// banner follows the window live instead of leaving a gap.
+    @State private var artSize: CGSize = .zero
 
     /// The text's size: small enough that a band reads as a picture.
     static let fontSize: CGFloat = 7
@@ -142,7 +141,10 @@ struct NewThreadBannerView: View {
                     banner
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { drawnHeight = $0 }
-                .frame(width: width, alignment: .top)
+                // Exactly the room, so the foot's fade stays where the room
+                // ends while the drawing under it is scaled or redrawn.
+                .frame(width: width, height: height, alignment: .top)
+                .clipped()
                 .mask { height == nil ? AnyView(Self.sideFade) : AnyView(Self.footFade) }
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: art == nil && image == nil)
             }
@@ -164,21 +166,17 @@ struct NewThreadBannerView: View {
             let key = key
             if let cached = NewThreadBanner.drawings[key.cacheKey] {
                 art = cached
-                artColumns = key.columns
-                artRows = key.rows
                 return
             }
             // Settle a resize before drawing again.
             if art != nil { try? await Task.sleep(for: .milliseconds(120)) }
-            let columns = columns, rows = rows, inverted = colorScheme != .dark, aspect = aspect
+            let columns = columns, inverted = colorScheme != .dark, aspect = aspect
             let rendered = await Task.detached(priority: .userInitiated) {
                 Self.attributed(AsciiBanner.render(image, columns: columns, inverted: inverted, aspect: aspect))
             }.value
             guard !Task.isCancelled else { return }
             NewThreadBanner.drawings[key.cacheKey] = rendered
             art = rendered
-            artColumns = columns
-            artRows = rows
         }
     }
 
@@ -200,6 +198,7 @@ struct NewThreadBannerView: View {
                 .font(Font(Self.font))
                 .lineSpacing(0)
                 .fixedSize()
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { artSize = $0 }
                 .scaleEffect(fillScale, anchor: .top)
         }
     }
@@ -208,10 +207,9 @@ struct NewThreadBannerView: View {
     /// when it is relatively taller: the room's width, and with a `height`
     /// its height too.
     private var fillScale: CGFloat {
-        let drawnWidth = CGFloat(artColumns) * Self.charWidth
-        guard drawnWidth > 0, width > 0 else { return 1 }
-        var scale = width / drawnWidth
-        if let height, artRows > 0 { scale = max(scale, height / (CGFloat(artRows) * Self.lineHeight)) }
+        guard artSize.width > 0, width > 0 else { return 1 }
+        var scale = width / artSize.width
+        if let height, artSize.height > 0 { scale = max(scale, height / artSize.height) }
         return scale
     }
 
