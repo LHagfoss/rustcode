@@ -669,6 +669,16 @@ final class DesktopModel: ObservableObject {
     /// The engine can move a chat to another folder (#2459).
     var canMoveChat: Bool { capabilities?.sessionMove == true && capabilities?.closeSession == true }
 
+    /// Threads whose suggested folder (`FolderSuggestion`) the user dismissed,
+    /// as `id|path`, so it is not offered again.
+    @Published private(set) var dismissedFolderSuggestions: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "dismissedFolderSuggestions") ?? [])
+
+    func dismissFolderSuggestion(_ folder: URL, for session: String) {
+        dismissedFolderSuggestions.insert("\(session)|\(folder.path)")
+        UserDefaults.standard.set(Array(dismissedFolderSuggestions), forKey: "dismissedFolderSuggestions")
+    }
+
     init() {
         let savedPath = UserDefaults.standard.string(forKey: "workspacePath")
         // An app opened from Finder or the Dock starts in `/`, which is no project.
@@ -1166,8 +1176,7 @@ final class DesktopModel: ObservableObject {
     /// keep theirs. The engine moves a closed chat, so the chat is closed,
     /// moved and opened again there. Cancelling changes nothing.
     func moveChatProject() async {
-        guard capabilities?.sessionMove == true, capabilities?.closeSession == true,
-              let id = selectedSession, let connection = engine?.connection else { return }
+        guard canMoveChat, let id = selectedSession, engine != nil else { return }
         guard !runningSessions.contains(id) else {
             error = "Stop the running turn before changing this thread's folder."
             return
@@ -1180,8 +1189,20 @@ final class DesktopModel: ObservableObject {
         panel.directoryURL = current
         panel.prompt = "Move Thread Here"
         panel.message = "This thread works in the folder you pick from now on. Other threads and new threads keep their folders."
-        guard panel.runModal() == .OK, let url = panel.url, usableProject(url),
-              url.standardizedFileURL.path != current.standardizedFileURL.path else { return }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        await moveChatProject(to: url)
+    }
+
+    /// Move the shown thread to `url`, which it works in from now on.
+    func moveChatProject(to url: URL) async {
+        guard capabilities?.sessionMove == true, capabilities?.closeSession == true,
+              let id = selectedSession, let connection = engine?.connection else { return }
+        guard !runningSessions.contains(id) else {
+            error = "Stop the running turn before changing this thread's folder."
+            return
+        }
+        let current = chatProject
+        guard usableProject(url), url.standardizedFileURL.path != current.standardizedFileURL.path else { return }
         var summary = sessions.first { $0.id == id } ?? SessionSummary(id: id, cwd: current.path)
         _ = try? await connection.request(ACPMethod.sessionClose, params: ACPRequests.session(id), timeout: .seconds(10))
         openChats.forget(id)
