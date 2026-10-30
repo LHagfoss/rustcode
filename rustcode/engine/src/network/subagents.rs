@@ -488,6 +488,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 agent.performance.input_tokens = request_performance.input_tokens;
                 agent.performance.output_tokens = request_performance.output_tokens;
                 agent.performance.cached_input_tokens = request_performance.cached_input_tokens;
+                agent.usage.add(&request_performance);
                 agent.last_activity_ms = Some(crate::app::subagent_controller::now_ms());
             }
         }

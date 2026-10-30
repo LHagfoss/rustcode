@@ -245,4 +245,17 @@ final class SubagentTests: XCTestCase {
         XCTAssertEqual(background.take("chat").map(\.id), [1])
         XCTAssertFalse(background.isStale("chat"))
     }
+
+    func testTotalsNameTokensToolCallsAndRequests() throws {
+        let agent = try XCTUnwrap(SubagentInfo(json: ["id": 1, "name": "a", "status": "completed", "toolCalls": 37,
+                                                      "requests": 12, "inputTokens": 180_000, "outputTokens": 4_200,
+                                                      "cachedInputTokens": 120_000]))
+        XCTAssertEqual(agent.totalTokens, 184_200)
+        XCTAssertEqual(agent.totalsLabel, "184k tokens (120k cached) · 37 tool calls · 12 requests")
+        let one = try XCTUnwrap(SubagentInfo(json: ["id": 2, "name": "b", "toolCalls": 1, "inputTokens": 950]))
+        XCTAssertEqual(one.totalsLabel, "950 tokens · 1 tool call")
+        XCTAssertNil(try XCTUnwrap(SubagentInfo(json: ["id": 3, "name": "c"])).totalsLabel, "an older engine sends none")
+        XCTAssertEqual(SubagentInfo.compact(2_400), "2.4k")
+        XCTAssertEqual(SubagentInfo.compact(1_240_000), "1.2M")
+    }
 }

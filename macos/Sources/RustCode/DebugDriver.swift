@@ -695,9 +695,11 @@ enum DebugDriver {
                 model.toggleToolRun(first.id)
             }
         case "agents":
-            // `agents [chat] [done] [open]`: two subagents, the first still
-            // working; `chat` adds the turn that spawned them, `done` lets
-            // the first finish too, `open` shows the first one's panel.
+            // `agents [chat] [done] [open] [long]`: two subagents, the first
+            // still working; `chat` adds the turn that spawned them, `done`
+            // lets the first finish too, `open` shows the first one's panel
+            // and reports how long it took to draw, `long` gives the first a
+            // 600-message conversation.
             let flags = Set(parts.dropFirst())
             let now = Date().timeIntervalSince1970 * 1000
             if flags.contains("chat") {
@@ -716,24 +718,43 @@ enum DebugDriver {
             let first: JSONValue = flags.contains("done")
                 ? ["id": 1, "name": "agent-1", "task": "Find where the ACP prompt arms delegation", "model": "gpt-6-luna",
                    "agentType": "explorer", "status": "completed", "messageCount": 3,
+                   "toolCalls": 37, "requests": 12, "inputTokens": 180_000, "outputTokens": 4_200,
+                   "cachedInputTokens": 120_000,
                    "startedAtMs": .number(now - 42_000), "finishedAtMs": .number(now - 3_000),
                    "completion": "`acp/prompt.rs` arms it."]
                 : ["id": 1, "name": "agent-1", "task": "Find where the ACP prompt arms delegation", "model": "gpt-6-luna",
                    "agentType": "explorer", "status": "running", "activeTurn": true, "messageCount": 3,
-                   "startedAtMs": .number(now - 42_000)]
+                   "toolCalls": 21, "requests": 8, "inputTokens": 96_000, "outputTokens": 2_100,
+                   "cachedInputTokens": 64_000, "startedAtMs": .number(now - 42_000)]
             let agents = SubagentInfo.list(from: ["agents": [
                 first,
                 ["id": 2, "name": "agent-2", "task": "Run the Swift tests", "agentType": "worker", "status": "completed",
                  "writeAccess": true, "messageCount": 2, "startedAtMs": .number(now - 125_000),
                  "finishedAtMs": .number(now - 20_000), "completion": "All 214 tests pass."],
             ]])
-            let transcript = SubagentInfo.transcript(from: ["updates": [
+            var updates: [JSONValue] = [
                 ["sessionUpdate": "user_message_chunk", "content": ["type": "text", "text": "Find where the ACP prompt arms delegation"]],
                 ["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": "Looking at `acp/prompt.rs` and `acp/commands.rs`."]],
                 ["sessionUpdate": "tool_call", "toolCallId": "t1", "title": "search_files", "status": "completed",
                  "rawInput": ["pattern": "begin_task_delegation"]],
-            ]])
+            ]
+            if flags.contains("long") {
+                for index in 0..<300 {
+                    updates.append(["sessionUpdate": "tool_call", "toolCallId": .string("l\(index)"), "title": "read_file",
+                                    "status": "completed", "rawInput": ["path": .string("src/file\(index).rs")]])
+                    updates.append(["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": .string(
+                        "Step \(index): the parser **keeps** its `state` here.\n\n- one\n- two\n\n```rust\nlet x = \(index);\n```")]])
+                }
+            }
+            let transcript = SubagentInfo.transcript(from: ["updates": .array(updates)])
+            let start = Date()
             model.debugAgents(agents, viewing: flags.contains("open") ? transcript : nil)
+            if flags.contains("open") {
+                let window = NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+                window?.contentView?.layoutSubtreeIfNeeded()
+                window?.displayIfNeeded()
+                report("agent open items \(transcript.items.count) first frame \(ms(start, Date())) ms")
+            }
         case "panelwheel":
             // `panelwheel <steps> [points]`: the reader's wheel over an
             // agent's panel, as the chat's input monitor sees it (#2598).

@@ -180,7 +180,9 @@ private struct AgentSpawnRow: View {
                             Text(info.elapsed(now: context.date) ?? "").foregroundStyle(.tertiary).monospacedDigit()
                         }
                     } else {
-                        Text([info.status.label, info.elapsed()].compactMap { $0 }.joined(separator: " · "))
+                        Text([info.status.label, info.elapsed(),
+                              info.totalTokens > 0 ? "\(SubagentInfo.compact(info.totalTokens)) tokens" : nil]
+                            .compactMap { $0 }.joined(separator: " · "))
                             .foregroundStyle(info.status == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
                             .monospacedDigit()
                     }
@@ -403,24 +405,64 @@ struct AgentPanel: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
                 .textSelection(.enabled)
+            if let totals = info.totalsLabel {
+                Label(totals, systemImage: "chart.bar.doc.horizontal")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .help("Tokens over every request \(info.name) made, follow-ups included; tool calls and requests of its latest run")
+            }
         }
     }
 
     private var conversation: some View {
-        let items = agent.transcript.items
-        return ScrollViewReader { proxy in
+        AgentConversation(transcript: agent.transcript, isLoading: agent.loadedCount < 0,
+                          completion: info.isActive ? nil : info.completion)
+            .equatable()
+            .id(info.id)
+    }
+}
+
+/// The child's messages. Its own view, compared by what it shows, so the
+/// header's status and timers ticking do not lay out every message again;
+/// and only the latest `window` rows are drawn until asked for more, so a
+/// long-running child opens at once, as the main chat draws a window too.
+private struct AgentConversation: View, Equatable {
+    let transcript: Transcript
+    let isLoading: Bool
+    let completion: String?
+    @State private var shown = Self.window
+
+    /// Rows drawn when the panel opens, and added per "Show earlier".
+    static let window = 40
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.transcript == rhs.transcript && lhs.isLoading == rhs.isLoading && lhs.completion == rhs.completion
+    }
+
+    var body: some View {
+        let items = transcript.items
+        let hidden = max(0, items.count - shown)
+        ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if items.isEmpty {
-                        Text(agent.loadedCount < 0 ? "Loading…" : "Nothing yet.")
+                        Text(isLoading ? "Loading…" : "Nothing yet.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)
                             .padding(.top, 40)
                     }
-                    ForEach(items) { item in
-                        TranscriptRow(item: item)
+                    if hidden > 0 {
+                        Button("Show \(min(hidden, Self.window)) earlier of \(hidden)") { shown += Self.window }
+                            .buttonStyle(.link)
+                            .font(.callout)
+                            .frame(maxWidth: .infinity)
                     }
-                    if let completion = info.completion, !info.isActive {
+                    ForEach(items.suffix(items.count - hidden)) { item in
+                        TranscriptRow(item: item).equatable()
+                    }
+                    if let completion {
                         Label(completion, systemImage: "flag.checkered")
                             .font(.callout)
                             .foregroundStyle(.secondary)

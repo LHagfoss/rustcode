@@ -742,7 +742,7 @@ final class DesktopModel: ObservableObject {
     // MARK: - Subagents
 
     /// A subagent's conversation, open in its panel.
-    struct ViewedAgent: Identifiable {
+    struct ViewedAgent: Identifiable, Equatable {
         var info: SubagentInfo
         var transcript = Transcript()
         /// The child's message count when `transcript` was read.
@@ -895,7 +895,9 @@ final class DesktopModel: ObservableObject {
             viewed.transcript = SubagentInfo.transcript(from: history)
             viewed.loadedCount = viewed.info.messageCount
         }
-        if viewedAgent?.id == viewed.id { viewedAgent = viewed }
+        // Published only on a change: each assignment redraws the panel and
+        // the window around it, once a second while the child is open.
+        if viewedAgent?.id == viewed.id, viewedAgent != viewed { viewedAgent = viewed }
     }
 
     /// A fresh agents list for the shown chat `session`. The child open on
