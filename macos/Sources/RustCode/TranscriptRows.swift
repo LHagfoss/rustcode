@@ -1134,6 +1134,8 @@ extension EnvironmentValues {
     @Entry var toggleMessage: MessageToggle? = nil
     /// Opens a subagent's panel by its id; without it, agent rows only show.
     @Entry var openAgent: (@MainActor (Int) -> Void)? = nil
+    /// Scroll the chat to a row and open it, as a pipeline step asks.
+    @Entry var revealItem: (@MainActor (Int) -> Void)? = nil
 }
 
 /// Opens or folds a long message of the chat (#2303). One object for the
@@ -1489,7 +1491,7 @@ struct TurnCompletionCard: View {
                         .buttonStyle(.plain)
                         .help(showsFiles ? "Hide the files" : "List the files")
                     }
-                    if completion.checks.isEmpty {
+                    if completion.checks.isEmpty, !completion.edited.isEmpty {
                         Label("No checks ran", systemImage: "questionmark.circle")
                             .foregroundStyle(.secondary)
                             .help("This turn ran no tests, builds or lints that RustCode could see.")
@@ -1505,6 +1507,9 @@ struct TurnCompletionCard: View {
                             CheckLine(check: check)
                         }
                     }
+                }
+                if let pipeline = completion.pipeline {
+                    PipelineLine(pipeline: pipeline)
                 }
                 if completion.failedCommands > 0 {
                     Label("\(completion.failedCommands) other command\(completion.failedCommands == 1 ? "" : "s") failed",
@@ -1529,6 +1534,72 @@ struct TurnCompletionCard: View {
             .background(.fill.quaternary, in: .rect(cornerRadius: 10))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("What this turn changed and checked")
+        }
+    }
+
+    /// `Commit ✓ › Push ✓ › Pull request #12 ✓ › Checks …`: each step as its
+    /// command ended. A step opens its command's output; the pull request
+    /// opens on GitHub.
+    private struct PipelineLine: View {
+        let pipeline: GitPipeline
+        @Environment(\.revealItem) private var reveal
+
+        var body: some View {
+            HStack(spacing: 4) {
+                ForEach(Array(pipeline.steps.enumerated()), id: \.offset) { index, step in
+                    if index > 0 {
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.quaternary)
+                            .accessibilityHidden(true)
+                    }
+                    Button {
+                        if let link = step.link { NSWorkspace.shared.open(link) } else { reveal?(step.item) }
+                    } label: {
+                        HStack(spacing: 4) {
+                            mark(step.outcome)
+                            Text(title(step))
+                        }
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help(help(step))
+                    .accessibilityLabel("\(title(step)): \(word(step.outcome))")
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Git steps")
+        }
+
+        private func title(_ step: GitPipeline.Step) -> String {
+            guard step.kind == .pullRequest, let number = step.link?.lastPathComponent else { return step.kind.title }
+            return "Pull request #\(number)"
+        }
+
+        private func help(_ step: GitPipeline.Step) -> String {
+            let opens = step.link != nil ? "Opens the pull request" : "Shows the command and its output"
+            return "\(step.kind.title) \(word(step.outcome)). \(opens)"
+        }
+
+        private func word(_ outcome: GitPipeline.Step.Outcome) -> String {
+            switch outcome {
+            case .running: "running"
+            case .succeeded: "succeeded"
+            case .failed: "failed"
+            case .pending: "still pending when watched"
+            case .cancelled: "stopped"
+            case .unknown: "has no known result"
+            }
+        }
+
+        @ViewBuilder
+        private func mark(_ outcome: GitPipeline.Step.Outcome) -> some View {
+            switch outcome {
+            case .running: ProgressView().controlSize(.mini)
+            case .succeeded: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            case .failed: Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+            case .pending: Image(systemName: "clock").foregroundStyle(.orange)
+            case .cancelled: Image(systemName: "stop.circle").foregroundStyle(.secondary)
+            case .unknown: Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
+            }
         }
     }
 

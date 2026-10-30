@@ -28,6 +28,8 @@ public struct TurnCompletion: Equatable, Sendable {
     /// Other commands (not checks) that failed.
     public var failedCommands: Int
     public var cancelled: Bool
+    /// The commit, push, pull request and CI steps the turn took (#2644).
+    public var pipeline: GitPipeline? = nil
 
     public var failedChecks: Int { checks.filter { $0.outcome == .failed }.count }
 
@@ -67,20 +69,23 @@ public struct TurnCompletion: Equatable, Sendable {
                 }
             }
             guard tool.title == "run_command", let command = tool.inputDetail else { continue }
-            if isCheck(command) {
+            // Watching CI is the pipeline's checks step, not a check run here.
+            let watchesCI = GitPipeline.kinds(in: command).contains(.checks)
+            if isCheck(command), !watchesCI {
                 let outcome: Check.Outcome = if tool.settledByTurnEnd || !(tool.status?.isTerminal ?? false) {
                     cancelled ? .cancelled : .unknown
                 } else {
                     tool.status == .failed ? .failed : .passed
                 }
                 checks.append(Check(command: command, outcome: outcome))
-            } else if tool.status == .failed, !tool.settledByTurnEnd {
+            } else if tool.status == .failed, !tool.settledByTurnEnd, GitPipeline.kinds(in: command).isEmpty {
                 failedCommands += 1
             }
         }
-        guard !edited.isEmpty || !checks.isEmpty else { return nil }
+        let pipeline = GitPipeline.of(work, cancelled: cancelled)
+        guard !edited.isEmpty || !checks.isEmpty || pipeline != nil else { return nil }
         return TurnCompletion(anchor: anchor, edited: edited, added: added, removed: removed, checks: checks,
-                              failedCommands: failedCommands, cancelled: cancelled)
+                              failedCommands: failedCommands, cancelled: cancelled, pipeline: pipeline)
     }
 
     /// A command that verifies work: tests, type checks, lints, builds.

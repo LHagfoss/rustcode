@@ -413,8 +413,9 @@ public enum SessionUpdate: Equatable, Sendable {
                   summary: String? = nil)
     /// `outputDelta` is output a running call printed since the last update;
     /// `output` is the whole result once it is in.
+    /// `exitCode` is a finished command's, as the engine reports it.
     case toolCallUpdate(id: String, title: String?, status: ToolStatus?, output: String?, diffs: [FileDiff] = [],
-                        outputDelta: String? = nil)
+                        outputDelta: String? = nil, exitCode: Int? = nil)
     case title(String)
     case configOptions(JSONValue)
     case availableCommands([SlashCommand])
@@ -464,7 +465,8 @@ public enum SessionUpdate: Equatable, Sendable {
                 status: update["status"]?.stringValue.flatMap(ToolStatus.init(rawValue:)),
                 output: Self.toolOutput(update),
                 diffs: FileDiff.parse(content: update["content"]),
-                outputDelta: update["_meta"]?["rustcode"]?["outputDelta"]?.stringValue)
+                outputDelta: update["_meta"]?["rustcode"]?["outputDelta"]?.stringValue,
+                exitCode: update["rawOutput"]?["exitCode"]?.intValue)
         case "session_info_update":
             if let title = update["title"]?.stringValue {
                 self = .title(title)
