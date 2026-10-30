@@ -426,6 +426,8 @@ final class DesktopModel: ObservableObject {
     /// Files and folders added with + or by dropping them on the composer. The
     /// engine takes text prompts, so they are sent as paths for the agent to read.
     @Published var attachments: [URL] = []
+    /// Diff lines picked in the Changes panel, sent with the message (#2643).
+    @Published var codeReferences: [CodeReference] = []
     /// Images pasted, dropped or attached; sent as ACP image blocks.
     @Published var images: [ImageAttachment] = []
     /// What the composer held for each chat not on screen, so a draft never
@@ -437,6 +439,7 @@ final class DesktopModel: ObservableObject {
         var text: String
         var command: SlashCommand?
         var attachments: [URL]
+        var references: [CodeReference] = []
         var images: [ImageAttachment]
     }
     /// Prompt turns in flight. Each chat runs its own turns, so a new chat is
@@ -1289,9 +1292,10 @@ final class DesktopModel: ObservableObject {
         }
         let title = chatTitle(session.id)
         let folder = URL(fileURLWithPath: session.cwd.isEmpty ? chatProject.path : session.cwd)
-        let prompt = QueuedPrompt(sessionId: session.id, typed: typed, text: Self.prompt(typed, attaching: attachments, in: folder), images: [])
+        let prompt = QueuedPrompt(sessionId: session.id, typed: typed, text: Self.prompt(typed, attaching: attachments, references: codeReferences, in: folder), images: [])
         draft = ""
         attachments = []
+        codeReferences = []
         guard await load(session) else {
             // Not delivered: the message comes back to be sent again.
             draft = typed
@@ -1313,7 +1317,7 @@ final class DesktopModel: ObservableObject {
     var canLaunchInBackground: Bool {
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         return engine?.connection != nil && draftCommand == nil && !typed.hasPrefix("/") && !typed.hasPrefix("!")
-            && (!typed.isEmpty || !attachments.isEmpty || !images.isEmpty)
+            && (!typed.isEmpty || !attachments.isEmpty || !images.isEmpty || !codeReferences.isEmpty)
             && (images.isEmpty || capabilities?.promptImages == true)
     }
 
@@ -1329,14 +1333,16 @@ final class DesktopModel: ObservableObject {
         guard canLaunchInBackground, let connection = engine?.connection else { return }
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let folder = chatProject
-        let (savedDraft, savedAttachments, savedImages) = (draft, attachments, images)
-        let text = Self.prompt(typed, attaching: attachments, in: folder)
+        let (savedDraft, savedAttachments, savedImages, savedReferences) = (draft, attachments, images, codeReferences)
+        let text = Self.prompt(typed, attaching: attachments, references: codeReferences, in: folder)
         draft = ""
         attachments = []
+        codeReferences = []
         images = []
         guard let id = await createSession(in: folder, on: connection, selecting: false) else {
             draft = savedDraft
             attachments = savedAttachments
+            codeReferences = savedReferences
             images = savedImages
             return
         }
@@ -1636,7 +1642,7 @@ final class DesktopModel: ObservableObject {
     /// holds something, so ↑ still moves the cursor within the text.
     @discardableResult
     func recallLastMessage() -> Bool {
-        guard draftCommand == nil, draft.isEmpty, attachments.isEmpty, images.isEmpty else { return false }
+        guard draftCommand == nil, draft.isEmpty, attachments.isEmpty, images.isEmpty, codeReferences.isEmpty else { return false }
         if let queued = selectedQueue.last {
             editQueued(queued)
             return true
@@ -1760,7 +1766,15 @@ final class DesktopModel: ObservableObject {
 
     /// The typed message followed by the attached paths, relative to the project
     /// when they are inside it.
-    static func prompt(_ text: String, attaching files: [URL], in workspace: URL) -> String {
+    /// Attach diff lines picked in the Changes panel to the draft. The draft
+    /// is kept and nothing is sent: the reference goes with the next message.
+    func attachCodeReference(_ reference: CodeReference) {
+        codeReferences.append(reference)
+        confirm("Attached \(reference.label) to your message", systemImage: "text.badge.plus")
+    }
+
+    static func prompt(_ text: String, attaching files: [URL], references: [CodeReference] = [], in workspace: URL) -> String {
+        let text = references.isEmpty ? text : ([text] + references.map { $0.prompt() }).filter { !$0.isEmpty }.joined(separator: "\n\n")
         guard !files.isEmpty else { return text }
         let root = workspace.standardizedFileURL.path
         let paths = files.map { url -> String in
@@ -2056,8 +2070,9 @@ final class DesktopModel: ObservableObject {
 
     /// Keep the composer's contents for the chat on screen.
     private func parkDraft() {
-        let parked = ParkedDraft(text: draft, command: draftCommand, attachments: attachments, images: images)
+        let parked = ParkedDraft(text: draft, command: draftCommand, attachments: attachments, references: codeReferences, images: images)
         let empty = parked.text.isEmpty && parked.command == nil && parked.attachments.isEmpty && parked.images.isEmpty
+            && parked.references.isEmpty
         parkedDrafts[selectedSession ?? Self.newChatQueue] = empty ? nil : parked
     }
 
@@ -2067,6 +2082,7 @@ final class DesktopModel: ObservableObject {
         draft = parked?.text ?? ""
         draftCommand = parked?.command
         attachments = parked?.attachments ?? []
+        codeReferences = parked?.references ?? []
         images = parked?.images ?? []
         composer.commandSelection = 0
     }
@@ -2237,14 +2253,14 @@ final class DesktopModel: ObservableObject {
             draftCommand = nil
         }
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !typed.isEmpty || !attachments.isEmpty || !images.isEmpty else { return }
+        guard !typed.isEmpty || !attachments.isEmpty || !images.isEmpty || !codeReferences.isEmpty else { return }
         if !images.isEmpty, capabilities?.promptImages != true {
             error = "This RustCode engine cannot take images. Update RustCode to attach them."
             return
         }
         // Commands that need no turn run now, even while the chat is busy;
         // the rest queue behind its turn like a message.
-        switch SlashCommand.dispatch(typed, in: commands, plain: attachments.isEmpty && images.isEmpty) {
+        switch SlashCommand.dispatch(typed, in: commands, plain: attachments.isEmpty && images.isEmpty && codeReferences.isEmpty) {
         case .app(let command):
             draft = ""
             await perform(command)
@@ -2261,18 +2277,20 @@ final class DesktopModel: ObservableObject {
             break
         }
         let folder = chatProject
-        let text = Self.prompt(typed, attaching: attachments, in: folder)
+        let text = Self.prompt(typed, attaching: attachments, references: codeReferences, in: folder)
         let sentImages = images
         if busy {
             guard let id = startingChat ? Self.newChatQueue : selectedSession else { return }
             queuedPrompts.append(QueuedPrompt(sessionId: id, typed: typed, text: text, images: sentImages))
             draft = ""
             attachments = []
+            codeReferences = []
             images = []
             return
         }
         draft = ""
         attachments = []
+        codeReferences = []
         images = []
         let created = selectedSession == nil
         // Until the new chat's turn starts, ⏎ and ⌘⏎ queue behind this message.
@@ -2303,6 +2321,9 @@ final class DesktopModel: ObservableObject {
     }
 
     #if DEBUG
+    /// For the debug driver: open the Changes panel's line picker on the first file.
+    @Published var debugPickFirstFile = false
+
     /// For the debug driver: a thread whose turn stopped, and one with an unread reply.
     func debugAttention(stopped: String?, unseen: String?) {
         if let stopped { stoppedTurns[stopped] = "Stopped: the provider timed out" }
@@ -2406,16 +2427,17 @@ final class DesktopModel: ObservableObject {
         MarkedText.commitInWindows()
         guard canSteer, let id = selectedSession else { return await submit() }
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if typed.isEmpty, attachments.isEmpty, images.isEmpty, draftCommand == nil {
+        if typed.isEmpty, attachments.isEmpty, images.isEmpty, codeReferences.isEmpty, draftCommand == nil {
             if let next = selectedQueue.first { await sendNow(next) }
             return
         }
         guard draftCommand == nil, images.isEmpty, !typed.hasPrefix("/"), !typed.hasPrefix("!") else {
             return await submit()
         }
-        let prompt = QueuedPrompt(sessionId: id, typed: typed, text: Self.prompt(typed, attaching: attachments, in: chatProject), images: [])
+        let prompt = QueuedPrompt(sessionId: id, typed: typed, text: Self.prompt(typed, attaching: attachments, references: codeReferences, in: chatProject), images: [])
         draft = ""
         attachments = []
+        codeReferences = []
         if await !steer(prompt) {
             queuedPrompts.append(prompt)
             confirm("Queued: the turn is waiting for you", systemImage: "text.line.last.and.arrowtriangle.forward")

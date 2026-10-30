@@ -1056,6 +1056,14 @@ enum DebugDriver {
             }
             model.transcript.apply(.agentText("Fixed the rules; the lint still fails on an unused import."))
             model.transcript.finishTurn(at: Date())
+        case "pick":
+            // `pick`: the Changes panel's line picker on its first file.
+            model.debugPickFirstFile = true
+        case "reference":
+            // `reference`: a picked diff line attached to the composer.
+            model.attachCodeReference(CodeReference(intent: .change, root: model.chatProject.path, path: "src/parser.rs",
+                                                    side: .new, lines: 40...44, scope: "uncommitted changes",
+                                                    baseCommit: "a1b2c3d", excerpt: ["fn parse() {", "    todo!()", "}"]))
         case "inbox":
             // `inbox [demo]`: open the attention inbox; `demo` first marks the
             // first thread stopped and the second unread.

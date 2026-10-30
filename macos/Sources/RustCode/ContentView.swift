@@ -2427,13 +2427,15 @@ private struct Composer: View {
     private var canSend: Bool {
         !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !model.attachments.isEmpty || !model.images.isEmpty || model.draftCommand != nil
+            || !model.codeReferences.isEmpty
     }
 
     /// What changes the composer's contents or size; the whole composer
     /// animates when it does.
     private var animationState: [String] {
         [String(model.busy), String(canSend), String(model.selectedQueue.count), model.draftCommand?.name ?? "",
-         SubagentInfo.workingLabel(model.subagents) ?? "", String(model.images.count), String(model.attachments.count)]
+         SubagentInfo.workingLabel(model.subagents) ?? "", String(model.images.count), String(model.attachments.count),
+         String(model.codeReferences.count)]
     }
 
     var body: some View {
@@ -2444,6 +2446,7 @@ private struct Composer: View {
             }
             if !model.images.isEmpty { imageChips }
             if !model.attachments.isEmpty { attachmentChips }
+            if !model.codeReferences.isEmpty { referenceChips }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if let chip = model.draftCommand {
                     Text(chip.name)
@@ -2512,13 +2515,15 @@ private struct Composer: View {
                 .onKeyPress(.escape) {
                     switch ComposerEscape.action(panelOpen: model.composerPanel != nil,
                                                  hasDraft: !model.draft.isEmpty || model.draftCommand != nil
-                                                     || !model.attachments.isEmpty || !model.images.isEmpty,
+                                                     || !model.attachments.isEmpty || !model.images.isEmpty
+                                                     || !model.codeReferences.isEmpty,
                                                  busy: model.busy) {
                     case .closePanel: model.composerPanel = nil
                     case .clearDraft:
                         model.draft = ""
                         model.draftCommand = nil
                         model.attachments = []
+                        model.codeReferences = []
                         model.images = []
                     case .stopTurn: Task { await model.cancel() }
                     case .ignore: return .ignored
@@ -2754,6 +2759,36 @@ private struct Composer: View {
             .help("Send (⏎)")
             .transition(.opacity)
         }
+    }
+
+    /// Diff lines picked in the Changes panel (#2643): what each refers to,
+    /// whether it asks or requests a change, and the excerpt on hover.
+    private var referenceChips: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                ForEach(model.codeReferences) { reference in
+                    HStack(spacing: 5) {
+                        Image(systemName: reference.intent == .ask ? "questionmark.bubble" : "pencil.line")
+                            .foregroundStyle(.secondary)
+                        Text(reference.label).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                        Button { model.codeReferences.removeAll { $0.id == reference.id } } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove")
+                        .accessibilityLabel("Remove reference")
+                    }
+                    .padding(.leading, 8)
+                    .padding(.trailing, 6)
+                    .padding(.vertical, 5)
+                    .background(.fill.tertiary, in: .capsule)
+                    .help("\(reference.intent == .ask ? "Question about" : "Change requested for") \(reference.label), \(reference.scope). Sent with your message, not on its own; never a pull request comment.\n\n" + reference.excerpt.prefix(12).joined(separator: "\n"))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(reference.intent == .ask ? "Question about" : "Change requested for") \(reference.label)")
+                }
+            }
+        }
+        .scrollIndicators(.never)
     }
 
     private var attachmentChips: some View {
