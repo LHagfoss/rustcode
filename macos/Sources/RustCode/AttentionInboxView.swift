@@ -39,10 +39,10 @@ struct AttentionInboxButton: View {
     var body: some View {
         let unresolved = model.unresolvedAttention
         let total = model.attentionEntries.count
-        ClusterButton(systemImage: total > 0 ? "tray.full" : "tray", help: help(unresolved: unresolved, total: total),
-                      isOn: model.showsInbox) {
-            model.showsInbox.toggle()
+        Button { model.showsInbox.toggle() } label: {
+            Label("Inbox", systemImage: total > 0 ? "tray.full" : "tray")
         }
+        .help(help(unresolved: unresolved, total: total))
         .overlay(alignment: .topTrailing) {
             if unresolved > 0 {
                 Text("\(unresolved)")

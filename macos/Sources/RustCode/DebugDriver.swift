@@ -571,6 +571,7 @@ enum DebugDriver {
             }
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
+        case "sidebar": model.toggleSidebar()
         case "banner":
             // `banner <path> [picture]` or `banner none`: the new thread
             // banner as Settings sets it, from a picture on disk.

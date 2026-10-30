@@ -36,7 +36,7 @@ struct RustCodeApp: App {
             }
             .frame(minWidth: 850, minHeight: 620)
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Thread") { Task { await model.newSession() } }
@@ -201,6 +201,8 @@ final class DesktopModel: ObservableObject {
     @Published var draftCommand: SlashCommand?
     /// The Settings section to show when the sheet opens.
     @Published var settingsSection: SettingsSection = .general
+    /// What Settings' search field holds.
+    @Published var settingsQuery = ""
     let chat = LiveTranscript()
     var transcript: Transcript {
         get { chat.transcript }

@@ -17,65 +17,53 @@ enum AppearanceSetting {
     }
 }
 
-/// ⌘, — Settings as a page of the window, in place of the chats and the
-/// chat (#2553): its own sidebar of sections on the left, the chosen section
-/// on the right. The chat stays alive under it, so Back (or Esc) returns to
-/// it with its draft and scroll position. The section sits in a centered
-/// column with margins that follow the window, and in a narrow window the
-/// sidebar keeps only the sections' icons (`SettingsLayout`, #2593).
+/// ⌘, — Settings as a page of the window, in place of the threads and the
+/// thread (#2553): its sections in the window's sidebar, the chosen section
+/// in the detail. The thread stays alive under it, so Back (or Esc) returns
+/// to it with its draft and scroll position. The section sits in a centered
+/// column with margins that follow the window (`SettingsLayout`, #2593).
+///
+/// The window's split view draws the two parts in its own columns, under
+/// the window's toolbar: `.sidebar` the search and sections, `.detail` the
+/// chosen section.
 struct SettingsView: View {
+    enum Part { case sidebar, detail }
+
     @ObservedObject var model: DesktopModel
+    let part: Part
     @Environment(\.closePanel) private var close
     @StateObject private var capabilities = CapabilitiesStore()
     @StateObject private var connections = ConnectionsStore()
-    @AppStorage(SidebarResizeHandle.key) private var sidebarWidth = SidebarResizeHandle.defaultWidth
-    /// The sections' sidebar; hidden, the section takes the whole window and
-    /// its buttons sit beside the traffic lights, as the chat's do.
-    @AppStorage("settingsShowsSidebar") private var showsSidebar = true
-    /// What the sidebar's search field holds; the sections listed match it.
-    @State private var query = ""
-    @State private var showsCompactSearch = false
     @FocusState private var searchFocused: Bool
     typealias Section = SettingsSection
 
     private var section: Section { model.settingsSection }
+    /// What the sidebar's search field holds; the sections listed match it.
+    private var query: String { model.settingsQuery }
 
     var body: some View {
-        GeometryReader { proxy in
-            let layout = SettingsLayout(width: proxy.size.width,
-                                        sidebar: Double(SidebarResizeHandle.clamp(sidebarWidth)))
-            HStack(spacing: 0) {
-                if showsSidebar || layout.compact {
-                    sidebar(compact: layout.compact)
-                        .frame(width: layout.sidebar)
-                        .background(Color.sidebarBackground)
-                        // The chat sidebar's edge line, so the two read as one.
-                        .overlay(alignment: .trailing) {
-                            Rectangle().fill(Color.primary.opacity(0.1)).frame(width: 1)
-                        }
-                        .transition(.move(edge: .leading))
-                }
-                detail(layout)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .background(Color.chatBackground)
-                    .overlay(alignment: .topLeading) {
-                        if !showsSidebar, !layout.compact {
-                            barButtons
-                                .padding(.leading, 80)
-                                .frame(height: SidebarMetrics.barHeight)
-                                .padding(.top, SidebarMetrics.barTopInset)
-                        }
-                    }
-            }
-            .animation(.snappy(duration: 0.2), value: showsSidebar)
+        switch part {
+        case .sidebar: sidebar.tint(.brand)
+        case .detail: page.tint(.brand)
         }
-        .ignoresSafeArea()
-        .tint(.brand)
-        // Esc goes back to the chat from wherever focus is, once a search
+    }
+
+    private var page: some View {
+        GeometryReader { proxy in
+            // Never the compact layout: the split view hides its sidebar
+            // instead, and the section has the whole detail.
+            detail(SettingsLayout(width: proxy.size.width + SettingsLayout.compactWidth,
+                                  sidebar: SettingsLayout.compactWidth))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .background(Color.chatBackground)
+        // Esc goes back to the thread from wherever focus is, once a search
         // in the sidebar is cleared.
         .background {
-            Button("Back to Thread") { if query.isEmpty { close() } else { query = "" } }
-                .keyboardShortcut(.cancelAction).hidden()
+            Button("Back to Thread") {
+                if query.isEmpty { close() } else { model.settingsQuery = "" }
+            }
+            .keyboardShortcut(.cancelAction).hidden()
         }
         .task(id: section) {
             if section == .general { await model.loadPresence() }
@@ -87,69 +75,28 @@ struct SettingsView: View {
         }
     }
 
-    private var chatTitle: String { model.settingsBackTitle }
-
-    /// Laid out like the chat sidebar it replaces: Back in a toolbar cluster
-    /// where that sidebar's buttons sit, a caption header like "Chats", and
-    /// rows with its fills, so opening Settings changes only the list.
-    private func sidebar(compact: Bool) -> some View {
-        VStack(alignment: compact ? .center : .leading, spacing: 0) {
-            // The title bar's room, beside the traffic lights, holding Back.
-            HStack(spacing: 2) {
-                Spacer()
-                if !compact { barButtons }
-            }
-            .padding(.leading, compact ? 0 : 80)
-            .padding(.trailing, 10)
-            .frame(height: SidebarMetrics.barHeight)
-            .padding(.top, SidebarMetrics.barTopInset)
-            .background(WindowDragArea())
-            if compact {
-                // Too narrow beside the traffic lights: Back goes under them.
-                backButton.padding(.top, 8)
-            }
-            if !compact {
-                searchField
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                Text("Settings")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 4)
-                    .accessibilityAddTraits(.isHeader)
-            } else {
-                // Too narrow for a field: a button opens it over the page.
-                Button { showsCompactSearch = true } label: {
-                    Image(systemName: "magnifyingglass").frame(width: 32, height: 28).contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(query.isEmpty ? .secondary : Color.brand)
-                .help("Search settings")
-                .accessibilityLabel("Search settings")
+    /// Laid out like the threads sidebar it replaces: a search field, a
+    /// caption header like "Threads", and rows with its fills, so opening
+    /// Settings changes only the list.
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            searchField
+                .padding(.horizontal, 12)
                 .padding(.top, 8)
-                .popover(isPresented: $showsCompactSearch, arrowEdge: .trailing) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        searchField
-                        ForEach(matches) { item in
-                            SectionRow(section: item, isSelected: item == section, compact: false) { choose(item) }
-                        }
-                        if matches.isEmpty { noMatches }
-                    }
-                    .padding(10)
-                    .frame(width: 220)
-                    .onAppear { searchFocused = true }
-                }
-                Divider().padding(.vertical, 8)
-            }
-            VStack(alignment: compact ? .center : .leading, spacing: 2) {
+            Text("Settings")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+                .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(matches) { item in
-                    SectionRow(section: item, isSelected: item == section, compact: compact) { model.settingsSection = item }
+                    SectionRow(section: item, isSelected: item == section) { model.settingsSection = item }
                 }
-                if matches.isEmpty, !compact { noMatches }
+                if matches.isEmpty { noMatches }
             }
-            .padding(.horizontal, compact ? 8 : 12)
+            .padding(.horizontal, 12)
             .animation(.snappy(duration: 0.15), value: matches)
             Spacer()
         }
@@ -166,18 +113,18 @@ struct SettingsView: View {
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search settings", text: $query)
+            TextField("Search settings", text: $model.settingsQuery)
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
-                .onSubmit { if let first = matches.first { choose(first) } }
+                .onSubmit { if let first = matches.first { model.settingsSection = first } }
                 .onKeyPress(.escape) {
                     guard !query.isEmpty else { return .ignored }
-                    query = ""
+                    model.settingsQuery = ""
                     return .handled
                 }
                 .accessibilityHint("Filters the settings sections")
             if !query.isEmpty {
-                Button { query = "" } label: {
+                Button { model.settingsQuery = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
@@ -199,27 +146,6 @@ struct SettingsView: View {
             .accessibilityAddTraits(.updatesFrequently)
     }
 
-    private func choose(_ item: Section) {
-        model.settingsSection = item
-        showsCompactSearch = false
-    }
-
-    private var backButton: some View {
-        ToolbarCluster {
-            ClusterButton(systemImage: "chevron.left", help: "Back to \(chatTitle) (Esc)", action: close)
-        }
-    }
-
-    /// The sidebar's toggle left of Back, where the chat's sidebar has its own.
-    private var barButtons: some View {
-        ToolbarCluster {
-            ClusterButton(systemImage: "sidebar.left", help: showsSidebar ? "Hide sidebar" : "Show sidebar") {
-                showsSidebar.toggle()
-            }
-            ClusterButton(systemImage: "chevron.left", help: "Back to \(chatTitle) (Esc)", action: close)
-        }
-    }
-
     /// The section in a column centered in the room right of the sidebar.
     private func detail(_ layout: SettingsLayout) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -227,10 +153,9 @@ struct SettingsView: View {
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
                 .frame(width: layout.column, alignment: .leading)
-                .padding(.top, 40)
+                .padding(.top, 16)
                 .padding(.bottom, 12)
                 .frame(maxWidth: .infinity)
-                .background(WindowDragArea())
             ScrollView {
                 Group {
                     switch section {
