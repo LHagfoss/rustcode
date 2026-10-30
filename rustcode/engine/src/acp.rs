@@ -328,11 +328,28 @@ fn replay_history_updates_with_compaction(
             "assistant" => {
                 // Reasoning goes out as thought chunks, as it did live, so
                 // the client labels a replayed thought as it did then.
-                let mut replayed = streaming::AcpEventStream::replay_assistant_text(
-                    &message.content,
-                    message.reasoning_summary,
-                    message.thought_time_ms.filter(|ms| *ms > 0),
-                );
+                // A stop marker is turn bookkeeping, not a reply: a cancel
+                // replays as an empty reply that carries the turn's "Stopped
+                // after" timing, any other stop as its short notice.
+                let mut replayed =
+                    match crate::network::lifecycle::stop_marker_notice(&message.content) {
+                        Some(notice) => vec![SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                            ContentBlock::Text(TextContent::new(
+                                if crate::network::lifecycle::is_turn_cancelled_marker(
+                                    &message.content,
+                                ) {
+                                    String::new()
+                                } else {
+                                    notice
+                                },
+                            )),
+                        ))],
+                        None => streaming::AcpEventStream::replay_assistant_text(
+                            &message.content,
+                            message.reasoning_summary,
+                            message.thought_time_ms.filter(|ms| *ms > 0),
+                        ),
+                    };
                 if let Some(turn) = &message.turn {
                     streaming::attach_turn_timing(&mut replayed, turn);
                 }
@@ -2881,6 +2898,46 @@ mod tests {
     // #2307: a replayed turn's last reply carries how long the turn took
     // and when it ended, so the Mac app shows them as it did live. A turn
     // with no end, as one still open, carries nothing.
+    #[test]
+    fn replayed_stop_marker_is_a_timed_empty_reply_or_its_notice() {
+        let mut cancelled =
+            crate::app::ChatMessage::new("assistant", "[harness: turn stopped — cancelled]");
+        cancelled.turn = Some(crate::app::TurnTiming {
+            turn_id: "t1".into(),
+            started_at: Some("2026-10-30T13:42:27Z".into()),
+            ended_at: Some("2026-10-30T13:42:37Z".into()),
+            elapsed_work_ms: Some(9_700),
+            outcome: Some(crate::app::TurnOutcome::Cancelled),
+        });
+        let stopped =
+            crate::app::ChatMessage::new("assistant", "[harness: turn stopped — loop_escalation]");
+        let updates = replay_history_updates(&[cancelled, stopped], None);
+        let texts: Vec<(String, Option<String>)> = updates
+            .iter()
+            .filter_map(|update| match update {
+                SessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
+                    ContentBlock::Text(text) => Some((
+                        text.text.clone(),
+                        chunk.meta.as_ref().and_then(|meta| {
+                            meta["rustcode"]["turn"]["outcome"]
+                                .as_str()
+                                .map(str::to_owned)
+                        }),
+                    )),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                (String::new(), Some("cancelled".to_owned())),
+                ("Stopped: the agent was repeating itself".to_owned(), None),
+            ]
+        );
+    }
+
     #[test]
     fn replayed_reply_carries_its_finished_turn_timing() {
         let turn = crate::app::TurnTiming {
