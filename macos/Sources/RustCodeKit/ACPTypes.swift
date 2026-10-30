@@ -55,6 +55,8 @@ public struct AgentInfo: Equatable, Sendable {
     public var rewind: Bool
     /// The engine moves a closed chat to another folder (`_rustcode/session/move`).
     public var sessionMove: Bool
+    /// The engine reads a project's pull requests (`_rustcode/pulls`, #2645).
+    public var pullRequests: Bool
 
     public init(initializeResult result: JSONValue) throws {
         guard let version = result["protocolVersion"]?.intValue else {
@@ -75,6 +77,7 @@ public struct AgentInfo: Equatable, Sendable {
         plan = (capabilities?["_meta"]?["rustcode"]?["agents"]?.intValue ?? 0) >= 2
         rewind = capabilities?["_meta"]?["rustcode"]?["rewind"]?.intValue != nil
         sessionMove = capabilities?["_meta"]?["rustcode"]?["sessionMove"]?.intValue != nil
+        pullRequests = capabilities?["_meta"]?["rustcode"]?["pullRequests"]?.intValue != nil
     }
 }
 

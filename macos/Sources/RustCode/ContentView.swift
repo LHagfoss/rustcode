@@ -1613,6 +1613,7 @@ private struct ChatView: View {
                     }
                     .help("Show thread in Finder")
                 }
+                if model.canReadPullRequests { PullRequestsButton(model: model) }
                 TerminalToolbarButton(terminal: model.terminal, keybindings: model.keybindings)
                 if !model.showsChanges {
                     Button { model.toggleChanges() } label: {

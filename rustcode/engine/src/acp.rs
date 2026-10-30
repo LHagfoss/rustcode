@@ -119,6 +119,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "agents": agents::AGENTS_CAPABILITY_VERSION,
                 "rewind": 1,
                 "sessionMove": 1,
+                "pullRequests": 1,
             }),
         )]))
 }
@@ -927,6 +928,42 @@ async fn unregister_acp_session(server: &AcpServer, session_id: &str) {
 #[request(method = "_rustcode/warm", response = serde_json::Value)]
 pub(crate) struct WarmRequest {}
 
+/// The project's pull requests (#2645): `state` is `open` (the default),
+/// `closed`, `merged` or `all`. Answers `{list}` or `{error: {code, message}}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/pulls", response = serde_json::Value)]
+pub(crate) struct PullsRequest {
+    pub cwd: std::path::PathBuf,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// One pull request in full. Answers `{pull}` or `{error: {code, message}}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/pulls/view", response = serde_json::Value)]
+pub(crate) struct PullViewRequest {
+    pub cwd: std::path::PathBuf,
+    pub number: u64,
+}
+
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
     let startup_state = crate::app::AppState::new();
     // Servers start on the session's first turn, not here: the app attaches
@@ -1286,6 +1323,39 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     Ok(())
                 })?;
                 responder.respond(serde_json::json!({}))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        // `gh` can take seconds, so neither holds the dispatch loop.
+        .on_receive_request(
+            async move |request: PullsRequest, responder, connection| {
+                connection.spawn(async move {
+                    let listed = crate::pull_requests::list(
+                        &request.cwd,
+                        request.state.as_deref().unwrap_or("open"),
+                        request.search.as_deref(),
+                        request.limit.unwrap_or(30),
+                    )
+                    .await;
+                    responder.respond(match listed {
+                        Ok(list) => serde_json::json!({ "list": list }),
+                        Err(error) => serde_json::json!({ "error": error }),
+                    })?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullViewRequest, responder, connection| {
+                connection.spawn(async move {
+                    let viewed = crate::pull_requests::view(&request.cwd, request.number).await;
+                    responder.respond(match viewed {
+                        Ok(pull) => serde_json::json!({ "pull": pull }),
+                        Err(error) => serde_json::json!({ "error": error }),
+                    })?;
+                    Ok(())
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
