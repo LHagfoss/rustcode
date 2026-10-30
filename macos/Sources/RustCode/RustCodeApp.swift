@@ -257,7 +257,14 @@ final class DesktopModel: ObservableObject {
     /// agent can use it only through `localhost_preview`, after the user
     /// allows it for a chat (PreviewAgentBridge.swift).
     let preview = PreviewController()
-    @Published var showsPreview = false
+    @Published var showsPreview = false {
+        didSet { if showsPreview { showsChanges = false } }
+    }
+    /// The read-only Changes panel beside the chat, in the preview's place
+    /// (#2642).
+    @Published var showsChanges = false {
+        didSet { if showsChanges { showsPreview = false } }
+    }
     /// The workspace terminal, per project. The user's own shell: it never
     /// goes through the engine or reaches the agent.
     let terminal = TerminalController()
@@ -1631,6 +1638,10 @@ final class DesktopModel: ObservableObject {
     /// ⇧⌘P: show or hide the localhost preview.
     func togglePreview() {
         withAnimation(.snappy(duration: 0.25)) { showsPreview.toggle() }
+    }
+
+    func toggleChanges() {
+        withAnimation(.snappy(duration: 0.25)) { showsChanges.toggle() }
     }
 
     func chooseAttachments() {
