@@ -108,8 +108,9 @@ final class LocalPreviewTests: XCTestCase {
     }
 
     func testStoreRemembersTheLastLocalURLPerProject() throws {
-        let suite = "LocalPreviewTests.\(UUID().uuidString)"
+        let suite = "LocalPreviewTests"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = PreviewURLStore(defaults: defaults)
         let web = try XCTUnwrap(URL(string: "http://localhost:3000/"))

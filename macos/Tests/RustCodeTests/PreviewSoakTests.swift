@@ -96,7 +96,10 @@ final class PreviewSoakTests: XCTestCase {
         defer { server.stop() }
         print("[soak] macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
 
-        let defaults = UserDefaults(suiteName: "rustcode-preview-soak-\(UUID().uuidString)")!
+        let suite = "rustcode-preview-soak"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
         let controller = PreviewController(store: PreviewURLStore(defaults: defaults))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 800), styleMask: [.titled],
                               backing: .buffered, defer: false)
