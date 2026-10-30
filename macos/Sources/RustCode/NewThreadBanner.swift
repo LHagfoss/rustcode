@@ -44,25 +44,56 @@ enum NewThreadBanner {
     static func remove(_ name: String) {
         if let url = url(name) { try? FileManager.default.removeItem(at: url) }
     }
+
+    /// Decoded pictures and drawn text, kept so a new thread shows its
+    /// banner at once instead of loading it each time it opens.
+    @MainActor static var images: [String: CGImage] = [:]
+    @MainActor static var drawings: [String: AttributedString] = [:]
+
+    /// The picture `name`, read at most 2400 pixels wide: enough for any
+    /// window, and a camera's original is many times that.
+    nonisolated static func load(_ name: String) -> CGImage? {
+        guard let url = url(name), let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: 2400]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// Read the chosen picture ahead of the first new thread.
+    @MainActor static func preload() {
+        let name = UserDefaults.standard.string(forKey: key) ?? ""
+        guard !name.isEmpty, images[name] == nil else { return }
+        Task.detached(priority: .utility) {
+            guard let image = load(name) else { return }
+            await MainActor.run { images[name] = image }
+        }
+    }
 }
 
 /// The banner as the new thread shows it: the picture in colored text, or
 /// the picture itself, across the room it has. Given a `height`, it fills
 /// that much of the top of the chat, cropped to fit, and fades to the chat
-/// toward its foot; without one (Settings' preview) it is a band at least
-/// 3:1. Either way it fades in from the left as it appears.
+/// toward its foot; without one it is a band at least 3:1. A picture seen
+/// before shows at once; a new one fades in when it is ready.
 struct NewThreadBannerView: View {
     let name: String
     let style: String
     /// The height to fill, or nil for a band as tall as the picture allows.
     var height: CGFloat?
+
+    init(name: String, style: String, height: CGFloat? = nil) {
+        self.name = name
+        self.style = style
+        self.height = height
+        _image = State(initialValue: NewThreadBanner.images[name])
+    }
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var width: CGFloat = 0
     @State private var drawnHeight: CGFloat = 0
     @State private var image: CGImage?
     @State private var art: AttributedString?
-    @State private var revealed = false
 
     /// The text's size: small enough that a band reads as a picture.
     static let fontSize: CGFloat = 7
@@ -108,38 +139,42 @@ struct NewThreadBannerView: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { drawnHeight = $0 }
                 .frame(width: width, alignment: .top)
                 .mask { height == nil ? AnyView(Self.sideFade) : AnyView(Self.footFade) }
-                .opacity(revealed ? 1 : 0)
-                .mask(alignment: .leading) {
-                    GeometryReader { proxy in
-                        Rectangle().frame(width: revealed ? proxy.size.width : 0)
-                    }
-                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: art == nil && image == nil)
             }
             .clipped()
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         .task(id: name) {
-            image = await Task.detached(priority: .userInitiated) {
-                NewThreadBanner.url(name).flatMap { url in
-                    CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
-                }
-            }.value
+            if let cached = NewThreadBanner.images[name] {
+                image = cached
+                return
+            }
+            let name = name
+            let loaded = await Task.detached(priority: .userInitiated) { NewThreadBanner.load(name) }.value
+            if let loaded { NewThreadBanner.images[name] = loaded }
+            image = loaded
         }
-        .task(id: RenderKey(name: name, columns: columns, rows: rows, dark: colorScheme == .dark, loaded: image != nil)) {
+        .task(id: key) {
             guard let image, columns > 0, style != "picture" else { return }
+            let key = key
+            if let cached = NewThreadBanner.drawings[key.cacheKey] {
+                art = cached
+                return
+            }
             // Settle a resize before drawing again.
-            try? await Task.sleep(for: .milliseconds(art == nil ? 0 : 120))
+            if art != nil { try? await Task.sleep(for: .milliseconds(120)) }
             let columns = columns, inverted = colorScheme != .dark, aspect = aspect
             let rendered = await Task.detached(priority: .userInitiated) {
                 Self.attributed(AsciiBanner.render(image, columns: columns, inverted: inverted, aspect: aspect))
             }.value
             guard !Task.isCancelled else { return }
+            NewThreadBanner.drawings[key.cacheKey] = rendered
             art = rendered
         }
-        .onChange(of: art != nil || (style == "picture" && image != nil), initial: true) { _, ready in
-            guard ready, !revealed else { return }
-            if reduceMotion { revealed = true } else { withAnimation(.easeOut(duration: 0.8)) { revealed = true } }
-        }
+    }
+
+    private var key: RenderKey {
+        RenderKey(name: name, columns: columns, rows: rows, dark: colorScheme == .dark, loaded: image != nil)
     }
 
     @ViewBuilder
@@ -180,6 +215,7 @@ struct NewThreadBannerView: View {
         var rows: Int
         var dark: Bool
         var loaded: Bool
+        var cacheKey: String { "\(name) \(columns)x\(rows) \(dark)" }
     }
 
     /// The banner's text with each run of like-colored cells in its color.

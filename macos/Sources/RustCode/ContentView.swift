@@ -1413,17 +1413,18 @@ private struct ChatView: View {
                         PermissionCard(model: model, request: permission).id(permission.id)
                     }
                 }
-                VStack(spacing: 0) {
+                VStack(spacing: -Self.trayTuck) {
                     Composer(model: model, composer: model.composer)
                         .zIndex(1)
                     // A tray tucked under the composer, a little narrower,
-                    // so the footer reads as the composer's own.
+                    // so the footer reads as the composer's own; its top
+                    // runs under the composer, so the row is centered in
+                    // what shows.
                     ComposerFooter(model: model)
-                        .padding(.horizontal, 6)
-                        .padding(.top, 4)
-                        .padding(.bottom, 2)
+                        .padding(.top, Self.trayTuck + 5)
+                        .padding(.bottom, 5)
                         .background(Color.primary.opacity(0.06),
-                                    in: UnevenRoundedRectangle(bottomLeadingRadius: 16, bottomTrailingRadius: 16))
+                                    in: UnevenRoundedRectangle(bottomLeadingRadius: 18, bottomTrailingRadius: 18))
                         .padding(.horizontal, 12)
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
@@ -1439,14 +1440,19 @@ private struct ChatView: View {
             .frame(maxWidth: .infinity)
         }
         // A new thread's banner over the top half of the chat, behind its
-        // title bar, fading toward the composer.
+        // title bar, fading toward the composer. Only a new thread has one:
+        // it fades away as the first message is sent.
         .background(alignment: .top) {
-            if centersComposer, !newThreadBanner.isEmpty {
-                NewThreadBannerView(name: newThreadBanner, style: newThreadBannerStyle, height: chatHeight / 2)
-                    .ignoresSafeArea()
-                    .transition(.opacity)
+            ZStack {
+                if showsBanner {
+                    NewThreadBannerView(name: newThreadBanner, style: newThreadBannerStyle, height: chatHeight / 2)
+                        .transition(.opacity)
+                }
             }
+            .ignoresSafeArea()
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.4), value: showsBanner)
         }
+        .task { NewThreadBanner.preload() }
         .onChange(of: isFresh, initial: true) { _, fresh in
             guard fresh != centersComposer else { return }
             // A thread opening or one already open does not move the
@@ -1520,6 +1526,14 @@ private struct ChatView: View {
         if model.isLoadingSelected { return false }
         if case .user = chat.transcript.items.last?.content { return true }
         return model.busy && chat.transcript.items.count <= 1
+    }
+
+    /// How far the composer's footer tray runs up under the composer.
+    static let trayTuck: CGFloat = 14
+
+    /// The banner shows over a new thread only, not one sent or opened.
+    private var showsBanner: Bool {
+        centersComposer && isFresh && model.selectedSession == nil && !newThreadBanner.isEmpty
     }
 
     /// How far the composer is raised to sit, with the banner over it, in
@@ -1625,7 +1639,7 @@ private struct ChatView: View {
         .padding(.bottom, 8)
         .background(WindowDragArea())
         // Clear over a new thread's banner, which runs up behind it.
-        .background(Color.chatBackground.opacity(centersComposer && !newThreadBanner.isEmpty ? 0 : 0.94))
+        .background(Color.chatBackground.opacity(showsBanner ? 0 : 0.94))
     }
 
     private let bottomAnchor = "bottom"
@@ -2372,6 +2386,7 @@ private struct ChatProjectMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
+        .modifier(FooterHover(isOn: style == .footer))
         .help(ProjectFolder.help(chat: model.chatProject, default: model.workspace))
         .accessibilityLabel("Project folder \(name)")
     }
@@ -2393,7 +2408,7 @@ private struct ComposerFooter: View {
             Spacer(minLength: 0)
             AgentPill(model: model)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 4)
         .frame(minHeight: 26)
         .animation(.snappy(duration: 0.2), value: SubagentInfo.workingLabel(model.subagents))
     }
@@ -2412,8 +2427,18 @@ private struct FooterButton: View {
                 .footerControl()
         }
         .buttonStyle(.plain)
-        .hoverHighlight(cornerRadius: 8, padding: 0)
+        .hoverHighlight(cornerRadius: FooterHover.radius, padding: 0)
         .help(help)
+    }
+}
+
+/// The footer's hover fill, on its folder menu as on its buttons.
+private struct FooterHover: ViewModifier {
+    let isOn: Bool
+    static let radius: CGFloat = 12
+
+    func body(content: Content) -> some View {
+        if isOn { content.hoverHighlight(cornerRadius: Self.radius, padding: 0) } else { content }
     }
 }
 
@@ -2423,9 +2448,9 @@ extension View {
         font(.callout)
             .foregroundStyle(.secondary)
             .lineLimit(1)
-            .padding(.horizontal, 8)
-            .frame(height: 24)
-            .contentShape(.rect)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .contentShape(.rect(cornerRadius: FooterHover.radius))
     }
 }
 
