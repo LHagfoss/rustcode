@@ -300,7 +300,7 @@ inside your home folder and the `roots` listed under `[remote]` in
 a folder elsewhere, one that does not exist, or a file is refused with
 `invalid_request` and a message that says which, and nothing is started. The
 device attaches to the new session as soon as it has registered. It is listed
-for every device at once; in the Mac app, `/resume` and `rustcode sessions` it
+for every device at once; in the Mac app, `/resume` and `rustcode threads` it
 appears after its first exchange, like any other session. No terminal is involved: the
 gateway starts a **session owner**, a `rustcode` process without a terminal
 that runs in that directory, owns the session and registers it like `/remote`

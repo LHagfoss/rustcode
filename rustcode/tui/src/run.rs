@@ -496,7 +496,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some(crate::cli::SessionCommands::Migrate { dry_run }) => {
                 let Some(report) = rustcode::config::migrate_legacy_sessions(*dry_run) else {
-                    eprintln!("Session migration failed: configuration directory is unavailable.");
+                    eprintln!("Thread migration failed: configuration directory is unavailable.");
                     std::process::exit(1);
                 };
                 println!(
@@ -512,7 +512,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     report.errors.len()
                 );
                 for error in &report.errors {
-                    eprintln!("session migration: {error}");
+                    eprintln!("thread migration: {error}");
                 }
                 if !report.errors.is_empty() {
                     std::process::exit(1);
@@ -536,7 +536,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 match rustcode::config::get_active_session_dir(id) {
                     Some(dir) if dir.is_dir() => println!("{}", dir.display()),
                     Some(_) => {
-                        eprintln!("No saved session with id `{id}`.");
+                        eprintln!("No saved thread with id `{id}`.");
                         std::process::exit(1);
                     }
                     None => {
@@ -943,7 +943,7 @@ fn run_session_export(id: Option<&str>, out: Option<&std::path::Path>) {
             {
                 Some(id) => id,
                 None => {
-                    eprintln!("No saved sessions in this workspace; pass a session id.");
+                    eprintln!("No saved threads in this workspace; pass a thread id.");
                     std::process::exit(1);
                 }
             }
@@ -969,7 +969,7 @@ fn run_sessions_list(show_all: bool) {
     };
     let (sessions, truncated) = rustcode::config::list_sessions_in_scope(LIMIT, &scope);
     if sessions.is_empty() {
-        println!("No saved sessions found.");
+        println!("No saved threads found.");
         return;
     }
     for meta in &sessions {
@@ -1023,7 +1023,7 @@ fn run_sessions_search(query: &str, show_all: bool, limit: usize, json: bool) {
         return;
     }
     if hits.is_empty() {
-        println!("No saved sessions match `{query}`.");
+        println!("No saved threads match `{query}`.");
         return;
     }
     for hit in &hits {
