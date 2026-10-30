@@ -1,3 +1,31 @@
+## [v0.112.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.112.0) - 2026-10-30
+
+### Features
+### Pull requests
+- A Pull Requests panel lists the project's pull requests with checks, reviews, files and activity, and starts a thread about one. (#2702)
+- Draft line comments and a review on a pull request, posted only when you submit. (#2706)
+- Watch a pull request from a thread and hear when checks fail or pass, reviews arrive, conflicts appear or it closes. Nothing is done on the pull request. (#2711)
+- A review guide for a pull request: stops in reading order, each linked to its changed lines, with notes and an Ask button. (#2712)
+
+### Threads
+- Threads can message each other: an agent can ask another thread in its project and wait for the answer, with your permission. Off by default; turn it on in Settings ▸ General. (#2714)
+- The first reply in a thread starts sooner: MCP servers start while you type. (#2695)
+- A thread that works mostly in another folder offers to move there. (#2697)
+- Stopped turns show a small "Stopped by you" line, and the raw "turn stopped" marker no longer shows as a reply. (#2692, #2698, #2713)
+- Text in the chat can be selected across messages by dragging, and copied in one go. (#2704)
+
+### Mac app
+- The new thread banner fills the top of the chat, fades away when you send, shows at once, and follows the window live while it is resized. (#2693, #2694, #2707, #2709, #2710)
+- The glass title bar is back, with the sidebar's buttons in one place in new threads, threads and Settings. (#2708)
+- Settings and threads share one sidebar toggle (⌘B), and showing or hiding the sidebar no longer stutters in long threads. (#2710)
+- The composer's footer sits on a tray, its controls get hover and rounder shapes, and chat text no longer shows through under it. (#2693, #2694, #2705)
+
+### iPhone
+- Review a thread's uncommitted changes from the phone and ask about selected lines. (#2715)
+
+### Storage
+- `rustcode storage clean` lists command output and attachments no thread uses, and `--apply` moves them aside for 14 days. (#2701)
+- Old thread layouts and leftover scratch folders are tidied once after an upgrade instead of on every start. (#2703)
 ## [v0.111.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.111.0) - 2026-10-30
 
 ### Features
