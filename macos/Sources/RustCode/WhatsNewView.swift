@@ -80,7 +80,7 @@ final class WhatsNew: ObservableObject {
     /// The notes of `tag`: cached after the first fetch, so a reopen makes
     /// no request; empty when GitHub cannot be reached or rate-limits, which
     /// the views show as a link to the release page instead.
-    private func notes(for tag: String) async -> ReleaseNotes {
+    func notes(for tag: String) async -> ReleaseNotes {
         let key = "whatsNewNotes.\(tag)"
         if let data = defaults.data(forKey: key), let cached = try? JSONDecoder().decode(ReleaseNotes.self, from: data) {
             return cached
@@ -232,6 +232,8 @@ struct WhatsNewPanel: View {
 /// waits on the network: the app's slate blue in depth, with the version.
 struct ReleaseArt: View {
     let version: String?
+    /// The sparkles and version in the middle; About sets its own over it.
+    var showsMark = true
 
     var body: some View {
         ZStack {
@@ -252,21 +254,25 @@ struct ReleaseArt: View {
                     .frame(width: size.height * 0.9)
                     .position(x: size.width * 0.72, y: size.height * 0.62)
             }
-            VStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 30, weight: .medium))
-                    .symbolRenderingMode(.hierarchical)
-                if let version {
-                    Text(version)
-                        .font(.system(size: 26, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                }
-            }
-            .foregroundStyle(.white)
-            .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+            if showsMark { mark }
         }
         .clipped()
         .accessibilityHidden(true)
+    }
+
+    private var mark: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 30, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+            if let version {
+                Text(version)
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+            }
+        }
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
     }
 }
 

@@ -372,6 +372,12 @@ final class DesktopModel: ObservableObject {
     @Published var showsAllProjects = UserDefaults.standard.object(forKey: "showsAllProjects") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(showsAllProjects, forKey: "showsAllProjects")
+            // The scope's last listing shows at once; the refresh catches it up.
+            if let cached = scopePages[Self.scopeKey(showsAllProjects ? nil : workspace)] {
+                sessionPages = cached.pages
+                listedScope = cached.scope
+                publishSessions()
+            }
             Task { await refreshSessions() }
             scheduleContentSearch()
         }
@@ -382,8 +388,14 @@ final class DesktopModel: ObservableObject {
     @Published private(set) var sessionsLoaded = false
     /// The engine's listing read so far, a page at a time (`SessionPages`),
     /// and the project it was read for; `sessions` is drawn from it.
-    private var sessionPages = SessionPages()
+    private var sessionPages = SessionPages() {
+        didSet { if sessionPages.isStarted { scopePages[Self.scopeKey(listedScope)] = (sessionPages, listedScope) } }
+    }
     private var listedScope: URL?
+    /// Each scope's latest listing, so switching All and Project shows rows
+    /// without waiting on the engine.
+    private var scopePages: [String: (pages: SessionPages, scope: URL?)] = [:]
+    private static func scopeKey(_ scope: URL?) -> String { scope?.path ?? "" }
     /// More chats are listed than the sidebar has read; it reads them as the
     /// reader scrolls near the end.
     @Published private(set) var hasMoreSessions = false
@@ -1725,6 +1737,7 @@ final class DesktopModel: ObservableObject {
         archivedDates[id] = nil
         lifecycle.forget(id)
         sessions.removeAll { $0.id == id }
+        for key in scopePages.keys { scopePages[key]?.pages.remove(id) }
         sessionPages.remove(id)
         startedSessions[id] = nil
         parkedDrafts[id] = nil
@@ -2029,6 +2042,7 @@ final class DesktopModel: ObservableObject {
         stop()
         transcript.removeAll()
         sessions = []
+        scopePages = [:]
         sessionPages.reset()
         hasMoreSessions = false
         selectedSession = nil
@@ -2159,8 +2173,8 @@ final class DesktopModel: ObservableObject {
                 pages.append(SessionSummary.list(from: result), next: SessionSummary.nextCursor(from: result))
                 read += 1
             }
-            sessionPages = pages
             listedScope = scope
+            sessionPages = pages
             moreSessionsFailed = false
             publishSessions()
             sessionsLoaded = true

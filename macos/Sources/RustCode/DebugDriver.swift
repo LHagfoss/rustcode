@@ -572,6 +572,31 @@ enum DebugDriver {
         case "pin": if let s = session(parts[1], model) { model.togglePin(s) }
         case "new": await model.newSession()
         case "sidebar": model.toggleSidebar()
+        case "timetoggle":
+            // `timetoggle sidebar|scope [times]`: flip the sidebar or its
+            // All/Projects scope and report the main thread's longest stall
+            // while the change animates, worst over `times` flips.
+            let times = Int(parts.count > 2 ? parts[2] : "4") ?? 4
+            var worst = 0.0, total = 0.0
+            for _ in 0..<times {
+                var last = Date(), gap = 0.0, gaps: [Int] = []
+                let timer = Timer(timeInterval: 0.002, repeats: true) { _ in
+                    let now = Date()
+                    let step = now.timeIntervalSince(last) * 1000
+                    if step > 12 { gaps.append(Int(step)) }
+                    gap = max(gap, step)
+                    last = now
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                if parts[1] == "scope" { model.showsAllProjects.toggle() } else { model.toggleSidebar() }
+                try? await Task.sleep(for: .milliseconds(450))
+                timer.invalidate()
+                if parts.contains("trace") { report("  stalls over 12 ms: \(gaps)") }
+                worst = max(worst, gap)
+                total += gap
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            report("timetoggle \(parts[1]) x\(times) avg stall \(Int(total / Double(times))) ms worst \(Int(worst)) ms")
         case "pulls":
             // `pulls [number]`: open the pull requests panel, or one of them.
             model.showsPullRequests = true

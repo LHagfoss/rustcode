@@ -664,7 +664,12 @@ struct ChatScroller: View {
 extension View {
     /// Reports this chat row's real frame to the chat's scroller.
     func reportsChatRow(_ row: Int, to state: ChatScrollState) -> some View {
-        onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { state.rowFrame(row, $0) }
+        // Only the vertical extent: a row moved sideways, as when the
+        // sidebar slides, reports nothing.
+        onGeometryChange(for: CGRect.self) { proxy in
+            let frame = proxy.frame(in: .scrollView)
+            return CGRect(x: 0, y: frame.minY, width: 0, height: frame.height)
+        } action: { state.rowFrame(row, $0) }
             .onDisappear { state.rowGone(row) }
             #if DEBUG
             // Where layout puts the row in the content, for the debug

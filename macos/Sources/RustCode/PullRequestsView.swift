@@ -180,15 +180,13 @@ final class PullRequestsStore: ObservableObject {
     }
 }
 
-/// The header's Pull Requests button: opens the panel beside the chat.
+/// The header's Pull Requests button, in the side panels' cluster: opens the panel beside the chat.
 struct PullRequestsButton: View {
     @ObservedObject var model: DesktopModel
 
     var body: some View {
-        ToolbarCluster {
-            ClusterButton(systemImage: "arrow.triangle.pull", help: "Pull requests of \(model.chatProject.lastPathComponent)") {
-                withAnimation(.snappy(duration: 0.25)) { model.showsPullRequests = true }
-            }
+        ClusterButton(systemImage: "arrow.triangle.pull", help: "Pull requests of \(model.chatProject.lastPathComponent)") {
+            withAnimation(.snappy(duration: 0.25)) { model.showsPullRequests = true }
         }
     }
 }
