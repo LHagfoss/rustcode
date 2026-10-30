@@ -491,6 +491,15 @@ pub enum StorageCommands {
         #[arg(long)]
         json: bool,
     },
+    /// List command output and attachments no thread refers to; --apply moves them aside
+    Clean {
+        /// Move the listed files to storage/removed, where they can be restored for 14 days
+        #[arg(long)]
+        apply: bool,
+        /// Print the plan (and result) as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -805,6 +814,20 @@ mod tests {
             cli.command,
             Some(Commands::Storage {
                 command: StorageCommands::Status { json: true }
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_storage_clean() {
+        let cli = Cli::try_parse_from(["rustcode", "storage", "clean", "--apply"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Storage {
+                command: StorageCommands::Clean {
+                    apply: true,
+                    json: false
+                }
             })
         ));
     }

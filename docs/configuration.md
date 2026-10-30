@@ -56,6 +56,22 @@ Everything else (configuration, credentials, models, locks) is listed as
 "other". The `sessions` link left by the threads rename is not counted twice.
 No store is cleaned automatically beyond what the table says.
 
+`tool output` and `attachments` collect files whose thread was later deleted
+or pruned. `storage clean` finds them:
+
+```bash
+rustcode storage clean           # list them; changes nothing
+rustcode storage clean --apply   # move them to storage/removed
+rustcode storage clean --json    # the plan (and result), for scripts
+```
+
+A file is listed only when no file under `threads/` or `history_archive/`
+names it and it has not changed for 30 days; folders and links in the stores
+are never touched, and no other store is. `--apply` moves each file to
+`storage/removed/<date-time>/<store>/`: move it back to restore it. A later
+`--apply` deletes a folder there once it is 14 days old. Nothing runs this
+automatically.
+
 If `migrations.json` was written by a newer RustCode (a higher `format`), this
 version runs no migrations and leaves the file alone; upgrade RustCode. If the
 file is unreadable, RustCode reports it and runs nothing; move it aside to let
