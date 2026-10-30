@@ -37,6 +37,7 @@ pub mod serve;
 pub mod shell_env;
 pub mod skills;
 pub mod storage_migrations;
+pub mod storage_report;
 mod symbols;
 pub mod tools;
 pub mod update;
