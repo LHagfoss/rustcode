@@ -485,3 +485,46 @@ mod sessions_folder_to_threads {
         );
     }
 }
+
+mod legacy_thread_steps {
+    use super::super::{legacy_thread_layout, prune_scratch_thread_folders};
+    use std::fs;
+
+    #[test]
+    fn a_thread_stored_directly_in_threads_is_filed_by_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // A millisecond id from 2026-07-21, as early versions wrote them.
+        let legacy = root.join("threads/1784626803679");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("history.json"), "[]").unwrap();
+        fs::create_dir_all(root.join("threads/2026/07/21")).unwrap();
+
+        legacy_thread_layout(root).unwrap();
+        assert!(!legacy.exists(), "the original is removed once copied");
+        let filed = rustcode_session::SessionStore::new(root).session_dir("1784626803679");
+        assert!(filed.join("history.json").is_file(), "{}", filed.display());
+        // Nothing left to do: running again changes nothing.
+        legacy_thread_layout(root).unwrap();
+        assert!(filed.join("history.json").is_file());
+    }
+
+    #[test]
+    fn empty_scratch_folders_go_and_threads_stay() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = dir.path().join("threads/2026/10/30");
+        fs::create_dir_all(day.join("session-title-123")).unwrap();
+        let kept = day.join("compaction-summary-456");
+        fs::create_dir_all(&kept).unwrap();
+        fs::write(kept.join("history.json"), "[]").unwrap();
+        fs::create_dir_all(day.join("01a15d3d27b9-7000-aba7-a4f7-a4f7ddc00034")).unwrap();
+
+        prune_scratch_thread_folders(dir.path()).unwrap();
+        assert!(!day.join("session-title-123").exists());
+        assert!(kept.exists(), "a scratch id with history is kept");
+        assert!(
+            day.join("01a15d3d27b9-7000-aba7-a4f7-a4f7ddc00034")
+                .exists()
+        );
+    }
+}

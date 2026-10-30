@@ -82,9 +82,14 @@ Registered migrations:
 | Id | What it does |
 | --- | --- |
 | `0001-sessions-folder-to-threads` | Renames `sessions/` to `threads/` and leaves `sessions` as a link to it, so an older RustCode still finds every thread. If an older version created a new `sessions/` after the rename, its threads are moved in; a thread present in both folders is left in `sessions/` and reported, and the step runs again on the next start once one copy is moved aside. Until the step has run, RustCode reads the old folder. |
+| `0002-legacy-thread-layout` | Moves threads that early versions kept directly in `threads/<id>` (or `threads/<id>.json`) to `threads/YYYY/MM/DD/<id>`, as `rustcode threads migrate` does: each is copied, the copy put in place, and only then the original removed. A thread already at its destination is left alone. |
+| `0003-prune-scratch-thread-folders` | Removes the empty folders that title, compaction and recap requests once left in `threads/` (#2562, #2571). Only folders named like those requests and holding no history are removed. Before, this ran on every start of the terminal. |
 
-The legacy configuration conversion above and `rustcode threads migrate
-[--dry-run]` keep their own entry points for now.
+`rustcode threads migrate [--dry-run]` still runs the thread-layout move by
+hand. The legacy configuration conversion above stays where it is: it merges
+into the `config.toml` being saved, and an older RustCode reads the JSON files
+until then. So does the old `fmr` folder rename, which happens before the
+config directory exists to hold a checkpoint.
 
 ## Configuration files
 

@@ -42,14 +42,56 @@ pub struct Migration {
 
 /// The registry, oldest first. Append new steps at the end.
 ///
-/// The legacy config (`config.json`/`models.json`) and session layout
-/// migrations keep their existing entry points until each can be moved here
-/// without changing its compatibility behavior.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    id: "0001-sessions-folder-to-threads",
-    description: "rename the sessions/ folder to threads/",
-    run: sessions_folder_to_threads,
-}];
+/// Two older conversions stay where they are, by necessity:
+/// - the `fmr` to `rustcode` folder rename runs while the config directory
+///   is first resolved, before there is a directory to keep a checkpoint in;
+/// - the legacy `config.json`/`models.json` conversion runs when the config
+///   is next saved, because it merges into the `config.toml` being written
+///   and an older RustCode still reads the JSON files until then.
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        id: "0001-sessions-folder-to-threads",
+        description: "rename the sessions/ folder to threads/",
+        run: sessions_folder_to_threads,
+    },
+    Migration {
+        id: "0002-legacy-thread-layout",
+        description: "file threads stored directly in threads/ by date",
+        run: legacy_thread_layout,
+    },
+    Migration {
+        id: "0003-prune-scratch-thread-folders",
+        description: "remove empty folders that title and compaction requests once left in threads/",
+        run: prune_scratch_thread_folders,
+    },
+];
+
+/// Threads that early versions kept directly in `threads/<id>` (or as
+/// `threads/<id>.json`) move to `threads/YYYY/MM/DD/<id>`, as
+/// `rustcode threads migrate` does. Each is copied, the copy renamed into
+/// place, and only then the original removed; a thread already at its
+/// destination is left where it is. Any failure keeps the step pending.
+fn legacy_thread_layout(config_dir: &Path) -> Result<(), String> {
+    let report = rustcode_session::SessionStore::new(config_dir).migrate_legacy_sessions(false);
+    if report.errors.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} of {} legacy thread(s) could not be moved, for example {}; run `rustcode threads migrate --dry-run` to inspect",
+        report.errors.len(),
+        report.found,
+        report.errors[0]
+    ))
+}
+
+/// Title, compaction and recap requests once left empty folders in the
+/// thread store (#2562, #2571). They stopped, so this runs once instead of
+/// on every start. Only folders named like a scratch id and holding no
+/// history are removed.
+fn prune_scratch_thread_folders(config_dir: &Path) -> Result<(), String> {
+    rustcode_session::SessionStore::new(config_dir).prune_scratch_session_dirs();
+    Ok(())
+}
 
 /// Rename `sessions/` to `threads/` and leave `sessions` as a link to it, so
 /// an older RustCode (or a process started before the upgrade) still finds
