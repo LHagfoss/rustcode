@@ -4859,9 +4859,12 @@ fn smart_ui_hint_needs_the_capability_and_a_root_prompt() {
     use super::schema::{SMART_UI_OFF_PROMPT_HINT, SMART_UI_PROMPT_HINT, append_smart_ui_hint};
     use crate::app::SmartUi;
     use crate::config::AgentMode;
-    assert!(crate::network::compaction::estimate_tokens(SMART_UI_PROMPT_HINT) < 180);
+    // The format and design guidance moved to the built-in `smart-ui`
+    // skill (#2625); the root prompt keeps only when to use it.
+    assert!(crate::network::compaction::estimate_tokens(SMART_UI_PROMPT_HINT) < 100);
     assert!(crate::network::compaction::estimate_tokens(SMART_UI_OFF_PROMPT_HINT) < 80);
     assert!(SMART_UI_PROMPT_HINT.contains("```rustcode-ui v1"));
+    assert!(SMART_UI_PROMPT_HINT.contains("`smart-ui` skill"));
     assert!(SMART_UI_OFF_PROMPT_HINT.contains("Settings › General › Chat › Smart UI"));
     let with = |policy: ToolSchemaPolicy, on: SmartUi| {
         let mut prompt = String::new();

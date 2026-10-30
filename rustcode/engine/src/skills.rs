@@ -37,7 +37,7 @@ pub struct SkillMetadata {
 /// turned off with `disabled_skills`.
 pub fn discover_skills() -> Vec<SkillMetadata> {
     let disabled = disabled_skill_names();
-    discover_skills_in(current_root_inputs())
+    with_builtin_skills(discover_skills_in(current_root_inputs()))
         .into_iter()
         .filter(|skill| !disabled.contains(&skill.name))
         .collect()
@@ -46,7 +46,46 @@ pub fn discover_skills() -> Vec<SkillMetadata> {
 /// Every discovered skill, enabled or not, for the settings surfaces that
 /// list and toggle them.
 pub fn discover_all_skills() -> Vec<SkillMetadata> {
-    discover_skills_in(current_root_inputs())
+    with_builtin_skills(discover_skills_in(current_root_inputs()))
+}
+
+/// Skills compiled into RustCode, so they ship and update with it (#2625).
+/// A skill of the same name in any root overrides one of these.
+const BUILTIN_SKILLS: &[&str] = &[include_str!("skills_builtin/smart-ui.md")];
+
+/// The directory a built-in skill reports: not on disk, named so `/skills`
+/// and `rustcode doctor` show where it came from.
+const BUILTIN_SKILL_DIR: &str = "<built-in>";
+
+fn builtin_skill_path(name: &str) -> PathBuf {
+    Path::new(BUILTIN_SKILL_DIR).join(name)
+}
+
+fn builtin_skill_content(name: &str) -> Option<&'static str> {
+    BUILTIN_SKILLS
+        .iter()
+        .copied()
+        .find(|content| parse_frontmatter(content).name == name)
+}
+
+/// `skills` and the built-in skills none of them overrides, sorted by name.
+fn with_builtin_skills(mut skills: Vec<SkillMetadata>) -> Vec<SkillMetadata> {
+    for content in BUILTIN_SKILLS {
+        let parsed = parse_frontmatter(content);
+        if skills.iter().any(|skill| skill.name == parsed.name) {
+            continue;
+        }
+        skills.push(SkillMetadata {
+            path: builtin_skill_path(&parsed.name),
+            name: parsed.name,
+            description: parsed.description,
+            triggers: parsed.triggers,
+            keywords: parsed.keywords,
+            priority: parsed.priority,
+        });
+    }
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    skills
 }
 
 /// Names in the user config's `disabled_skills`. Read from the file on each
@@ -720,8 +759,11 @@ fn truncate_skill_content(content: &mut String) {
 
 pub fn get_skill_content(name: &str) -> Option<SkillInfo> {
     let meta = discover_skills().into_iter().find(|s| s.name == name)?;
-    let skill_md = meta.path.join("SKILL.md");
-    let mut content = fs::read_to_string(&skill_md).ok()?;
+    let mut content = if meta.path == builtin_skill_path(&meta.name) {
+        builtin_skill_content(&meta.name)?.to_owned()
+    } else {
+        fs::read_to_string(meta.path.join("SKILL.md")).ok()?
+    };
     truncate_skill_content(&mut content);
     Some(SkillInfo {
         name: meta.name,
@@ -812,6 +854,29 @@ mod tests {
             keywords: Vec::new(),
             priority: 0,
         }
+    }
+
+    #[test]
+    fn builtin_smart_ui_skill_is_listed_unless_a_root_overrides_it() {
+        let skills = with_builtin_skills(Vec::new());
+        let smart_ui = skills
+            .iter()
+            .find(|skill| skill.name == "smart-ui")
+            .unwrap();
+        assert_eq!(smart_ui.path, builtin_skill_path("smart-ui"));
+        assert!(smart_ui.description.contains("rustcode-ui v1"));
+        let content = builtin_skill_content("smart-ui").unwrap();
+        assert!(content.contains("```rustcode-ui v1"));
+        assert!(content.len() < MAX_SKILL_CONTENT_BYTES);
+
+        let own = test_metadata("smart-ui", "my own");
+        let skills = with_builtin_skills(vec![own]);
+        let smart_ui: Vec<_> = skills
+            .iter()
+            .filter(|skill| skill.name == "smart-ui")
+            .collect();
+        assert_eq!(smart_ui.len(), 1);
+        assert_eq!(smart_ui[0].description, "my own");
     }
 
     #[test]
