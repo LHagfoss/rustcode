@@ -576,6 +576,8 @@ enum DebugDriver {
             // `pulls [number]`: open the pull requests panel, or one of them.
             model.showsPullRequests = true
             if parts.count > 1 { model.pullToOpen = Int(parts[1]) }
+        case "pullguide":
+            model.makesPullGuide = true
         case "pullfile":
             // `pullfile <path>`: open a file's diff in the open pull request.
             if parts.count > 1 { model.pullFileToOpen = parts[1] }
