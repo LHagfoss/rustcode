@@ -50,6 +50,40 @@ gets a new `protocol_version`.
 The host omits absent optional fields; it never sends `null`, although the
 schema tolerates it.
 
+## Thread names
+
+RustCode calls a conversation a **thread** ([terminology](../terminology.md)).
+Version 1 was written when it was called a session, so its names say
+`session`. A client can ask to use thread names instead: it sends
+`"wire_names": "thread"` in its `pair` or `authenticate` frame, and a gateway
+that supports it answers with the same field in `paired` or `authenticated`.
+From then on every frame on that connection uses the names below, in both
+directions. Without the field (an older client, or an older gateway that
+ignores it) the connection keeps the v1 names, so either side can be
+upgraded first.
+
+Only names change; frames, fields, order and meaning are v1's, and the schema
+and golden frames under `v1/` stay in v1 names. Text inside a frame (titles,
+prompts, messages) is never rewritten.
+
+| v1 name | Thread name | Where |
+| --- | --- | --- |
+| `session_id` | `thread_id` | field |
+| `session` | `thread` | field |
+| `sessions` | `threads` | field, and `kind` of the list push frame |
+| `subscribe_sessions`, `list_sessions`, `list_saved_sessions` | `subscribe_threads`, `list_threads`, `list_saved_threads` | operation `type` |
+| `create_session`, `attach_session`, `detach_session`, `resume_session`, `set_session_settings` | `create_thread`, `attach_thread`, `detach_thread`, `resume_thread`, `set_thread_settings` | operation `type` |
+| `sessions`, `saved_sessions`, `session_created`, `session_resumed`, `session_settings_updated` | `threads`, `saved_threads`, `thread_created`, `thread_resumed`, `thread_settings_updated` | result `type` |
+| `session_closed` | `thread_closed` | event `type` |
+| `session_changed` | `thread_changed` | close `reason` |
+| `stale_session` | `stale_thread` | error `code` |
+
+The gateway translates at the device's socket
+(`rustcode/engine/src/remote_gateway/wire_names.rs`) and the iOS app at its own
+(`ios/RustCodeRemote/Sources/RustCodeRemote/Wire/WireNames.swift`); a test
+fails when the schema gains a `session` name the table does not cover. The
+current iOS app asks for thread names.
+
 ## Connection
 
 1. Open a WebSocket to `ws://<address>/` without an `Origin` header (a request

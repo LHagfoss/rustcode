@@ -41,7 +41,7 @@ extension RemoteError: LocalizedError {
         case .invalidFrame(let detail): "The host sent data this app could not understand (\(detail))."
         case .codecUnavailable: "Connecting to a real host is not available in this build."
         case .timeout: "The host did not answer in time."
-        case .resyncRequired: "The session has to be reloaded."
+        case .resyncRequired: "The thread has to be reloaded."
         case .pairingFailed(let detail): "Pairing failed: \(detail)"
         case .rateLimited(let retryAfter):
             if let retryAfter {
@@ -62,16 +62,16 @@ extension RemoteError: LocalizedError {
 extension RemoteRejection {
     public var message: String {
         switch self {
-        case .busy: "The session is busy. Queue the message or wait for the turn to finish."
+        case .busy: "The thread is busy. Queue the message or wait for the turn to finish."
         case .notRunning: "There is no running turn any more. Send the message again to start one."
         case .invalidAnswer: "That answer does not match the question."
         case .staleQuestion: "That question was already answered."
         case .staleApproval: "That approval was already resolved."
         case .staleTurn: "That turn has already ended."
-        case .staleSession: "The session is no longer shared."
+        case .staleSession: "The thread is no longer shared."
         case .unsupportedOperation: "This action is not supported remotely. Use /help for available commands, or use the host terminal. Update and restart the RustCode gateway if a supported command is missing."
         case .openElsewhere(let message):
-            message.isEmpty ? "This session is open on the Mac. Continue it there, or share it with /remote." : message
+            message.isEmpty ? "This thread is open on the Mac. Continue it there, or share it with /remote." : message
         case .other(let code, let message): message ?? "The host rejected the request (\(code))."
         }
     }

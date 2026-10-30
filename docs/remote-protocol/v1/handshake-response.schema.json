@@ -111,6 +111,13 @@
         "type": {
           "const": "paired",
           "type": "string"
+        },
+        "wire_names": {
+          "description": "`\"thread\"` when the gateway accepted the device's request for the\nthread names; absent means the v1 names.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -160,6 +167,13 @@
         "type": {
           "const": "authenticated",
           "type": "string"
+        },
+        "wire_names": {
+          "description": "`\"thread\"` when the gateway accepted the device's request for the\nthread names; absent means the v1 names.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

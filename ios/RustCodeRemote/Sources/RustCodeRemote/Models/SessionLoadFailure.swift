@@ -54,13 +54,13 @@ public struct SessionLoadFailure: Sendable, Equatable {
 
     public var title: String {
         switch category {
-        case .notFound: "Session Not Found"
-        case .stale: "Session Changed"
+        case .notFound: "Thread Not Found"
+        case .stale: "Thread Changed"
         case .ownerUnavailable: "Mac Not Responding"
         case .openElsewhere: "Open on the Mac"
         case .timeout: "Mac Not Responding"
-        case .invalidData: "Couldn’t Read Session"
-        case .refused: "Couldn’t Open Session"
+        case .invalidData: "Couldn’t Read Thread"
+        case .refused: "Couldn’t Open Thread"
         }
     }
 
@@ -77,9 +77,9 @@ public struct SessionLoadFailure: Sendable, Equatable {
 
     private static func message(for category: Category, error: RemoteError) -> String {
         switch category {
-        case .notFound: "The Mac no longer shares this session. It may have been closed there."
-        case .stale: "The session was shared again on the Mac while it loaded."
-        case .ownerUnavailable: "The Mac did not answer for this session. It may still be starting."
+        case .notFound: "The Mac no longer shares this thread. It may have been closed there."
+        case .stale: "The thread was shared again on the Mac while it loaded."
+        case .ownerUnavailable: "The Mac did not answer for this thread. It may still be starting."
         case .timeout: "The Mac did not answer in time."
         case .invalidData: "The Mac sent data this app could not read. Updating RustCode on the Mac or this app may help."
         case .openElsewhere, .refused: error.localizedDescription

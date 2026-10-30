@@ -331,6 +331,7 @@ impl Shared {
                     .expires_at()
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ),
+            wire_names: None,
         };
         Ok(self.register(&mut state, &record, welcome))
     }
@@ -374,6 +375,7 @@ impl Shared {
                     .expires_at()
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ),
+            wire_names: None,
         };
         Ok(self.register(&mut state, &record, welcome))
     }

@@ -20,25 +20,25 @@ import Testing
     @Test func handshakeRequestsHaveTheGatewaysExactShape() throws {
         let code = try codec.encode(.pair(credential: .shortCode("1234-5678"), deviceName: "phone"), requestID: RequestID())
         #expect(try Contract.json(Data(code.utf8)) == Contract.json(Data(
-            #"{"type":"pair","protocol_version":1,"method":"code","secret":"1234-5678","device_name":"phone"}"#.utf8
+            #"{"type":"pair","protocol_version":1,"method":"code","secret":"1234-5678","device_name":"phone","wire_names":"thread"}"#.utf8
         )))
         let credential = try codec.encode(.pair(credential: .oneTime("cred"), deviceName: "phone"), requestID: RequestID())
         #expect(try Contract.json(Data(credential.utf8)) == Contract.json(Data(
-            #"{"type":"pair","protocol_version":1,"method":"credential","secret":"cred","device_name":"phone"}"#.utf8
+            #"{"type":"pair","protocol_version":1,"method":"credential","secret":"cred","device_name":"phone","wire_names":"thread"}"#.utf8
         )))
         let install = try codec.encode(
             .pair(credential: .oneTime("cred"), deviceName: "phone", installID: "6F9619FF-8B86-D011-B42D-00C04FC964FF"),
             requestID: RequestID()
         )
         #expect(try Contract.json(Data(install.utf8)) == Contract.json(Data(
-            #"{"type":"pair","protocol_version":1,"method":"credential","secret":"cred","device_name":"phone","install_id":"6F9619FF-8B86-D011-B42D-00C04FC964FF"}"#.utf8
+            #"{"type":"pair","protocol_version":1,"method":"credential","secret":"cred","device_name":"phone","install_id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","wire_names":"thread"}"#.utf8
         )))
         let authenticate = try codec.encode(
             .authenticate(device: DeviceIdentity(id: "0011223344556677", name: "phone"), deviceToken: "tok"),
             requestID: RequestID()
         )
         #expect(try Contract.json(Data(authenticate.utf8)) == Contract.json(Data(
-            #"{"type":"authenticate","protocol_version":1,"device_id":"0011223344556677","token":"tok"}"#.utf8
+            #"{"type":"authenticate","protocol_version":1,"device_id":"0011223344556677","token":"tok","wire_names":"thread"}"#.utf8
         )))
         // No request ID and no device name leak into the authenticate frame.
         #expect(!authenticate.contains("request_id"))
@@ -54,7 +54,7 @@ import Testing
             deviceToken: "tok"
         ))))
         #expect(try codec.decode(
-            #"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone"}"#
+            #"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","wire_names":"thread"}"#
         ) == .handshake(.authenticated(identity)))
 
         // The golden frames carry the host's name and the link expiry.

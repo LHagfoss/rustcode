@@ -51,6 +51,13 @@
         "type": {
           "const": "pair",
           "type": "string"
+        },
+        "wire_names": {
+          "description": "`\"thread\"` asks for the thread names on the wire; see [`WIRE_NAMES_THREAD`].",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -79,6 +86,13 @@
         "type": {
           "const": "authenticate",
           "type": "string"
+        },
+        "wire_names": {
+          "description": "`\"thread\"` asks for the thread names on the wire; see [`WIRE_NAMES_THREAD`].",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

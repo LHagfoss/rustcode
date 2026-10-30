@@ -40,6 +40,7 @@ pub mod owner_client;
 pub mod pairing_watch;
 #[cfg(unix)]
 mod transport;
+pub mod wire_names;
 
 #[cfg(all(test, unix))]
 mod e2e_tests;

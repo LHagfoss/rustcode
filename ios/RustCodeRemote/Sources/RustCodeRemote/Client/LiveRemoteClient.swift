@@ -38,6 +38,9 @@ public actor LiveRemoteClient: RemoteClient {
     private var updateContinuations: [SessionRef: UpdatesContinuation] = [:]
     /// Sessions whose events cannot be trusted until the snapshot the host announced arrives.
     private var awaitingSnapshot: Set<SessionRef> = []
+    /// The gateway confirmed thread names for this connection (`WireNames`): frames are
+    /// translated at the socket, and the codec keeps working in v1 names.
+    private var threadNames = false
 
     public init(
         codec: any RemoteCodec,
@@ -294,6 +297,7 @@ public actor LiveRemoteClient: RemoteClient {
         }
         generation += 1
         let generation = generation
+        threadNames = false
         self.transport = transport
         receiveTask = Task { [weak self] in
             var failure: RemoteError?
@@ -311,7 +315,10 @@ public actor LiveRemoteClient: RemoteClient {
     /// Sends one command and waits for its reply. A `.failure` reply is thrown.
     private func request(_ command: RemoteCommand, id: RequestID = RequestID(), timeout: Duration? = nil) async throws -> RemoteReply {
         guard let transport else { throw RemoteError.notConnected }
-        let frame = try codec.encode(command, requestID: id)
+        var frame = try codec.encode(command, requestID: id)
+        if threadNames, !command.isHandshake {
+            frame = WireNames.toThreadNames(frame)
+        }
 
         // The waiter is registered before the frame leaves, so a fast reply cannot be missed.
         let (replies, waiter) = AsyncStream.makeStream(of: Result<RemoteReply, RemoteError>.self)
@@ -358,6 +365,12 @@ public actor LiveRemoteClient: RemoteClient {
 
     private func receive(_ frame: String, generation: Int) async {
         guard generation == self.generation else { return }
+        var frame = frame
+        if threadNames {
+            frame = WireNames.toSessionNames(frame)
+        } else if WireNames.confirmed(in: frame) {
+            threadNames = true
+        }
         let message: RemoteMessage
         do {
             message = try codec.decode(frame)

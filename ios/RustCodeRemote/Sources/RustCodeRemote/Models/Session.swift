@@ -49,7 +49,7 @@ public struct SessionSummary: Identifiable, Hashable, Sendable {
     /// When the newest transcript message was written, if the host says.
     public var lastActiveAt: Date?
     public var displayTitle: String {
-        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Session \(id.prefix(8))" : title
+        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Thread \(id.prefix(8))" : title
     }
     public var health: SessionHealth
 
