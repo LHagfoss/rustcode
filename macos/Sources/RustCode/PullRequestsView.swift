@@ -420,6 +420,7 @@ private struct PullRequestDetailView: View {
                     Button("Open on GitHub") { NSWorkspace.shared.open(url) }
                         .buttonStyle(PillButtonStyle())
                 }
+                if model.canWatchPullRequests, model.selectedSession != nil { watchButton }
                 Button("Ask in New Thread", action: askInNewThread)
                     .buttonStyle(PillButtonStyle(prominent: true))
                     .help("Start a thread about this pull request; the message is written, not sent")
@@ -455,6 +456,23 @@ private struct PullRequestDetailView: View {
             openFiles.insert(path)
             Task { await store.loadDiff(model.engineConnection) }
         }
+    }
+
+    private var watch: PullWatch? {
+        model.pullWatches(in: model.selectedSession).first { $0.number == pull.number && $0.isWatching }
+    }
+
+    /// Watch this pull request from the shown thread (#2648).
+    private var watchButton: some View {
+        Button(watch == nil ? "Watch" : "Watching") {
+            Task {
+                if let watch { await model.stopWatching(watch) } else { await model.watchPull(pull.number) }
+            }
+        }
+        .buttonStyle(PillButtonStyle())
+        .help(watch == nil
+              ? "Tell this thread when checks fail or pass, reviews or comments arrive, conflicts appear, or it closes. Nothing is done on the pull request"
+              : "Stop watching")
     }
 
     private var header: some View {
@@ -817,5 +835,67 @@ private struct PullFileDiff: View {
         }
         .padding(8)
         .padding(.leading, 34)
+    }
+}
+
+/// A thread's pull request watch in its title bar: what it last saw, a way
+/// to hand that to the agent as a message, and Stop (#2648).
+struct PullWatchChip: View {
+    @ObservedObject var model: DesktopModel
+    let watch: PullWatch
+
+    var body: some View {
+        Menu {
+            if watch.events.isEmpty {
+                Text(watch.isWatching ? "Nothing new yet" : "Nothing happened while watching")
+            }
+            ForEach(Array(watch.events.suffix(8).enumerated().reversed()), id: \.offset) { _, event in
+                Label(event.at.map { "\(event.message) · \($0.formatted(.relative(presentation: .named)))" } ?? event.message,
+                      systemImage: event.systemImage)
+            }
+            if let error = watch.lastError, watch.isWatching {
+                Label("Last check failed: \(error)", systemImage: "wifi.exclamationmark")
+            }
+            Divider()
+            if !watch.events.isEmpty {
+                Button("Ask the Agent…") { model.askAgent(about: watch) }
+            }
+            if let url = watch.url {
+                Button("Open on GitHub") { NSWorkspace.shared.open(url) }
+            }
+            if watch.isWatching {
+                Button("Stop Watching") { Task { await model.stopWatching(watch) } }
+            } else {
+                Button("Remove") { Task { await model.stopWatching(watch, remove: true) } }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon).foregroundStyle(tint)
+                Text(watch.label).lineLimit(1)
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .glassSurface(in: .capsule)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(watch.isWatching ? "RustCode checks this pull request every few minutes" : (watch.stopReason ?? "Stopped"))
+    }
+
+    private var icon: String {
+        guard watch.isWatching else { return "eye.slash" }
+        return watch.events.last?.systemImage ?? "eye"
+    }
+
+    private var tint: Color {
+        switch watch.events.last?.kind {
+        case "checks_failed", "conflicts": .red
+        case "checks_passed": .green
+        case "activity": Color.brand
+        default: .secondary
+        }
     }
 }

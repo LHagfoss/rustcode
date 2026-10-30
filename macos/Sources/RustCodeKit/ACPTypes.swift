@@ -60,6 +60,9 @@ public struct AgentInfo: Equatable, Sendable {
     /// The engine also reads a pull request's diff and posts a review the
     /// user submits (`_rustcode/pulls/diff`, `/review`, #2646).
     public var pullRequestReviews: Bool
+    /// The engine watches a pull request for a thread and says what changed
+    /// (`_rustcode/pulls/watch*`, #2648).
+    public var pullWatches: Bool
 
     public init(initializeResult result: JSONValue) throws {
         guard let version = result["protocolVersion"]?.intValue else {
@@ -82,6 +85,7 @@ public struct AgentInfo: Equatable, Sendable {
         sessionMove = capabilities?["_meta"]?["rustcode"]?["sessionMove"]?.intValue != nil
         pullRequests = capabilities?["_meta"]?["rustcode"]?["pullRequests"]?.intValue != nil
         pullRequestReviews = (capabilities?["_meta"]?["rustcode"]?["pullRequests"]?.intValue ?? 0) >= 2
+        pullWatches = (capabilities?["_meta"]?["rustcode"]?["pullRequests"]?.intValue ?? 0) >= 3
     }
 }
 

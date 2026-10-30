@@ -119,7 +119,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "agents": agents::AGENTS_CAPABILITY_VERSION,
                 "rewind": 1,
                 "sessionMove": 1,
-                "pullRequests": 2,
+                "pullRequests": 3,
             }),
         )]))
 }
@@ -914,6 +914,104 @@ async fn unregister_acp_session(server: &AcpServer, session_id: &str) {
     }
 }
 
+/// Watch a pull request from a thread (#2648). Answers `{watch}` or
+/// `{error: {code, message}}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/pulls/watch/start", response = serde_json::Value)]
+pub(crate) struct PullWatchStartRequest {
+    pub session_id: String,
+    pub cwd: std::path::PathBuf,
+    pub number: u64,
+    #[serde(default)]
+    pub interests: Option<crate::pull_watch::Interests>,
+}
+
+/// Stop watching; `remove` forgets the watch too. Answers `{watch}`, with
+/// a null watch when there was none.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/pulls/watch/stop", response = serde_json::Value)]
+pub(crate) struct PullWatchStopRequest {
+    pub session_id: String,
+    pub number: u64,
+    #[serde(default)]
+    pub remove: bool,
+}
+
+/// The watches, a thread's when `sessionId` is given. Answers `{watches}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/pulls/watches", response = serde_json::Value)]
+pub(crate) struct PullWatchesRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+/// A watch changed: checked, stopped, or with new events, which are only
+/// in this message once. The app tells the reader; nothing acts on them.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_rustcode/pulls/watch")]
+pub(crate) struct PullWatchNotification {
+    pub watch: crate::pull_watch::Watch,
+    pub events: Vec<crate::pull_watch::WatchEvent>,
+}
+
+/// Start checking watches for this connection's client, once per engine.
+/// Each round tries for the checking lease, so a second engine takes over
+/// when the first one exits.
+fn start_pull_watching(connection: &agent_client_protocol::ConnectionTo<Client>) {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let Some(store) = crate::pull_watch::WatchStore::default_store() else {
+        return;
+    };
+    let notify = connection.clone();
+    let _ = connection.spawn(async move {
+        let mut lease = None;
+        loop {
+            if lease.is_none() {
+                lease = store.lease();
+            }
+            if lease.is_some() {
+                crate::pull_watch::check_due(&store, |watch, events| {
+                    let _ = notify.send_notification(PullWatchNotification {
+                        watch: watch.clone(),
+                        events: events.to_vec(),
+                    });
+                })
+                .await;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    });
+}
+
 /// The user started writing a message: start the deferred MCP servers now,
 /// so the turn the message starts does not wait for them. Answers at once;
 /// the servers start in the background, once.
@@ -1438,6 +1536,47 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     })?;
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullWatchStartRequest, responder, connection| {
+                start_pull_watching(&connection);
+                let Some(store) = crate::pull_watch::WatchStore::default_store() else {
+                    return responder.respond(serde_json::json!({ "error": { "code": "failed", "message": "No config directory" } }));
+                };
+                let started = store.start(
+                    &request.session_id,
+                    &request.cwd,
+                    request.number,
+                    request.interests.unwrap_or_default(),
+                    chrono::Utc::now().timestamp(),
+                );
+                responder.respond(match started {
+                    Ok(watch) => serde_json::json!({ "watch": watch }),
+                    Err(message) => serde_json::json!({ "error": { "code": "failed", "message": message } }),
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullWatchStopRequest, responder, _connection| {
+                let stopped = crate::pull_watch::WatchStore::default_store()
+                    .and_then(|store| store.stop(&request.session_id, request.number, request.remove).ok())
+                    .flatten();
+                responder.respond(serde_json::json!({ "watch": stopped }))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullWatchesRequest, responder, connection| {
+                // The app asks on launch: watches from before a restart
+                // carry on from here.
+                start_pull_watching(&connection);
+                let watches = crate::pull_watch::WatchStore::default_store()
+                    .map(|store| store.list(request.session_id.as_deref()))
+                    .unwrap_or_default();
+                responder.respond(serde_json::json!({ "watches": watches }))
             },
             agent_client_protocol::on_receive_request!(),
         )

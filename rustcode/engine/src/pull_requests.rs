@@ -172,6 +172,15 @@ pub async fn view(cwd: &Path, number: u64) -> Result<PullDetail, PullError> {
     })
 }
 
+/// What a watch compares (#2648): the pull request's state, checks,
+/// mergeability, reviews and comments, without its body and files.
+pub(crate) async fn watch_view(cwd: &Path, number: u64) -> Result<Value, PullError> {
+    let number = number.to_string();
+    gh_json(cwd, &["pr", "view", &number, "--json", WATCH_FIELDS]).await
+}
+
+const WATCH_FIELDS: &str = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName,headRefOid,updatedAt,url,additions,deletions,changedFiles,mergeable,reviews,comments";
+
 async fn gh_json(cwd: &Path, args: &[&str]) -> Result<Value, PullError> {
     let output = gh(cwd, args, None).await?;
     serde_json::from_slice(&output).map_err(|error| PullError {
@@ -495,7 +504,7 @@ fn summary(value: &Value) -> Option<PullSummary> {
     })
 }
 
-fn detail(value: &Value) -> Option<PullDetail> {
+pub(crate) fn detail(value: &Value) -> Option<PullDetail> {
     let summary = summary(value)?;
     let files = value
         .get("files")
