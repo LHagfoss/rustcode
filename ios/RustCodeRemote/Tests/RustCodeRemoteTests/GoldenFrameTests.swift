@@ -121,7 +121,7 @@ enum Contract {
 
     @Test func everyGoldenHandshakeFrameRoundTrips() throws {
         let requests = try Contract.goldenFiles("handshake/requests")
-        #expect(requests.count == 3)
+        #expect(requests.count == 4)
         var methods = Set<String>()
         var requestTypes = Set<String>()
         for file in requests {
@@ -141,7 +141,7 @@ enum Contract {
         #expect(methods == Set(WirePairingMethod.allCases.map(\.rawValue)))
 
         let responses = try Contract.goldenFiles("handshake/responses")
-        #expect(responses.count == 16)
+        #expect(responses.count == 17)
         var responseTypes = Set<String>()
         var codes = Set<String>()
         for file in responses {

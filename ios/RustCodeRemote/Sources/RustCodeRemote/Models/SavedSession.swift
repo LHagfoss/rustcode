@@ -60,7 +60,7 @@ public struct SavedSession: Identifiable, Hashable, Sendable {
     }
 
     public var displayTitle: String {
-        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Session \(id.prefix(8))" : title
+        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Thread \(id.prefix(8))" : title
     }
 
     /// Where an `.open` session is open, ready to show under its title.

@@ -17,6 +17,14 @@ use std::fmt;
 /// Version of the handshake frames below.
 pub const HANDSHAKE_PROTOCOL_VERSION: u32 = 1;
 
+/// The `wire_names` a device sends to read and write every frame after the
+/// handshake with "thread" where protocol v1 says "session" (`thread_id`,
+/// `list_threads`, `kind: "threads"`, …; see
+/// [`super::wire_names`]). A gateway that understands it echoes it in its
+/// `paired` or `authenticated` frame; an older gateway ignores the field and
+/// the device keeps the v1 names. Devices that do not ask get the v1 names.
+pub const WIRE_NAMES_THREAD: &str = "thread";
+
 /// Largest handshake frame accepted from an unauthenticated socket.
 pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 8 * 1024;
 
@@ -72,16 +80,28 @@ pub enum HandshakeRequest {
         /// ASCII characters. Older apps leave it out.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         install_id: Option<String>,
+        /// `"thread"` asks for the thread names on the wire; see [`WIRE_NAMES_THREAD`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wire_names: Option<String>,
     },
     /// Present a device token obtained from an earlier `paired` frame.
     Authenticate {
         protocol_version: u32,
         device_id: String,
         token: Secret,
+        /// `"thread"` asks for the thread names on the wire; see [`WIRE_NAMES_THREAD`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wire_names: Option<String>,
     },
 }
 
 impl HandshakeRequest {
+    /// Whether the device asked for the thread names on the wire.
+    pub fn wants_thread_names(&self) -> bool {
+        let (Self::Pair { wire_names, .. } | Self::Authenticate { wire_names, .. }) = self;
+        wire_names.as_deref() == Some(WIRE_NAMES_THREAD)
+    }
+
     /// Parse a first frame. The version is checked before the shape, so a
     /// newer client gets `unsupported_version` rather than `invalid_frame`.
     pub fn parse(text: &str) -> Result<Self, HandshakeResponse> {
@@ -132,6 +152,10 @@ pub enum HandshakeResponse {
         /// pairs again after it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<String>,
+        /// `"thread"` when the gateway accepted the device's request for the
+        /// thread names; absent means the v1 names.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wire_names: Option<String>,
     },
     /// The device token was accepted.
     Authenticated {
@@ -146,6 +170,10 @@ pub enum HandshakeResponse {
         /// pairs again after it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<String>,
+        /// `"thread"` when the gateway accepted the device's request for the
+        /// thread names; absent means the v1 names.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wire_names: Option<String>,
     },
     Error {
         code: ErrorCode,
@@ -166,6 +194,13 @@ impl HandshakeResponse {
 
     pub fn to_text(&self) -> String {
         serde_json::to_string(self).expect("handshake frames always serialize")
+    }
+
+    /// Confirm the thread names in a `paired` or `authenticated` frame.
+    pub fn confirm_thread_names(&mut self) {
+        if let Self::Paired { wire_names, .. } | Self::Authenticated { wire_names, .. } = self {
+            *wire_names = Some(WIRE_NAMES_THREAD.to_owned());
+        }
     }
 }
 
@@ -212,6 +247,7 @@ mod tests {
             secret: Secret::new("1234-5678"),
             device_name: "phone".into(),
             install_id: None,
+            wire_names: None,
         };
         assert_eq!(
             serde_json::to_string(&pair).unwrap(),
@@ -221,6 +257,7 @@ mod tests {
             protocol_version: 1,
             device_id: "0011223344556677".into(),
             token: Secret::new("tok"),
+            wire_names: None,
         };
         assert_eq!(
             serde_json::to_string(&authenticate).unwrap(),
@@ -243,6 +280,7 @@ mod tests {
             token: Secret::new("tok"),
             host_name: None,
             expires_at: None,
+            wire_names: None,
         };
         assert_eq!(
             paired.to_text(),
@@ -256,6 +294,7 @@ mod tests {
             device_name: "phone".into(),
             host_name: None,
             expires_at: None,
+            wire_names: None,
         };
         assert_eq!(
             authenticated.to_text(),
@@ -340,6 +379,7 @@ mod tests {
             secret: Secret::new(needle),
             device_name: "phone".into(),
             install_id: None,
+            wire_names: None,
         };
         let paired = HandshakeResponse::Paired {
             protocol_version: 1,
@@ -350,6 +390,7 @@ mod tests {
             token: Secret::new(needle),
             host_name: Some("studio".into()),
             expires_at: None,
+            wire_names: None,
         };
         assert!(!format!("{pair:?}").contains(needle));
         assert!(!format!("{paired:?}").contains(needle));

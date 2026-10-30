@@ -167,6 +167,10 @@ imperative ("add", not "added"), under ~72 characters. Do not prefix with
 
 ## Session-driven fix loop
 
+A session and a thread are the same thing: "thread" in the apps, CLI, storage
+and remote protocol, "session" in ACP and internal identifiers. See
+`docs/terminology.md` before naming anything user-facing.
+
 - Diagnose from evidence:
   `~/.config/rustcode/threads/<yyyy>/<mm>/<dd>/<id>/{history.json,logs/debug.log,performance.json}`
   (threads are filed by start date; `rustcode threads path <id>` prints one's

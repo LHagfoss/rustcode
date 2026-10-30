@@ -326,7 +326,7 @@ public final class RemoteStore {
             // The host's own words say more than a generic notice can; keep them verbatim.
             let message = (error as? RemoteError)?.errorDescription ?? error.localizedDescription
             pendingCreation?.hostMessage = message
-            notice = "The Mac has not confirmed the session: \(message)"
+            notice = "The Mac has not confirmed the thread: \(message)"
         }
         return false
     }
@@ -379,7 +379,7 @@ public final class RemoteStore {
         } catch {
             guard host == hostGeneration, generation == savedSessionsGeneration else { return }
             // The live list still works; say why the saved ones are missing.
-            notice = "Couldn't load saved sessions: \((error as? RemoteError)?.errorDescription ?? error.localizedDescription)"
+            notice = "Couldn't load saved threads: \((error as? RemoteError)?.errorDescription ?? error.localizedDescription)"
         }
     }
 
@@ -414,7 +414,7 @@ public final class RemoteStore {
                 if let index = savedSessions.firstIndex(where: { $0.id == sessionID }) {
                     savedSessions[index].state = .open
                 }
-                notice = "That session is open in a terminal on \(self.host?.name ?? "your Mac"). Continue it there, or share it with /remote."
+                notice = "That thread is open in a terminal on \(self.host?.name ?? "your Mac"). Continue it there, or share it with /remote."
             } else if case .openElsewhere = rejection {
                 // Opening it here too would run it twice and lose one side's history.
                 if let index = savedSessions.firstIndex(where: { $0.id == sessionID }) {
@@ -427,7 +427,7 @@ public final class RemoteStore {
         } catch {
             guard host == hostGeneration else { return false }
             let message = (error as? RemoteError)?.errorDescription ?? error.localizedDescription
-            notice = "The Mac has not confirmed the session: \(message)"
+            notice = "The Mac has not confirmed the thread: \(message)"
         }
         return false
     }
@@ -512,7 +512,7 @@ public final class RemoteStore {
         while attached?.session.sessionID != sessionID {
             guard selectedSessionID == sessionID, connection == .connected, ContinuousClock.now < deadline,
                   (try? await Task.sleep(for: .milliseconds(100))) != nil else {
-                if selectedSessionID == sessionID { notice = "Couldn't open the session to retry its prompt." }
+                if selectedSessionID == sessionID { notice = "Couldn't open the thread to retry its prompt." }
                 return false
             }
         }
@@ -533,7 +533,7 @@ public final class RemoteStore {
         }
         guard attached?.session == snapshot.session else { return false }
         guard let prompt else {
-            notice = "This session has no prompt to retry."
+            notice = "This thread has no prompt to retry."
             return false
         }
         return await send(prompt)
@@ -957,7 +957,7 @@ public final class RemoteStore {
             attached = nil
         commandResult = nil
             self.selectedSessionID = nil
-            notice = "That session is no longer open on the Mac."
+            notice = "That thread is no longer open on the Mac."
             return
         }
         if let attached, attached.session != current.ref {
@@ -1002,7 +1002,7 @@ public final class RemoteStore {
         defer {
             if resyncs >= 5, !Task.isCancelled, selectedSessionID == sessionID {
                 fail(SessionLoadFailure(sessionID: sessionID, category: .stale,
-                    message: "The session kept changing while it loaded."))
+                    message: "The thread kept changing while it loaded."))
             }
         }
         while !Task.isCancelled, connection == .connected, selectedSessionID == sessionID, resyncs < 5,

@@ -15,7 +15,7 @@ use crate::controller::ApprovalChoice;
 
 use crate::remote_gateway::handshake::{
     ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse, PairingMethod,
-    Secret,
+    Secret, WIRE_NAMES_THREAD,
 };
 use crate::remote_gateway::pairing::QrPayload;
 
@@ -107,6 +107,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 secret: Secret::new("q0lYc1o3bXJ3T2d5d0l2Rk5kU2tqeTZqZ0Z2ZUo0V2s"),
                 device_name: "Lars's iPhone".to_owned(),
                 install_id: Some("6F9619FF-8B86-D011-B42D-00C04FC964FF".to_owned()),
+                wire_names: None,
             },
         ),
         (
@@ -117,6 +118,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 secret: Secret::new("4821-9034"),
                 device_name: "Lars's iPhone".to_owned(),
                 install_id: None,
+                wire_names: None,
             },
         ),
         (
@@ -125,6 +127,16 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 protocol_version: HANDSHAKE_PROTOCOL_VERSION,
                 device_id: "0011223344556677".to_owned(),
                 token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
+                wire_names: None,
+            },
+        ),
+        (
+            "authenticate_thread_names",
+            HandshakeRequest::Authenticate {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                device_id: "0011223344556677".to_owned(),
+                token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
+                wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
             },
         ),
     ]
@@ -144,6 +156,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
                 host_name: Some("studio".to_owned()),
                 expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
+                wire_names: None,
             },
         ),
         (
@@ -156,6 +169,20 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 device_name: "Lars's iPhone".to_owned(),
                 host_name: Some("studio".to_owned()),
                 expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
+                wire_names: None,
+            },
+        ),
+        (
+            "authenticated_thread_names".to_owned(),
+            HandshakeResponse::Authenticated {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                gateway_id: GATEWAY.to_owned(),
+                instance_id: INSTANCE.to_owned(),
+                device_id: "0011223344556677".to_owned(),
+                device_name: "Lars's iPhone".to_owned(),
+                host_name: Some("studio".to_owned()),
+                expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
+                wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
             },
         ),
     ];

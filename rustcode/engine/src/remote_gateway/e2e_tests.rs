@@ -972,6 +972,45 @@ async fn a_gateway_restart_keeps_the_registration_and_its_receipts() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_that_asks_for_thread_names_reads_and_writes_them() {
+    let host = Host::start().await;
+    let connector = host.connector();
+    let mut terminal = Terminal::share(&connector, "thread-one").await;
+    terminal.registered().await;
+    let (_, paired) = Phone::pair(&host, "phone").await;
+
+    let (mut phone, welcome) = Phone::connect(
+        host.addr(),
+        json!({
+            "type": "authenticate",
+            "protocol_version": 1,
+            "device_id": paired["device_id"],
+            "token": paired["token"],
+            "wire_names": "thread",
+        }),
+    )
+    .await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    assert_eq!(welcome["wire_names"], "thread", "{welcome}");
+
+    let listed = phone.request(None, json!({"type": "list_threads"})).await;
+    assert_eq!(listed["result"]["type"], "threads", "{listed}");
+    let threads = listed["result"]["threads"].as_array().expect("threads");
+    assert_eq!(threads.len(), 1, "{listed}");
+    assert_eq!(threads[0]["thread_id"], "thread-one", "{listed}");
+    assert!(threads[0].get("session_id").is_none(), "{listed}");
+
+    // A device that does not ask keeps the v1 names.
+    let (mut old, welcome) = Phone::authenticate(&host, &paired).await;
+    assert!(welcome.get("wire_names").is_none(), "{welcome}");
+    let listed = old.request(None, json!({"type": "list_sessions"})).await;
+    assert_eq!(
+        listed["result"]["sessions"][0]["session_id"], "thread-one",
+        "{listed}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_terminals_share_and_a_third_stays_private() {
     let host = Host::start().await;
     let connector = host.connector();

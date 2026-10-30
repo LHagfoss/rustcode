@@ -17,6 +17,8 @@ public enum WireHandshakeRequest: Codable, Equatable, Sendable {
         /// Kept by the app across pairings, so the host replaces this install's earlier
         /// device record instead of adding one. Left out when unknown.
         public var installID: String?
+        /// `"thread"` asks for the thread names on the wire (`WireNames`).
+        public var wireNames: String? = WireNames.thread
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
@@ -24,6 +26,7 @@ public enum WireHandshakeRequest: Codable, Equatable, Sendable {
             case secret
             case deviceName = "device_name"
             case installID = "install_id"
+            case wireNames = "wire_names"
         }
     }
 
@@ -31,11 +34,14 @@ public enum WireHandshakeRequest: Codable, Equatable, Sendable {
         public var protocolVersion: UInt32
         public var deviceID: String
         public var token: String
+        /// `"thread"` asks for the thread names on the wire (`WireNames`).
+        public var wireNames: String? = WireNames.thread
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
             case deviceID = "device_id"
             case token
+            case wireNames = "wire_names"
         }
     }
 
@@ -81,6 +87,8 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
         public var hostName: String?
         /// When the pairing stops being accepted, RFC 3339. Absent from older hosts.
         public var expiresAt: String?
+        /// `"thread"` when the host confirmed the thread names (`WireNames`).
+        public var wireNames: String?
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
@@ -91,6 +99,7 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
             case token
             case hostName = "host_name"
             case expiresAt = "expires_at"
+            case wireNames = "wire_names"
         }
     }
 
@@ -103,6 +112,8 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
         public var hostName: String?
         /// When the pairing stops being accepted, RFC 3339. Absent from older hosts.
         public var expiresAt: String?
+        /// `"thread"` when the host confirmed the thread names (`WireNames`).
+        public var wireNames: String?
 
         enum CodingKeys: String, CodingKey {
             case protocolVersion = "protocol_version"
@@ -112,6 +123,7 @@ public enum WireGatewayFrame: Codable, Equatable, Sendable {
             case deviceName = "device_name"
             case hostName = "host_name"
             case expiresAt = "expires_at"
+            case wireNames = "wire_names"
         }
     }
 

@@ -6,7 +6,7 @@ import Testing
     @Test func hostMetadataIsOptionalAndTitlesHaveStableFallback() throws {
         let raw = #"{"session_id":"abcdef123456","registration_epoch":1,"title":"  \n","model":"model","activity":"idle","attention":{"approval":false,"question":false},"health":"live"}"#
         let old = WireCodec.summary(try JSONDecoder().decode(WireSessionInfo.self, from: Data(raw.utf8)))
-        #expect(old.displayTitle == "Session abcdef12")
+        #expect(old.displayTitle == "Thread abcdef12")
         #expect(old.turnCount == nil)
         let current = raw.dropLast() + #", "turn_count":42}"#
         #expect(WireCodec.summary(try JSONDecoder().decode(WireSessionInfo.self, from: Data(current.utf8))).turnCount == 42)

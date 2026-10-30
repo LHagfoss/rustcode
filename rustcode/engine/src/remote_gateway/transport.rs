@@ -6,8 +6,9 @@
 //! receives nothing but a handshake response or an error.
 
 use super::gateway::{Admitted, LiveConnection, MAX_FRAME_BYTES, Shared, UnauthenticatedSlot};
-use super::handshake::{ErrorCode, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES};
+use super::handshake::{ErrorCode, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES};
 use super::router::{FrameQueue, FrameSink};
+use super::wire_names;
 use futures_util::{SinkExt, StreamExt, stream::SplitSink, stream::SplitStream};
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,6 +54,7 @@ pub(super) async fn serve_connection(
         _ = shared.shutdown.cancelled() => return,
         first = tokio::time::timeout_at(deadline, first_frame(&mut socket)) => first,
     };
+    let mut thread_names = false;
     let admission = match first {
         Err(_) => Err(HandshakeResponse::error(
             ErrorCode::HandshakeTimeout,
@@ -60,11 +62,15 @@ pub(super) async fn serve_connection(
         )),
         Ok(Err(None)) => return,
         Ok(Err(Some(rejection))) => Err(rejection),
-        Ok(Ok(text)) => shared.admit_device(&text),
+        Ok(Ok(text)) => {
+            thread_names =
+                HandshakeRequest::parse(&text).is_ok_and(|request| request.wants_thread_names());
+            shared.admit_device(&text)
+        }
     };
     let Admitted {
         connection,
-        welcome,
+        mut welcome,
         sink,
         queue,
     } = match admission {
@@ -77,6 +83,9 @@ pub(super) async fn serve_connection(
         }
     };
     drop(slot);
+    if thread_names {
+        welcome.confirm_thread_names();
+    }
 
     let delivered = tokio::time::timeout(
         shared.limits.write_timeout,
@@ -89,7 +98,7 @@ pub(super) async fn serve_connection(
         }
         return;
     }
-    session(&shared, socket, connection, sink, queue).await;
+    session(&shared, socket, connection, sink, queue, thread_names).await;
 }
 
 /// Refuse the upgrade when the request carries an `Origin` header. Browsers
@@ -152,6 +161,7 @@ async fn session(
     connection: LiveConnection,
     sink: FrameSink,
     mut queue: FrameQueue,
+    thread_names: bool,
 ) {
     let (mut writer, mut reader) = socket.split();
     shared.router.connected(&connection.context, &sink);
@@ -160,7 +170,7 @@ async fn session(
     let ended = tokio::select! {
         biased;
         _ = connection.control.cancel.cancelled() => Some(connection.control.reason()),
-        ended = pump(shared, &connection, &sink, &mut writer, &mut reader, &mut queue) => ended,
+        ended = pump(shared, &connection, &sink, &mut writer, &mut reader, &mut queue, thread_names) => ended,
     };
     shared.router.disconnected(&connection.context);
     // Leave the live registry before the goodbye so status never lists a
@@ -185,6 +195,7 @@ async fn pump(
     writer: &mut SplitSink<Socket, Message>,
     reader: &mut SplitStream<Socket>,
     queue: &mut FrameQueue,
+    thread_names: bool,
 ) -> Option<ErrorCode> {
     let limits = shared.limits;
     let mut ping =
@@ -194,6 +205,7 @@ async fn pump(
         tokio::select! {
             outbound = queue.recv() => {
                 let frame = outbound?;
+                let frame = if thread_names { wire_names::to_thread_names(&frame) } else { frame };
                 write(writer, Message::text(frame), limits.write_timeout).await?;
             }
             _ = ping.tick() => {
@@ -205,7 +217,12 @@ async fn pump(
             inbound = reader.next() => match inbound {
                 Some(Ok(Message::Text(text))) => {
                     last_heard = Instant::now();
-                    shared.router.frame(&connection.context, text.as_str(), sink);
+                    if thread_names {
+                        let text = wire_names::to_session_names(text.as_str());
+                        shared.router.frame(&connection.context, &text, sink);
+                    } else {
+                        shared.router.frame(&connection.context, text.as_str(), sink);
+                    }
                 }
                 Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {
                     last_heard = Instant::now();
