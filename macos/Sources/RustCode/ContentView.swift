@@ -16,21 +16,27 @@ struct ContentView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if model.showsSidebar {
-                SessionSidebar(model: model, updater: model.updater)
-                    .frame(width: sidebarClampedWidth)
-                    // The line sits on the sidebar's edge, its grab area
-                    // either side of it; laid out beside the sidebar, the
-                    // handle's own width showed as a strip of sidebar past
-                    // the line (#2433). Above the chat, so the half over it
-                    // still takes the drag.
-                    .overlay(alignment: .trailing) {
+            // Kept alive while hidden and slid out of a closing frame:
+            // built afresh on each show, its rows cost the slide's first
+            // frames.
+            SessionSidebar(model: model, updater: model.updater)
+                .frame(width: sidebarClampedWidth)
+                .frame(width: model.showsSidebar ? sidebarClampedWidth : 0, alignment: .trailing)
+                .clipped()
+                .allowsHitTesting(model.showsSidebar)
+                .accessibilityHidden(!model.showsSidebar)
+                // The line sits on the sidebar's edge, its grab area
+                // either side of it; laid out beside the sidebar, the
+                // handle's own width showed as a strip of sidebar past
+                // the line (#2433). Above the chat, so the half over it
+                // still takes the drag.
+                .overlay(alignment: .trailing) {
+                    if model.showsSidebar {
                         SidebarResizeHandle(width: $sidebarWidth)
                             .offset(x: SidebarResizeHandle.width / 2)
                     }
-                    .zIndex(1)
-                    .transition(.move(edge: .leading))
-            }
+                }
+                .zIndex(1)
             ChatView(model: model, chat: model.chat, find: model.find)
                 .background(Color.chatBackground)
                 // A subagent opens in the chat's place, the chat kept alive
@@ -265,6 +271,7 @@ struct ClusterButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .help(help)
         .accessibilityLabel(help)
     }
@@ -1693,13 +1700,16 @@ private struct ChatView: View {
         }
     }
 
+    /// The title bar's side margin, near its top and bottom ones.
+    private static let headerInset: CGFloat = 10
+
     /// The chat's title bar: the title and project, and the sidebar buttons
     /// beside the traffic lights while the sidebar is hidden.
     private var header: some View {
         HStack(spacing: 10) {
             if !model.showsSidebar {
                 SidebarBarButtons(model: model)
-                    .padding(.leading, SidebarMetrics.barLeading - 18)
+                    .padding(.leading, SidebarMetrics.barLeading - Self.headerInset)
             }
             // `~/code / Title`: the chat's folder, a divider, its title.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -1733,20 +1743,19 @@ private struct ChatView: View {
                     }
                 }
             }
-            if model.canReadPullRequests, !model.showsPullRequests { PullRequestsButton(model: model) }
-            TerminalToolbarButton(terminal: model.terminal, keybindings: model.keybindings)
-            if !model.showsChanges {
-                ToolbarCluster {
+            // The side panels' buttons, in one cluster like the sidebar's.
+            ToolbarCluster {
+                if model.canReadPullRequests, !model.showsPullRequests { PullRequestsButton(model: model) }
+                TerminalToolbarButton(terminal: model.terminal, keybindings: model.keybindings)
+                if !model.showsChanges {
                     ClusterButton(systemImage: "plus.forwardslash.minus", help: "Show the project's changes") { model.toggleChanges() }
                 }
-            }
-            if !model.showsPreview {
-                ToolbarCluster {
+                if !model.showsPreview {
                     ClusterButton(systemImage: "globe", help: model.keybindings.help("Show localhost preview", .togglePreview)) { model.togglePreview() }
                 }
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, Self.headerInset)
         .frame(height: SessionSidebar.barHeight)
         .padding(.top, SessionSidebar.barTopInset)
         .padding(.bottom, 8)
@@ -2499,6 +2508,9 @@ private struct ChatProjectMenu: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .contentShape(.rect(cornerRadius: 8))
             case .footer:
                 HStack(spacing: 5) {
                     Image(systemName: "folder")
@@ -2512,7 +2524,7 @@ private struct ChatProjectMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .modifier(FooterHover(isOn: style == .footer))
+        .hoverHighlight(cornerRadius: style == .footer ? FooterHover.radius : 8)
         .help(ProjectFolder.help(chat: model.chatProject, default: model.workspace))
         .accessibilityLabel("Project folder \(name)")
     }
@@ -2559,13 +2571,9 @@ private struct FooterButton: View {
 }
 
 /// The footer's hover fill, on its folder menu as on its buttons.
-private struct FooterHover: ViewModifier {
-    let isOn: Bool
+/// The footer controls' rounding.
+private enum FooterHover {
     static let radius: CGFloat = 12
-
-    func body(content: Content) -> some View {
-        if isOn { content.hoverHighlight(cornerRadius: Self.radius, padding: 0) } else { content }
-    }
 }
 
 extension View {

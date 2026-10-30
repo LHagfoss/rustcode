@@ -48,7 +48,7 @@ enum NewThreadBanner {
     /// Decoded pictures and drawn text, kept so a new thread shows its
     /// banner at once instead of loading it each time it opens.
     @MainActor static var images: [String: CGImage] = [:]
-    @MainActor static var drawings: [String: AttributedString] = [:]
+    @MainActor static var drawings: [String: NewThreadBannerView.Drawing] = [:]
 
     /// The picture `name`, read at most 2400 pixels wide: enough for any
     /// window, and a camera's original is many times that.
@@ -90,14 +90,21 @@ struct NewThreadBannerView: View {
     }
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
     @State private var width: CGFloat = 0
     @State private var drawnHeight: CGFloat = 0
     @State private var image: CGImage?
-    @State private var art: AttributedString?
-    /// The size `art` draws at: while a resize waits for the next drawing,
-    /// the text is scaled to fill the new room, as a picture is, so the
-    /// banner follows the window live instead of leaving a gap.
-    @State private var artSize: CGSize = .zero
+    /// The text drawn once into a bitmap: as styled text, its thousands of
+    /// colored runs were laid out and drawn again on every frame the chat
+    /// changed size, which stalled the sidebar's slide.
+    @State private var art: Drawing?
+
+    /// The banner's text as a picture, and the size the text takes.
+    struct Drawing: @unchecked Sendable {
+        let image: CGImage
+        let size: CGSize
+        let scale: CGFloat
+    }
 
     /// The text's size: small enough that a band reads as a picture.
     static let fontSize: CGFloat = 7
@@ -171,10 +178,11 @@ struct NewThreadBannerView: View {
             // Settle a resize before drawing again.
             if art != nil { try? await Task.sleep(for: .milliseconds(120)) }
             let columns = columns, inverted = colorScheme != .dark, aspect = aspect, fill = height != nil
-            let rendered = await Task.detached(priority: .userInitiated) {
-                Self.attributed(AsciiBanner.render(image, columns: columns, inverted: inverted, aspect: aspect, fill: fill))
+            let scale = displayScale
+            let drawn = await Task.detached(priority: .userInitiated) {
+                Self.draw(AsciiBanner.render(image, columns: columns, inverted: inverted, aspect: aspect, fill: fill), scale: scale)
             }.value
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, let rendered = drawn else { return }
             NewThreadBanner.drawings[key.cacheKey] = rendered
             art = rendered
         }
@@ -194,11 +202,11 @@ struct NewThreadBannerView: View {
                 .frame(width: width, height: tall)
                 .clipped()
         } else if let art {
-            Text(art)
-                .font(Font(Self.font))
-                .lineSpacing(0)
-                .fixedSize()
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { artSize = $0 }
+            // While a resize waits for the next drawing, this one is scaled
+            // to fill the new room, so the banner follows the window live.
+            Image(decorative: art.image, scale: art.scale)
+                .resizable()
+                .frame(width: art.size.width, height: art.size.height)
                 .scaleEffect(fillScale, anchor: .top)
         }
     }
@@ -207,7 +215,7 @@ struct NewThreadBannerView: View {
     /// when it is relatively taller: the room's width, and with a `height`
     /// its height too.
     private var fillScale: CGFloat {
-        guard artSize.width > 0, width > 0 else { return 1 }
+        guard let artSize = art?.size, artSize.width > 0, width > 0 else { return 1 }
         var scale = width / artSize.width
         if let height, artSize.height > 0 { scale = max(scale, height / artSize.height) }
         return scale
@@ -237,19 +245,28 @@ struct NewThreadBannerView: View {
         var cacheKey: String { "\(name) \(columns)x\(rows) \(dark)" }
     }
 
-    /// The banner's text with each run of like-colored cells in its color.
-    nonisolated static func attributed(_ banner: AsciiBanner) -> AttributedString {
-        var out = AttributedString()
+    /// `banner` drawn as its text would be, at `scale` pixels a point: each
+    /// row a line in the banner's font, each run of like-colored cells in
+    /// its color.
+    nonisolated static func draw(_ banner: AsciiBanner, scale: CGFloat) -> Drawing? {
+        let size = CGSize(width: ceil(CGFloat(banner.columns) * charWidth), height: ceil(CGFloat(banner.rows.count) * lineHeight))
+        guard size.width > 0, size.height > 0,
+              let context = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        let ctFont = font as CTFont
+        let baseline = lineHeight - CTFontGetDescent(ctFont) - (lineHeight - CTFontGetAscent(ctFont) - CTFontGetDescent(ctFont)) / 2
         for (index, row) in banner.rows.enumerated() {
+            let line = NSMutableAttributedString()
             var run = ""
             var runColor: (Int, Int, Int)?
             func flush() {
                 guard !run.isEmpty else { return }
-                var part = AttributedString(run)
-                if let color = runColor {
-                    part.foregroundColor = Color(red: Double(color.0) / 15, green: Double(color.1) / 15, blue: Double(color.2) / 15)
-                }
-                out += part
+                let color = runColor.map { CGColor(srgbRed: CGFloat($0.0) / 15, green: CGFloat($0.1) / 15, blue: CGFloat($0.2) / 15, alpha: 1) }
+                    ?? CGColor(gray: 0.5, alpha: 1)
+                line.append(NSAttributedString(string: run, attributes: [.font: ctFont, kCTForegroundColorAttributeName as NSAttributedString.Key: color]))
                 run = ""
             }
             for cell in row {
@@ -262,8 +279,10 @@ struct NewThreadBannerView: View {
                 run.append(cell.character)
             }
             flush()
-            if index < banner.rows.count - 1 { out += AttributedString("\n") }
+            // Core Graphics counts up from the foot.
+            context.textPosition = CGPoint(x: 0, y: size.height - CGFloat(index) * lineHeight - baseline)
+            CTLineDraw(CTLineCreateWithAttributedString(line), context)
         }
-        return out
+        return context.makeImage().map { Drawing(image: $0, size: size, scale: scale) }
     }
 }

@@ -241,7 +241,7 @@ struct SettingsView: View {
                     case .skills: SkillsSettings(model: model, store: capabilities)
                     case .mcp: MCPSettings(model: model, store: capabilities)
                     case .engine: EngineSettings(model: model)
-                    case .about: AboutSettings(updater: model.updater)
+                    case .about: AboutSettings(model: model, updater: model.updater)
                     }
                 }
                 .frame(width: layout.column, alignment: .leading)
@@ -1177,29 +1177,164 @@ private struct EngineSettings: View {
     }
 }
 
+/// About: who the app is, what this version brought, and what it runs on.
 private struct AboutSettings: View {
+    @ObservedObject var model: DesktopModel
     @ObservedObject var updater: Updater
-    private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
-    }
+    /// This version's release notes, read once from GitHub and then cached.
+    @State private var notes: ReleaseNotes?
+
+    private var version: String { updater.currentVersion?.description ?? "development" }
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 104, height: 104)
-            Text("RustCode").font(.title.weight(.semibold))
-            Text("Version \(version)").foregroundStyle(.secondary)
-            Link(destination: URL(string: "https://github.com/LHagfoss/rustcode")!) {
-                Label("View on GitHub", systemImage: "arrow.up.right")
-            }
-            .buttonStyle(PillButtonStyle())
-            .padding(.top, 6)
-            UpdateControl(updater: updater)
-                .padding(.top, 14)
+        VStack(alignment: .leading, spacing: 18) {
+            hero
+            stats
+            changelog
+            system
+            links
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 30)
+        .padding(.top, 6)
+        .task {
+            guard let current = updater.currentVersion else { return }
+            notes = await model.whatsNew.notes(for: ReleaseNotes.tag(for: current))
+        }
+    }
+
+    /// The release art behind the icon, name and version, with the update control.
+    private var hero: some View {
+        ReleaseArt(version: nil, showsMark: false)
+            .frame(height: 150)
+            .overlay(alignment: .leading) {
+                HStack(spacing: 16) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 84, height: 84)
+                        .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("RustCode").font(.system(size: 26, weight: .semibold, design: .rounded))
+                        Text(updater.currentVersion == nil ? "Development build" : "Version \(version)").font(.callout).opacity(0.8)
+                    }
+                    Spacer(minLength: 8)
+                    UpdateControl(updater: updater)
+                        .colorScheme(.dark)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 24)
+            }
+            .clipShape(.rect(cornerRadius: 16))
+    }
+
+    /// What the sidebar holds, at a glance.
+    private var stats: some View {
+        let listed = model.sessions
+        let projects = Set(listed.map(\.cwd).filter { !$0.isEmpty }).count
+        return HStack(spacing: 10) {
+            stat("\(listed.count)\(model.hasMoreSessions ? "+" : "")", "Threads", "bubble.left.and.bubble.right")
+            stat("\(projects)", projects == 1 ? "Project" : "Projects", "folder")
+            stat("\(model.pinnedSessions.count)", "Pinned", "pin")
+            stat("\(model.archivedSessions.count)", "Archived", "archivebox")
+        }
+    }
+
+    private func stat(_ value: String, _ label: String, _ symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: symbol).foregroundStyle(Color.brand)
+            Text(value).font(.system(size: 22, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.fill.quinary, in: .rect(cornerRadius: 12))
+    }
+
+    /// This version's highlights, and the way to its full changelog.
+    private var changelog: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("New in \(version)", systemImage: "sparkles").font(.headline)
+                Spacer()
+                Button("Full Changelog") { Task { await model.whatsNew.reopen(current: updater.currentVersion) } }
+                    .buttonStyle(PillButtonStyle())
+                    .disabled(updater.currentVersion == nil)
+            }
+            if updater.currentVersion == nil {
+                Text("This is a development build, so it has no release notes.").foregroundStyle(.secondary)
+            } else if let notes {
+                let highlights = notes.highlights(limit: 6)
+                if highlights.isEmpty {
+                    Text("The release notes could not be loaded. They are on the release's page on GitHub.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(highlights, id: \.self) { line in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Circle().fill(Color.brand).frame(width: 5, height: 5).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 3 }
+                                Text(line).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.fill.quinary, in: .rect(cornerRadius: 12))
+    }
+
+    /// What the app runs on, for a bug report.
+    private var system: some View {
+        let process = ProcessInfo.processInfo
+        let os = process.operatingSystemVersion
+        #if arch(arm64)
+        let architecture = "Apple silicon"
+        #else
+        let architecture = "Intel"
+        #endif
+        let rows: [(String, String)] = [
+            ("App", "\(version) (\(Bundle.main.bundleIdentifier ?? "unbundled"))"),
+            ("macOS", "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"),
+            ("Mac", "\(architecture), \(process.activeProcessorCount) cores, \(process.physicalMemory / 1_073_741_824) GB"),
+            ("Project", model.workspace.path.abbreviatingHome),
+        ]
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("System", systemImage: "desktopcomputer").font(.headline)
+                Spacer()
+                Button("Copy") {
+                    Clipboard.copy(rows.map { "\($0.0): \($0.1)" }.joined(separator: "\n"))
+                }
+                .buttonStyle(PillButtonStyle())
+                .help("Copy these details, for a bug report")
+            }
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                ForEach(rows, id: \.0) { row in
+                    GridRow {
+                        Text(row.0).foregroundStyle(.secondary)
+                        Text(row.1).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+            }
+            .font(.callout)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.fill.quinary, in: .rect(cornerRadius: 12))
+    }
+
+    private var links: some View {
+        HStack(spacing: 8) {
+            link("GitHub", "chevron.left.forwardslash.chevron.right", "https://github.com/\(ReleaseNotes.repository)")
+            link("Releases", "shippingbox", "https://github.com/\(ReleaseNotes.repository)/releases")
+            link("Report an Issue", "exclamationmark.bubble", "https://github.com/\(ReleaseNotes.repository)/issues/new")
+        }
+    }
+
+    private func link(_ title: String, _ symbol: String, _ url: String) -> some View {
+        Link(destination: URL(string: url)!) { Label(title, systemImage: symbol) }
+            .buttonStyle(PillButtonStyle())
     }
 }
 

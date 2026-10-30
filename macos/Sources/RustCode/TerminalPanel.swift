@@ -295,10 +295,8 @@ struct TerminalToolbarButton: View {
     @ObservedObject var keybindings: KeybindingStore
 
     var body: some View {
-        ToolbarCluster {
-            ClusterButton(systemImage: "terminal",
-                          help: keybindings.help(terminal.isShown ? "Hide terminal" : "Show terminal", .toggleTerminal),
-                          isOn: terminal.isShown) { terminal.toggle() }
-        }
+        ClusterButton(systemImage: "terminal",
+                      help: keybindings.help(terminal.isShown ? "Hide terminal" : "Show terminal", .toggleTerminal),
+                      isOn: terminal.isShown) { terminal.toggle() }
     }
 }
