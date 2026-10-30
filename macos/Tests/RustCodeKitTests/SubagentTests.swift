@@ -215,4 +215,34 @@ final class SubagentTests: XCTestCase {
         // Before the agents list has it, the row names the child by its id.
         XCTAssertEqual(AgentSpawn.rows([transcript.items[0].id], in: transcript.items, agents: [])[0].name, "agent-1")
     }
+
+    /// #2653: a read with no answer keeps a chat's agent rows, marked
+    /// stale; an answer clears that, and only repeated misses drop them.
+    func testBackgroundAgentsSurviveTransientMisses() {
+        let working = SubagentInfo.list(from: ["agents": [["id": 1, "name": "a", "status": "running"]]])
+        var background = BackgroundAgents()
+        background.leave("chat", agents: working)
+
+        XCTAssertFalse(background.missed("chat"))
+        XCTAssertTrue(background.isStale("chat"))
+        XCTAssertEqual(background.agents(of: "chat").map(\.id), [1])
+        XCTAssertEqual(background.working, ["chat"], "a stale chat is still read")
+
+        background.update("chat", agents: working)
+        XCTAssertFalse(background.isStale("chat"))
+
+        for _ in 1..<BackgroundAgents.maxMisses { XCTAssertFalse(background.missed("chat")) }
+        XCTAssertTrue(background.missed("chat"))
+        XCTAssertEqual(background.agents(of: "chat"), [])
+        XCTAssertFalse(background.isStale("chat"))
+        XCTAssertFalse(background.missed("chat"), "nothing left to drop")
+    }
+
+    func testTakingAChatBackClearsItsMisses() {
+        var background = BackgroundAgents()
+        background.leave("chat", agents: SubagentInfo.list(from: ["agents": [["id": 1, "name": "a", "status": "running"]]]))
+        background.missed("chat")
+        XCTAssertEqual(background.take("chat").map(\.id), [1])
+        XCTAssertFalse(background.isStale("chat"))
+    }
 }

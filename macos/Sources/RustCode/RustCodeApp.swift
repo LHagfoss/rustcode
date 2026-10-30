@@ -770,15 +770,25 @@ final class DesktopModel: ObservableObject {
         #if DEBUG
         if debugHoldsAgents { return }
         #endif
-        let result = try? await connection.request(
-            ACPMethod.agents, params: ACPRequests.agents(sessionId: session), timeout: .seconds(10))
-        // Opened meanwhile: the chat's own poll has its agents now.
-        guard selectedSession != session else { return }
-        guard let result else {
-            // A chat that cannot answer, as one deleted, stops being read.
-            backgroundAgents.forget(session)
+        let result: JSONValue
+        do {
+            result = try await connection.request(
+                ACPMethod.agents, params: ACPRequests.agents(sessionId: session), timeout: .seconds(10))
+        } catch {
+            // Opened meanwhile: the chat's own poll has its agents now.
+            guard selectedSession != session else { return }
+            // The engine answered that it cannot list them, as for a chat
+            // deleted: they are gone. No answer at all (a timeout, a dropped
+            // connection) keeps the last rows, marked stale (#2653).
+            if error is RPCError {
+                backgroundAgents.forget(session)
+            } else {
+                backgroundAgents.missed(session)
+            }
             return
         }
+        // Opened meanwhile: the chat's own poll has its agents now.
+        guard selectedSession != session else { return }
         let agents = SubagentInfo.list(from: result)
         var next = backgroundAgents
         next.update(session, agents: agents)
