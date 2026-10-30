@@ -44,7 +44,18 @@ on every card.
 
 A client that runs blocks advertises `clientCapabilities._meta.rustcode.smartUi = 1`
 at `initialize` while the setting is on. Sessions of that engine then get a
-short `# Smart UI` section (under 180 tokens) in the root system prompt.
+short `# Smart UI` section in the root system prompt: when to use Smart UI,
+the fence name, and to load the `smart-ui` skill before writing one (83
+estimated tokens, down from 139 when the format lived there; #2625).
+
+The `smart-ui` skill is built into the engine
+(`rustcode/engine/src/skills_builtin/smart-ui.md`, about 890 tokens) and is
+listed with the other skills as `<built-in>/smart-ui`. It holds the format,
+limits and design guidance: pick Markdown or `rustcode-viz` first, one compact
+component per reply (the app runs one view at a time), sized for a narrow
+column, system colors and fonts, accessible controls. A skill named
+`smart-ui` in any skill root overrides it, and `disabled_skills` can turn it
+off.
 
 While the setting is off the app sends `smartUi = 0`. The root prompt then
 carries a one-line note instead (under 80 tokens): Smart UI exists but is off,
