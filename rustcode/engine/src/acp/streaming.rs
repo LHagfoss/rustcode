@@ -121,6 +121,15 @@ impl AcpEventStream {
     }
 
     fn process_text_delta(&mut self, text: String) -> Vec<SessionUpdate> {
+        // A turn that ends without an answer leaves its stop marker in the
+        // live reply buffer too. It is bookkeeping, not prose: `TurnFinished`
+        // carries it and turns it into a notice, so it never shows raw.
+        if self.answer_prose.is_empty()
+            && self.pending.is_empty()
+            && crate::network::lifecycle::stop_marker_notice(&text).is_some()
+        {
+            return Vec::new();
+        }
         const OPEN_TAG: &str = "<think>";
         const CLOSE_TAG: &str = "</think>";
         const OPEN_PREFIXES: &[&str] = &["<think", "<thin", "<thi", "<th", "<t", "<"];
