@@ -567,13 +567,16 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertEqual(model.selectedSession, "pair")
         XCTAssertTrue(chatSelected())
         XCTAssertFalse(model.replacesChat)
-        XCTAssertEqual(model.sidebarChildren(of: "pair").map(\.id), [1, 2], "ended agents stay to open")
-        XCTAssertTrue(model.sidebarChildren(of: "pair").allSatisfy { !$0.isActive })
+        // #2631: ended agents leave the sidebar; their results stay in the
+        // chat's agents list.
+        XCTAssertEqual(model.sidebarChildren(of: "pair").map(\.id), [], "ended agents do not look like work")
+        XCTAssertEqual(model.subagents.map(\.id), [1, 2])
 
-        // Left and opened again: still there, and opened to read, one stays open.
+        // Left and opened again: still listed, and opened to read, one stays open.
         await model.selectFromSidebar(quick)
         await model.selectFromSidebar(pair)
-        try await until { model.sidebarChildren(of: "pair").map(\.id) == [1, 2] }
+        try await until { model.subagents.map(\.id) == [1, 2] }
+        XCTAssertEqual(model.sidebarChildren(of: "pair").map(\.id), [])
         model.openAgent(try XCTUnwrap(model.subagents.first { $0.id == 1 }))
         try await Task.sleep(for: .milliseconds(1200))
         XCTAssertEqual(model.viewedAgent?.id, 1)
