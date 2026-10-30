@@ -997,17 +997,7 @@ pub fn read_session(
     request: &RemoteRequest,
     limits: &super::projection::ProjectionLimits,
 ) -> Result<RemoteResult, RemoteError> {
-    if request.protocol_version != REMOTE_PROTOCOL_VERSION {
-        return Err(RemoteError::incompatible_version(u64::from(
-            request.protocol_version,
-        )));
-    }
-    if request.session_id.as_deref() != Some(registration.session_id.as_str())
-        || request.registration_epoch != Some(registration.registration_epoch)
-        || state.active_session_id != registration.session_id
-    {
-        return Err(stale_session());
-    }
+    check_read(state, registration, request)?;
     match &request.operation {
         RemoteOperation::GetHistory { cursor, limit } => {
             super::projection::project_history_page(state, limits, cursor.as_deref(), *limit)
@@ -1028,6 +1018,39 @@ pub fn read_session(
             "the session owner does not answer this operation",
         )),
     }
+}
+
+/// A read is for this registration's session, in this protocol version.
+fn check_read(
+    state: &AppState,
+    registration: &SessionRegistration,
+    request: &RemoteRequest,
+) -> Result<(), RemoteError> {
+    if request.protocol_version != REMOTE_PROTOCOL_VERSION {
+        return Err(RemoteError::incompatible_version(u64::from(
+            request.protocol_version,
+        )));
+    }
+    if request.session_id.as_deref() != Some(registration.session_id.as_str())
+        || request.registration_epoch != Some(registration.registration_epoch)
+        || state.active_session_id != registration.session_id
+    {
+        return Err(stale_session());
+    }
+    Ok(())
+}
+
+/// The workspace `get_changes` reads, checked like any session read. Git
+/// runs after the state lock is released.
+pub fn changes_workspace(
+    state: &AppState,
+    registration: &SessionRegistration,
+    request: &RemoteRequest,
+) -> Result<std::path::PathBuf, RemoteError> {
+    check_read(state, registration, request)?;
+    state
+        .effective_workspace_root()
+        .ok_or_else(|| error(RemoteErrorCode::NotFound, "the session has no workspace"))
 }
 
 fn stale_session() -> RemoteError {

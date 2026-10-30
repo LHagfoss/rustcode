@@ -257,6 +257,7 @@ comes from authentication and is never part of a frame.
 | `get_request_status` | terminal that holds the receipt | `request_status` | |
 | `list_saved_sessions` | gateway (`saved_sessions`) | `saved_sessions` | `invalid_request` |
 | `resume_session` | gateway (`saved_sessions`) | `session_resumed` | `not_found`, `busy`, `open_elsewhere`, `invalid_request`, `internal` |
+| `get_changes` | terminal (`session_changes`) | `changes` | `not_found` (no workspace), `stale_session` |
 
 Any request can also be rejected with:
 
@@ -299,8 +300,21 @@ session on screen, and host-wide configuration remain local-only.
 
 The `sessions` result also carries `capabilities`, the optional host-wide
 operations the gateway implements. It is absent from gateways that implement
-none; currently the only flag is `saved_sessions`. A client offers a host-wide
-feature only when its flag is listed.
+none; the flags are `saved_sessions` and `session_changes`. A client offers a
+feature only when its flag is listed; an older owner answers `get_changes`
+with `unsupported_operation`.
+
+`get_changes` reads the attached session's uncommitted changes in its
+workspace for review. It is read-only: the owner runs `git status` and
+`git diff` with optional locks off, never a Git command that writes. The
+`changes` result carries `captured_at` (when the changes were read, for the
+client to show how fresh they are), the workspace, `head` and `branch`, and up
+to 100 files. Each file has its status, added and removed lines, and its
+unified diff, at most 32 KiB per file and 160 KiB in all. A file past either
+bound has `diff_truncated` set, and changed files past the 100 listed are
+counted in `omitted_files`. A workspace that is not a Git repository, or a
+read that takes over 10 seconds, answers `available: false` with a `reason`.
+Reading again is always safe.
 
 A session leaves the list the moment its terminal stops sharing, switches
 session or exits. `health` is `unresponsive` when the terminal has been silent

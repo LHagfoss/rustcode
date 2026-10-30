@@ -305,7 +305,7 @@ import Testing
             Issue.record("expected session lists")
             return
         }
-        #expect(capabilities == [HostCapability.savedSessions])
+        #expect(capabilities == [HostCapability.savedSessions, HostCapability.sessionChanges])
         let first = try #require(sessions.first)
         #expect(first.ref == session)
         #expect(first.title == "Fix the failing parser tests")

@@ -38,6 +38,8 @@ public enum RemoteCommand: Sendable, Equatable {
     case listSavedSessions(cursor: String?, limit: Int?, query: String?)
     /// Reopens a saved session. Answered by `.sessionResumed` once it is shared.
     case resumeSession(sessionID: String)
+    /// The session's uncommitted changes, read-only. Needs `HostCapability.sessionChanges`.
+    case getChanges(SessionRef)
 
     public var isHandshake: Bool {
         switch self {
@@ -132,6 +134,7 @@ public enum RemoteReply: Sendable, Equatable {
     case attached(SessionAttachment.Start, origin: ReplayOrigin)
     case detached
     case history(HistoryPage)
+    case changes(SessionChanges)
     case content(ContentChunk)
     /// A mutation's receipt, or the answer to `getRequestStatus`. A `received` receipt may be
     /// followed by a final one for the same request.

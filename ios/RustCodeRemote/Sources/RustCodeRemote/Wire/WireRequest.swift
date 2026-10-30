@@ -56,6 +56,8 @@ public enum WireOperation: Codable, Equatable, Sendable {
     case requestShare(RequestShare)
     case listSavedSessions(ListSavedSessions)
     case resumeSession(ResumeSession)
+    /// The attached session's uncommitted changes, read-only.
+    case getChanges
     case unknown(type: String, JSONValue)
 
     /// Every `operation.type` this build knows.
@@ -63,7 +65,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
         "upload_image", "list_directories", "create_session", "list_sessions", "subscribe_sessions", "attach_session", "detach_session", "get_history",
         "get_content", "submit_prompt", "steer", "queue", "cancel_turn", "answer_question",
         "resolve_approval", "get_request_status", "set_session_settings", "execute_command", "cancel_question",
-        "request_share", "list_saved_sessions", "resume_session",
+        "request_share", "list_saved_sessions", "resume_session", "get_changes",
     ]
 
     public struct DirectoryPath: Codable, Equatable, Sendable { public var path: String? }
@@ -189,6 +191,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case .requestShare: "request_share"
         case .listSavedSessions: "list_saved_sessions"
         case .resumeSession: "resume_session"
+        case .getChanges: "get_changes"
         case .unknown(let type, _): type
         }
     }
@@ -218,6 +221,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
         case "request_share": self = .requestShare(try RequestShare(from: decoder))
         case "list_saved_sessions": self = .listSavedSessions(try ListSavedSessions(from: decoder))
         case "resume_session": self = .resumeSession(try ResumeSession(from: decoder))
+        case "get_changes": self = .getChanges
         default: self = .unknown(type: type, try JSONValue(from: decoder))
         }
     }
@@ -225,7 +229,7 @@ public enum WireOperation: Codable, Equatable, Sendable {
     public func encode(to encoder: any Encoder) throws {
         let payload: (any Encodable)? = switch self {
         case .uploadImage(let payload): payload
-        case .listSessions, .subscribeSessions, .detachSession: nil
+        case .listSessions, .subscribeSessions, .detachSession, .getChanges: nil
         case .listDirectories(let payload), .createSession(let payload): payload
         case .attachSession(let payload): payload
         case .getHistory(let payload): payload

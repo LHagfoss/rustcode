@@ -10,6 +10,7 @@
 //! them and one golden frame per shape are committed under
 //! `docs/remote-protocol/v1/`; `contract::tests` fails when they drift.
 
+pub mod changes;
 pub mod contract;
 #[cfg(unix)]
 mod images;

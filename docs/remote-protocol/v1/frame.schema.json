@@ -176,6 +176,111 @@
       ],
       "type": "object"
     },
+    "RemoteChangedFile": {
+      "properties": {
+        "additions": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binary": {
+          "type": "boolean"
+        },
+        "deletions": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "diff": {
+          "description": "The file's unified diff, absent for a binary file or once the frame's\nbudget is spent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diff_truncated": {
+          "description": "`diff` was cut or left out to keep the frame bounded.",
+          "type": "boolean"
+        },
+        "old_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "description": "`added`, `modified`, `deleted`, `renamed` or `untracked`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "status",
+        "additions",
+        "deletions",
+        "binary",
+        "diff_truncated"
+      ],
+      "type": "object"
+    },
+    "RemoteChanges": {
+      "description": "A session's uncommitted changes as `get_changes` reads them.",
+      "properties": {
+        "available": {
+          "description": "False when there is nothing to read, with `reason` saying why (not a\nGit repository, Git missing or too slow).",
+          "type": "boolean"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "captured_at": {
+          "description": "RFC 3339 time the changes were read: what the client shows them as\nfresh as.",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/RemoteChangedFile"
+          },
+          "type": "array"
+        },
+        "head": {
+          "description": "The commit the changes are against, abbreviated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "omitted_files": {
+          "description": "Changed files past the listed ones.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "captured_at",
+        "workspace",
+        "available",
+        "files",
+        "omitted_files"
+      ],
+      "type": "object"
+    },
     "RemoteCommandInfo": {
       "properties": {
         "action": {
@@ -1132,6 +1237,20 @@
           "required": [
             "type",
             "session"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RemoteChanges",
+          "description": "The answer to `get_changes`.",
+          "properties": {
+            "type": {
+              "const": "changes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         },

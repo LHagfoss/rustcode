@@ -217,6 +217,12 @@ public actor LiveRemoteClient: RemoteClient {
         return page
     }
 
+    public func getChanges(_ session: SessionRef) async throws -> SessionChanges {
+        let reply = try await request(.getChanges(session))
+        guard case .changes(let changes) = reply else { throw Self.unexpected(reply) }
+        return changes
+    }
+
     public func getContent(
         _ contentID: String,
         in session: SessionRef,

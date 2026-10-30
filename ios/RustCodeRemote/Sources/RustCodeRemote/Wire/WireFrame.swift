@@ -78,12 +78,13 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
     case shareAccepted(ShareAccepted)
     case shareDenied(ShareDenied)
     case requestStatus(RequestStatus)
+    case changes(WireChanges)
     case unknown(type: String, JSONValue)
 
     public static let knownTypes: Set<String> = [
         "image_uploaded", "directories", "session_created", "error", "sessions", "attached", "resumed", "detached", "history", "content",
         "session_settings_updated", "prompt_accepted", "turn_cancelled", "question_answered", "question_cancelled", "command_executed", "approval_resolved", "request_status",
-        "share_request_sent", "share_accepted", "share_denied", "session_resumed", "saved_sessions",
+        "share_request_sent", "share_accepted", "share_denied", "session_resumed", "saved_sessions", "changes",
     ]
 
     public struct SessionCreated: Codable, Equatable, Sendable { public var session: WireSessionInfo }
@@ -231,6 +232,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .shareAccepted: "share_accepted"
         case .shareDenied: "share_denied"
         case .requestStatus: "request_status"
+        case .changes: "changes"
         case .unknown(let type, _): type
         }
     }
@@ -261,6 +263,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case "share_accepted": self = .shareAccepted(try ShareAccepted(from: decoder))
         case "share_denied": self = .shareDenied(try ShareDenied(from: decoder))
         case "request_status": self = .requestStatus(try RequestStatus(from: decoder))
+        case "changes": self = .changes(try WireChanges(from: decoder))
         default: self = .unknown(type: type, try JSONValue(from: decoder))
         }
     }
@@ -290,6 +293,7 @@ public indirect enum WireResult: Codable, Equatable, Sendable {
         case .shareAccepted(let payload): payload
         case .shareDenied(let payload): payload
         case .requestStatus(let payload): payload
+        case .changes(let payload): payload
         case .unknown(_, let raw): raw
         }
         if case .unknown(_, let raw) = self {
@@ -990,5 +994,41 @@ public struct WireSessionSettings: Codable, Equatable, Sendable {
     }
     var domain: SessionSettings {
         SessionSettings(models: models.map { .init(id: $0.id, model: $0.model, reasoningEfforts: $0.reasoningEfforts) }, selectedModel: selectedModel, reasoningEffort: reasoningEffort, canChange: canChange)
+    }
+}
+
+/// A session's uncommitted changes, as `get_changes` reads them.
+public struct WireChanges: Codable, Equatable, Sendable {
+    public var capturedAt: String
+    public var workspace: String
+    public var available: Bool
+    public var reason: String?
+    public var head: String?
+    public var branch: String?
+    public var files: [WireChangedFile]
+    public var omittedFiles: UInt32
+
+    enum CodingKeys: String, CodingKey {
+        case capturedAt = "captured_at"
+        case workspace, available, reason, head, branch, files
+        case omittedFiles = "omitted_files"
+    }
+}
+
+public struct WireChangedFile: Codable, Equatable, Sendable {
+    public var path: String
+    public var oldPath: String?
+    public var status: String
+    public var additions: UInt32
+    public var deletions: UInt32
+    public var binary: Bool
+    public var diff: String?
+    public var diffTruncated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case oldPath = "old_path"
+        case status, additions, deletions, binary, diff
+        case diffTruncated = "diff_truncated"
     }
 }

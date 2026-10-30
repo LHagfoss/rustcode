@@ -1,0 +1,33 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-changes",
+  "result": {
+    "type": "changes",
+    "captured_at": "2026-07-14T09:41:03Z",
+    "workspace": "/Users/example/projects/rustcode",
+    "available": true,
+    "head": "3cf8743",
+    "branch": "feat/watch",
+    "files": [
+      {
+        "path": "src/watch.rs",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "binary": false,
+        "diff": "diff --git a/src/watch.rs b/src/watch.rs\n--- a/src/watch.rs\n+++ b/src/watch.rs\n@@ -10,3 +10,4 @@ fn check() {\n     let due = store.due(now);\n-    poll(due);\n+    poll(due).await;\n+    store.save();\n }\n",
+        "diff_truncated": false
+      },
+      {
+        "path": "assets/logo.png",
+        "status": "untracked",
+        "additions": 0,
+        "deletions": 0,
+        "binary": true,
+        "diff_truncated": false
+      }
+    ],
+    "omitted_files": 0
+  }
+}

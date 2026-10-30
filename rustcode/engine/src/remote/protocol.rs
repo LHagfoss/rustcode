@@ -20,6 +20,8 @@ pub const REMOTE_PROTOCOL_VERSION: u32 = 1;
 pub mod host_capability {
     /// `list_saved_sessions` and `resume_session`.
     pub const SAVED_SESSIONS: &str = "saved_sessions";
+    /// `get_changes`: a session's uncommitted changes, read-only.
+    pub const SESSION_CHANGES: &str = "session_changes";
 }
 
 /// Default and largest page of `list_saved_sessions`.
@@ -164,11 +166,16 @@ pub enum RemoteOperation {
     ResumeSession {
         session_id: String,
     },
+    /// The attached session's uncommitted changes in its workspace, read
+    /// once: a bounded summary and per-file diff. Changes nothing, runs no
+    /// Git operation that writes. Requires the `session_changes` host
+    /// capability.
+    GetChanges,
 }
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 22] = [
+    pub const NAMES: [&'static str; 23] = [
         "list_sessions",
         "list_directories",
         "create_session",
@@ -191,6 +198,7 @@ impl RemoteOperation {
         "request_share",
         "list_saved_sessions",
         "resume_session",
+        "get_changes",
     ];
 
     pub fn name(&self) -> &'static str {
@@ -217,6 +225,7 @@ impl RemoteOperation {
             Self::RequestShare { .. } => "request_share",
             Self::ListSavedSessions { .. } => "list_saved_sessions",
             Self::ResumeSession { .. } => "resume_session",
+            Self::GetChanges => "get_changes",
         }
     }
 
@@ -372,6 +381,8 @@ pub enum RemoteResult {
     SessionResumed {
         session: RemoteSessionInfo,
     },
+    /// The answer to `get_changes`.
+    Changes(RemoteChanges),
     /// One page of `list_saved_sessions`.
     SavedSessions {
         sessions: Vec<RemoteSavedSession>,
@@ -689,6 +700,46 @@ pub struct RemoteSessionInfo {
     pub activity: SessionActivity,
     pub attention: RemoteAttention,
     pub health: OwnerHealth,
+}
+
+/// A session's uncommitted changes as `get_changes` reads them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteChanges {
+    /// RFC 3339 time the changes were read: what the client shows them as
+    /// fresh as.
+    pub captured_at: String,
+    pub workspace: String,
+    /// False when there is nothing to read, with `reason` saying why (not a
+    /// Git repository, Git missing or too slow).
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The commit the changes are against, abbreviated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub files: Vec<RemoteChangedFile>,
+    /// Changed files past the listed ones.
+    pub omitted_files: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteChangedFile {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_path: Option<String>,
+    /// `added`, `modified`, `deleted`, `renamed` or `untracked`.
+    pub status: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub binary: bool,
+    /// The file's unified diff, absent for a binary file or once the frame's
+    /// budget is spent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// `diff` was cut or left out to keep the frame bounded.
+    pub diff_truncated: bool,
 }
 
 /// One saved session as `list_saved_sessions` reports it.
@@ -1325,6 +1376,7 @@ mod tests {
             RemoteOperation::ResumeSession {
                 session_id: String::new(),
             },
+            RemoteOperation::GetChanges,
         ];
         assert_eq!(operations.len(), RemoteOperation::NAMES.len());
         for (operation, name) in operations.iter().zip(RemoteOperation::NAMES) {

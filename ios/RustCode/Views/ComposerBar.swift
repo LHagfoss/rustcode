@@ -25,6 +25,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
     @Binding var showsActions: Bool
     @Binding var nextAction: ChatAction?
     @State private var showsFolder = false
+    @State private var showsChanges = false
     @State private var showsPhotos = false
     @State private var showsFiles = false
     @State private var showsCamera = false
@@ -98,6 +99,7 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
         .copyConfirmation("Thread ID Copied", trigger: copiedIDCount, alignment: .top)
         .sensoryFeedback(.success, trigger: images.count) { old, new in new > old }
         .sheet(isPresented: $showsFolder) { NewSessionView() }
+        .sheet(isPresented: $showsChanges) { ChangesView(sessionID: sessionID) }
         .fullScreenCover(isPresented: $showsCamera) {
             CameraPhotoPicker { result in
                 showsCamera = false
@@ -370,6 +372,8 @@ struct ComposerBar<Accessory: View, Controls: View>: View {
             Task { await store.createSession(directory: nil) }
         case .folder:
             showsFolder = true
+        case .changes:
+            showsChanges = true
         case .copySessionID:
             Clipboard.copy(sessionID)
             copiedIDCount += 1

@@ -149,7 +149,19 @@ public actor DemoRemoteClient: RemoteClient {
     }
 
     public func hostCapabilities() async -> Set<String> {
-        isConnected ? [HostCapability.savedSessions] : []
+        isConnected ? [HostCapability.savedSessions, HostCapability.sessionChanges] : []
+    }
+
+    public func getChanges(_ session: SessionRef) async throws -> SessionChanges {
+        guard isConnected else { throw RemoteError.notConnected }
+        let diff = "diff --git a/src/parser.rs b/src/parser.rs\n--- a/src/parser.rs\n+++ b/src/parser.rs\n@@ -40,4 +40,6 @@ fn parse_list(input: &str) -> Vec<Item> {\n     let mut items = Vec::new();\n-    for line in input.lines() {\n+    for line in input.lines().filter(|line| !line.trim().is_empty()) {\n+        // Blank lines no longer end the list.\n         items.push(Item::from(line));\n     }\n"
+        return SessionChanges(
+            capturedAt: Date(), workspace: "~/projects/parser", isAvailable: true, head: "3cf8743", branch: "fix/blank-lines",
+            files: [
+                SessionChanges.File(path: "src/parser.rs", status: .modified, additions: 2, deletions: 1, diff: diff),
+                SessionChanges.File(path: "tests/blank_lines.rs", status: .untracked, additions: 12, deletions: 0,
+                                    diff: "@@ -0,0 +1,3 @@\n+#[test]\n+fn blank_lines_are_skipped() {\n+}\n"),
+            ])
     }
 
     public func listSavedSessions(cursor: String?, limit: Int, query: String?) async throws -> SavedSessionPage {

@@ -87,6 +87,7 @@ struct LineCodec: RemoteCodec {
         case .requestShare: "share"
         case .listSavedSessions(let cursor, _, let query): "saved:\(cursor ?? "-"):\(query ?? "-")"
         case .resumeSession(let sessionID): "resume:\(sessionID)"
+        case .getChanges: "changes"
         }
         return "\(requestID)|\(operation)"
     }

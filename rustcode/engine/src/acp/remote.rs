@@ -794,6 +794,35 @@ impl Share {
                                     );
                                 }
                             }
+                        } else if matches!(
+                            request.operation,
+                            crate::remote::protocol::RemoteOperation::GetChanges
+                        ) {
+                            // Git may take a moment: read it off the owner's
+                            // loop, with no lock held.
+                            let app = self.session.state.lock().await;
+                            let workspace = crate::remote::ops::changes_workspace(
+                                &app,
+                                &self.registration,
+                                &request,
+                            );
+                            drop(app);
+                            match workspace {
+                                Ok(root) => {
+                                    tokio::spawn(async move {
+                                        let changes = crate::remote::changes::read(
+                                            &root,
+                                            chrono::Utc::now().to_rfc3339(),
+                                        )
+                                        .await;
+                                        reply.send(RemoteResponse::new(
+                                            request_id,
+                                            crate::remote::protocol::RemoteResult::Changes(changes),
+                                        ));
+                                    });
+                                }
+                                Err(error) => reply.send(RemoteResponse::error(request_id, error)),
+                            }
                         } else {
                             let app = self.session.state.lock().await;
                             let result = read_session(
