@@ -17,6 +17,8 @@ public struct ToolItem: Equatable, Sendable {
     /// The call never reported back: the turn ended and closed it. Its
     /// status is how the card shows it, not an outcome (#2649).
     public var settledByTurnEnd = false
+    /// A finished command's exit code, when the engine sent it.
+    public var exitCode: Int?
 
     public var displayTitle: String { ToolPresentation.title(title) }
     public var detail: String? { inputDetail ?? ToolPresentation.detail(input: nil, output: output) }
@@ -214,7 +216,7 @@ public struct Transcript: Equatable, Sendable {
                 append(.tool(ToolItem(callId: id, title: title, kind: kind, status: status, input: rendered,
                                       inputDetail: detail, summary: summary)), at: now)
             }
-        case .toolCallUpdate(let id, let title, let status, let output, let diffs, let outputDelta):
+        case .toolCallUpdate(let id, let title, let status, let output, let diffs, let outputDelta, let exitCode):
             let changes = FileChange.group(diffs)
             if let index = toolIndex(id), case .tool(var tool) = items[index].content {
                 tool.title = title ?? tool.title
@@ -222,6 +224,7 @@ public struct Transcript: Equatable, Sendable {
                 if let outputDelta { tool.output = Self.liveTail((tool.output ?? "") + outputDelta) }
                 tool.output = output ?? tool.output
                 if !changes.isEmpty { tool.changes = changes }
+                tool.exitCode = exitCode ?? tool.exitCode
                 items[index].content = .tool(tool)
             } else {
                 append(.tool(ToolItem(callId: id, title: title ?? "Tool", status: status, output: output, changes: changes)), at: now)

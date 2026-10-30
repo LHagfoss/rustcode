@@ -1383,6 +1383,7 @@ private struct ChatView: View {
         .environment(\.editsOpenByDefault, verbosity.editsOpen)
         .environment(\.toggleToolRun, { [model] run in withAnimation(.rowReveal) { model.toggleToolRun(run) } })
         .environment(\.openAgent, { [model] id in model.openAgent(id: id) })
+        .environment(\.revealItem, { [model] id in model.revealRequest = id })
         .environment(\.toggleMessage, messageToggle)
         .environment(\.messageActions, model.messageActions)
         .safeAreaInset(edge: .top, spacing: 0) {

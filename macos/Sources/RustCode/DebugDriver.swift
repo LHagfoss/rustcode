@@ -1077,8 +1077,10 @@ enum DebugDriver {
         case "filter":
             model.sessionFilter = parts.dropFirst().joined(separator: " ")
         case "completion":
-            // `completion`: a finished turn that edited a file and ran checks
-            // (one passed, one failed, one never reported), for its card.
+            // `completion [ship]`: a finished turn that edited a file and ran
+            // checks (one passed, one failed, one never reported), for its
+            // card; `ship` also commits, pushes, opens a pull request and
+            // watches its checks, which are still pending.
             let start = Date().addingTimeInterval(-42)
             model.transcript.appendUser("Fix the rules and run the checks.")
             model.transcript.beginTurn(at: start)
@@ -1091,6 +1093,19 @@ enum DebugDriver {
                                                  status: .inProgress, input: nil, detail: command))
                 if let status {
                     model.transcript.apply(.toolCallUpdate(id: "drive-c-\(index)", title: nil, status: status, output: "done"))
+                }
+            }
+            if parts.contains("ship") {
+                for (index, (command, status, exit, output)) in [
+                    ("git add -A && git commit -m 'fix(rules): allow towers'", ToolStatus.completed, 0, "1 file changed"),
+                    ("git push -u origin HEAD", .completed, 0, ""),
+                    ("gh pr create --fill", .completed, 0, "https://github.com/LHagfoss/btd6/pull/42"),
+                    ("gh pr checks 42 --watch", .failed, 8, "some checks are still pending"),
+                ].enumerated() {
+                    model.transcript.apply(.toolCall(id: "drive-s-\(index)", title: "run_command", kind: "execute",
+                                                     status: .inProgress, input: nil, detail: command))
+                    model.transcript.apply(.toolCallUpdate(id: "drive-s-\(index)", title: nil, status: status,
+                                                           output: output, exitCode: exit))
                 }
             }
             model.transcript.apply(.agentText("Fixed the rules; the lint still fails on an unused import."))

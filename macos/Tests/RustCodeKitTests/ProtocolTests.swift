@@ -86,7 +86,7 @@ final class ProtocolTests: XCTestCase {
             "sessionUpdate": "tool_call_update", "toolCallId": "c1",
             "_meta": ["rustcode": ["outputDelta": "running 3 tests\n"]],
         ]])
-        guard case .toolCallUpdate(_, _, _, let full, _, let delta) = output else { return XCTFail("expected an update") }
+        guard case .toolCallUpdate(_, _, _, let full, _, let delta, _) = output else { return XCTFail("expected an update") }
         XCTAssertNil(full)
         XCTAssertEqual(delta, "running 3 tests\n")
     }
