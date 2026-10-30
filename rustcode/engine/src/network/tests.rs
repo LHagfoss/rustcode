@@ -4254,11 +4254,15 @@ fn provider_error_metrics_distinguish_quota_exhaustion() {
 fn active_todo_is_the_current_phase_checkpoint() {
     let todos = vec![
         crate::app::TodoItem {
+            id: "t1".to_string(),
+            blocked_reason: None,
             content: "Scaffold".to_string(),
             status: "completed".to_string(),
             priority: "high".to_string(),
         },
         crate::app::TodoItem {
+            id: "t2".to_string(),
+            blocked_reason: None,
             content: "Verify placement".to_string(),
             status: "in_progress".to_string(),
             priority: "high".to_string(),
@@ -5155,6 +5159,8 @@ fn typed_instruction_prefix_survives_provider_alignment() {
 #[test]
 fn test_build_dynamic_context_tail() {
     let todo = |content: &str, status: &str| crate::app::TodoItem {
+        id: String::new(),
+        blocked_reason: None,
         content: content.to_string(),
         status: status.to_string(),
         priority: "high".to_string(),

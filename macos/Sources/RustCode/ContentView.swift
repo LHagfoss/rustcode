@@ -247,6 +247,9 @@ private struct SessionSidebar: View {
     /// moves out from under a still pointer never hears it leave, which left
     /// several rows lit at once.
     @State var hoveredSession: String?
+    /// The Done and Snoozed shelves the reader unfolded.
+    @State private var openShelves: Set<SidebarGroups.Kind> = []
+    @AppStorage(DesktopModel.groupsByAttentionKey) private var groupsByAttention = true
 
     static let barHeight = SidebarMetrics.barHeight
     /// How wide the sidebar is beside the chat.
@@ -323,13 +326,15 @@ private struct SessionSidebar: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            let pinned = model.visibleSessions.filter { model.pinnedSessions.contains($0.id) }
-            let unpinned = model.visibleSessions.filter { !model.pinnedSessions.contains($0.id) }
+            let groups = model.sidebarGroups(byAttention: groupsByAttention)
             ScrollView {
                 // One list keyed by chat: as two lists, a chat pinned while
                 // open moved into the pinned one and kept its selected fill
                 // after another chat was opened.
-                let entries = SidebarEntry.entries(pinned: pinned, unpinned: unpinned)
+                let byId = Dictionary(model.visibleSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                // A search shows what is on the shelves too.
+                let open = model.sessionFilter.isEmpty ? openShelves : Set(SidebarGroups.Kind.allCases)
+                let entries = SidebarEntry.entries(groups, sessions: byId, openShelves: open)
                 // The row whose appearance reads the next page of chats.
                 let prefetch = entries.indices.last.flatMap { last in
                     entries.indices.first { SessionPages.isNearEnd($0, of: last + 1) }.map { entries[$0].id }
@@ -337,12 +342,12 @@ private struct SessionSidebar: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(entries) { entry in
                         switch entry {
-                        case .pinnedHeader:
-                            Label("Pinned", systemImage: "pin.fill")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 10)
-                                .padding(.top, 2)
+                        case .header(let kind, let count):
+                            GroupHeader(kind: kind, count: count, isOpen: open.contains(kind)) {
+                                withAnimation(.snappy(duration: 0.2)) {
+                                    if openShelves.contains(kind) { openShelves.remove(kind) } else { openShelves.insert(kind) }
+                                }
+                            }
                         case .divider:
                             Divider().opacity(0.4).padding(.vertical, 6).padding(.horizontal, 10)
                         case .session(let session):
@@ -367,7 +372,18 @@ private struct SessionSidebar: View {
             // A pin (⌘P), a refresh or a filter moves rows under a still
             // pointer, and none of them hears it leave: forget the hover so
             // only the row the pointer next moves over lights up.
-            .onChange(of: (pinned + unpinned).map(\.id)) { _, _ in hoveredSession = nil }
+            .onChange(of: groups.ids) { _, _ in hoveredSession = nil }
+            // Something new in a done or snoozed chat brings it back, and a
+            // snooze ends on time, even after a restart (#2634, #2635).
+            .onChange(of: model.runningSessions) { _, _ in model.settleLifecycle() }
+            .onChange(of: model.permissionQueue.map(\.sessionId)) { _, _ in model.settleLifecycle() }
+            .task(id: model.lifecycle) {
+                while !Task.isCancelled {
+                    let next = model.settleLifecycle()
+                    let wait = min(next.map { $0.timeIntervalSinceNow } ?? 60, 60)
+                    try? await Task.sleep(for: .seconds(max(wait, 1)))
+                }
+            }
             // A chat opened from the keyboard, a toast or a notification
             // leaves the pointer's row lit beside the new selection.
             .onChange(of: model.selectedSession) { _, _ in hoveredSession = nil }
@@ -640,21 +656,71 @@ private struct ProjectButtonStyle: ButtonStyle {
 /// A line of the sidebar's chat list: the pinned chats under their header
 /// and a divider, then the rest.
 enum SidebarEntry: Identifiable {
-    case pinnedHeader
-    case divider
+    /// A group's heading; only shelves, the attention groups and Pinned have one.
+    case header(SidebarGroups.Kind, count: Int)
+    case divider(SidebarGroups.Kind)
     case session(SessionSummary)
 
     var id: String {
         switch self {
-        case .pinnedHeader: "\u{0}pinned"
-        case .divider: "\u{0}divider"
+        case .header(let kind, _): "\u{0}header-\(kind.rawValue)"
+        case .divider(let kind): "\u{0}divider-\(kind.rawValue)"
         case .session(let session): session.id
         }
     }
 
-    static func entries(pinned: [SessionSummary], unpinned: [SessionSummary]) -> [SidebarEntry] {
-        guard !pinned.isEmpty else { return unpinned.map(SidebarEntry.session) }
-        return [.pinnedHeader] + pinned.map(SidebarEntry.session) + [.divider] + unpinned.map(SidebarEntry.session)
+    /// The rows for `groups`: a heading over each group but Chats, a divider
+    /// between groups, and a folded shelf as just its heading.
+    static func entries(_ groups: SidebarGroups, sessions: [String: SessionSummary],
+                        openShelves: Set<SidebarGroups.Kind>) -> [SidebarEntry] {
+        var entries: [SidebarEntry] = []
+        for (index, group) in groups.groups.enumerated() {
+            if index > 0 { entries.append(.divider(group.kind)) }
+            if group.kind != .chats { entries.append(.header(group.kind, count: group.ids.count)) }
+            if group.kind.isShelf, !openShelves.contains(group.kind) { continue }
+            entries += group.ids.compactMap { sessions[$0] }.map(SidebarEntry.session)
+        }
+        return entries
+    }
+}
+
+/// A group's heading: what it holds and why, and for a shelf a fold button
+/// with its count.
+private struct GroupHeader: View {
+    let kind: SidebarGroups.Kind
+    let count: Int
+    let isOpen: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        if kind.isShelf {
+            Button(action: toggle) {
+                HStack(spacing: 6) {
+                    Label(kind.title, systemImage: kind.systemImage)
+                    Text("\(count)").monospacedDigit().foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.top, 2)
+            .accessibilityLabel("\(kind.title), \(count) chat\(count == 1 ? "" : "s")")
+            .accessibilityValue(isOpen ? "Shown" : "Hidden")
+            .accessibilityHint(isOpen ? "Hides them" : "Shows them")
+        } else {
+            Label(kind.title, systemImage: kind.systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(kind == .needsYou ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                .padding(.horizontal, 10)
+                .padding(.top, 2)
+                .accessibilityAddTraits(.isHeader)
+        }
     }
 }
 
@@ -692,6 +758,27 @@ private struct SessionMenu: View {
         Button("Open", systemImage: "bubble.left") { Task { await model.select(session) } }
         Button("Rename…", systemImage: "pencil") { model.renamingSession = session }
         Button(model.pinnedSessions.contains(session.id) ? "Unpin" : "Pin", systemImage: "pin") { model.togglePin(session) }
+        if !model.archivedSessions.contains(session.id) {
+            Divider()
+            // Done and Snooze move the row only (#2634, #2635); a chat that
+            // waits for an answer or is working cannot be put away.
+            let busy = SidebarLifecycle.refusal(model.attention(of: session.id)) != nil
+            if model.lifecycle.isDone(session.id) {
+                Button("Reopen", systemImage: "arrow.uturn.backward.circle") { model.reopen(session) }
+            } else {
+                Button("Mark as Done", systemImage: "checkmark.circle") { model.markDone(session) }.disabled(busy)
+            }
+            if model.lifecycle.isSnoozed(session.id, now: Date()) {
+                Button("Wake Now", systemImage: "sun.max") { model.wakeNow(session) }
+            } else {
+                Menu("Snooze", systemImage: "moon.zzz") {
+                    ForEach(SnoozeChoice.allCases) { choice in
+                        Button(choice.title) { model.snooze(session, until: choice.wake(from: Date())) }
+                    }
+                }
+                .disabled(busy)
+            }
+        }
         Divider()
         Button("Copy Title", systemImage: "doc.on.doc") { Clipboard.copy(session.title ?? "New chat") }
         Button("Copy Session ID", systemImage: "number") { Clipboard.copy(session.id) }
