@@ -96,7 +96,7 @@ struct PreviewPanel: View {
             Spacer(minLength: 8)
             Button("Deny") { preview.answerAgentApproval(allow: false) }
                 .buttonStyle(PillButtonStyle())
-            Button("Allow for This Chat") { preview.answerAgentApproval(allow: true) }
+            Button("Allow for This Thread") { preview.answerAgentApproval(allow: true) }
                 .buttonStyle(PillButtonStyle(prominent: true))
         }
         .padding(.horizontal, 14)
@@ -105,7 +105,7 @@ struct PreviewPanel: View {
     }
 
     private func agentChatTitle(_ session: String) -> String {
-        preview.chatTitle(session).map { "“\($0)”" } ?? "this chat"
+        preview.chatTitle(session).map { "“\($0)”" } ?? "this thread"
     }
 
     private func agentActivityBadge(_ activity: String) -> some View {

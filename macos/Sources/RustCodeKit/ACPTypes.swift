@@ -653,7 +653,7 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
         // Also advertised by the engine, but available before the first
         // session exists so `/remote` opens the panel instead of being sent
         // as a prompt.
-        SlashCommand(name: "/remote", description: "Share this chat with a phone or another device",
+        SlashCommand(name: "/remote", description: "Share this thread with a phone or another device",
                      action: .remote),
         SlashCommand(name: "/visualize", description: "Charts, tables and trees you can ask for, with examples",
                      action: .visualizations),

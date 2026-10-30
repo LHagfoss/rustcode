@@ -229,9 +229,9 @@ final class KeybindingTests: XCTestCase {
 
     func testHelpIncludesTheCurrentShortcut() {
         let store = makeStore()
-        XCTAssertEqual(store.help("New chat", .newChat), "New chat (⌘N)")
+        XCTAssertEqual(store.help("New thread", .newChat), "New thread (⌘N)")
         store.clear(.newChat)
-        XCTAssertEqual(store.help("New chat", .newChat), "New chat")
+        XCTAssertEqual(store.help("New thread", .newChat), "New thread")
     }
 
     /// The AppKit menu is what actually receives a shortcut; a remap has to
@@ -242,7 +242,7 @@ final class KeybindingTests: XCTestCase {
         defer { NSApp.mainMenu = previous }
 
         let menu = NSMenu()
-        let newChat = NSMenuItem(title: "New Chat", action: nil, keyEquivalent: "n")
+        let newChat = NSMenuItem(title: "New Thread", action: nil, keyEquivalent: "n")
         newChat.keyEquivalentModifierMask = .command
         let settings = NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ",")
         settings.keyEquivalentModifierMask = .command
@@ -278,8 +278,8 @@ final class KeybindingTests: XCTestCase {
         let previous = NSApp.mainMenu
         defer { NSApp.mainMenu = previous }
         let menu = NSMenu()
-        let draft = NSMenuItem(title: "Choose Folder for This Chat…", action: nil, keyEquivalent: "")
-        let open = NSMenuItem(title: "New Chat in Folder…", action: nil, keyEquivalent: "")
+        let draft = NSMenuItem(title: "Choose Folder for This Thread…", action: nil, keyEquivalent: "")
+        let open = NSMenuItem(title: "New Thread in Folder…", action: nil, keyEquivalent: "")
         let fallback = NSMenuItem(title: "Choose Default Project…", action: nil, keyEquivalent: "")
         for item in [draft, open, fallback] { menu.addItem(item) }
         NSApp.mainMenu = menu

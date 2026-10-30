@@ -180,7 +180,7 @@ struct SkillsSettings: View {
     }
 
     private func footer(_ snapshot: CapabilitySnapshot) -> String {
-        var text = "A skill that is off stays installed but is never offered to the model. Changes apply from the next message, in open chats too, and to every project."
+        var text = "A skill that is off stays installed but is never offered to the model. Changes apply from the next message, in open threads too, and to every project."
         if let path = snapshot.configPath { text += " Saved in \(path.abbreviatingHome)." }
         return text
     }

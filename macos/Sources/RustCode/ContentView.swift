@@ -274,13 +274,13 @@ private struct SessionSidebar: View {
                     if model.showsArchived || !model.archivedSessions.isEmpty {
                         ClusterButton(
                             systemImage: model.showsArchived ? "chevron.left" : "archivebox",
-                            help: model.showsArchived ? "Back to chats" : "Archived chats",
+                            help: model.showsArchived ? "Back to threads" : "Archived threads",
                             isOn: model.showsArchived
                         ) {
                             withAnimation(.snappy(duration: 0.2)) { model.showsArchived.toggle() }
                         }
                     }
-                    ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New chat", .newChat)) { Task { await model.newSession() } }
+                    ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New thread", .newChat)) { Task { await model.newSession() } }
                 }
             }
             .padding(.leading, 80)
@@ -291,7 +291,7 @@ private struct SessionSidebar: View {
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search chats", text: $model.sessionFilter)
+                TextField("Search threads", text: $model.sessionFilter)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onChange(of: model.focusSessionSearch) { _, focus in
@@ -323,7 +323,7 @@ private struct SessionSidebar: View {
             .padding(.top, 8)
 
             HStack(spacing: 6) {
-                Text(model.showsArchived ? "Archived" : "Chats")
+                Text(model.showsArchived ? "Archived" : "Threads")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -403,7 +403,7 @@ private struct SessionSidebar: View {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
                 } else if model.visibleSessions.isEmpty {
-                    Text(model.showsArchived ? "No archived chats." : model.sessions.isEmpty ? "No chats in this project yet." : "No matching chats.")
+                    Text(model.showsArchived ? "No archived threads." : model.sessions.isEmpty ? "No threads in this project yet." : "No matching threads.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -427,7 +427,7 @@ private struct SessionSidebar: View {
                 }
                 .buttonStyle(ProjectButtonStyle())
                 .pointingHandCursor()
-                .help(model.keybindings.help("Choose the default project for new chats. Open chats keep their own folder", .chooseProject))
+                .help(model.keybindings.help("Choose the default project for new threads. Open threads keep their own folder", .chooseProject))
                 ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.openSettings() }
             }
             .padding(.horizontal, 8)
@@ -718,7 +718,7 @@ private struct GroupHeader: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
             .padding(.top, 2)
-            .accessibilityLabel("\(kind.title), \(count) chat\(count == 1 ? "" : "s")")
+            .accessibilityLabel("\(kind.title), \(count) thread\(count == 1 ? "" : "s")")
             .accessibilityValue(isOpen ? "Shown" : "Hidden")
             .accessibilityHint(isOpen ? "Hides them" : "Shows them")
         } else {
@@ -741,12 +741,12 @@ private struct MoreSessionsRow: View {
     var body: some View {
         HStack(spacing: 8) {
             if model.moreSessionsFailed {
-                Text("Could not load more chats.").foregroundStyle(.secondary)
+                Text("Could not load more threads.").foregroundStyle(.secondary)
                 Button("Retry") { Task { await model.retryMoreSessions() } }
                     .buttonStyle(.borderless)
             } else {
                 ProgressView().controlSize(.small)
-                Text("Loading more chats…").foregroundStyle(.secondary)
+                Text("Loading more threads…").foregroundStyle(.secondary)
             }
         }
         .font(.caption)
@@ -788,17 +788,17 @@ private struct SessionMenu: View {
             }
         }
         Divider()
-        Button("Copy Title", systemImage: "doc.on.doc") { Clipboard.copy(session.title ?? "New chat") }
-        Button("Copy Session ID", systemImage: "number") { Clipboard.copy(session.id) }
+        Button("Copy Title", systemImage: "doc.on.doc") { Clipboard.copy(session.title ?? "New thread") }
+        Button("Copy Thread ID", systemImage: "number") { Clipboard.copy(session.id) }
         Button("Show in Finder", systemImage: "folder") { Task { await model.revealInFinder(session) } }
         if !session.cwd.isEmpty {
             Button("Open Project in Finder", systemImage: "folder.badge.gearshape") {
                 NSWorkspace.shared.open(URL(fileURLWithPath: session.cwd, isDirectory: true))
             }
-            Button("Search Chats in \(session.projectName)", systemImage: "line.3.horizontal.decrease") {
+            Button("Search Threads in \(session.projectName)", systemImage: "line.3.horizontal.decrease") {
                 model.sessionFilter = session.projectName
             }
-            Button("New Chat in \(session.projectName)", systemImage: "square.and.pencil") {
+            Button("New Thread in \(session.projectName)", systemImage: "square.and.pencil") {
                 Task { await model.newSession(in: URL(fileURLWithPath: session.cwd, isDirectory: true)) }
             }
         }
@@ -827,7 +827,7 @@ struct RenameSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Rename Chat").font(.headline)
+            Text("Rename Thread").font(.headline)
             TextField("Title", text: $title)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 12)
@@ -872,7 +872,7 @@ struct ScopeToggle: View {
         .glassSurface(in: .capsule)
         .animation(.snappy(duration: 0.2), value: showsAll)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Chats")
+        .accessibilityLabel("Threads")
     }
 
     private func segment(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
@@ -918,7 +918,7 @@ struct SessionRow: View {
                     // title starts on the same edge with nothing reserved
                     // before it, and its metadata never moves (#2412).
                     HStack(spacing: 6) {
-                        Text(session.title ?? "New chat")
+                        Text(session.title ?? "New thread")
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         indicator
@@ -1081,7 +1081,7 @@ private struct ChatView: View {
 
     private var selected: SessionSummary? { model.sessions.first { $0.id == model.selectedSession } }
 
-    private var title: String { model.selectedSession == nil ? "New Chat" : selected?.title ?? "RustCode" }
+    private var title: String { model.selectedSession == nil ? "New Thread" : selected?.title ?? "RustCode" }
 
     /// The folder this chat works in: its own, which may not be the default.
     private var projectName: String { model.chatProject.lastPathComponent }
@@ -1254,7 +1254,7 @@ private struct ChatView: View {
             }
             .overlay {
                 if model.isLoadingSelected {
-                    ProgressView("Loading chat…").controlSize(.small).foregroundStyle(.secondary)
+                    ProgressView("Loading thread…").controlSize(.small).foregroundStyle(.secondary)
                 } else if transcript.isEmpty, !model.busy {
                     EmptyChat(folder: model.chatProject, isDefault: model.draftProject == nil,
                               isDraft: model.selectedSession == nil,
@@ -1455,7 +1455,7 @@ private struct ChatView: View {
             if !model.showsSidebar {
                 ToolbarCluster {
                     ClusterButton(systemImage: "sidebar.left", help: model.keybindings.help("Show sidebar", .toggleSidebar)) { model.toggleSidebar() }
-                    ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New chat", .newChat)) { Task { await model.newSession() } }
+                    ClusterButton(systemImage: "square.and.pencil", help: model.keybindings.help("New thread", .newChat)) { Task { await model.newSession() } }
                 }
                 .padding(.leading, 70)
             }
@@ -1476,13 +1476,13 @@ private struct ChatView: View {
             }
             if let session = model.sessions.first(where: { $0.id == model.selectedSession }) {
                 ToolbarCluster {
-                    ClusterButton(systemImage: "magnifyingglass", help: model.keybindings.help("Find in chat", .findInChat), isOn: model.showsFind) {
+                    ClusterButton(systemImage: "magnifyingglass", help: model.keybindings.help("Find in thread", .findInChat), isOn: model.showsFind) {
                         model.showsFind.toggle()
                     }
                     ClusterButton(systemImage: model.pinnedSessions.contains(session.id) ? "pin.fill" : "pin",
-                                  help: model.keybindings.help(model.pinnedSessions.contains(session.id) ? "Unpin chat" : "Pin chat", .pinChat),
+                                  help: model.keybindings.help(model.pinnedSessions.contains(session.id) ? "Unpin thread" : "Pin thread", .pinChat),
                                   isOn: model.pinnedSessions.contains(session.id)) { model.togglePin(session) }
-                    ClusterButton(systemImage: "folder", help: "Show chat in Finder") {
+                    ClusterButton(systemImage: "folder", help: "Show thread in Finder") {
                         Task { await model.revealInFinder(session) }
                     }
                 }
@@ -2080,7 +2080,7 @@ private struct FindBar: View {
         let count = find.matches.count
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find in chat", text: $text)
+            TextField("Find in thread", text: $text)
                 .textFieldStyle(.plain)
                 .focused($focused)
                 .onKeyPress(.return, phases: .down) { press in
@@ -2156,7 +2156,7 @@ private struct EmptyChat: View {
                         Label(folder.path.abbreviatingHome, systemImage: isDefault ? "folder" : "folder.fill")
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        Text(isDefault ? "Change" : "This chat only")
+                        Text(isDefault ? "Change" : "This thread only")
                             .foregroundStyle(Color.brand)
                     }
                     .font(.callout)
@@ -2165,7 +2165,7 @@ private struct EmptyChat: View {
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: 560)
-                .help("Choose the folder this chat works in. New chats still start in the default project.")
+                .help("Choose the folder this thread works in. New threads still start in the default project.")
             } else {
                 Label(folder.path.abbreviatingHome, systemImage: "folder")
                     .font(.callout)
@@ -2201,7 +2201,7 @@ private struct ChatProjectMenu: View {
         Menu {
             let folder = model.chatProject
             if model.selectedSession == nil {
-                Button("Choose Folder for This Chat…", systemImage: "folder.badge.gearshape") {
+                Button("Choose Folder for This Thread…", systemImage: "folder.badge.gearshape") {
                     Task { await model.chooseChatProject() }
                 }
                 if model.draftProject != nil {
@@ -2210,10 +2210,10 @@ private struct ChatProjectMenu: View {
                     }
                 }
             } else {
-                Button("New Chat in \(name)", systemImage: "square.and.pencil") {
+                Button("New Thread in \(name)", systemImage: "square.and.pencil") {
                     Task { await model.newSession(in: folder) }
                 }
-                Button("New Chat in Another Folder…", systemImage: "folder.badge.plus") {
+                Button("New Thread in Another Folder…", systemImage: "folder.badge.plus") {
                     Task { await model.chooseChatProject() }
                 }
                 if model.canMoveChat {
@@ -2664,7 +2664,7 @@ private struct Composer: View {
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .help("Add files, start a chat or switch project")
+        .help("Add files, start a thread or switch project")
     }
 
     /// Model, reasoning effort and Fast mode in one pill that opens one
@@ -2880,14 +2880,14 @@ struct AddPanel: View {
         [
             ("Attach Files or Folders…", "paperclip", { model.chooseAttachments() }),
             ("Attach Image…", "photo", { model.chooseImages() }),
-            ("New Chat", "square.and.pencil", { Task { await model.newSession() } }),
-            ("New Chat in Folder…", "folder.badge.plus", { Task { await model.chooseChatProject() } }),
+            ("New Thread", "square.and.pencil", { Task { await model.newSession() } }),
+            ("New Thread in Folder…", "folder.badge.plus", { Task { await model.chooseChatProject() } }),
             ("Choose Default Project…", "folder", { model.chooseWorkspace() }),
             ("Ask for a Chart, Table or Tree…", "chart.bar.xaxis", { model.showsVisualizationGuide = true }),
         ] + (model.canSendDraftElsewhere
-            ? [("Send Message to Another Chat…", "paperplane", { model.chooseChatForDraft() })] : [])
+            ? [("Send Message to Another Thread…", "paperplane", { model.chooseChatForDraft() })] : [])
             + (model.canLaunchInBackground
-                ? [("Start as New Chat in Background  ⌘⇧⏎", "paperplane.circle", { Task { await model.launchInBackground() } })] : [])
+                ? [("Start as New Thread in Background  ⌘⇧⏎", "paperplane.circle", { Task { await model.launchInBackground() } })] : [])
     }
 
     var body: some View {

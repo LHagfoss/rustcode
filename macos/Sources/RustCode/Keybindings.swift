@@ -234,11 +234,11 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var title: String {
         switch self {
-        case .newChat: return "New Chat"
-        case .switchChat: return "Switch Chat"
+        case .newChat: return "New Thread"
+        case .switchChat: return "Switch Thread"
         case .stopTurn: return "Stop Turn"
-        case .pinChat: return "Pin or Unpin Chat"
-        case .findInChat: return "Find in Chat"
+        case .pinChat: return "Pin or Unpin Thread"
+        case .findInChat: return "Find in Thread"
         case .findNext: return "Find Next"
         case .findPrevious: return "Find Previous"
         case .toggleSidebar: return "Show or Hide Sidebar"
@@ -247,7 +247,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
         case .toggleTerminal: return "Show or Hide Terminal"
         case .newTerminalTab: return "New Terminal Tab"
         case .closeTerminal: return "Close Terminal Tab"
-        case .chooseChatProject: return "Choose Folder for This Chat"
+        case .chooseChatProject: return "Choose Folder for This Thread"
         case .chooseProject: return "Choose Default Project"
         case .settings: return "Open Settings"
         }
@@ -255,21 +255,21 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var detail: String {
         switch self {
-        case .newChat: return "Start a fresh chat in the open project"
-        case .switchChat: return "Jump to a chat by title"
+        case .newChat: return "Start a fresh thread in the open project"
+        case .switchChat: return "Jump to a thread by title"
         case .stopTurn: return "Stop the reply that is streaming"
-        case .pinChat: return "Keep the open chat at the top of the sidebar"
-        case .findInChat: return "Search the open chat"
+        case .pinChat: return "Keep the open thread at the top of the sidebar"
+        case .findInChat: return "Search the open thread"
         case .findNext: return "Move to the next match"
         case .findPrevious: return "Move to the previous match"
-        case .toggleSidebar: return "More room for the chat"
-        case .togglePreview: return "Show localhost sites beside the chat"
+        case .toggleSidebar: return "More room for the thread"
+        case .togglePreview: return "Show localhost sites beside the thread"
         case .reloadPreview: return "Reload the page in the preview"
-        case .toggleTerminal: return "Your own shell, below the chat"
+        case .toggleTerminal: return "Your own shell, below the thread"
         case .newTerminalTab: return "Open another shell in this project"
         case .closeTerminal: return "Close the selected terminal tab, and the panel with the last. The window stays"
-        case .chooseChatProject: return "A new chat's own folder. From an open chat, starts a new chat in it"
-        case .chooseProject: return "Where new chats start. Open chats keep their own folder"
+        case .chooseChatProject: return "A new thread's own folder. From an open thread, starts a new thread in it"
+        case .chooseProject: return "Where new threads start. Open threads keep their own folder"
         case .settings: return "General, keybinds, skills and MCP"
         }
     }
@@ -311,7 +311,7 @@ enum KeybindingAction: String, CaseIterable, Identifiable, Codable, Sendable {
 }
 
 enum KeybindingCategory: String, CaseIterable, Identifiable {
-    case chat = "Chat"
+    case chat = "Thread"
     case find = "Find"
     case view = "View"
     case app = "App"
@@ -550,12 +550,12 @@ final class KeybindingMenuSync {
     /// SwiftUI does not expose the menu item behind a command, so they are
     /// found by the titles this app gives them.
     private static let actions: [String: KeybindingAction] = [
-        "New Chat": .newChat,
-        "Switch Chat…": .switchChat,
+        "New Thread": .newChat,
+        "Switch Thread…": .switchChat,
         "Stop Turn": .stopTurn,
-        "Pin Chat": .pinChat,
-        "Unpin Chat": .pinChat,
-        "Find in Chat…": .findInChat,
+        "Pin Thread": .pinChat,
+        "Unpin Thread": .pinChat,
+        "Find in Thread…": .findInChat,
         "Find Next": .findNext,
         "Find Previous": .findPrevious,
         "Show Sidebar": .toggleSidebar,
@@ -567,8 +567,8 @@ final class KeybindingMenuSync {
         "Hide Terminal": .toggleTerminal,
         "New Terminal Tab": .newTerminalTab,
         "Close Terminal Tab": .closeTerminal,
-        "Choose Folder for This Chat…": .chooseChatProject,
-        "New Chat in Folder…": .chooseChatProject,
+        "Choose Folder for This Thread…": .chooseChatProject,
+        "New Thread in Folder…": .chooseChatProject,
         "Choose Default Project…": .chooseProject,
         "Settings…": .settings,
     ]

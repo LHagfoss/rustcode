@@ -47,7 +47,7 @@ struct RemotePanel: View {
                 Text("Remote access").font(.title3.weight(.semibold))
                 Text(shared
                      ? "Scan the code with the RustCode app on your phone."
-                     : "Share this chat with a phone or another device.")
+                     : "Share this thread with a phone or another device.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -194,7 +194,7 @@ struct RemotePanel: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Remote access is off")
                 .font(.headline)
-            Text("Turn it on to share this chat with a paired device. Remote access stays on for this Mac until you turn it off.")
+            Text("Turn it on to share this thread with a paired device. Remote access stays on for this Mac until you turn it off.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -118,7 +118,7 @@ public struct SidebarGroups: Equatable, Sendable {
             case .readyForReview: "Ready for Review"
             case .working: "Working"
             case .pinned: "Pinned"
-            case .chats: "Chats"
+            case .chats: "Threads"
             case .snoozed: "Snoozed"
             case .done: "Done"
             }

@@ -28,7 +28,7 @@ public enum SessionSwitcher {
     /// none does. Lower is better.
     static func rank(_ session: SessionSummary, query: String) -> Int? {
         let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
-        let title = session.title ?? "New chat"
+        let title = session.title ?? "New thread"
         if title.range(of: query, options: options.union(.anchored)) != nil { return 0 }
         // A word of the title starting with the query: "parser" in "Fix parser".
         let words = title.split { !$0.isLetter && !$0.isNumber }

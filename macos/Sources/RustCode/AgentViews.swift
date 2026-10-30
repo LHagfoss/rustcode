@@ -320,7 +320,7 @@ private struct SubagentChildRow: View {
                       : "\(agent.name): \(agent.task)")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Agent \(agent.name), \(agent.agentType), \(isStale ? "last known " : "")\(agent.isActive ? "working" : agent.status.label)")
-        .accessibilityHint(isSelected ? "Goes back to the chat" : "Opens the agent's conversation")
+        .accessibilityHint(isSelected ? "Goes back to the thread" : "Opens the agent's conversation")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
@@ -361,7 +361,7 @@ struct AgentPanel: View {
     }
 
     private var parentTitle: String {
-        model.sessions.first { $0.id == model.selectedSession }?.title ?? "Chat"
+        model.sessions.first { $0.id == model.selectedSession }?.title ?? "Thread"
     }
 
     private var header: some View {
@@ -374,7 +374,7 @@ struct AgentPanel: View {
             .foregroundStyle(.secondary)
             .pointingHandCursor()
             .keyboardShortcut(.cancelAction)
-            .help("Back to the chat that started \(info.name) (Esc)")
+            .help("Back to the thread that started \(info.name) (Esc)")
             .accessibilityLabel("Back to \(parentTitle)")
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 AgentStatusMark(agent: info)
