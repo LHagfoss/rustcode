@@ -39,9 +39,14 @@ version runs no migrations and leaves the file alone; upgrade RustCode. If the
 file is unreadable, RustCode reports it and runs nothing; move it aside to let
 every step run again. The file is machine-local and is never synced.
 
-No migrations are registered yet. The legacy configuration conversion above
-and `rustcode sessions migrate [--dry-run]` keep their own entry points for
-now.
+Registered migrations:
+
+| Id | What it does |
+| --- | --- |
+| `0001-sessions-folder-to-threads` | Renames `sessions/` to `threads/` and leaves `sessions` as a link to it, so an older RustCode still finds every thread. If an older version created a new `sessions/` after the rename, its threads are moved in; a thread present in both folders is left in `sessions/` and reported, and the step runs again on the next start once one copy is moved aside. Until the step has run, RustCode reads the old folder. |
+
+The legacy configuration conversion above and `rustcode sessions migrate
+[--dry-run]` keep their own entry points for now.
 
 ## Configuration files
 

@@ -112,9 +112,7 @@ fn active_session_marker_lock() -> &'static Mutex<Option<ActiveSessionMarker>> {
 }
 
 fn active_log_markers_dir(config_dir: &Path) -> PathBuf {
-    config_dir
-        .join(rustcode_session::SESSIONS_DIR)
-        .join(ACTIVE_LOG_MARKERS_DIR)
+    rustcode_session::threads_dir(config_dir).join(ACTIVE_LOG_MARKERS_DIR)
 }
 
 fn active_log_marker_path(config_dir: &Path, process_id: u32) -> PathBuf {
@@ -128,7 +126,7 @@ fn update_active_session_marker(config_dir: &Path, session_id: Option<&str>) -> 
         .unwrap_or_else(|error| error.into_inner());
 
     if let Some(session_id) = session_id {
-        let sessions_dir = config_dir.join(rustcode_session::SESSIONS_DIR);
+        let sessions_dir = rustcode_session::threads_dir(config_dir);
         if std::fs::create_dir_all(&sessions_dir).is_err() || !is_real_directory(&sessions_dir) {
             return false;
         }
@@ -182,7 +180,7 @@ fn acquire_active_session_marker(
 ) -> Option<std::fs::File> {
     let markers_dir = active_log_markers_dir(config_dir);
     if std::fs::create_dir_all(&markers_dir).is_err()
-        || !is_real_directory(&config_dir.join(rustcode_session::SESSIONS_DIR))
+        || !is_real_directory(&rustcode_session::threads_dir(config_dir))
         || !is_real_directory(&markers_dir)
     {
         return None;
@@ -735,7 +733,7 @@ fn order_session_logs_for_pruning(log_files: &mut [SessionLogFile]) {
 }
 
 fn collect_session_log_files(config_dir: &Path) -> Vec<SessionLogFile> {
-    let sessions_dir = config_dir.join(rustcode_session::SESSIONS_DIR);
+    let sessions_dir = rustcode_session::threads_dir(config_dir);
     let mut session_dirs = Vec::new();
     for top_level in child_directories(&sessions_dir) {
         if is_real_directory(&top_level.join("logs")) {
@@ -1135,7 +1133,7 @@ mod tests {
         append_line_to_logs(dir.path(), None, "[time] early startup");
         let contents = std::fs::read_to_string(dir.path().join("debug.log")).expect("global log");
         assert!(contents.contains("early startup"));
-        assert!(!dir.path().join("sessions").exists());
+        assert!(!dir.path().join("threads").exists());
     }
 
     #[test]
@@ -1584,7 +1582,7 @@ mod tests {
     #[test]
     fn aggregate_session_log_cap_prunes_oldest_inactive_segments_first() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let sessions = dir.path().join("sessions");
+        let sessions = dir.path().join("threads");
         let active_logs = sessions.join("active/logs");
         let old_session = sessions.join("old-session");
         let old_logs = old_session.join("logs");
@@ -1618,8 +1616,8 @@ mod tests {
     #[test]
     fn aggregate_session_log_cap_discovers_canonical_session_layout() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let active_logs = dir.path().join("sessions/2026/09/23/active/logs");
-        let old_logs = dir.path().join("sessions/2026/09/22/old/logs");
+        let active_logs = dir.path().join("threads/2026/09/23/active/logs");
+        let old_logs = dir.path().join("threads/2026/09/22/old/logs");
         std::fs::create_dir_all(&active_logs).expect("active logs");
         std::fs::create_dir_all(&old_logs).expect("old logs");
         std::fs::write(active_logs.join("debug.log"), b"active").expect("active log");
@@ -1691,8 +1689,8 @@ mod tests {
     #[test]
     fn stale_session_log_write_cannot_override_active_session_protection() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let active_logs = dir.path().join("sessions/current/logs");
-        let stale_logs = dir.path().join("sessions/stale-owner/logs");
+        let active_logs = dir.path().join("threads/current/logs");
+        let stale_logs = dir.path().join("threads/stale-owner/logs");
         std::fs::create_dir_all(&active_logs).expect("active logs");
         std::fs::create_dir_all(&stale_logs).expect("stale logs");
         std::fs::write(active_logs.join("debug.log"), b"curr").expect("active current");
@@ -1725,8 +1723,8 @@ mod tests {
     #[test]
     fn cross_process_active_markers_protect_shared_session_logs_until_both_exit() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let active_logs = dir.path().join("sessions/current/logs");
-        let inactive_logs = dir.path().join("sessions/inactive/logs");
+        let active_logs = dir.path().join("threads/current/logs");
+        let inactive_logs = dir.path().join("threads/inactive/logs");
         std::fs::create_dir_all(&active_logs).expect("active logs");
         std::fs::create_dir_all(&inactive_logs).expect("inactive logs");
         std::fs::write(active_logs.join("debug.log"), b"curr").expect("active current");

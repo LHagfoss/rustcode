@@ -1742,6 +1742,7 @@ fn test_ensure_sync_gitignore_creates_and_updates() {
     ensure_sync_gitignore(dir.path()).unwrap();
     let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
     assert!(content.contains("sessions/"));
+    assert!(content.contains("threads/*/sandbox/"));
     assert!(content.contains("backups/"));
     assert!(content.contains("usage_stats.json"));
     assert!(content.contains("sessions/*/sandbox/"));
@@ -1773,9 +1774,9 @@ fn sync_index_cleanup_preserves_local_runtime_files() {
         "Review this change.\n",
     )
     .unwrap();
-    fs::create_dir_all(dir.path().join("sessions/2026/09/11/example")).unwrap();
+    fs::create_dir_all(dir.path().join("threads/2026/09/11/example")).unwrap();
     fs::write(
-        dir.path().join("sessions/2026/09/11/example/history.json"),
+        dir.path().join("threads/2026/09/11/example/history.json"),
         "[]\n",
     )
     .unwrap();
@@ -1793,7 +1794,7 @@ fn sync_index_cleanup_preserves_local_runtime_files() {
     };
     run_git(&["init", "-q"]);
     run_git(&["add", "-A"]);
-    run_git(&["add", "-f", "sessions", "backups"]);
+    run_git(&["add", "-f", "threads", "backups"]);
     run_git(&[
         "-c",
         "user.name=rustcode-test",
@@ -1807,7 +1808,7 @@ fn sync_index_cleanup_preserves_local_runtime_files() {
     assert_eq!(untrack_non_sync_files(dir.path()).unwrap(), 2);
     assert!(
         dir.path()
-            .join("sessions/2026/09/11/example/history.json")
+            .join("threads/2026/09/11/example/history.json")
             .exists()
     );
     assert!(dir.path().join("backups/archive.tar.gz").exists());

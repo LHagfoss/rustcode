@@ -678,7 +678,7 @@ pub fn list_sessions_page(
 /// listings that a remote client can act on (ACP, remote devices) refuse any
 /// other file, even one the store itself would follow.
 pub fn session_file_in_store(config_dir: &Path, path: &Path) -> bool {
-    let Ok(root) = std::fs::canonicalize(config_dir.join(rustcode_session::SESSIONS_DIR)) else {
+    let Ok(root) = std::fs::canonicalize(rustcode_session::threads_dir(config_dir)) else {
         return false;
     };
     std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(root))
@@ -842,11 +842,16 @@ symbols.db
 tool_output/
 attachments/
 backups/
+threads/
 sessions/
 usage_stats.json
 # Legacy configuration files are read-only migration inputs, not sync state.
 models.json
 config.json
+threads/*/sandbox/
+threads/*/artifacts/
+threads/*/subagents/
+threads/*/image_cache.json
 sessions/*/sandbox/
 sessions/*/artifacts/
 sessions/*/subagents/

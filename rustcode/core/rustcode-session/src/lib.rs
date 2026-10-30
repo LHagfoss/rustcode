@@ -13,7 +13,12 @@ use std::sync::{Condvar, Mutex, OnceLock, atomic::AtomicU64, atomic::Ordering};
 use std::time::Duration;
 
 pub const HISTORY_FILE: &str = "history.json";
-pub const SESSIONS_DIR: &str = "sessions";
+/// Folder under the config directory that holds one folder per thread.
+pub const THREADS_DIR: &str = "threads";
+/// The folder's name before threads were called threads. The startup
+/// migration renames it to [`THREADS_DIR`] and leaves a link under this name
+/// for older RustCode versions.
+pub const LEGACY_SESSIONS_DIR: &str = "sessions";
 pub const IMAGE_CACHE_FILE: &str = "image_cache.json";
 /// Durable long-turn segment state for resuming productive continuations
 /// after a restart. Written when a turn ends with a pending continuation or
@@ -24,6 +29,21 @@ pub const SESSION_WORKSPACE_FILE: &str = "workspace.json";
 pub const SESSION_METADATA_SCHEMA_VERSION: u32 = 1;
 const HISTORY_WRITE_DEBOUNCE: Duration = Duration::from_millis(250);
 const MAX_SESSIONS: usize = 30;
+
+/// The thread store under `config_dir`: `threads/`, or the legacy
+/// `sessions/` while only that exists (the migration has not run yet).
+pub fn threads_dir(config_dir: &Path) -> PathBuf {
+    let threads = config_dir.join(THREADS_DIR);
+    if threads.is_dir() {
+        return threads;
+    }
+    let legacy = config_dir.join(LEGACY_SESSIONS_DIR);
+    if legacy.is_dir() { legacy } else { threads }
+}
+
+fn is_store_dir_name(name: &std::ffi::OsStr) -> bool {
+    name == THREADS_DIR || name == LEGACY_SESSIONS_DIR
+}
 
 pub fn valid_session_id(session_id: &str) -> bool {
     !session_id.is_empty()
@@ -752,11 +772,15 @@ impl SessionStore {
         &self.root
     }
 
+    /// The folder that holds the threads; see [`threads_dir`].
+    pub fn threads_dir(&self) -> PathBuf {
+        threads_dir(&self.root)
+    }
+
     /// Return the canonical date-partitioned location for a session ID.
     pub fn canonical_session_dir(&self, session_id: &str) -> PathBuf {
         let (year, month, day) = session_date_parts(session_id).unwrap_or_else(current_date_parts);
-        self.root
-            .join(SESSIONS_DIR)
+        self.threads_dir()
             .join(format!("{year:04}"))
             .join(format!("{month:02}"))
             .join(format!("{day:02}"))
@@ -771,7 +795,7 @@ impl SessionStore {
         if canonical.is_dir() {
             return canonical;
         }
-        let legacy = self.root.join(SESSIONS_DIR).join(session_id);
+        let legacy = threads_dir(&self.root).join(session_id);
         if legacy.is_dir() { legacy } else { canonical }
     }
 
@@ -815,18 +839,11 @@ impl SessionStore {
         if canonical.exists() {
             return canonical;
         }
-        let legacy_dir = self
-            .root
-            .join(SESSIONS_DIR)
-            .join(session_id)
-            .join(HISTORY_FILE);
+        let legacy_dir = self.threads_dir().join(session_id).join(HISTORY_FILE);
         if legacy_dir.exists() {
             return legacy_dir;
         }
-        let legacy_file = self
-            .root
-            .join(SESSIONS_DIR)
-            .join(format!("{session_id}.json"));
+        let legacy_file = self.threads_dir().join(format!("{session_id}.json"));
         if legacy_file.exists() {
             return legacy_file;
         }
@@ -858,14 +875,14 @@ impl SessionStore {
             let is_legacy_directory = parent
                 .parent()
                 .and_then(|parent| parent.file_name())
-                .is_some_and(|component| component == SESSIONS_DIR);
+                .is_some_and(is_store_dir_name);
             let is_partitioned_directory = parent
                 .parent()
                 .and_then(|day| day.parent())
                 .and_then(|month| month.parent())
                 .and_then(|year| year.parent())
                 .and_then(|sessions| sessions.file_name())
-                .is_some_and(|component| component == SESSIONS_DIR);
+                .is_some_and(is_store_dir_name);
             if is_legacy_directory || is_partitioned_directory {
                 return parent
                     .file_name()
@@ -875,7 +892,7 @@ impl SessionStore {
         } else if path
             .parent()
             .and_then(|parent| parent.file_name())
-            .is_some_and(|component| component == SESSIONS_DIR)
+            .is_some_and(is_store_dir_name)
         {
             return path
                 .file_stem()
@@ -1194,7 +1211,7 @@ impl SessionStore {
     /// exactly like a scratch id and holding no transcript are removed.
     /// Returns how many were removed.
     pub fn prune_scratch_session_dirs(&self) -> usize {
-        let sessions = self.root.join(SESSIONS_DIR);
+        let sessions = threads_dir(&self.root);
         let mut removed = 0;
         for year in read_directories(&sessions) {
             for month in read_directories(&year) {
@@ -1301,11 +1318,11 @@ impl SessionStore {
     }
 
     fn session_read_path(&self, path: &Path) -> Option<PathBuf> {
-        if !path.starts_with(self.root.join(SESSIONS_DIR)) {
+        if !path.starts_with(threads_dir(&self.root)) {
             // Preserve callers that explicitly read a non-session legacy file.
             return Some(path.to_path_buf());
         }
-        let sessions_root = std::fs::canonicalize(self.root.join(SESSIONS_DIR)).ok()?;
+        let sessions_root = std::fs::canonicalize(threads_dir(&self.root)).ok()?;
         let canonical = std::fs::canonicalize(path).ok()?;
         canonical.starts_with(sessions_root).then_some(canonical)
     }
@@ -1494,14 +1511,14 @@ impl SessionStore {
             }
         } else if path
             .parent()
-            .is_some_and(|parent| parent.ends_with(SESSIONS_DIR))
+            .is_some_and(|parent| parent.file_name().is_some_and(is_store_dir_name))
         {
             let _ = std::fs::remove_file(path);
         }
     }
 
     fn discovered_session_paths(&self) -> Vec<PathBuf> {
-        let sessions = self.root.join(SESSIONS_DIR);
+        let sessions = threads_dir(&self.root);
         #[cfg(test)]
         read_metrics::record_directory_scan();
         let Ok(entries) = std::fs::read_dir(&sessions) else {
@@ -1549,7 +1566,7 @@ impl SessionStore {
     }
 
     fn legacy_session_sources(&self) -> Vec<(String, PathBuf)> {
-        let sessions = self.root.join(SESSIONS_DIR);
+        let sessions = threads_dir(&self.root);
         let Ok(entries) = std::fs::read_dir(&sessions) else {
             return Vec::new();
         };
@@ -1708,7 +1725,7 @@ fn is_session_directory(path: &Path) -> bool {
     if path
         .parent()
         .and_then(|parent| parent.file_name())
-        .is_some_and(|component| component == SESSIONS_DIR)
+        .is_some_and(is_store_dir_name)
     {
         return true;
     }
@@ -1717,7 +1734,7 @@ fn is_session_directory(path: &Path) -> bool {
         .and_then(|month| month.parent())
         .and_then(|year| year.parent())
         .and_then(|sessions| sessions.file_name())
-        .is_some_and(|component| component == SESSIONS_DIR)
+        .is_some_and(is_store_dir_name)
         && !name.is_empty()
 }
 
@@ -2039,7 +2056,7 @@ mod tests {
 
         let root = tempfile::tempdir().expect("temp root");
         let store = SessionStore::new(root.path());
-        let sessions = root.path().join(SESSIONS_DIR);
+        let sessions = root.path().join(THREADS_DIR);
         std::fs::create_dir_all(&sessions).unwrap();
         let outside = root.path().join("outside.json");
         std::fs::write(
@@ -2434,7 +2451,7 @@ mod tests {
         // Folders leaked by older builds are removed; a real session, a
         // scratch-named folder holding a transcript, and unrelated folders
         // stay.
-        let day = root.path().join(SESSIONS_DIR).join("2026/10/28");
+        let day = root.path().join(THREADS_DIR).join("2026/10/28");
         let leaked = [
             day.join("session-title-1793186210375136000"),
             day.join("compaction-summary-1793183363393325000"),
@@ -2548,7 +2565,7 @@ mod tests {
         assert_eq!(
             directory,
             root.path()
-                .join(SESSIONS_DIR)
+                .join(THREADS_DIR)
                 .join(format!("{:04}", expected_date.0))
                 .join(format!("{:02}", expected_date.1))
                 .join(format!("{:02}", expected_date.2))
@@ -2570,7 +2587,7 @@ mod tests {
     fn legacy_directories_and_flat_files_are_discovered_and_sorted() {
         let root = tempfile::tempdir().expect("temp root");
         let store = SessionStore::new(root.path());
-        let sessions = root.path().join(SESSIONS_DIR);
+        let sessions = root.path().join(THREADS_DIR);
         write_history(&sessions.join("1704067200000").join(HISTORY_FILE));
         write_history(&sessions.join("1704153600000.json"));
 
@@ -2600,17 +2617,46 @@ mod tests {
         );
     }
 
+    /// Before the startup migration renames `sessions/` to `threads/`, the
+    /// store keeps reading the old folder; once `threads/` exists it wins.
+    #[test]
+    fn the_store_reads_the_legacy_sessions_folder_until_threads_exists() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        assert_eq!(store.threads_dir(), root.path().join(THREADS_DIR));
+
+        std::fs::create_dir_all(root.path().join(LEGACY_SESSIONS_DIR)).expect("legacy");
+        assert_eq!(store.threads_dir(), root.path().join(LEGACY_SESSIONS_DIR));
+        let id = "1704067200000";
+        write_history(&store.canonical_session_dir(id).join(HISTORY_FILE));
+        assert!(root.path().join(LEGACY_SESSIONS_DIR).join("2024").exists());
+        assert!(!store.load_session_history_direct(id).is_empty());
+
+        std::fs::rename(
+            root.path().join(LEGACY_SESSIONS_DIR),
+            root.path().join(THREADS_DIR),
+        )
+        .expect("rename");
+        assert_eq!(store.threads_dir(), root.path().join(THREADS_DIR));
+        assert!(!store.load_session_history_direct(id).is_empty());
+        assert_eq!(
+            SessionStore::session_id_from_path(&store.canonical_session_dir(id).join(HISTORY_FILE))
+                .as_deref(),
+            Some(id)
+        );
+    }
+
     #[test]
     fn migration_supports_dry_run_is_idempotent_and_preserves_tree() {
         let root = tempfile::tempdir().expect("temp root");
         let store = SessionStore::new(root.path());
-        let legacy = root.path().join(SESSIONS_DIR).join("1704067200000");
+        let legacy = root.path().join(THREADS_DIR).join("1704067200000");
         write_history(&legacy.join(HISTORY_FILE));
         std::fs::create_dir_all(legacy.join("sandbox")).expect("sandbox");
         std::fs::create_dir_all(legacy.join("artifacts")).expect("artifacts");
         std::fs::create_dir_all(legacy.join("subagents").join("agent-1")).expect("subagent");
         std::fs::write(legacy.join("artifacts").join("result.txt"), "artifact").expect("artifact");
-        let flat = root.path().join(SESSIONS_DIR).join("1704153600000.json");
+        let flat = root.path().join(THREADS_DIR).join("1704153600000.json");
         write_history(&flat);
 
         let dry_run = store.migrate_legacy_sessions(true);
@@ -2647,7 +2693,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temp root");
         let store = SessionStore::new(root.path());
         let id = "1704067200000";
-        let legacy = root.path().join(SESSIONS_DIR).join(id);
+        let legacy = root.path().join(THREADS_DIR).join(id);
         write_history(&legacy.join(HISTORY_FILE));
         let destination = store.canonical_session_dir(id);
         write_history(&destination.join(HISTORY_FILE));
@@ -2667,7 +2713,7 @@ mod tests {
     fn migration_preserves_artifact_only_legacy_sessions() {
         let root = tempfile::tempdir().expect("temp root");
         let store = SessionStore::new(root.path());
-        let legacy = root.path().join(SESSIONS_DIR).join("1704240000000");
+        let legacy = root.path().join(THREADS_DIR).join("1704240000000");
         std::fs::create_dir_all(legacy.join("sandbox")).expect("sandbox");
         std::fs::create_dir_all(legacy.join("artifacts")).expect("artifacts");
         std::fs::write(legacy.join("sandbox/state.txt"), "preserve").expect("sandbox file");
@@ -2690,7 +2736,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temp root");
         let store = SessionStore::new(root.path());
         let id = "1704067200000";
-        let legacy = root.path().join(SESSIONS_DIR).join(id);
+        let legacy = root.path().join(THREADS_DIR).join(id);
         write_history(&legacy.join(HISTORY_FILE));
 
         assert_eq!(store.get_active_session_dir(id), legacy);

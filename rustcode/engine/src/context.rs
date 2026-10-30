@@ -347,8 +347,8 @@ pub(crate) fn session_logs_line(session_id: &str) -> Option<String> {
 
 fn session_logs_line_in(store: &rustcode_session::SessionStore, session_id: &str) -> String {
     format!(
-        "- RustCode sessions: {}/<yyyy>/<mm>/<dd>/<id>/ (history.json, logs/debug.log); this session: {}",
-        store.root().join(rustcode_session::SESSIONS_DIR).display(),
+        "- RustCode threads: {}/<yyyy>/<mm>/<dd>/<id>/ (history.json, logs/debug.log); this thread: {}",
+        store.threads_dir().display(),
         store.session_dir(session_id).display(),
     )
 }
@@ -687,17 +687,14 @@ mod tests {
     }
 
     #[test]
-    fn session_logs_line_names_the_sessions_root_and_this_session() {
+    fn session_logs_line_names_the_threads_root_and_this_thread() {
         let dir = tempfile::tempdir().unwrap();
         let store = rustcode_session::SessionStore::new(dir.path());
         let id = "01a183fa80b3-7001-8eb6-c9cf-c9cfe6b67c49";
         let line = super::session_logs_line_in(&store, id);
-        let root = dir.path().join("sessions");
-        assert!(line.starts_with(&format!("- RustCode sessions: {}/", root.display())));
-        assert!(line.ends_with(&format!(
-            "this session: {}",
-            store.session_dir(id).display()
-        )));
+        let root = dir.path().join("threads");
+        assert!(line.starts_with(&format!("- RustCode threads: {}/", root.display())));
+        assert!(line.ends_with(&format!("this thread: {}", store.session_dir(id).display())));
         assert!(!line.contains('\n'));
         assert!(super::session_logs_line("").is_none());
     }

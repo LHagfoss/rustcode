@@ -23,7 +23,7 @@ moving long-archived chats to the Trash (#2489).
   Use **Unarchive** (swipe or context menu) to bring one back; this also
   clears its archive date.
 - Trashed chats: open the Trash in Finder and use **Put Back** on the session
-  folder (under `~/.config/rustcode/sessions/<yyyy>/<mm>/<dd>/`). The chat
+  folder (under `~/.config/rustcode/threads/<yyyy>/<mm>/<dd>/`). The chat
   reappears in the list on the next refresh.
 
 ## Upgrade

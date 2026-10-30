@@ -382,3 +382,106 @@ fn status_reports_structured_output_without_touching_files() {
     );
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
 }
+
+mod sessions_folder_to_threads {
+    use super::super::sessions_folder_to_threads;
+    use std::fs;
+    use std::path::Path;
+
+    fn thread(root: &Path, folder: &str, id: &str) -> std::path::PathBuf {
+        let dir = root.join(folder).join("2026/10/30").join(id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("history.json"), "[]").unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_fresh_install_has_nothing_to_move() {
+        let dir = tempfile::tempdir().unwrap();
+        sessions_folder_to_threads(dir.path()).unwrap();
+        assert!(!dir.path().join("threads").exists());
+        assert!(fs::symlink_metadata(dir.path().join("sessions")).is_err());
+    }
+
+    #[test]
+    fn the_folder_is_renamed_and_the_old_name_links_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        thread(dir.path(), "sessions", "a");
+        sessions_folder_to_threads(dir.path()).unwrap();
+        assert!(
+            dir.path()
+                .join("threads/2026/10/30/a/history.json")
+                .is_file()
+        );
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("sessions");
+            assert!(
+                fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert!(link.join("2026/10/30/a/history.json").is_file());
+        }
+        // Running again changes nothing.
+        sessions_folder_to_threads(dir.path()).unwrap();
+        assert!(
+            dir.path()
+                .join("threads/2026/10/30/a/history.json")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn a_sessions_folder_written_after_the_rename_is_merged_in() {
+        let dir = tempfile::tempdir().unwrap();
+        thread(dir.path(), "threads", "a");
+        thread(dir.path(), "sessions", "b");
+        sessions_folder_to_threads(dir.path()).unwrap();
+        assert!(
+            dir.path()
+                .join("threads/2026/10/30/a/history.json")
+                .is_file()
+        );
+        assert!(
+            dir.path()
+                .join("threads/2026/10/30/b/history.json")
+                .is_file()
+        );
+        #[cfg(unix)]
+        assert!(
+            fs::symlink_metadata(dir.path().join("sessions"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn an_entry_in_both_folders_is_kept_and_reported_until_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        thread(dir.path(), "threads", "a");
+        let kept = thread(dir.path(), "sessions", "a");
+        thread(dir.path(), "sessions", "b");
+        let error = sessions_folder_to_threads(dir.path()).unwrap_err();
+        assert!(error.contains("1 entries exist in both"), "{error}");
+        assert!(
+            kept.join("history.json").is_file(),
+            "the colliding thread stays"
+        );
+        assert!(
+            dir.path()
+                .join("threads/2026/10/30/b/history.json")
+                .is_file()
+        );
+
+        fs::remove_dir_all(&kept).unwrap();
+        sessions_folder_to_threads(dir.path()).unwrap();
+        assert!(
+            dir.path()
+                .join("threads/2026/10/30/a/history.json")
+                .is_file()
+        );
+    }
+}
