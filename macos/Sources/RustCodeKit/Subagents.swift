@@ -160,6 +160,12 @@ public struct SubagentInfo: Identifiable, Equatable, Sendable {
 /// and show how they end, until their chat is opened again.
 public struct BackgroundAgents: Equatable, Sendable {
     public private(set) var bySession: [String: [SubagentInfo]] = [:]
+    /// Reads in a row that got no answer, by chat. Its rows keep their last
+    /// known state, marked stale, until a read answers again (#2653).
+    public private(set) var misses: [String: Int] = [:]
+    /// Unanswered reads in a row after which a chat's rows are dropped: about
+    /// a minute of a timed-out or closed connection.
+    public static let maxMisses = 5
 
     public init() {}
 
@@ -176,17 +182,41 @@ public struct BackgroundAgents: Equatable, Sendable {
         let listed = Set((bySession[session] ?? []).map(\.id))
         let shown = agents.filter { $0.isActive || listed.contains($0.id) }
         bySession[session] = shown.isEmpty ? nil : shown
+        misses[session] = nil
+    }
+
+    /// A read of `session` got no answer (a timeout, a dropped connection):
+    /// not proof its agents are gone, so their rows stay, marked stale, until
+    /// `maxMisses` reads in a row have failed. True when they were dropped.
+    @discardableResult
+    public mutating func missed(_ session: String) -> Bool {
+        guard bySession[session] != nil else { return false }
+        let count = (misses[session] ?? 0) + 1
+        guard count < Self.maxMisses else {
+            forget(session)
+            return true
+        }
+        misses[session] = count
+        return false
+    }
+
+    /// Whether `session`'s rows show what was last read, not a fresh answer.
+    public func isStale(_ session: String) -> Bool {
+        (misses[session] ?? 0) > 0
     }
 
     /// `session` is on screen again: its agents go back to the chat's list.
     @discardableResult
     public mutating func take(_ session: String) -> [SubagentInfo] {
-        bySession.removeValue(forKey: session) ?? []
+        misses[session] = nil
+        return bySession.removeValue(forKey: session) ?? []
     }
 
-    /// `session` is gone, or its agents can no longer be read.
+    /// `session` is gone: the engine answered that its agents cannot be
+    /// read, or reads kept failing.
     public mutating func forget(_ session: String) {
         bySession[session] = nil
+        misses[session] = nil
     }
 
     public func agents(of session: String) -> [SubagentInfo] {

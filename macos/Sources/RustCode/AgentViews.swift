@@ -227,9 +227,10 @@ struct SubagentChildRows: View {
         let children = shown
             ? model.sidebarChildren(of: session.id)
             : model.backgroundAgents.agents(of: session.id)
+        let stale = !shown && model.backgroundAgents.isStale(session.id)
         VStack(alignment: .leading, spacing: 1) {
             ForEach(children) { agent in
-                SubagentChildRow(agent: agent, isSelected: agent.id == viewing) {
+                SubagentChildRow(agent: agent, isSelected: agent.id == viewing, isStale: stale) {
                     if !shown {
                         Task { await model.openAgent(agent, in: session) }
                     } else if agent.id == viewing {
@@ -257,6 +258,8 @@ struct SubagentChildRows: View {
 private struct SubagentChildRow: View {
     let agent: SubagentInfo
     let isSelected: Bool
+    /// The last state read; the latest read got no answer (#2653).
+    var isStale = false
     let action: () -> Void
 
     var body: some View {
@@ -268,12 +271,17 @@ private struct SubagentChildRow: View {
                     Text(agent.agentType).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(agent.isActive ? agent.elapsed(now: context.date) ?? "" : agent.status.label)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
+                if isStale {
+                    Image(systemName: "wifi.exclamationmark").foregroundStyle(.tertiary)
+                } else {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(agent.isActive ? agent.elapsed(now: context.date) ?? "" : agent.status.label)
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    }
                 }
             }
+            .opacity(isStale ? 0.6 : 1)
             .font(.caption)
             .padding(.horizontal, 8)
             .frame(height: 24)
@@ -283,9 +291,10 @@ private struct SubagentChildRow: View {
         .buttonStyle(.plain)
         .hoverHighlight(cornerRadius: 8, padding: 0)
         .pointingHandCursor()
-        .help("\(agent.name): \(agent.task)")
+        .help(isStale ? "\(agent.name): last known state; RustCode could not reach the engine to refresh it"
+                      : "\(agent.name): \(agent.task)")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Agent \(agent.name), \(agent.agentType), \(agent.isActive ? "working" : agent.status.label)")
+        .accessibilityLabel("Agent \(agent.name), \(agent.agentType), \(isStale ? "last known " : "")\(agent.isActive ? "working" : agent.status.label)")
         .accessibilityHint(isSelected ? "Goes back to the chat" : "Opens the agent's conversation")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
