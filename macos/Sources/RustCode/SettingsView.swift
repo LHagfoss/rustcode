@@ -29,6 +29,10 @@ struct SettingsView: View {
     @StateObject private var capabilities = CapabilitiesStore()
     @StateObject private var connections = ConnectionsStore()
     @AppStorage(SidebarResizeHandle.key) private var sidebarWidth = SidebarResizeHandle.defaultWidth
+    /// What the sidebar's search field holds; the sections listed match it.
+    @State private var query = ""
+    @State private var showsCompactSearch = false
+    @FocusState private var searchFocused: Bool
     typealias Section = SettingsSection
 
     private var section: Section { model.settingsSection }
@@ -52,8 +56,12 @@ struct SettingsView: View {
         }
         .ignoresSafeArea()
         .tint(.brand)
-        // Esc goes back to the chat from wherever focus is.
-        .background { Button("Back to Chat", action: close).keyboardShortcut(.cancelAction).hidden() }
+        // Esc goes back to the chat from wherever focus is, once a search
+        // in the sidebar is cleared.
+        .background {
+            Button("Back to Chat") { if query.isEmpty { close() } else { query = "" } }
+                .keyboardShortcut(.cancelAction).hidden()
+        }
         .task(id: section) {
             if section == .general { await model.loadPresence() }
             if section == .skills || section == .mcp { await capabilities.load(model.engineConnection) }
@@ -86,6 +94,9 @@ struct SettingsView: View {
                 backButton.padding(.top, 8)
             }
             if !compact {
+                searchField
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
                 Text("Settings")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -94,19 +105,88 @@ struct SettingsView: View {
                     .padding(.bottom, 4)
                     .accessibilityAddTraits(.isHeader)
             } else {
+                // Too narrow for a field: a button opens it over the page.
+                Button { showsCompactSearch = true } label: {
+                    Image(systemName: "magnifyingglass").frame(width: 32, height: 28).contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(query.isEmpty ? .secondary : Color.brand)
+                .help("Search settings")
+                .accessibilityLabel("Search settings")
+                .padding(.top, 8)
+                .popover(isPresented: $showsCompactSearch, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        searchField
+                        ForEach(matches) { item in
+                            SectionRow(section: item, isSelected: item == section, compact: false) { choose(item) }
+                        }
+                        if matches.isEmpty { noMatches }
+                    }
+                    .padding(10)
+                    .frame(width: 220)
+                    .onAppear { searchFocused = true }
+                }
                 Divider().padding(.vertical, 8)
             }
             VStack(alignment: compact ? .center : .leading, spacing: 2) {
-                ForEach(Section.allCases) { item in
+                ForEach(matches) { item in
                     SectionRow(section: item, isSelected: item == section, compact: compact) { model.settingsSection = item }
                 }
+                if matches.isEmpty, !compact { noMatches }
             }
             .padding(.horizontal, compact ? 8 : 12)
+            .animation(.snappy(duration: 0.15), value: matches)
             Spacer()
         }
         .padding(.bottom, 12)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Settings sections")
+    }
+
+    /// The sections that match the search, all of them while it is empty.
+    private var matches: [Section] { Section.matching(query) }
+
+    /// Patterned on the chat sidebar's search: ⏎ opens the first match, Esc
+    /// clears the field before it goes back to the chat (#2625).
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search settings", text: $query)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .onSubmit { if let first = matches.first { choose(first) } }
+                .onKeyPress(.escape) {
+                    guard !query.isEmpty else { return .ignored }
+                    query = ""
+                    return .handled
+                }
+                .accessibilityHint("Filters the settings sections")
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .glassSurface(in: .capsule)
+    }
+
+    private var noMatches: some View {
+        Text("No settings match “\(query)”")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private func choose(_ item: Section) {
+        model.settingsSection = item
+        showsCompactSearch = false
     }
 
     private var backButton: some View {
@@ -1048,6 +1128,33 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .mcp: "point.3.connected.trianglepath.dotted"
         case .engine: "terminal"
         case .about: "info.circle"
+        }
+    }
+
+    /// Words for what a section holds, so a search for a setting finds the
+    /// section it lives in, not only one named like it (#2625).
+    var keywords: [String] {
+        switch self {
+        case .general: ["appearance", "theme", "dark", "light", "notifications", "project", "folder", "fade",
+                        "predictions", "smart ui", "tool calls", "verbosity", "auto-approve", "yolo",
+                        "discord", "rich presence", "model", "effort", "reasoning", "new chats"]
+        case .keybinds: ["keyboard", "shortcuts", "hotkeys", "keys"]
+        case .connections: ["accounts", "providers", "login", "sign in", "api key", "github", "copilot", "remote", "phone"]
+        case .skills: ["skill", "agent skills"]
+        case .mcp: ["mcp", "servers", "tools", "model context protocol"]
+        case .engine: ["engine", "restart", "logs", "binary", "version", "path"]
+        case .about: ["version", "updates", "license", "release"]
+        }
+    }
+
+    /// The sections whose name or keywords contain every word of `query`,
+    /// in sidebar order; all of them for an empty query.
+    static func matching(_ query: String) -> [SettingsSection] {
+        let words = query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return allCases }
+        return allCases.filter { section in
+            let text = ([section.rawValue] + section.keywords).joined(separator: " ").lowercased()
+            return words.allSatisfy(text.contains)
         }
     }
 }
