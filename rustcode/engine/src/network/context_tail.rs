@@ -209,15 +209,26 @@ fn build_dynamic_context_tail_internal(
             let mark = match t.status.as_str() {
                 "completed" => "[x]",
                 "in_progress" => "[~]",
+                "blocked" => "[!]",
                 _ => "[ ]",
             };
+            let id = if t.id.is_empty() {
+                String::new()
+            } else {
+                format!("{} ", t.id)
+            };
             plan.push_str(&format!(
-                "{}. {} {} ({})\n",
+                "{}. {} {}{} ({})",
                 i + 1,
                 mark,
+                id,
                 t.content,
                 t.priority
             ));
+            if let Some(reason) = &t.blocked_reason {
+                plan.push_str(&format!(" blocked: {reason}"));
+            }
+            plan.push('\n');
         }
         fragments.push(history::ContextFragment::new("task plan", plan));
     }

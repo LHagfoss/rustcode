@@ -108,3 +108,27 @@ messages into native tool batches.
 Coordinating separate, user-visible sessions (rather than children inside one
 session) is planned in
 [cross-session orchestration](architecture/cross-session-orchestration.md).
+
+## Task plan (`todo_write`)
+
+The root agent keeps a task plan with `todo_write`; children cannot write it.
+The plan is the agent's proposal: a step is done only when the agent marks it
+so, never because of prose or a check that was not observed. It lives in the
+session state and is shown to the agent at the end of every request.
+
+Each step has a stable `id` (`t1`, `t2`, …), `content`, `status` (`pending`,
+`in_progress`, `completed`, `blocked`), `priority` (`high`, `medium`, `low`)
+and, only while blocked, a `blocked_reason` (#2640).
+
+- Without `merge`, `todos` replaces the plan. A step keeps the id it names,
+  else the id of the current step with the same content, else gets the next
+  unused one, so rewriting the list does not renumber it. Ids are never
+  reused within a plan.
+- With `"merge": true`, a step naming a current id updates only the fields it
+  gives, a step without an id is appended, and the rest stay as they were.
+  Repeating the same update changes nothing.
+- A call is refused whole, with nothing changed, for an unknown status or
+  priority, an id given twice, a new step without content, a merge naming an
+  id that does not exist, or a `blocked_reason` on a step that is not blocked.
+- Calls from before ids existed (`content`, `status`, `priority` only) work
+  unchanged, and a plan without ids gets them in order on its next update.

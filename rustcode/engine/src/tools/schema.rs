@@ -126,8 +126,8 @@ pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     ),
     (
         "todo_write",
-        "Replace the persistent task plan with a list of steps.",
-        r#"{"todos": "list of steps, each with content, status and priority"}"#,
+        "Replace the persistent task plan with a list of steps, or with merge: true update the steps whose id you give (others stay).",
+        r#"{"todos": "list of steps: id (to keep or update one), content, status, priority, blocked_reason", "merge": "optional bool"}"#,
     ),
 ];
 
@@ -2374,9 +2374,11 @@ fn agent_tool_schema(name: &str) -> Value {
         }
         "todo_write" => serde_json::json!({
             "type":"object", "properties": {"todos": {"type":"array", "items": {"type":"object", "properties": {
-                "content":{"type":"string"}, "status":{"type":"string","enum":["pending","in_progress","completed"]},
-                "priority":{"type":"string","enum":["high","medium","low"]}
-            }, "required":["content"]}}}, "required":["todos"]
+                "id":{"type":"string"}, "content":{"type":"string"},
+                "status":{"type":"string","enum":["pending","in_progress","completed","blocked"]},
+                "priority":{"type":"string","enum":["high","medium","low"]},
+                "blocked_reason":{"type":"string"}
+            }}}, "merge":{"type":"boolean"}}, "required":["todos"]
         }),
         _ => schema_from_arguments("{}"),
     }
@@ -2723,7 +2725,7 @@ Never guess MCP server names: see MCP Servers, then `list_mcp_tools` `select` fo
         p.push_str("- send_agent | Args: {\"id\": subagent_id, \"message\": \"message\", \"interrupt\": false} | Follow up an idle subagent or steer an active child at its next safe boundary; interrupt stops its current turn and redirects it now.\n");
         if policy.profile == ToolSchemaProfile::Coding {
             p.push_str("- set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n");
-            p.push_str("- todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n");
+            p.push_str("- todo_write | Args: {\"todos\": [{\"id\": \"t1\", \"content\": \"step\", \"status\": \"pending|in_progress|completed|blocked\", \"priority\": \"high|medium|low\"}], \"merge\": false} | Replace the persistent task plan; with merge true, update only the steps whose id you give. Use this at the start of multi-step work and update it as steps finish.\n");
         }
     }
 

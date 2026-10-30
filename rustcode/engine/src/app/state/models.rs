@@ -428,11 +428,184 @@ pub struct SubAgent {
 /// One entry of the agent's persistent task plan, managed via the `todo_write` tool.
 /// The current list is re-injected into the system prompt every round so the agent
 /// can execute its plan across turns instead of re-planning from scratch.
+///
+/// Each item has a stable `id` (`t1`, `t2`, …) so an update can name the step
+/// it changes instead of replacing an unrelated one (#2640). The plan is what
+/// the agent proposes; nothing marks a step done but the agent's own
+/// `todo_write`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct TodoItem {
+    /// Stable within the session. Older payloads had none; one is assigned.
+    #[serde(default)]
+    pub id: String,
     pub content: String,
-    pub status: String,   // "pending" | "in_progress" | "completed"
+    pub status: String,   // "pending" | "in_progress" | "completed" | "blocked"
     pub priority: String, // "high" | "medium" | "low"
+    /// Why a `blocked` step cannot go on; only a blocked step has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+}
+
+pub const TODO_STATUSES: &[&str] = &["pending", "in_progress", "completed", "blocked"];
+pub const TODO_PRIORITIES: &[&str] = &["high", "medium", "low"];
+
+/// The plan after a `todo_write` call with `args`, or why the call is refused.
+/// Nothing changes on a refusal.
+///
+/// - Without `merge`, `todos` is the whole new plan. An item keeps the id it
+///   names, else the id of the current step with the same content, else gets
+///   the next free one, so rewriting the list does not renumber it.
+/// - With `merge: true`, an item naming a current id updates only the fields
+///   it gives; an item without an id is appended; the rest stay as they are.
+/// - `status` and `priority` must be one of [`TODO_STATUSES`] and
+///   [`TODO_PRIORITIES`]; `blocked_reason` goes only with `blocked`. An id may
+///   appear once per call.
+pub fn apply_todo_write(
+    current: &[TodoItem],
+    args: &serde_json::Value,
+) -> Result<Vec<TodoItem>, String> {
+    let Some(items) = args.get("todos").and_then(|t| t.as_array()) else {
+        return Err("error: missing 'todos' array argument".to_string());
+    };
+    let merge = args.get("merge").and_then(|m| m.as_bool()).unwrap_or(false);
+    let field = |item: &serde_json::Value, key: &str| -> Result<Option<String>, String> {
+        match item.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(text)) => Ok(Some(text.trim().to_string())),
+            Some(_) => Err(format!("error: todo '{key}' must be a string")),
+        }
+    };
+    let fresh_id = |used: &mut std::collections::HashSet<String>| {
+        let id = (1..)
+            .map(|n| format!("t{n}"))
+            .find(|id| !used.contains(id))
+            .expect("an unused id");
+        used.insert(id.clone());
+        id
+    };
+    let mut used: std::collections::HashSet<String> = current
+        .iter()
+        .filter(|todo| !todo.id.is_empty())
+        .map(|todo| todo.id.clone())
+        .collect();
+    // A plan from before ids existed gets them first, in order.
+    let current: Vec<TodoItem> = current
+        .iter()
+        .cloned()
+        .map(|mut todo| {
+            if todo.id.is_empty() {
+                todo.id = fresh_id(&mut used);
+            }
+            todo
+        })
+        .collect();
+    let current = current.as_slice();
+    // Ids the call names are taken before any is handed out.
+    used.extend(
+        items
+            .iter()
+            .filter_map(|item| item.get("id")?.as_str())
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty()),
+    );
+    let mut seen = std::collections::HashSet::new();
+    let mut next = if merge {
+        current.to_vec()
+    } else {
+        Vec::with_capacity(items.len())
+    };
+    for item in items {
+        let id = field(item, "id")?.filter(|id| !id.is_empty());
+        if let Some(id) = &id
+            && !seen.insert(id.clone())
+        {
+            return Err(format!("error: todo id '{id}' appears more than once"));
+        }
+        let content = field(item, "content")?.filter(|c| !c.is_empty());
+        let status = field(item, "status")?;
+        if let Some(status) = &status
+            && !TODO_STATUSES.contains(&status.as_str())
+        {
+            return Err(format!(
+                "error: todo status '{status}' is not one of {}",
+                TODO_STATUSES.join(", ")
+            ));
+        }
+        let priority = field(item, "priority")?;
+        if let Some(priority) = &priority
+            && !TODO_PRIORITIES.contains(&priority.as_str())
+        {
+            return Err(format!(
+                "error: todo priority '{priority}' is not one of {}",
+                TODO_PRIORITIES.join(", ")
+            ));
+        }
+        let blocked_reason = field(item, "blocked_reason")?.filter(|r| !r.is_empty());
+
+        let existing = if merge {
+            id.as_ref()
+                .and_then(|id| next.iter().position(|todo| &todo.id == id))
+        } else {
+            None
+        };
+        if merge && id.is_some() && existing.is_none() {
+            return Err(format!(
+                "error: no todo with id '{}' to update; omit the id to add a step",
+                id.unwrap_or_default()
+            ));
+        }
+        let todo = if let Some(index) = existing {
+            let todo = &mut next[index];
+            if let Some(content) = content {
+                todo.content = content;
+            }
+            if let Some(status) = status {
+                todo.status = status;
+            }
+            if let Some(priority) = priority {
+                todo.priority = priority;
+            }
+            if blocked_reason.is_some() {
+                todo.blocked_reason = blocked_reason;
+            }
+            todo
+        } else {
+            let Some(content) = content else {
+                return Err("error: each new todo needs a non-empty 'content'".to_string());
+            };
+            let id = match id {
+                Some(id) => {
+                    used.insert(id.clone());
+                    id
+                }
+                None => match current
+                    .iter()
+                    .find(|todo| todo.content == content && !seen.contains(&todo.id))
+                {
+                    Some(todo) => {
+                        seen.insert(todo.id.clone());
+                        todo.id.clone()
+                    }
+                    None => fresh_id(&mut used),
+                },
+            };
+            next.push(TodoItem {
+                id,
+                content,
+                status: status.unwrap_or_else(|| "pending".to_string()),
+                priority: priority.unwrap_or_else(|| "medium".to_string()),
+                blocked_reason,
+            });
+            next.last_mut().expect("just pushed")
+        };
+        if todo.status != "blocked" {
+            if todo.blocked_reason.is_some() && existing.is_none() {
+                return Err("error: 'blocked_reason' goes only with status 'blocked'".to_string());
+            }
+            todo.blocked_reason = None;
+        }
+    }
+    Ok(next)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -990,5 +1163,128 @@ impl LiveToolCall {
             omitted_output_bytes: 0,
             started_at: std::time::Instant::now(),
         }
+    }
+}
+
+#[cfg(test)]
+mod todo_tests {
+    use super::{TodoItem, apply_todo_write};
+    use serde_json::json;
+
+    fn plan(todos: &[TodoItem]) -> Vec<(String, String, String)> {
+        todos
+            .iter()
+            .map(|t| (t.id.clone(), t.content.clone(), t.status.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_new_plan_gets_ids_and_defaults() {
+        let todos = apply_todo_write(
+            &[],
+            &json!({"todos": [{"content": "A"}, {"content": "B", "status": "in_progress"}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            plan(&todos),
+            [
+                ("t1".into(), "A".into(), "pending".into()),
+                ("t2".into(), "B".into(), "in_progress".into())
+            ]
+        );
+        assert_eq!(todos[0].priority, "medium");
+    }
+
+    #[test]
+    fn rewriting_the_list_keeps_ids_by_content_and_never_reuses_them() {
+        let first =
+            apply_todo_write(&[], &json!({"todos": [{"content": "A"}, {"content": "B"}]})).unwrap();
+        let second = apply_todo_write(
+            &first,
+            &json!({"todos": [
+                {"content": "B", "status": "completed"}, {"content": "C"}
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(
+            plan(&second),
+            [
+                ("t2".into(), "B".into(), "completed".into()),
+                ("t3".into(), "C".into(), "pending".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_updates_only_the_named_step() {
+        let todos =
+            apply_todo_write(&[], &json!({"todos": [{"content": "A"}, {"content": "B"}]})).unwrap();
+        let merged = apply_todo_write(&todos, &json!({"merge": true, "todos": [
+            {"id": "t2", "status": "blocked", "blocked_reason": "needs a token"}, {"content": "C"}
+        ]}))
+        .unwrap();
+        assert_eq!(
+            plan(&merged),
+            [
+                ("t1".into(), "A".into(), "pending".into()),
+                ("t2".into(), "B".into(), "blocked".into()),
+                ("t3".into(), "C".into(), "pending".into())
+            ]
+        );
+        assert_eq!(merged[1].blocked_reason.as_deref(), Some("needs a token"));
+        // Unblocking drops the reason; repeating the same update changes nothing.
+        let unblocked = apply_todo_write(
+            &merged,
+            &json!({"merge": true, "todos": [{"id": "t2", "status": "in_progress"}]}),
+        )
+        .unwrap();
+        assert_eq!(unblocked[1].blocked_reason, None);
+        let again = apply_todo_write(
+            &unblocked,
+            &json!({"merge": true, "todos": [{"id": "t2", "status": "in_progress"}]}),
+        )
+        .unwrap();
+        assert_eq!(again, unblocked);
+    }
+
+    #[test]
+    fn a_named_id_is_never_handed_to_another_step() {
+        let todos = apply_todo_write(
+            &[],
+            &json!({"todos": [{"content": "A"}, {"id": "t1", "content": "B"}]}),
+        )
+        .unwrap();
+        assert_eq!(plan(&todos)[0].0, "t2");
+        assert_eq!(plan(&todos)[1].0, "t1");
+    }
+
+    #[test]
+    fn invalid_calls_are_refused() {
+        let todos = apply_todo_write(&[], &json!({"todos": [{"content": "A"}]})).unwrap();
+        for args in [
+            json!({}),
+            json!({"todos": [{"content": "A", "status": "done"}]}),
+            json!({"todos": [{"content": "A", "priority": "urgent"}]}),
+            json!({"todos": [{"content": ""}]}),
+            json!({"todos": [{"id": "x", "content": "A"}, {"id": "x", "content": "B"}]}),
+            json!({"todos": [{"content": "A", "blocked_reason": "why"}]}),
+            json!({"todos": [{"content": 3}]}),
+            json!({"merge": true, "todos": [{"id": "t9", "status": "completed"}]}),
+        ] {
+            assert!(apply_todo_write(&todos, &args).is_err(), "{args}");
+        }
+    }
+
+    #[test]
+    fn an_old_payload_and_an_old_plan_still_work() {
+        let old: TodoItem = serde_json::from_value(
+            json!({"content": "A", "status": "pending", "priority": "high"}),
+        )
+        .unwrap();
+        assert_eq!(old.id, "");
+        let merged =
+            apply_todo_write(&[old], &json!({"merge": true, "todos": [{"content": "B"}]})).unwrap();
+        assert_eq!(plan(&merged)[0].0, "t1");
+        assert_eq!(plan(&merged)[1].0, "t2");
     }
 }
