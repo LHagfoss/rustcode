@@ -47,8 +47,8 @@ pub struct Cli {
     #[arg(long = "fullscreen")]
     pub fullscreen: bool,
 
-    /// Include sessions from all workspaces (default scopes the picker,
-    /// bare --resume/--continue, and `sessions list` to the current
+    /// Include threads from all workspaces (default scopes the picker,
+    /// bare --resume/--continue, and `threads list` to the current
     /// workspace; explicit --resume/--continue <id> always bypasses scoping)
     #[arg(long = "all")]
     pub all: bool,
@@ -81,18 +81,19 @@ pub enum Commands {
         command: Option<SyncCommands>,
     },
 
-    /// Export a session as a zip archive (default: into ~/Downloads) to send
-    /// to another machine; same as `sessions export`
+    /// Export a thread as a zip archive (default: into ~/Downloads) to send
+    /// to another machine; same as `threads export`
     Export {
-        /// Session id, as shown by `sessions list` or `/status`; defaults to
-        /// the most recent session
+        /// Thread id, as shown by `threads list` or `/status`; defaults to
+        /// the most recent thread
         id: Option<String>,
         /// Directory to write the archive into
         #[arg(long)]
         out: Option<std::path::PathBuf>,
     },
 
-    /// Inspect or migrate the on-disk session store
+    /// List, search, export or locate saved threads (`sessions` still works)
+    #[command(name = "threads", alias = "sessions")]
     Sessions {
         #[command(subcommand)]
         command: Option<SessionCommands>,
@@ -434,41 +435,41 @@ fn parse_bounded_usize(value: &str, min: usize, max: usize, name: &str) -> Resul
 
 #[derive(clap::Subcommand, Debug)]
 pub enum SessionCommands {
-    /// Migrate legacy sessions into sessions/YYYY/MM/DD/<id>
+    /// Migrate legacy threads into threads/YYYY/MM/DD/<id>
     Migrate {
         /// Report the migration without changing files
         #[arg(long)]
         dry_run: bool,
     },
-    /// List saved sessions (scoped to the current workspace by default)
+    /// List saved threads (scoped to the current workspace by default)
     List {
-        /// List sessions from all workspaces with their workspace per entry
+        /// List threads from all workspaces with their workspace per entry
         #[arg(long)]
         all: bool,
     },
-    /// Find saved sessions whose messages contain a text (case-insensitive),
+    /// Find saved threads whose messages contain a text (case-insensitive),
     /// scoped to the current workspace by default
     Search {
         /// Text to look for in user and assistant messages
         query: String,
-        /// Search sessions from all workspaces
+        /// Search threads from all workspaces
         #[arg(long)]
         all: bool,
-        /// Most sessions to return
+        /// Most threads to return
         #[arg(long, default_value_t = 50)]
         limit: usize,
         /// Print the matches as a JSON array
         #[arg(long)]
         json: bool,
     },
-    /// Print the on-disk directory of a session (history.json, logs, …)
+    /// Print the on-disk directory of a thread (history.json, logs, …)
     Path {
-        /// Session id, as shown by `sessions list` or `/session`
+        /// Thread id, as shown by `threads list` or `/session`
         id: String,
     },
-    /// Export a session as a zip archive (default: into ~/Downloads)
+    /// Export a thread as a zip archive (default: into ~/Downloads)
     Export {
-        /// Session id; defaults to the most recent session
+        /// Thread id; defaults to the most recent thread
         id: Option<String>,
         /// Directory to write the archive into
         #[arg(long)]
@@ -633,6 +634,13 @@ mod tests {
 
     #[test]
     fn parses_sessions_list_with_all_flag() {
+        let threads = Cli::try_parse_from(["rustcode", "threads", "list"]).unwrap();
+        assert!(matches!(
+            threads.command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::List { all: false })
+            })
+        ));
         let cli = Cli::try_parse_from(["rustcode", "sessions", "list"]).unwrap();
         assert!(matches!(
             cli.command,
