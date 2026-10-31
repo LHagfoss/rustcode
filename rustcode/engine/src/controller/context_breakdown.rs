@@ -285,10 +285,20 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
     let system_prompt_tokens = full_system_prompt_tokens
         .saturating_sub(system_tools_tokens)
         .saturating_sub(skills_tokens);
+    // Every request carries the system prompt, tools and skills, so an
+    // estimate made before the provider counts one includes them. From the
+    // transcript alone a new chat read as `~95 / 272k` while its first
+    // request already held thousands of tokens.
+    let mut current_usage = input.current_usage;
+    if current_usage.source == ContextUsageSource::HistoryEstimate {
+        current_usage.used_tokens = current_usage
+            .used_tokens
+            .saturating_add(u32::try_from(full_system_prompt_tokens).unwrap_or(u32::MAX));
+    }
 
     ContextBreakdown {
         context_window,
-        current_usage: input.current_usage,
+        current_usage,
         configured_guards,
         user_tokens,
         assistant_tokens,
@@ -299,7 +309,7 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
         subagent_tokens: input.subagent_tokens,
         compacted_history_tokens,
         compaction: input.compaction.clone(),
-        remaining_tokens: context_window.saturating_sub(input.current_usage.used_tokens as usize),
+        remaining_tokens: context_window.saturating_sub(current_usage.used_tokens as usize),
     }
 }
 
@@ -442,12 +452,21 @@ mod tests {
         let mut state = AppState::new();
         state.history.push(ChatMessage::new("user", "abcdefgh"));
         let breakdown = ContextBreakdown::from_state(&state);
+        // The transcript's two tokens plus what every request carries.
+        let overhead = breakdown.system_prompt_tokens
+            + breakdown.system_tools_tokens
+            + breakdown.skills_tokens;
+        assert!(overhead > 0);
         assert_eq!(
             breakdown.current_usage,
             ContextUsage {
-                used_tokens: 2,
+                used_tokens: (2 + overhead) as u32,
                 source: ContextUsageSource::HistoryEstimate,
             }
+        );
+        assert_eq!(
+            breakdown.remaining_tokens,
+            breakdown.context_window - 2 - overhead
         );
     }
 
@@ -457,9 +476,11 @@ mod tests {
         state
             .history
             .push(ChatMessage::new("user", "x".repeat(4_000)));
-        let report = context_report_markdown(&ContextBreakdown::from_state(&state), Some("m"));
+        let breakdown = ContextBreakdown::from_state(&state);
+        let report = context_report_markdown(&breakdown, Some("m"));
         assert!(report.contains("Model: `m`"));
-        assert!(report.contains("**Used 1.0k of"));
+        let used = format_token_count(breakdown.current_usage.used_tokens as usize);
+        assert!(report.contains(&format!("**Used {used} of")), "{report}");
         assert!(report.contains('█') || report.contains('░'));
         assert!(report.contains("| Category | Tokens | % of window |"));
         for label in CONTEXT_CATEGORY_LABELS {
