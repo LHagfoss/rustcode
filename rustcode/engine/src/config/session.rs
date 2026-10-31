@@ -434,6 +434,7 @@ mod tests {
             client_id: Some("public-client-id".into()),
             enabled: true,
             always_include: false,
+            timeout_secs: None,
         });
 
         let snapshot = session_settings_snapshot(&config, Some("selected-profile"))

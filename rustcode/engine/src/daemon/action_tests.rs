@@ -163,6 +163,7 @@ async fn production_startup_failures_are_retryable_but_missing_snapshots_are_not
         client_id: None,
         enabled: true,
         always_include: false,
+        timeout_secs: None,
     };
     let action = JobAction::McpCall {
         server: "teams".into(),
@@ -216,6 +217,7 @@ read -r line
         client_id: None,
         enabled: true,
         always_include: false,
+        timeout_secs: None,
     };
     let workspace = tempfile::tempdir().unwrap();
     let interactive = crate::mcp::start_owned_server(&config, workspace.path())
@@ -280,6 +282,7 @@ read -r line
         client_id: None,
         enabled: true,
         always_include: false,
+        timeout_secs: None,
     };
     let workspace = tempfile::tempdir().unwrap();
     let client = crate::mcp::start_owned_server(&config, workspace.path())
@@ -537,7 +540,7 @@ read -r line
     assert_eq!(output["request"]["method"], "tools/call");
     assert_eq!(
         output["request"]["params"],
-        json!({"name":"send_chat_message","arguments":{"chat_id":"123","content":"Good morning!"}})
+        json!({"name":"send_chat_message","arguments":{"chat_id":"123","content":"Good morning!"},"_meta":{"progressToken":3}})
     );
     assert_eq!(
         std::path::Path::new(output["cwd"].as_str().unwrap())

@@ -463,6 +463,7 @@ mod tests {
             client_id: None,
             enabled: true,
             always_include: false,
+            timeout_secs: None,
         }
     }
 

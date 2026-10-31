@@ -80,6 +80,7 @@ pub fn mcp_server_from_spec(spec: &McpServerSpec) -> Result<McpServerConfig, Str
         client_id: spec.client_id.clone(),
         enabled: true,
         always_include: spec.always_include,
+        timeout_secs: None,
     })
 }
 
