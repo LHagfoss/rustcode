@@ -2482,6 +2482,9 @@ private struct ChatProjectMenu: View {
     /// The footer's label is a folder and the folder's name.
     var style = Style.header
 
+    /// The widest the header's path grows before it is cut from the front.
+    static let maxPathWidth: CGFloat = 260
+
     var body: some View {
         Menu {
             let folder = model.chatProject
@@ -2514,7 +2517,11 @@ private struct ChatProjectMenu: View {
             switch style {
             case .header:
                 HStack(spacing: 3) {
+                    // Capped, so a deep folder such as one under /private/tmp
+                    // shows its last folders rather than pushing the title
+                    // across the bar; the tooltip holds the whole path.
                     Text(path).truncationMode(.head)
+                        .frame(maxWidth: Self.maxPathWidth, alignment: .trailing)
                     Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
                 }
                 .font(.callout)
