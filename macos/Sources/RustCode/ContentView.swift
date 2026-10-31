@@ -3005,6 +3005,9 @@ private struct Composer: View {
             .textFieldStyle(.plain)
             .font(.body)
             .focused($focused)
+            // AppKit's field editor draws text one point higher than the
+            // unfocused field; keep the text and placeholder steady on focus.
+            .offset(y: focused ? 1 : 0)
             .onChange(of: focused, initial: true) { _, on in ComposerPredictions.apply(composerFocused: on) }
             // Focus can settle before the field editor takes over: typing is
             // when the setting matters, so it is checked again then.
