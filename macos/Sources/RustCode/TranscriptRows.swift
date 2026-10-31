@@ -1496,29 +1496,22 @@ struct HorizontalOverflow<Content: View>: View {
     }
 }
 
-/// Under a finished turn's answer: the files it changed, the checks it ran
-/// and the git steps it took, with how each ended as observed (#2649).
-/// Unknown and cancelled checks say so; nothing here claims a check passed
-/// that did not report it. A command reads as what it did (`Ran tests`,
-/// `Committed “…”`), and its row opens to the command itself. Steps opens the
-/// turn's calls, where the output is. Off in Settings, it does not show.
+/// Under a finished turn's answer, one quiet line: how many files it
+/// changed with their lines, and how it ended (#2649): whether its checks
+/// passed and how far its git steps got. The line opens to the files; Steps
+/// opens the turn's calls, where the commands and their output are. Nothing
+/// here claims a check passed that did not report it. Off in Settings, it
+/// does not show.
 struct TurnCompletionCard: View {
     let completion: TurnCompletion
     @AppStorage(TurnCompletionCard.enabledKey) private var enabled = true
     @Environment(\.toggleToolRun) private var toggle
-    /// Nil until the reader chooses: a few files show, many fold.
-    @State private var showsFilesChoice: Bool?
-    /// The rows opened to their command, by position.
-    @State private var opened: Set<Int> = []
+    @State private var showsFiles = false
 
     static let enabledKey = "showsTurnCompletion"
-    /// Files listed without asking.
-    private static let filesShown = 3
-
-    private var showsFiles: Bool { showsFilesChoice ?? (completion.files.count <= Self.filesShown) }
 
     var body: some View {
-        if enabled {
+        if enabled, !completion.files.isEmpty || !marks.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 if showsFiles, !completion.files.isEmpty {
@@ -1529,63 +1522,28 @@ struct TurnCompletionCard: View {
                     .padding(.bottom, 6)
                     .transition(.opacity)
                 }
-                if hasSteps {
-                    Divider().opacity(0.5).padding(.horizontal, 10)
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(completion.checks.enumerated()), id: \.offset) { index, check in
-                            StepRow(symbol: check.summary.symbol, label: check.summary.label, detail: check.summary.detail,
-                                    tag: check.summary.tag, others: check.summary.others, status: Status(check.outcome),
-                                    command: check.command, isOpen: opened.contains(index)) { flip(index) }
-                        }
-                        if let pipeline = completion.pipeline {
-                            ForEach(Array(pipeline.steps.enumerated()), id: \.offset) { _, step in
-                                PipelineRow(step: step)
-                            }
-                        }
-                        if completion.failedCommands > 0 {
-                            StepRow(symbol: "exclamationmark.triangle",
-                                    label: "\(completion.failedCommands) other command\(completion.failedCommands == 1 ? "" : "s") failed",
-                                    status: .failed)
-                        }
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 6)
-                }
             }
             .font(.callout)
             .fontDesign(.rounded)
-            .background(.fill.quaternary, in: .rect(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+            .background(.fill.quaternary, in: .rect(cornerRadius: 10))
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("What this turn changed and checked")
+            .accessibilityLabel("What this turn changed")
         }
     }
 
-    private var hasSteps: Bool {
-        !completion.checks.isEmpty || completion.pipeline != nil || completion.failedCommands > 0
-    }
-
-    private func flip(_ index: Int) {
-        withAnimation(.snappy(duration: 0.15)) {
-            if opened.contains(index) { opened.remove(index) } else { opened.insert(index) }
-        }
-    }
-
-    /// `2 changed files +6 −3 ›` and, at the end, Steps.
+    /// `3 files changed +6 −3 ›   ✓ Checks passed · Committed   Steps`
     private var header: some View {
         HStack(spacing: 8) {
             if completion.files.isEmpty {
-                Label("No files changed", systemImage: "doc")
-                    .foregroundStyle(.secondary)
+                Text("No files changed").foregroundStyle(.secondary)
             } else {
                 Button {
-                    withAnimation(.snappy(duration: 0.15)) { showsFilesChoice = !showsFiles }
+                    withAnimation(.snappy(duration: 0.15)) { showsFiles.toggle() }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "doc.on.doc").foregroundStyle(.secondary)
-                        Text("\(completion.files.count) changed file\(completion.files.count == 1 ? "" : "s")")
+                        Text("\(completion.files.count) file\(completion.files.count == 1 ? "" : "s") changed")
                             .fontWeight(.medium)
-                        DiffChip(added: completion.added, removed: completion.removed)
+                        DiffStat(added: completion.added, removed: completion.removed)
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.tertiary)
@@ -1597,230 +1555,79 @@ struct TurnCompletionCard: View {
                 .hoverHighlight(cornerRadius: 6, padding: 4)
                 .help(showsFiles ? "Hide the files" : "List the files")
             }
-            if completion.checks.isEmpty, !completion.edited.isEmpty {
-                Badge(text: "No checks", symbol: "questionmark.circle", tint: .secondary)
-                    .help("This turn ran no tests, builds or lints that RustCode could see.")
+            Spacer(minLength: 8)
+            ForEach(marks, id: \.text) { mark in
+                Label(mark.text, systemImage: mark.symbol)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(mark.tint)
+                    .lineLimit(1)
+                    .help(mark.help)
             }
-            Spacer(minLength: 0)
             Button {
                 toggle(TurnFold.key(for: completion.anchor))
             } label: {
-                Label("Steps", systemImage: "list.bullet")
-                    .font(.caption.weight(.medium))
+                Image(systemName: "list.bullet")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .frame(height: 20)
-                    .background(.fill.tertiary, in: .capsule)
-                    .contentShape(.capsule)
+                    .frame(width: 22, height: 20)
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .pointingHandCursor()
-            .help("Open the turn's calls and their output")
+            .hoverHighlight(cornerRadius: 6)
+            .help("Show the turn's steps and their output")
+            .accessibilityLabel("Steps")
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .frame(minHeight: 32)
     }
 
-    /// How a step ended, as a mark: a quiet check when it passed, a word in
-    /// a tinted capsule for anything that needs a look.
-    enum Status: Equatable {
-        case passed, failed, running, pending, cancelled, unknown
-
-        init(_ outcome: TurnCompletion.Check.Outcome) {
-            self = switch outcome {
-            case .passed: .passed
-            case .failed: .failed
-            case .cancelled: .cancelled
-            case .unknown: .unknown
-            }
-        }
-
-        init(_ outcome: GitPipeline.Step.Outcome) {
-            self = switch outcome {
-            case .running: .running
-            case .succeeded: .passed
-            case .failed: .failed
-            case .pending: .pending
-            case .cancelled: .cancelled
-            case .unknown: .unknown
-            }
-        }
-
-        var word: String {
-            switch self {
-            case .passed: "passed"
-            case .failed: "failed"
-            case .running: "running"
-            case .pending: "still pending when watched"
-            case .cancelled: "stopped"
-            case .unknown: "no result"
-            }
-        }
-    }
-
-    /// A word in a small tinted capsule: `Failed`, `No checks`, `cargo`.
-    private struct Badge: View {
+    /// How the turn ended, at most two words: its checks, then its furthest
+    /// git step.
+    private struct Mark {
         let text: String
-        var symbol: String? = nil
-        var tint: Color
-
-        var body: some View {
-            HStack(spacing: 3) {
-                if let symbol { Image(systemName: symbol).imageScale(.small) }
-                Text(text)
-            }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 6)
-            .frame(height: 18)
-            .background(tint.opacity(0.12), in: .capsule)
-            .fixedSize()
-        }
-    }
-
-    private struct StatusMark: View {
-        let status: Status
-
-        var body: some View {
-            switch status {
-            case .passed:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green.opacity(0.85))
-            case .running:
-                ProgressView().controlSize(.mini)
-            case .failed:
-                Badge(text: "Failed", symbol: "xmark", tint: .red)
-            case .pending:
-                Badge(text: "Pending", symbol: "clock", tint: .orange)
-            case .cancelled:
-                Badge(text: "Stopped", tint: .secondary)
-            case .unknown:
-                Badge(text: "No result", tint: .secondary)
-            }
-        }
-    }
-
-    /// One thing the turn did: its icon, what it did, the tool as a tag, and
-    /// how it ended. With a command, a click opens the row to it.
-    private struct StepRow: View {
         let symbol: String
-        let label: String
-        var detail: String? = nil
-        var tag: String? = nil
-        var others = 0
-        let status: Status
-        var command: String? = nil
-        var isOpen = false
-        var action: (() -> Void)? = nil
-        var help: String? = nil
-
-        var body: some View {
-            VStack(alignment: .leading, spacing: 4) {
-                if let action {
-                    Button(action: action) { line.contentShape(.rect) }
-                        .buttonStyle(.plain)
-                        .hoverHighlight(cornerRadius: 6)
-                } else {
-                    line
-                }
-                if isOpen, let command {
-                    Text(command)
-                        .font(.caption.monospaced())
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .background(.background.opacity(0.6), in: .rect(cornerRadius: 8))
-                        .padding(.leading, 26)
-                        .padding(.bottom, 4)
-                        .transition(.opacity)
-                }
-            }
-            .help(help ?? command ?? "")
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel([label, detail, tag].compactMap { $0 }.joined(separator: " ") + ": \(status.word)")
-        }
-
-        private var line: some View {
-            HStack(spacing: 6) {
-                Image(systemName: symbol)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18)
-                Text(label)
-                    .layoutPriority(1)
-                    .lineLimit(1)
-                if let detail {
-                    Text(detail)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                if let tag { Badge(text: tag, tint: .brand) }
-                if others > 0 {
-                    Text("+\(others)")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.tertiary)
-                        .help("And \(others) more command\(others == 1 ? "" : "s"): \(command ?? "")")
-                }
-                Spacer(minLength: 6)
-                StatusMark(status: status)
-                // Held open on every row, so the marks line up.
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(isOpen ? 90 : 0))
-                    .opacity(command == nil ? 0 : 1)
-            }
-            .padding(.horizontal, 4)
-            .frame(minHeight: 24)
-        }
+        let tint: Color
+        let help: String
     }
 
-    /// A commit, push, pull request, CI watch or merge: `Committed “fix: x”`.
-    /// A pull request opens on GitHub; any other step opens its command's
-    /// output.
-    private struct PipelineRow: View {
-        let step: GitPipeline.Step
-        @Environment(\.revealItem) private var reveal
-
-        var body: some View {
-            StepRow(symbol: symbol, label: label, detail: detail, status: Status(step.outcome), action: open,
-                    help: "\(step.kind.title) \(Status(step.outcome).word). "
-                        + (step.link != nil ? "Opens the pull request" : "Shows the command and its output"))
+    private var marks: [Mark] {
+        var marks: [Mark] = []
+        // A check run again counts as its last run: a failure that was
+        // fixed and rerun passed.
+        var last: [String: TurnCompletion.Check.Outcome] = [:]
+        for check in completion.checks { last[check.summary.label] = check.outcome }
+        let failed = last.filter { $0.value == .failed }.keys.sorted()
+        if !failed.isEmpty {
+            marks.append(Mark(text: failed.count == 1 ? "1 check failed" : "\(failed.count) checks failed",
+                              symbol: "xmark.circle.fill", tint: .red,
+                              help: "Failed on its last run: \(failed.joined(separator: ", "))"))
+        } else if !last.isEmpty, last.values.allSatisfy({ $0 == .passed }) {
+            marks.append(Mark(text: "Checks passed", symbol: "checkmark.circle.fill", tint: .green,
+                              help: last.keys.sorted().joined(separator: ", ")))
         }
-
-        private func open() {
-            if let link = step.link { NSWorkspace.shared.open(link) } else { reveal?(step.item) }
-        }
-
-        private var done: Bool { step.outcome == .succeeded }
-
-        private var symbol: String {
-            switch step.kind {
-            case .commit: CommandSummary.Kind.commit.symbol
-            case .push: CommandSummary.Kind.push.symbol
-            case .pullRequest: CommandSummary.Kind.pullRequest.symbol
-            case .checks: CommandSummary.Kind.ciChecks.symbol
-            case .merge: CommandSummary.Kind.merge.symbol
-            }
-        }
-
-        private var label: String {
-            switch step.kind {
+        if let step = completion.pipeline?.steps.last {
+            let done = step.outcome == .succeeded
+            let text = switch step.kind {
             case .commit: done ? "Committed" : "Commit"
             case .push: done ? "Pushed" : "Push"
-            case .pullRequest:
-                if let number = step.link?.lastPathComponent { done ? "Opened pull request #\(number)" : "Pull request #\(number)" }
-                else { done ? "Opened a pull request" : "Pull request" }
-            case .checks: "CI checks"
+            case .pullRequest: done ? "Opened PR" : "Pull request"
+            case .checks: "CI"
             case .merge: done ? "Merged" : "Merge"
             }
+            let kind: CommandSummary.Kind = switch step.kind {
+            case .commit: .commit
+            case .push: .push
+            case .pullRequest: .pullRequest
+            case .checks: .ciChecks
+            case .merge: .merge
+            }
+            let failed = step.outcome == .failed
+            marks.append(Mark(text: failed ? "\(text) failed" : text,
+                              symbol: failed ? "xmark.circle.fill" : kind.symbol,
+                              tint: failed ? .red : .secondary,
+                              help: [step.kind.title, step.detail].compactMap { $0 }.joined(separator: ": ")))
         }
-
-        private var detail: String? {
-            guard let detail = step.detail else { return nil }
-            return step.kind == .commit ? "“\(detail)”" : "to \(detail)"
-        }
+        return marks
     }
 
     /// A changed file: its name, the folder it is in, and its lines.
@@ -1839,7 +1646,7 @@ struct TurnCompletionCard: View {
                     Text(folder).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 }
                 Spacer(minLength: 6)
-                DiffChip(added: file.added, removed: file.removed, quiet: true)
+                DiffStat(added: file.added, removed: file.removed)
             }
             .padding(.horizontal, 4)
             .frame(minHeight: 22)
@@ -1852,11 +1659,10 @@ struct TurnCompletionCard: View {
         }
     }
 
-    /// `+6 −3` as a compact chip; quiet in a file's row, without the fill.
-    private struct DiffChip: View {
+    /// `+6 −3`.
+    private struct DiffStat: View {
         let added: Int
         let removed: Int
-        var quiet = false
 
         var body: some View {
             HStack(spacing: 4) {
@@ -1864,9 +1670,6 @@ struct TurnCompletionCard: View {
                 Text("\u{2212}\(removed)").foregroundStyle(.red)
             }
             .font(.caption.monospacedDigit().weight(.medium))
-            .padding(.horizontal, quiet ? 0 : 6)
-            .frame(height: 18)
-            .background(quiet ? AnyShapeStyle(.clear) : AnyShapeStyle(.fill.tertiary), in: .capsule)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(added) lines added, \(removed) removed")
         }

@@ -95,7 +95,7 @@ struct VisualizationGuideView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     Button("Insert") { model.insertExamplePrompt(entry.prompt) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(PillButtonStyle(prominent: true))
                         .help("Put this request in the message field")
                 }
                 .padding(12)

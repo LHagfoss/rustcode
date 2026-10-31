@@ -82,7 +82,7 @@ extension View {
 
     /// The main action of a card, filled with the brand colour.
     func brandProminent() -> some View {
-        buttonStyle(.borderedProminent).tint(.brandFill)
+        buttonStyle(PillButtonStyle(prominent: true))
     }
 }
 

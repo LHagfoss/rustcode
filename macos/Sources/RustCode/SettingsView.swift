@@ -345,6 +345,7 @@ struct RowDivider: View {
 /// A quiet capsule button, the counterpart of the composer's controls.
 struct PillButtonStyle: ButtonStyle {
     var prominent = false
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -353,7 +354,7 @@ struct PillButtonStyle: ButtonStyle {
             .padding(.horizontal, 12)
             .frame(height: 26)
             .background(prominent ? AnyShapeStyle(Color.brandFill) : AnyShapeStyle(.fill.tertiary), in: .capsule)
-            .opacity(configuration.isPressed ? 0.7 : 1)
+            .opacity(!isEnabled ? 0.45 : configuration.isPressed ? 0.7 : 1)
             .contentShape(.capsule)
     }
 }
