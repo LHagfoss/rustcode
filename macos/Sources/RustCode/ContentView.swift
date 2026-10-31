@@ -2492,6 +2492,16 @@ private struct ChatProjectMenu: View {
                 Button("Choose Folder for This Thread…", systemImage: "folder.badge.gearshape") {
                     Task { await model.chooseChatProject() }
                 }
+                let recent = ProjectFolder.recent(model.sessions, excluding: folder)
+                if !recent.isEmpty {
+                    Section("Recent") {
+                        ForEach(recent, id: \.path) { recentFolder in
+                            Button(recentFolder.path.abbreviatingHome, systemImage: "folder") {
+                                Task { await model.newSession(in: recentFolder) }
+                            }
+                        }
+                    }
+                }
                 if model.draftProject != nil {
                     Button("Use Default Project (\(model.workspace.lastPathComponent))", systemImage: "arrow.uturn.backward") {
                         model.draftProject = nil
