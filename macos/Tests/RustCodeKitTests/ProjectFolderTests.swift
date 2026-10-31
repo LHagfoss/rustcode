@@ -51,6 +51,22 @@ final class ProjectFolderTests: XCTestCase {
         XCTAssertFalse(ProjectFolder.isUsable(locked))
     }
 
+    func testRecentFoldersAreNewestFirstWithoutRepeatsOrTheCurrentOne() {
+        let day: TimeInterval = 86_400
+        let sessions = [
+            SessionSummary(id: "a", cwd: "/code/old", updatedAt: Date(timeIntervalSince1970: 1 * day)),
+            SessionSummary(id: "b", cwd: "/code/app", updatedAt: Date(timeIntervalSince1970: 3 * day)),
+            SessionSummary(id: "c", cwd: "/code/app/", updatedAt: Date(timeIntervalSince1970: 2 * day)),
+            SessionSummary(id: "d", cwd: "/code/here", updatedAt: Date(timeIntervalSince1970: 4 * day)),
+            SessionSummary(id: "e", cwd: "/code/gone", updatedAt: Date(timeIntervalSince1970: 5 * day)),
+            SessionSummary(id: "f", cwd: ""),
+        ]
+        let recent = ProjectFolder.recent(
+            sessions, excluding: URL(fileURLWithPath: "/code/here"), usable: { $0.path != "/code/gone" })
+        XCTAssertEqual(recent.map(\.path), ["/code/app", "/code/old"])
+        XCTAssertEqual(ProjectFolder.recent(sessions, excluding: URL(fileURLWithPath: "/x"), limit: 1, usable: { _ in true }).map(\.path), ["/code/gone"])
+    }
+
     func testChooseFolderMovesAnOpenThreadInsteadOfStartingAnother() {
         XCTAssertEqual(ProjectFolder.choice(threadOpen: false, canMove: true), .startNewThreadIn)
         XCTAssertEqual(ProjectFolder.choice(threadOpen: true, canMove: true), .moveThread)

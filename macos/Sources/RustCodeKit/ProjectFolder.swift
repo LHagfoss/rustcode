@@ -61,6 +61,25 @@ public enum ProjectFolder {
         return "This thread's folder: \(here)\nDefault project for new threads: \(start)"
     }
 
+    /// The folders recent threads worked in, newest first, without `current`
+    /// and repeats, so a new thread can start in one without the file dialog.
+    /// `usable` filters out folders that are gone.
+    public static func recent(
+        _ sessions: [SessionSummary], excluding current: URL, limit: Int = 5,
+        usable: (URL) -> Bool = isUsable
+    ) -> [URL] {
+        var seen: Set<String> = [current.standardizedFileURL.path]
+        var folders: [URL] = []
+        for session in sessions.sorted(by: { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) })
+        where !session.cwd.isEmpty {
+            let folder = URL(fileURLWithPath: session.cwd, isDirectory: true).standardizedFileURL
+            guard seen.insert(folder.path).inserted, usable(folder) else { continue }
+            folders.append(folder)
+            if folders.count == limit { break }
+        }
+        return folders
+    }
+
     /// Two paths name the same folder, ignoring a trailing slash, `.` and `..`.
     public static func same(_ a: URL, _ b: URL) -> Bool {
         a.standardizedFileURL.path == b.standardizedFileURL.path
