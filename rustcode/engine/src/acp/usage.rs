@@ -25,7 +25,12 @@ pub(crate) fn usage_update(state: &crate::app::AppState) -> SessionUpdate {
                 .iter()
                 .map(|message| message.content.len())
                 .sum();
-            ((chars / 4) as u64, true)
+            // The system prompt, tools and skills ride on every request too.
+            let breakdown = crate::controller::ContextBreakdown::from_state(state);
+            let overhead = breakdown.system_prompt_tokens
+                + breakdown.system_tools_tokens
+                + breakdown.skills_tokens;
+            ((chars / 4 + overhead) as u64, true)
         }
     };
     let size = u64::from(state.active_context_window());
@@ -230,6 +235,13 @@ mod tests {
     };
     use crate::app::{ChatMessage, TokenUsage};
 
+    /// Tokens every request carries besides the transcript, as estimated.
+    fn overhead(state: &crate::app::AppState) -> u64 {
+        let breakdown = crate::controller::ContextBreakdown::from_state(state);
+        (breakdown.system_prompt_tokens + breakdown.system_tools_tokens + breakdown.skills_tokens)
+            as u64
+    }
+
     fn assistant(prompt: u32, completion: u32, cached: Option<u32>) -> ChatMessage {
         let mut message = ChatMessage::new("assistant", "reply");
         message.token_usage = Some(TokenUsage {
@@ -349,7 +361,7 @@ mod tests {
 
         assert!(state.current_token_usage.is_none());
         let value = serde_json::to_value(usage_update(&state)).unwrap();
-        assert_eq!(value["used"], 1_000);
+        assert_eq!(value["used"], 1_000 + overhead(&state));
         assert_eq!(value["_meta"]["rustcode"]["estimated"], true);
         assert_eq!(
             value["_meta"]["rustcode"]["context"]["compaction"]["count"],
@@ -400,8 +412,9 @@ mod tests {
         state.history.push(assistant(9_000, 10, None));
 
         let value = serde_json::to_value(usage_update(&state)).unwrap();
-        // 400 + 5 characters at four per token, not the saved 9 000 prompt.
-        assert_eq!(value["used"], 101);
+        // 400 + 5 characters at four per token and the system prompt, not
+        // the saved 9 000 prompt.
+        assert_eq!(value["used"], 101 + overhead(&state));
         assert_eq!(value["_meta"]["rustcode"]["estimated"], true);
         assert_eq!(value["_meta"]["rustcode"]["inputTokens"], 9_000);
     }
@@ -417,7 +430,7 @@ mod tests {
         let context = &value["_meta"]["rustcode"]["context"];
         assert_eq!(context["version"], 2);
         assert_eq!(context["window"], u64::from(state.active_context_window()));
-        assert_eq!(context["used"], 100);
+        assert_eq!(context["used"], 100 + overhead(&state));
         assert_eq!(context["estimated"], true);
         // No compaction has run in a fresh session.
         assert!(context["compaction"].is_null());
@@ -428,7 +441,7 @@ mod tests {
         assert!(categories[0]["tokens"].as_u64().unwrap() > 0);
         assert_eq!(
             context["free"].as_u64().unwrap(),
-            u64::from(state.active_context_window()) - 100
+            u64::from(state.active_context_window()) - 100 - overhead(&state)
         );
 
         let meta = context_reply_meta(&state);
