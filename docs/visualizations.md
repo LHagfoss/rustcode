@@ -245,7 +245,7 @@ field. It opens from:
   engine starts),
 - **Help ▸ Charts, Tables & Trees in Chat…**,
 - **Ask for a Chart, Table or Tree…** in the composer's + menu, and
-- the **Ask for a chart, table, or tree** link on an empty chat.
+- the **Ask for a chart, table, or tree** tip when it appears on an empty chat.
 
 The guide's entries, prompts and samples live in
 `RustCodeKit/VisualizationGuide.swift`; a test checks that it covers every
