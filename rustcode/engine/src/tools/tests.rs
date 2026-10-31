@@ -42,6 +42,7 @@ fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
         "label verified findings, judgments, and gaps",
         "never claim comprehensive coverage without evidence",
         "Avoid fixed long templates",
+        "Cite `path:line` with full repo-relative paths",
     ] {
         assert!(prompt.contains(required), "missing {required:?}");
     }
