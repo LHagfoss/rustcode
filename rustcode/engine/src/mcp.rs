@@ -19,7 +19,24 @@ pub struct McpClient {
     child: Arc<Mutex<Option<Child>>>,
     stderr_diagnostics: Arc<StdMutex<Vec<String>>>,
     stderr_finished: Arc<Notify>,
+    /// Progress listeners for in-flight stdio requests, keyed by the request
+    /// id sent as `progressToken`. A `notifications/progress` for the token
+    /// restarts that request's timeout.
+    progress: ProgressListeners,
+    /// How long a request may go without a response or progress, in seconds.
+    request_timeout_secs: AtomicU64,
 }
+
+type ProgressListeners = Arc<Mutex<HashMap<i64, mpsc::UnboundedSender<()>>>>;
+
+/// How long an MCP request may wait without a response or progress when the
+/// server's config sets no `timeout_secs`.
+pub(crate) const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// A request that keeps reporting progress may still run at most this many
+/// timeouts in total, so a server that only ever reports progress cannot hold
+/// a turn forever.
+const MAX_PROGRESS_EXTENSIONS: u32 = 60;
 
 enum Transport {
     Stdio { tx: mpsc::Sender<Value> },
@@ -914,6 +931,8 @@ impl McpClient {
             tokio::sync::oneshot::Sender<Value>,
         >::new()));
         let pending_clone = Arc::clone(&pending);
+        let progress: ProgressListeners = Arc::new(Mutex::new(HashMap::new()));
+        let progress_clone = Arc::clone(&progress);
 
         // Stdin writer task
         tokio::spawn(async move {
@@ -937,7 +956,15 @@ impl McpClient {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
                 if let Ok(msg) = serde_json::from_str::<Value>(&line) {
-                    if let Some(id) = msg.get("id").and_then(|i| i.as_i64()) {
+                    if msg.get("method").and_then(Value::as_str) == Some("notifications/progress") {
+                        let token = msg["params"]["progressToken"].as_i64();
+                        if let Some(listener) = match token {
+                            Some(token) => progress_clone.lock().await.get(&token).cloned(),
+                            None => None,
+                        } {
+                            let _ = listener.send(());
+                        }
+                    } else if let Some(id) = msg.get("id").and_then(|i| i.as_i64()) {
                         let mut pend = pending_clone.lock().await;
                         if let Some(sender) = pend.remove(&id) {
                             let _ = sender.send(msg);
@@ -996,6 +1023,8 @@ impl McpClient {
             child: Arc::new(Mutex::new(Some(child))),
             stderr_diagnostics,
             stderr_finished,
+            progress,
+            request_timeout_secs: AtomicU64::new(DEFAULT_REQUEST_TIMEOUT_SECS),
         });
 
         client.handshake().await?;
@@ -1050,6 +1079,8 @@ impl McpClient {
             child: Arc::new(Mutex::new(None)),
             stderr_diagnostics: Arc::new(StdMutex::new(Vec::new())),
             stderr_finished: Arc::new(Notify::new()),
+            progress: Arc::new(Mutex::new(HashMap::new())),
+            request_timeout_secs: AtomicU64::new(DEFAULT_REQUEST_TIMEOUT_SECS),
         });
 
         client.handshake().await.map_err(|error| {
@@ -1099,6 +1130,19 @@ impl McpClient {
         Ok(())
     }
 
+    /// Wait this long for a request's response, and for a stdio tool call,
+    /// this long since its last progress notification.
+    pub(crate) fn set_request_timeout(&self, timeout_secs: Option<u64>) {
+        let secs = timeout_secs
+            .filter(|secs| *secs > 0)
+            .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+        self.request_timeout_secs.store(secs, Ordering::Relaxed);
+    }
+
+    fn request_timeout(&self) -> Duration {
+        Duration::from_secs(self.request_timeout_secs.load(Ordering::Relaxed))
+    }
+
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         match &self.transport {
             Transport::Stdio { .. } => self.call_stdio(method, params).await,
@@ -1123,6 +1167,17 @@ impl McpClient {
             pend.insert(id, tx_one);
         }
 
+        // Ask for progress on tool calls, so a long one that reports it can
+        // outlive the timeout instead of failing while its work goes on.
+        let mut params = params;
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+        if method == "tools/call"
+            && let Some(object) = params.as_object_mut()
+        {
+            object.insert("_meta".to_string(), json!({"progressToken": id}));
+            self.progress.lock().await.insert(id, progress_tx);
+        }
+
         let req = json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -1132,10 +1187,24 @@ impl McpClient {
 
         if let Err(error) = tx.send(req).await {
             self.pending.lock().await.remove(&id);
+            self.progress.lock().await.remove(&id);
             return Err(format!("Failed to send request: {error}"));
         }
 
-        let resp = match tokio::time::timeout(Duration::from_secs(30), rx).await {
+        let timeout = self.request_timeout();
+        let mut rx = rx;
+        let mut extensions = 0;
+        let outcome = loop {
+            tokio::select! {
+                response = &mut rx => break Ok(response),
+                Some(()) = progress_rx.recv(), if extensions < MAX_PROGRESS_EXTENSIONS => {
+                    extensions += 1;
+                }
+                () = tokio::time::sleep(timeout) => break Err(()),
+            }
+        };
+        self.progress.lock().await.remove(&id);
+        let resp = match outcome {
             Ok(Ok(resp)) => resp,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&id);
@@ -1161,9 +1230,14 @@ impl McpClient {
                     "Server closed connection before responding; server reported: {diagnostics}"
                 ));
             }
-            Err(_) => {
+            Err(()) => {
                 self.pending.lock().await.remove(&id);
-                return Err("MCP request timed out".to_string());
+                return Err(format!(
+                    "MCP request timed out after {}s without a response or progress \
+                     (raise `timeout_secs` for server '{}' if its tools run longer)",
+                    timeout.as_secs(),
+                    self.name
+                ));
             }
         };
         check_jsonrpc_response(resp)
@@ -1262,7 +1336,7 @@ impl McpClient {
                 return Err("MCP client is not a remote client".to_string());
             };
             let name = self.name.clone();
-            let request = Self::build_remote_post(&snapshot, body);
+            let request = Self::build_remote_post(&snapshot, body).timeout(self.request_timeout());
             let resp = request
                 .send()
                 .await
@@ -2134,11 +2208,11 @@ pub(crate) async fn start_owned_server(
     // A missing transport is a configuration error, surfaced through the same
     // warning path as a spawn or connection failure — never a silent skip.
     server.validate()?;
-    if server.is_remote() {
+    let client = if server.is_remote() {
         let url = server.url.clone().unwrap_or_default();
         let headers = server.headers.clone();
         let name = name.clone();
-        return tokio::time::timeout(
+        tokio::time::timeout(
             Duration::from_secs(10),
             McpClient::start_remote_configured(
                 name.clone(),
@@ -2148,20 +2222,23 @@ pub(crate) async fn start_owned_server(
             ),
         )
         .await
-        .map_err(|_| format!("MCP server '{name}' startup timed out"))?;
-    }
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        McpClient::start_in_workspace(
-            server.name.clone(),
-            server.command.clone(),
-            server.args.clone(),
-            server.env.clone(),
-            Some(workspace),
-        ),
-    )
-    .await
-    .map_err(|_| format!("MCP server '{name}' startup timed out"))?
+        .map_err(|_| format!("MCP server '{name}' startup timed out"))??
+    } else {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            McpClient::start_in_workspace(
+                server.name.clone(),
+                server.command.clone(),
+                server.args.clone(),
+                server.env.clone(),
+                Some(workspace),
+            ),
+        )
+        .await
+        .map_err(|_| format!("MCP server '{name}' startup timed out"))??
+    };
+    client.set_request_timeout(server.timeout_secs);
+    Ok(client)
 }
 
 /// Owns an isolated registry and reaps clients even when a turn is dropped.
@@ -2227,6 +2304,7 @@ pub(crate) async fn start_configured_server(
 ) -> Result<(), String> {
     srv_config.validate()?;
     let name = srv_config.name.clone();
+    let timeout_secs = srv_config.timeout_secs;
     shutdown_server(&name).await;
 
     let client = if srv_config.is_remote() {
@@ -2247,6 +2325,7 @@ pub(crate) async fn start_configured_server(
         )
         .await?
     };
+    client.set_request_timeout(timeout_secs);
     clear_mcp_startup_failure(&name);
     if let Ok(mut reg) = get_mcp_registry().lock() {
         reg.insert(name, client);
@@ -2511,6 +2590,7 @@ mod tests {
             client_id: None,
             enabled: true,
             always_include: false,
+            timeout_secs: None,
         }
     }
 
@@ -2527,6 +2607,7 @@ mod tests {
                 client_id: None,
                 enabled: true,
                 always_include: false,
+                timeout_secs: None,
             },
             crate::config::McpServerConfig {
                 name: "disabled".to_string(),
@@ -2538,6 +2619,7 @@ mod tests {
                 client_id: None,
                 enabled: false,
                 always_include: false,
+                timeout_secs: None,
             },
             crate::config::McpServerConfig {
                 name: "enabled-two".to_string(),
@@ -2549,6 +2631,7 @@ mod tests {
                 client_id: None,
                 enabled: true,
                 always_include: false,
+                timeout_secs: None,
             },
         ];
         let started = Arc::new(StdMutex::new(Vec::new()));
@@ -2588,6 +2671,7 @@ mod tests {
                 client_id: None,
                 enabled: true,
                 always_include: false,
+                timeout_secs: None,
             },
             crate::config::McpServerConfig {
                 name: "reachable".to_string(),
@@ -2599,6 +2683,7 @@ mod tests {
                 client_id: None,
                 enabled: true,
                 always_include: false,
+                timeout_secs: None,
             },
         ];
         let started = Arc::new(StdMutex::new(Vec::new()));
@@ -2647,6 +2732,54 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].get("name").unwrap().as_str().unwrap(), "test_tool");
 
+        client.shutdown().await;
+    }
+
+    /// A mock server that answers the handshake, then answers tool call 3
+    /// after `body`, which may report progress for it first.
+    async fn slow_tool_server(name: &str, body: &str) -> Arc<McpClient> {
+        let script = format!(
+            "read line; echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{{}},\"serverInfo\":{{\"name\":\"mock\",\"version\":\"1.0.0\"}}}}}}'; read line; read line; echo '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"tools\":[]}}}}'; read line; {body} echo '{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"content\":[]}}}}'; read line"
+        );
+        let client = McpClient::start(
+            name.to_string(),
+            "sh".to_string(),
+            vec!["-c".to_string(), script],
+            HashMap::new(),
+        )
+        .await
+        .expect("mock server starts");
+        client.set_request_timeout(Some(1));
+        client
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tool_call_progress_extends_timeout() {
+        let progress = "echo '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":3,\"progress\":1}}';";
+        let body =
+            format!("sleep 0.6; {progress} sleep 0.6; {progress} sleep 0.6; {progress} sleep 0.6;");
+        let client = slow_tool_server("progress_server", &body).await;
+
+        let result = client.call_tool("slow", json!({})).await;
+
+        assert!(
+            result.is_ok(),
+            "progress must keep the call alive: {result:?}"
+        );
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tool_call_times_out_without_progress() {
+        let client = slow_tool_server("silent_server", "sleep 2;").await;
+
+        let error = client
+            .call_tool("slow", json!({}))
+            .await
+            .expect_err("a silent call past its timeout fails");
+
+        assert!(error.contains("timed out after 1s"), "{error}");
+        assert!(error.contains("timeout_secs"), "{error}");
         client.shutdown().await;
     }
 
@@ -3236,6 +3369,7 @@ mod tests {
             client_id: None,
             enabled: false,
             always_include: false,
+            timeout_secs: None,
         };
         let result = start_owned_server(&server, workspace.path()).await;
         let error = match result {
@@ -3259,6 +3393,7 @@ mod tests {
             client_id: None,
             enabled: true,
             always_include: false,
+            timeout_secs: None,
         };
         let result = start_owned_server(&server, workspace.path()).await;
         let client = match result {

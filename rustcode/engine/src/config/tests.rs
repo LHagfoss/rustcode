@@ -2074,6 +2074,7 @@ fn remote_mcp_server(name: &str, token: &str) -> McpServerConfig {
         client_id: None,
         enabled: true,
         always_include: false,
+        timeout_secs: None,
     }
 }
 

@@ -1502,13 +1502,19 @@ pub(super) async fn handle_app_event(
                 }
 
                 if s.show_mcp_config {
-                    let (existing_mcp_always_include, existing_mcp_client_id) = s
-                        .mcp_edit_state
-                        .as_ref()
-                        .and_then(|edit_state| edit_state.edit_index)
-                        .and_then(|idx| s.config.mcp_servers.get(idx))
-                        .map(|server| (server.always_include, server.client_id.clone()))
-                        .unwrap_or_default();
+                    let (existing_mcp_always_include, existing_mcp_client_id, existing_mcp_timeout) =
+                        s.mcp_edit_state
+                            .as_ref()
+                            .and_then(|edit_state| edit_state.edit_index)
+                            .and_then(|idx| s.config.mcp_servers.get(idx))
+                            .map(|server| {
+                                (
+                                    server.always_include,
+                                    server.client_id.clone(),
+                                    server.timeout_secs,
+                                )
+                            })
+                            .unwrap_or_default();
                     if let Some(ref mut edit_state) = s.mcp_edit_state {
                         if crate::ui::keymap::KeyMap::from_environment().resolve(key)
                             == crate::ui::keymap::KeyAction::Paste
@@ -1565,6 +1571,7 @@ pub(super) async fn handle_app_event(
                                         client_id: existing_mcp_client_id,
                                         enabled: true,
                                         always_include: existing_mcp_always_include,
+                                        timeout_secs: existing_mcp_timeout,
                                     };
 
                                     if edit_state.is_add {

@@ -805,6 +805,7 @@ mod tests {
             client_id: None,
             enabled,
             always_include: false,
+            timeout_secs: None,
         }
     }
 

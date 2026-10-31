@@ -184,6 +184,10 @@ fn oauth_client(stub: &OAuthStub) -> McpClient {
         child: Arc::new(Mutex::new(None)),
         stderr_diagnostics: Arc::new(StdMutex::new(Vec::new())),
         stderr_finished: Arc::new(Notify::new()),
+        progress: Arc::new(Mutex::new(HashMap::new())),
+        request_timeout_secs: std::sync::atomic::AtomicU64::new(
+            super::DEFAULT_REQUEST_TIMEOUT_SECS,
+        ),
     }
 }
 

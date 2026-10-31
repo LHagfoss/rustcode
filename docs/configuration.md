@@ -202,6 +202,19 @@ byte budget. If a complete server toolset cannot fit either limit, that
 reservation is rejected for the request; the rejection and omitted tool names
 are recorded in `mcp.native_schema_selection`.
 
+An MCP request fails when the server sends neither a response nor progress for
+30 seconds. A stdio tool call asks for progress (`_meta.progressToken`), and
+each `notifications/progress` the server sends for it restarts the wait, up to
+60 restarts. Set `timeout_secs` on a server whose tools run longer without
+reporting progress, such as downloads or builds:
+
+```toml
+[[mcp_servers]]
+name = "video"
+command = "video-mcp"
+timeout_secs = 600
+```
+
 ### Web search with Parallel
 
 [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)

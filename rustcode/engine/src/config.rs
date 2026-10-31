@@ -1142,6 +1142,11 @@ pub struct McpServerConfig {
     /// budget, none of that server's tools are bound and the omission is logged.
     #[serde(default)]
     pub always_include: bool,
+    /// Seconds a tool call may go without a response or progress notification
+    /// before it fails. Defaults to 30; raise it for servers whose tools run
+    /// long (downloads, builds) without reporting progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
 }
 
 impl McpServerConfig {
@@ -1782,6 +1787,7 @@ impl Default for AppConfig {
                 client_id: None,
                 enabled: true,
                 always_include: false,
+                timeout_secs: None,
             }],
             approved_command_prefixes: Vec::new(),
             denied_command_prefixes: Vec::new(),
