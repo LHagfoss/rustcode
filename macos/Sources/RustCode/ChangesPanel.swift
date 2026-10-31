@@ -97,7 +97,7 @@ struct ChangesPanel: View {
 
     private var toolbar: some View {
         HStack(spacing: 8) {
-            Picker("Compare", selection: Binding(
+            SettingsSegments("Compare", selection: Binding(
                 get: { store.scope == .workingTree ? 0 : 1 },
                 set: { choice in
                     if choice == 0 {
@@ -106,13 +106,7 @@ struct ChangesPanel: View {
                     } else {
                         store.compare(with: nil, folder: folder)
                     }
-                })) {
-                Text("Uncommitted").tag(0)
-                Text("Branch").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+                }), options: [(0, "Uncommitted"), (1, "Branch")])
             .help("Uncommitted: the files on disk against the last commit. Branch: everything since the branch left its base.")
             if case .branch(let base) = store.scope {
                 Menu {

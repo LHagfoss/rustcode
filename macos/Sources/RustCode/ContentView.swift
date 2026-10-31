@@ -444,10 +444,15 @@ private struct SessionSidebar: View {
             // A chat opened from the keyboard, a toast or a notification
             // leaves the pointer's row lit beside the new selection.
             .onChange(of: model.selectedSession) { _, _ in hoveredSession = nil }
-            // Room under the last chat, so the update pill floating over the
-            // list's foot never covers it.
-            .contentMargins(.bottom, updater.available == nil ? 0 : 56, for: .scrollContent)
-            .overlay(alignment: .bottom) { UpdatePill(updater: updater) }
+            // Room under the last chat, so the project card and update pill
+            // floating over the list's foot never cover it.
+            .contentMargins(.bottom, updater.available == nil ? 72 : 116, for: .scrollContent)
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    UpdatePill(updater: updater)
+                    projectCard
+                }
+            }
             .overlay {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
@@ -457,33 +462,39 @@ private struct SessionSidebar: View {
                         .foregroundStyle(.secondary)
                 }
             }
-
-            HStack(spacing: 4) {
-                Button { model.chooseWorkspace() } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "folder.fill").foregroundStyle(Color.brand)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(model.workspace.lastPathComponent).font(.callout.weight(.medium)).lineLimit(1)
-                            Text(model.workspace.deletingLastPathComponent().path.abbreviatingHome)
-                                .font(.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .contentShape(.rect(cornerRadius: 10))
-                }
-                .buttonStyle(ProjectButtonStyle())
-                .pointingHandCursor()
-                .help(model.keybindings.help("Choose the default project for new threads. Open threads keep their own folder", .chooseProject))
-                ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.openSettings() }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.045))
         }
+    }
+
+    /// The default project and Settings, on a glass card floating over the
+    /// list's foot, so the chats scroll on under it.
+    private var projectCard: some View {
+        HStack(spacing: 4) {
+            Button { model.chooseWorkspace() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.fill").foregroundStyle(Color.brand)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(model.workspace.lastPathComponent).font(.callout.weight(.medium)).lineLimit(1)
+                        Text(model.workspace.deletingLastPathComponent().path.abbreviatingHome)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .contentShape(.rect(cornerRadius: 10))
+            }
+            .buttonStyle(ProjectButtonStyle())
+            .pointingHandCursor()
+            .help(model.keybindings.help("Choose the default project for new threads. Open threads keep their own folder", .chooseProject))
+            ChromeButton(systemImage: "gearshape", help: model.keybindings.help("Settings", .settings)) { model.openSettings() }
+        }
+        .padding(4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .floatingSurface(in: .rect(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
     }
 }
 
@@ -506,6 +517,7 @@ private struct UpdatePill: View {
                         ProgressView().controlSize(.small)
                     }
                 }
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 14)
                 .frame(height: 32)
                 .contentShape(.capsule)
@@ -792,7 +804,7 @@ private struct MoreSessionsRow: View {
             if model.moreSessionsFailed {
                 Text("Could not load more threads.").foregroundStyle(.secondary)
                 Button("Retry") { Task { await model.retryMoreSessions() } }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(PillButtonStyle())
             } else {
                 ProgressView().controlSize(.small)
                 Text("Loading more threads…").foregroundStyle(.secondary)
@@ -2614,9 +2626,9 @@ private struct FolderSuggestionCard: View {
                     .lineLimit(2)
             }
             Spacer(minLength: 8)
-            Button("Not Now", action: dismiss).buttonStyle(.borderless)
+            Button("Not Now", action: dismiss).buttonStyle(PillButtonStyle())
             Button("Move Thread", action: move)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PillButtonStyle(prominent: true))
                 .disabled(!canMove)
                 .help(canMove ? "Move this thread to \(folder.path.abbreviatingHome)" : "Stop the running turn first")
         }
@@ -2635,7 +2647,7 @@ private struct ErrorBanner: View {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.attention)
             Text(text).font(.callout).textSelection(.enabled).lineLimit(4)
             Spacer(minLength: 8)
-            Button("Dismiss", action: dismiss).buttonStyle(.borderless)
+            Button("Dismiss", action: dismiss).buttonStyle(PillButtonStyle())
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

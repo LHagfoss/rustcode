@@ -27,7 +27,7 @@ struct PermissionCard: View {
             HStack {
                 if request.autoApproveOption != nil {
                     Button("Approve All from Now On") { Task { await model.setAutoApprove(true) } }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(PillButtonStyle())
                         .help("Auto-approve tools from now on. Turn it off in Settings.")
                 }
                 Spacer()
@@ -37,7 +37,7 @@ struct PermissionCard: View {
                             .brandProminent()
                     } else {
                         Button(option.name) { Task { await model.answer(request, with: option) } }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(PillButtonStyle())
                     }
                 }
             }
@@ -85,13 +85,14 @@ struct QuestionCard: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { Task { await model.answer(request, text: custom) } }
                 Button("Send") { Task { await model.answer(request, text: custom) } }
+                    .buttonStyle(PillButtonStyle(prominent: true))
                     .disabled(custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             HStack {
                 Spacer()
                 if let reject = request.rejectOption {
                     Button(reject.name) { Task { await model.answer(request, with: reject) } }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(PillButtonStyle())
                 }
                 if question.multiple {
                     Button("Submit") {

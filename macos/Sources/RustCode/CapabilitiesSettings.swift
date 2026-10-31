@@ -298,11 +298,10 @@ private struct AddMCPServerSheet: View {
             Text("Add MCP Server").font(.headline)
             Form {
                 TextField("Name", text: $draft.name, prompt: Text("files"))
-                Picker("Type", selection: $draft.transport) {
-                    Text("Local command").tag(MCPServerDraft.Transport.stdio)
-                    Text("Remote URL").tag(MCPServerDraft.Transport.http)
+                LabeledContent("Type") {
+                    SettingsSegments("Type", selection: $draft.transport,
+                                     options: [(.stdio, "Local command"), (.http, "Remote URL")])
                 }
-                .pickerStyle(.segmented)
                 switch draft.transport {
                 case .stdio:
                     TextField("Command", text: $draft.command, prompt: Text("npx -y @example/files-mcp"))

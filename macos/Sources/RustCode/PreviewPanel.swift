@@ -129,9 +129,9 @@ struct PreviewPanel: View {
             Text(error.message).font(.callout).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             if error.browserURL != nil {
-                Button("Open in Browser") { preview.openInBrowser() }.buttonStyle(.borderless)
+                Button("Open in Browser") { preview.openInBrowser() }.buttonStyle(PillButtonStyle())
             }
-            Button("Dismiss") { preview.dismissAddressError() }.buttonStyle(.borderless)
+            Button("Dismiss") { preview.dismissAddressError() }.buttonStyle(PillButtonStyle())
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
