@@ -1678,6 +1678,7 @@ private struct ChatView: View {
                   isDraft: model.selectedSession == nil,
                   choose: { Task { await model.chooseChatProject() } },
                   showVisualizations: { model.showsVisualizationGuide = true })
+            .id(chat.transcript.identity)
     }
 
     /// The + or model panel, drawn over the whole chat so nothing clips it, with
@@ -2423,6 +2424,16 @@ private struct EmptyChat: View {
     let showVisualizations: () -> Void
     @AppStorage(NewThreadBanner.key) private var banner = ""
 
+    private static let tips: [(text: String, image: String, opensGuide: Bool)] = [
+        ("Use + to attach files, folders, or images", "paperclip", false),
+        ("Choose a folder just for this thread", "folder", false),
+        ("Ask for a chart, table, or tree", "chart.bar.xaxis", true),
+        ("Use the preview to view a local site alongside your chat", "globe", false),
+        ("Open the terminal alongside your conversation", "terminal", false),
+        ("Search a thread to find an earlier message", "magnifyingglass", false),
+    ]
+    @State private var tip = Int.random(in: 0..<tips.count)
+
     var body: some View {
         VStack(spacing: 14) {
             VStack(spacing: 14) {
@@ -2433,7 +2444,7 @@ private struct EmptyChat: View {
                         .frame(width: 88, height: 88)
                 }
                 Text("What should we build?")
-                    .font(.title2.weight(.semibold))
+                    .font(.title.weight(.semibold))
             }
             .allowsHitTesting(false)
             if isDraft {
@@ -2458,14 +2469,19 @@ private struct EmptyChat: View {
                     .foregroundStyle(.secondary)
                     .allowsHitTesting(false)
             }
-            // The one way in that needs no menu or command: answers can hold
-            // charts, tables and trees, and the guide shows how to ask.
-            Button(action: showVisualizations) {
-                Label("Ask for a chart, table, or tree", systemImage: "chart.bar.xaxis")
+            if Self.tips[tip].opensGuide {
+                Button(action: showVisualizations) {
+                    Label(Self.tips[tip].text, systemImage: Self.tips[tip].image)
+                        .font(.callout)
+                }
+                .buttonStyle(.link)
+                .help("Examples of visualizations you can ask for (/visualize)")
+            } else {
+                Label(Self.tips[tip].text, systemImage: Self.tips[tip].image)
                     .font(.callout)
+                    .foregroundStyle(Color.brand)
+                    .multilineTextAlignment(.center)
             }
-            .buttonStyle(.link)
-            .help("Examples of visualizations you can ask for (/visualize)")
         }
     }
 }
