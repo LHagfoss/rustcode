@@ -1,3 +1,7 @@
+## [v0.112.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.112.2) - 2026-10-31
+
+### Fixes
+- The summary under a turn is one line with the changed files, their lines and how checks and git steps ended; buttons and switches across the app match Settings, and the sidebar's project card floats over the list. (#2720)
 ## [v0.112.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.112.1) - 2026-10-30
 
 ### Fixes
