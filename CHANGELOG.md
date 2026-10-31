@@ -1,3 +1,11 @@
+## [v0.113.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.113.0) - 2026-10-31
+
+### Features
+- MCP tool calls can run past 30 seconds: servers that report progress keep the call alive, and `timeout_secs` raises the limit per server. (#2724)
+- A new chat's context meter no longer reads near zero before the first reply. (#2726)
+- Answers cite code with full repo-relative paths. (#2728)
+- A thread in a deep folder no longer fills the header with its full path. (#2730)
+- A new thread's folder menu lists recent project folders, so starting a thread in one skips the file dialog. (#2732)
 ## [v0.112.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.112.2) - 2026-10-31
 
 ### Fixes
