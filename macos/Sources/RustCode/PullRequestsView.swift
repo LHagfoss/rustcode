@@ -278,7 +278,7 @@ private struct PullRequestsPanel: View {
                 .font(.callout)
                 .padding(.horizontal, 12)
                 .frame(height: 30)
-                .glassSurface(in: .capsule)
+                .blurSurface(in: .capsule)
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
@@ -1045,7 +1045,7 @@ struct PullWatchChip: View {
             .font(.caption.weight(.medium))
             .padding(.horizontal, 10)
             .frame(height: 24)
-            .glassSurface(in: .capsule)
+            .blurSurface(in: .capsule)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)

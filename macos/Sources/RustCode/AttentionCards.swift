@@ -256,10 +256,10 @@ private struct AnswerRow: View {
 }
 
 private extension View {
-    /// An approval or question above the composer: Liquid Glass with a
+    /// An approval or question above the composer: the blurred material with a
     /// neutral hairline. The header's symbol carries the state, not the edge.
     func attentionCard() -> some View {
-        glassSurface(in: .rect(cornerRadius: 20))
+        blurSurface(in: .rect(cornerRadius: 20))
             .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.1), lineWidth: 1) }
     }
 }

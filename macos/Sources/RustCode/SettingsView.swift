@@ -187,7 +187,7 @@ struct SettingsView: View {
         .font(.callout)
         .padding(.horizontal, 12)
         .frame(height: 30)
-        .glassSurface(in: .capsule)
+        .blurSurface(in: .capsule)
     }
 
     private var noMatches: some View {
@@ -852,7 +852,7 @@ private struct KeybindingsSettings: View {
         .font(.callout)
         .padding(.horizontal, 12)
         .frame(height: 30)
-        .glassSurface(in: .capsule)
+        .blurSurface(in: .capsule)
         .frame(maxWidth: 280)
         .simultaneousGesture(TapGesture().onEnded { recording = nil })
     }
@@ -923,7 +923,7 @@ private struct RecordingBanner: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassSurface(in: .rect(cornerRadius: 14))
+        .blurSurface(in: .rect(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.brand.opacity(0.45), lineWidth: 1)
         }
@@ -949,11 +949,11 @@ private struct NoteBanner: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-        .glassSurface(in: .rect(cornerRadius: 14))
+        .blurSurface(in: .rect(cornerRadius: 14))
     }
 }
 
-/// A capsule button on Liquid Glass, for the controls above the keybinds.
+/// A capsule button on the blurred material, for the controls above the keybinds.
 private struct GlassPillButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
@@ -964,7 +964,7 @@ private struct GlassPillButtonStyle: ButtonStyle {
             .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
             .padding(.horizontal, 12)
             .frame(height: 28)
-            .interactiveGlassSurface(in: .capsule)
+            .blurSurface(in: .capsule)
             .opacity(configuration.isPressed ? 0.7 : 1)
             .contentShape(.capsule)
     }

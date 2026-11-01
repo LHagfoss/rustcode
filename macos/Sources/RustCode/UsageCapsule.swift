@@ -2,7 +2,7 @@ import RustCodeKit
 import SwiftUI
 
 /// The chat header's context meter: a short bar filling with the share of the
-/// context window in use, and `34k / 128k` beside it, on the same Liquid Glass
+/// context window in use, and `34k / 128k` beside it, on the same filled
 /// capsule as the toolbar clusters. The tooltip adds the session's tokens.
 struct UsageCapsule: View {
     let usage: SessionUsage
@@ -18,7 +18,7 @@ struct UsageCapsule: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 28)
-        .glassSurface(in: .capsule)
+        .background(.fill.tertiary, in: .capsule)
         .fixedSize()
         .help(usage.detail)
         .accessibilityElement(children: .ignore)

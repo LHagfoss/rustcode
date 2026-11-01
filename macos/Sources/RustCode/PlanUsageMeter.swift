@@ -85,7 +85,7 @@ struct PlanUsagePanel: View {
         PlanUsageRows(usage: usage, compact: true)
             .padding(14)
             .frame(width: Self.width, alignment: .leading)
-            .glassSurface(in: .rect(cornerRadius: 18))
+            .blurSurface(in: .rect(cornerRadius: 18))
             .padding(.leading, leading)
             .frame(width: bounds.width, height: max(meter.minY - 10, 0), alignment: .bottomLeading)
             .allowsHitTesting(false)

@@ -83,6 +83,7 @@ struct ContentView: View {
         .background(Color.sidebarBackground)
         .ignoresSafeArea()
         .tint(.brand)
+        .floatingPopoverHost()
         // Settings is a page in the window's place, over the chats and the
         // chat, which stay alive under it (#2553). It opens and closes at
         // once, with no transition, even inside an animated change (#2593).
@@ -237,7 +238,8 @@ struct ChromeButton: View {
     }
 }
 
-/// Toolbar buttons grouped in one Liquid Glass capsule, as in Finder.
+/// Toolbar buttons grouped in one quiet filled capsule, as the header's
+/// Plan button is drawn, rather than Liquid Glass.
 struct ToolbarCluster<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -245,7 +247,7 @@ struct ToolbarCluster<Content: View>: View {
         HStack(spacing: 0) { content }
             .padding(.horizontal, 3)
             .frame(height: 28)
-            .glassSurface(in: .capsule)
+            .background(.fill.tertiary, in: .capsule)
     }
 }
 
@@ -266,7 +268,7 @@ struct ClusterButton: View {
                 .foregroundStyle(isOn ? AnyShapeStyle(Color.brand) : AnyShapeStyle(.secondary))
                 .offset(y: Self.opticalOffset[systemImage] ?? 0)
                 .frame(width: 32, height: 24)
-                .background(isHovered || isOn ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear), in: .capsule)
+                .background(isHovered || isOn ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear), in: .capsule)
                 .contentShape(.capsule)
         }
         .buttonStyle(.plain)
@@ -279,7 +281,7 @@ struct ClusterButton: View {
     private static let opticalOffset: [String: CGFloat] = ["square.and.pencil": -1]
 }
 
-/// The sidebar's buttons, in one glass cluster: at the sidebar bar's
+/// The sidebar's buttons, in one cluster: at the sidebar bar's
 /// trailing end while it shows, beside the traffic lights in the chat's
 /// title bar while it is hidden.
 struct SidebarBarButtons: View {
@@ -367,7 +369,7 @@ private struct SessionSidebar: View {
             .font(.callout)
             .padding(.horizontal, 12)
             .frame(height: 30)
-            .glassSurface(in: .capsule)
+            .blurSurface(in: .capsule)
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
@@ -500,7 +502,7 @@ private struct SessionSidebar: View {
     }
 }
 
-/// A new version, floating over the foot of the chat list in glass, so it
+/// A new version, floating over the foot of the chat list, blurred, so it
 /// neither takes a row of its own nor leaves a gap above the project bar.
 private struct UpdatePill: View {
     @ObservedObject var updater: Updater
@@ -525,7 +527,7 @@ private struct UpdatePill: View {
                 .contentShape(.capsule)
             }
             .buttonStyle(QuietPressStyle())
-            .interactiveGlassSurface(in: .capsule)
+            .blurSurface(in: .capsule)
             .pointingHandCursor()
             .padding(.bottom, 12)
             .help("Install the new version and restart RustCode")
@@ -921,8 +923,8 @@ struct RenameSheet: View {
     }
 }
 
-/// "All" or "Project": which chats the sidebar lists. The native segmented
-/// control, which is Liquid Glass on macOS 26.
+/// "All" or "Project": which chats the sidebar lists, in a filled capsule
+/// like the toolbar clusters.
 struct ScopeToggle: View {
     @Binding var showsAll: Bool
     @Namespace private var selection
@@ -933,7 +935,7 @@ struct ScopeToggle: View {
             segment("Project", isOn: !showsAll) { showsAll = false }
         }
         .padding(2)
-        .glassSurface(in: .capsule)
+        .background(.fill.tertiary, in: .capsule)
         .animation(.snappy(duration: 0.2), value: showsAll)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Threads")
@@ -1725,7 +1727,7 @@ private struct ChatView: View {
                     }
                     .padding(6)
                     .frame(width: panel == .model ? min(380, max(CGFloat(layout.column), 290)) : 290, alignment: .leading)
-                    .glassSurface(in: .rect(cornerRadius: 20))
+                    .blurSurface(in: .rect(cornerRadius: 20))
                     if panel == .add { Spacer(minLength: 0) }
                 }
                 .frame(maxWidth: Self.columnMaxWidth)
@@ -2017,7 +2019,7 @@ private struct CommandSuggestions: View {
                     }
                 }
                 .clipShape(.rect(cornerRadius: 20))
-                .glassSurface(in: .rect(cornerRadius: 20))
+                .blurSurface(in: .rect(cornerRadius: 20))
                 .frame(maxWidth: 760)
                 .padding(.horizontal, layout.padding)
                 .padding(.bottom, composerHeight + 16 + 8)
@@ -2121,7 +2123,7 @@ private struct StickyTurnBar: View {
                     .padding(.horizontal, 12)
                     .frame(height: 28)
                     .contentShape(.capsule)
-                    .interactiveGlassSurface(in: .capsule)
+                    .blurSurface(in: .capsule)
                 }
                 .buttonStyle(.plain)
                 .pointingHandCursor()
@@ -2146,7 +2148,7 @@ private struct LatestButton: View {
                 .padding(.horizontal, 12)
                 .frame(height: 30)
                 .contentShape(.capsule)
-                .interactiveGlassSurface(in: .capsule)
+                .blurSurface(in: .capsule)
         }
         .buttonStyle(.plain)
         .help("Scroll to the latest message")
@@ -2435,7 +2437,7 @@ private struct FindBar: View {
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .frame(height: 38)
-        .glassSurface(in: .capsule)
+        .blurSurface(in: .capsule)
         .frame(maxWidth: 560)
         .padding(.horizontal, 28)
         .padding(.bottom, 8)
