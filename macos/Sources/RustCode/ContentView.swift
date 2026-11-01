@@ -2745,6 +2745,9 @@ private struct ComposerCaretFollower: NSViewRepresentable {
 
     final class FollowerView: NSView {
         private var observers: [Any] = []
+        private weak var adjustedLayout: NSLayoutManager?
+        private weak var adjustedField: NSTextField?
+        private var originalFontLeading = true
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -2752,7 +2755,14 @@ private struct ComposerCaretFollower: NSViewRepresentable {
             super.viewDidMoveToWindow()
             observers.forEach(NotificationCenter.default.removeObserver)
             observers = []
+            restoreFontLeading()
             guard window != nil else { return }
+            observers.append(NotificationCenter.default.addObserver(forName: NSControl.textDidEndEditingNotification, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let self, let field = note.object as? NSTextField, field === self.adjustedField else { return }
+                    self.restoreFontLeading()
+                }
+            })
             for name in [NSTextView.didChangeSelectionNotification, NSText.didChangeNotification] {
                 observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                     guard let editor = note.object as? NSTextView else { return }
@@ -2764,14 +2774,33 @@ private struct ComposerCaretFollower: NSViewRepresentable {
 
         private func follow(_ editor: NSTextView) {
             guard let scroll = enclosingScrollView, let document = scroll.documentView,
-                  editor.window === window, editor.isDescendant(of: document),
+                  editor.window === window, window?.firstResponder === editor, editor.isDescendant(of: document),
                   let layout = editor.layoutManager, let container = editor.textContainer else { return }
+            var ancestor: NSView? = editor.superview
+            while ancestor != nil && !(ancestor is NSTextField) { ancestor = ancestor?.superview }
+            guard let field = ancestor as? NSTextField else { return }
+            if adjustedLayout !== layout {
+                restoreFontLeading()
+                adjustedLayout = layout
+                adjustedField = field
+                originalFontLeading = layout.usesFontLeading
+                // The unfocused field lays out 16-point lines; the shared field
+                // editor otherwise adds font leading and shifts every next line.
+                layout.usesFontLeading = false
+                layout.invalidateLayout(forCharacterRange: NSRange(location: 0, length: editor.string.utf16.count), actualCharacterRange: nil)
+            }
             let caret = NSRange(location: editor.selectedRange().upperBound, length: 0)
             let glyphs = layout.glyphRange(forCharacterRange: caret, actualCharacterRange: nil)
             var rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
             if rect.height == 0 { rect.size.height = layout.defaultLineHeight(for: editor.font ?? .systemFont(ofSize: NSFont.systemFontSize)) }
             rect = rect.offsetBy(dx: editor.textContainerOrigin.x, dy: editor.textContainerOrigin.y)
             document.scrollToVisible(editor.convert(rect.insetBy(dx: 0, dy: -2), to: document))
+        }
+
+        private func restoreFontLeading() {
+            adjustedLayout?.usesFontLeading = originalFontLeading
+            adjustedLayout = nil
+            adjustedField = nil
         }
 
         deinit { observers.forEach(NotificationCenter.default.removeObserver) }
@@ -3005,6 +3034,9 @@ private struct Composer: View {
             .textFieldStyle(.plain)
             .font(.body)
             .focused($focused)
+            // AppKit's field editor draws text one point higher than the
+            // unfocused field; keep the text and placeholder steady on focus.
+            .offset(y: focused ? 1 : 0)
             .onChange(of: focused, initial: true) { _, on in ComposerPredictions.apply(composerFocused: on) }
             // Focus can settle before the field editor takes over: typing is
             // when the setting matters, so it is checked again then.
