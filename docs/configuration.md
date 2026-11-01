@@ -204,9 +204,11 @@ are recorded in `mcp.native_schema_selection`.
 
 An MCP request fails when the server sends neither a response nor progress for
 30 seconds. A stdio tool call asks for progress (`_meta.progressToken`), and
-each `notifications/progress` the server sends for it restarts the wait, up to
-60 restarts. Set `timeout_secs` on a server whose tools run longer without
-reporting progress, such as downloads or builds:
+each `notifications/progress` the server sends for it restarts the wait; a
+call that keeps reporting progress may run up to 61 timeouts in total (about
+30 minutes at the default). Set `timeout_secs` on a server whose tools run
+longer without reporting progress, such as downloads or builds. `rustcode mcp
+add --force` keeps a `timeout_secs` already set on the server it replaces:
 
 ```toml
 [[mcp_servers]]

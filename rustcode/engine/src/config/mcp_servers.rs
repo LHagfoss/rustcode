@@ -183,6 +183,13 @@ pub(crate) fn add_mcp_server_in(
                 server.name
             )),
             Some(index) => {
+                // `timeout_secs` is only set by hand in the config; a
+                // replacement from `mcp add --force` or the agent's `mcp`
+                // tool carries none and must not drop it silently.
+                let mut server = server;
+                if server.timeout_secs.is_none() {
+                    server.timeout_secs = servers[index].timeout_secs;
+                }
                 servers[index] = server;
                 Ok(true)
             }

@@ -2112,6 +2112,39 @@ fn mcp_add_keeps_an_existing_server_unless_forced() {
 }
 
 #[test]
+fn mcp_add_force_keeps_a_hand_set_timeout() {
+    let dir = TempDir::new().unwrap();
+    let mut first = remote_mcp_server("slow", "one");
+    first.timeout_secs = Some(300);
+    mcp_servers::add_mcp_server_in(dir.path(), first, false).unwrap();
+
+    mcp_servers::add_mcp_server_in(dir.path(), remote_mcp_server("slow", "two"), true).unwrap();
+    let (_, _, config) = load_config_from(dir.path());
+    let stored = config
+        .mcp_servers
+        .iter()
+        .find(|entry| entry.name == "slow")
+        .unwrap();
+    assert_eq!(stored.timeout_secs, Some(300));
+    assert_eq!(stored.headers, remote_mcp_server("slow", "two").headers);
+
+    let mut explicit = remote_mcp_server("slow", "three");
+    explicit.timeout_secs = Some(60);
+    mcp_servers::add_mcp_server_in(dir.path(), explicit, true).unwrap();
+    let (_, _, config) = load_config_from(dir.path());
+    let stored = config
+        .mcp_servers
+        .iter()
+        .find(|entry| entry.name == "slow")
+        .unwrap();
+    assert_eq!(
+        stored.timeout_secs,
+        Some(60),
+        "a replacement's own timeout wins"
+    );
+}
+
+#[test]
 fn mcp_add_rejects_names_and_entries_the_runtime_cannot_use() {
     let dir = TempDir::new().unwrap();
     for name in ["", "two words", "a/b"] {
