@@ -80,6 +80,10 @@ instructions for work in this repository.
   `scripts/release-notes.sh > notes.md` (each PR's `## Changelog` line, else
   its title), edit, then pass `--notes-file`. Release once per batch of merged
   work, not per PR.
+- To try a batch on a Mac before a full release, cut a release candidate:
+  `--version X.Y.Z-rc.N`. Only the macOS CLI and app are built, published as
+  a GitHub prerelease that Homebrew and both updaters skip. The next
+  `--patch`/`--minor` release after it is `X.Y.Z` itself.
 
 ## Pull requests
 

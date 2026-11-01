@@ -141,7 +141,10 @@ Usage: $(basename "$0") [OPTIONS]
 Release automation for the rustcode workspace.
 
 Required:
-  --version VERSION    Semver version to release (e.g. 0.52.0)
+  --version VERSION    Semver version to release (e.g. 0.52.0). A suffix
+                       makes a release candidate (e.g. 0.53.0-rc.1): only the
+                       macOS CLI and app are built, published as a GitHub
+                       prerelease that Homebrew and the updaters skip.
 
 Optional:
   --patch              Derive version: patch bump over max(latest tag, Cargo.toml)
@@ -281,11 +284,23 @@ get_current_version() {
 }
 
 # Compare two semver strings; returns 0 if a > b, 1 otherwise.
+# Semver precedence: X.Y.Z first, and a release outranks its own release
+# candidates (0.115.0 > 0.115.0-rc.2 > 0.115.0-rc.1); plain `sort -V` puts
+# the bare version first.
 semver_gt() {
-    local sorted last
-    sorted="$(printf '%s\n%s\n' "$1" "$2" | sort -V)"
+    local a="$1" b="$2" a_core="${1%%-*}" b_core="${2%%-*}" sorted last
+    [[ "$a" == "$b" ]] && return 1
+    if [[ "$a_core" != "$b_core" ]]; then
+        sorted="$(printf '%s\n%s\n' "$a_core" "$b_core" | sort -V)"
+        last="$(printf '%s\n' "$sorted" | tail -n1)"
+        [[ "$last" == "$a_core" ]]
+        return
+    fi
+    [[ "$a" == "$a_core" ]] && return 0
+    [[ "$b" == "$b_core" ]] && return 1
+    sorted="$(printf '%s\n%s\n' "$a" "$b" | sort -V)"
     last="$(printf '%s\n' "$sorted" | tail -n1)"
-    [[ "$last" == "$1" && "$1" != "$2" ]]
+    [[ "$last" == "$a" ]]
 }
 
 # Latest released version from tags (without the leading v), or empty.
@@ -321,6 +336,11 @@ derive_bump_version() {
     base="$current"
     if [[ -n "${tag:-}" ]] && semver_gt "$tag" "$current"; then
         base="$tag"
+    fi
+    # After a release candidate, the next release is that version itself.
+    if [[ "$base" == *-* ]]; then
+        printf '%s\n' "${base%%-*}"
+        return
     fi
     bump_version "$base" "$part"
 }
@@ -503,7 +523,9 @@ phase_update_versions() {
     local pbxproj="$REPO_ROOT/$IOS_PROJECT"
     [[ -f "$pbxproj" ]] || die "iOS project not found: $pbxproj"
     tmp="$(mktemp)"
-    sed -e 's/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = '"$VERSION"';/' \
+    # The App Store version is plain X.Y.Z; a release candidate's suffix
+    # stays out of it (the build number already drops it).
+    sed -e 's/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = '"${VERSION%%-*}"';/' \
         -e 's/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = '"$(ios_build_number "$VERSION")"';/' \
         "$pbxproj" > "$tmp"
     if $DRY_RUN; then
@@ -517,6 +539,11 @@ phase_update_versions() {
 IOS_PROJECT="ios/RustCode.xcodeproj/project.pbxproj"
 
 # 0.72.3 -> 72003: monotonic across releases, as CFBundleVersion must be.
+# A release candidate: a version with a pre-release suffix, `0.115.0-rc.1`.
+is_prerelease() {
+    [[ "$VERSION" == *-* ]]
+}
+
 ios_build_number() {
     local core="${1%%-*}" major minor patch
     IFS=. read -r major minor patch <<< "$core"
@@ -1056,6 +1083,14 @@ phase_verify_release() {
         "rustcode-windows-x86_64.zip"
         "SHA256SUMS"
     )
+    # A release candidate ships the macOS CLI and app only (build.yml).
+    if is_prerelease; then
+        expected_assets=(
+            "rustcode-macos-aarch64.tar.gz"
+            "rustcode-macos-aarch64-swift-app.zip"
+            "SHA256SUMS"
+        )
+    fi
 
     # Poll until the GitHub release exists and lists every expected asset:
     # the release can be visible a moment before its asset list is complete.
@@ -1064,7 +1099,7 @@ phase_verify_release() {
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
         # Use supported fields: tagName, name, url, assets.
-        release_info="$(gh release view "v$VERSION" --json tagName,name,url,assets 2>/dev/null || true)"
+        release_info="$(gh release view "v$VERSION" --json tagName,name,url,assets,isPrerelease 2>/dev/null || true)"
         if [[ -n "$release_info" ]] &&
             jq -e --args '[.assets[].name] as $names | all($ARGS.positional[]; IN($names[]))' \
                 "${expected_assets[@]}" >/dev/null 2>&1 <<<"$release_info"; then
@@ -1115,10 +1150,28 @@ phase_verify_release() {
         die "Missing expected assets: ${missing_assets[*]}"
     fi
 
+    local prerelease
+    prerelease="$(echo "$release_info" | jq -r '.isPrerelease')"
+    if is_prerelease && [[ "$prerelease" != "true" ]]; then
+        die "v$VERSION is a release candidate but was not published as a prerelease; stable updaters would pick it up."
+    fi
+    if ! is_prerelease && [[ "$prerelease" == "true" ]]; then
+        die "v$VERSION was published as a prerelease; the updaters will not see it."
+    fi
+
 }
 
 phase_verify_distribution() {
     info "Phase 14: Verifying Homebrew metadata and local updater"
+
+    if is_prerelease; then
+        # Homebrew and both updaters follow `releases/latest`, which skips a
+        # prerelease: nothing to verify there, and nothing changed for users.
+        info "  Release candidate: Homebrew and the updaters stay on the last stable release."
+        info "  Install it from https://github.com/LHagfoss/rustcode/releases/tag/v$VERSION"
+        info "Release candidate v$VERSION complete."
+        return
+    fi
 
     if $DRY_RUN; then
         info "[dry-run] Would verify the Homebrew formula, run rustcode --update, and check rustcode --version."
@@ -1336,8 +1389,11 @@ run_tests() {
        [[ "$(bump_version 1.2.3-rc.1 patch)" == "1.2.4" ]] && \
        [[ "$(ios_build_number 0.72.3)" == "72003" ]] && \
        [[ "$(ios_build_number 1.0.0-rc.1)" == "1000000" ]] && \
+       semver_gt 0.115.0 0.115.0-rc.1 && ! semver_gt 0.115.0-rc.1 0.115.0 && \
+       semver_gt 0.115.0-rc.2 0.115.0-rc.1 && semver_gt 0.115.0-rc.1 0.114.0 && \
+       semver_gt 0.114.10 0.114.9 && ! semver_gt 0.114.0 0.114.0 && \
        ! bump_version 1.2.3 bogus >/dev/null 2>&1; then
-        info "  ✓ patch/minor/major bumps correct, pre-release dropped, invalid rejected"
+        info "  ✓ bumps, pre-release ordering and invalid input correct"
     else
         error "  ✗ bump_version arithmetic wrong"
         failed=$((failed + 1))
