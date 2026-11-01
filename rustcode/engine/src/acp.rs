@@ -545,6 +545,12 @@ async fn acp_load_session(
             connection,
             &session_id,
         );
+        state.smart_ui_client = preview::smart_ui_client_for(
+            state.smart_ui == crate::app::SmartUi::On
+                && server.client_has_smart_ui_preview.load(Ordering::Relaxed),
+            connection,
+            &session_id,
+        );
         let config_options = build_session_config_options(&state);
         let loaded_usage = usage::usage_update(&state);
         let loaded_compaction = state.last_compaction.clone();
@@ -841,6 +847,8 @@ struct AcpServer {
     /// The client advertised `_meta.rustcode.preview` (#2138), so its
     /// sessions get `localhost_preview`.
     client_has_preview: Arc<AtomicBool>,
+    /// The client renders `smart_ui_preview` calls (`smartUi >= 2`).
+    client_has_smart_ui_preview: Arc<AtomicBool>,
     /// The client hosts other threads for `message_session` (#2637).
     client_has_orchestration: Arc<AtomicBool>,
     /// Discord Rich Presence, for a client that asked for it (#2179).
@@ -895,6 +903,7 @@ impl AcpServer {
             visualization_level: Arc::new(AtomicU8::new(0)),
             client_smart_ui: Arc::new(AtomicU8::new(0)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
+            client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
             client_has_orchestration: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
@@ -1136,6 +1145,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     ),
                     Ordering::Relaxed,
                 );
+                server.client_has_smart_ui_preview.store(
+                    crate::smart_ui::client_meta_supports_preview(
+                        request.client_capabilities.meta.as_ref(),
+                    ),
+                    Ordering::Relaxed,
+                );
                 server.client_has_orchestration.store(
                     crate::orchestration::client_meta_supports(
                         request.client_capabilities.meta.as_ref(),
@@ -1175,6 +1190,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     );
                     state.orchestration_client = preview::orchestration_client_for(
                         server.client_has_orchestration.load(Ordering::Relaxed),
+                        &_connection,
+                        &session_id,
+                    );
+                    state.smart_ui_client = preview::smart_ui_client_for(
+                        state.smart_ui == crate::app::SmartUi::On
+                            && server.client_has_smart_ui_preview.load(Ordering::Relaxed),
                         &_connection,
                         &session_id,
                     );
@@ -2163,6 +2184,7 @@ mod tests {
             visualization_level: Arc::new(AtomicU8::new(0)),
             client_smart_ui: Arc::new(AtomicU8::new(0)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
+            client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
             client_has_orchestration: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),

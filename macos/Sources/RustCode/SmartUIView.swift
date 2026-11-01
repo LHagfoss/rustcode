@@ -13,7 +13,7 @@ struct SmartUIView: View {
     /// The reply is still arriving, so an open fence may yet close.
     var isStreaming = false
     @ObservedObject private var host = SmartUIHost.shared
-    @AppStorage(SmartUI.enabledKey) private var isEnabled = false
+    @AppStorage(SmartUI.enabledKey) private var isEnabled = SmartUI.enabledByDefault
     /// The block was written while on screen, so it runs once complete.
     @State private var wasBuilding = false
     @State private var showsSource = false
@@ -326,7 +326,8 @@ final class SmartUIHost: NSObject, ObservableObject {
         pages.values.first { $0.webView === webView }
     }
 
-    /// The sandbox every Smart UI page runs in.
+    /// The sandbox every Smart UI page runs in, live or previewed for the
+    /// agent (`SmartUIPreviewRenderer`).
     static func sandboxConfiguration(rules: WKContentRuleList?) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()

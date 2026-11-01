@@ -10,12 +10,23 @@ public enum SmartUI {
     public static let version = 1
     public static var infoString: String { "\(infoName) v\(version)" }
 
-    /// The setting that turns Smart UI on. Off by default; the engine is told
-    /// at `initialize`, so a change applies once the engine restarts.
+    /// The setting that turns Smart UI on. On by default (#2484 shipped it
+    /// opt-in; agents rarely used it); the engine is told at `initialize`,
+    /// so a change applies once the engine restarts.
     public static let enabledKey = "smartUIEnabled"
-    public static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
+    public static let enabledByDefault = true
+    public static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? enabledByDefault
+    }
     /// The `_meta.rustcode.smartUi` version advertised while it is on.
-    public static let capabilityVersion = 1
+    /// Version 2 also answers `previewMethod`, so the engine offers the agent
+    /// `smart_ui_preview` (`engine/src/smart_ui.rs`).
+    public static let capabilityVersion = 2
+    /// The engine's request to render a block offscreen for the agent.
+    public static let previewMethod = "_rustcode/smartUi/preview"
+    /// The card width a preview is rendered at: a typical chat column less
+    /// the card's padding.
+    public static let previewWidth = 560.0
 
     /// Largest fragment that runs; a bigger one shows as source.
     public static let maxSourceBytes = 64 * 1024
@@ -50,6 +61,35 @@ public enum SmartUI {
         return info.split(whereSeparator: \.isWhitespace).first.map(String.init) == infoName
     }
 
+    /// The scheme a fragment names a bundled library with:
+    /// `<script src="rustcode-lib:chart.js"></script>`.
+    public static let libraryScheme = "rustcode-lib"
+
+    /// `fragment` with each bundled-library tag replaced by the library's
+    /// code, inline. Nothing is fetched: the code ships with the app, so the
+    /// page stays inside `script-src 'unsafe-inline'`. An unknown name is
+    /// left as written, and the policy blocks it.
+    public static func expandingLibraries(in fragment: String) -> String {
+        guard fragment.range(of: libraryScheme, options: .caseInsensitive) != nil else { return fragment }
+        let pattern = #"<script\s+src\s*=\s*["']\#(libraryScheme):([A-Za-z0-9._-]+)["']\s*>\s*</script\s*>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return fragment }
+        var result = ""
+        var rest = fragment.startIndex
+        var included = Set<SmartUILibrary>()
+        for match in regex.matches(in: fragment, range: NSRange(fragment.startIndex..., in: fragment)) {
+            guard let whole = Range(match.range, in: fragment), let name = Range(match.range(at: 1), in: fragment),
+                  let library = SmartUILibrary(rawValue: fragment[name].lowercased()) else { continue }
+            result += fragment[rest..<whole.lowerBound]
+            // Each library loads once, at its first tag.
+            if included.insert(library).inserted {
+                result += "<script>\n\(library.inlineSource)\n</script>"
+            }
+            rest = whole.upperBound
+        }
+        result += fragment[rest...]
+        return result
+    }
+
     /// The page loaded into the web view: the policy and base styles first,
     /// then the fragment as written. A fragment's own `<meta>` policy can only
     /// narrow this one; browsers enforce every policy present.
@@ -64,10 +104,78 @@ public enum SmartUI {
         body { font: 13px -apple-system, system-ui, sans-serif; color: CanvasText; overflow-wrap: anywhere; }
         </style>
         </head><body>
-        \(fragment)
+        \(expandingLibraries(in: fragment))
         </body></html>
         """
     }
+}
+
+/// A JavaScript library bundled with the app for Smart UI pages. Pages
+/// cannot reach a CDN, so the useful ones ship here (docs/smart-ui.md).
+public enum SmartUILibrary: String, CaseIterable, Sendable {
+    /// Chart.js, the global `Chart`.
+    case chartJS = "chart.js"
+
+    public var version: String {
+        switch self {
+        case .chartJS: return Self.chartJSVersion
+        }
+    }
+
+    /// The library's code, safe to put inside a `<script>` element.
+    var inlineSource: String {
+        let source: String
+        switch self {
+        case .chartJS: source = Self.chartJSSource
+        }
+        return source.replacingOccurrences(of: "</script", with: "<\\/script", options: .caseInsensitive)
+    }
+}
+
+/// A `_rustcode/smartUi/preview` request: the block body the agent wants to
+/// see before it writes the fence.
+public struct SmartUIPreviewRequest: Sendable, Equatable {
+    public let sessionId: String?
+    public let html: String
+
+    public enum Failure: Error, Equatable, Sendable {
+        case invalid(String)
+    }
+
+    public init(params: JSONValue) throws {
+        guard let html = params["html"]?.stringValue else { throw Failure.invalid("`html` must be a string") }
+        guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.invalid("empty block") }
+        guard html.utf8.count <= SmartUI.maxSourceBytes else {
+            throw Failure.invalid("larger than \(SmartUI.maxSourceBytes / 1024) KB")
+        }
+        self.html = html
+        sessionId = params["sessionId"]?.stringValue
+    }
+
+    /// The title the card would show.
+    public var title: String { SmartUIBlock.element("title", in: html) ?? "Interactive view" }
+
+    /// The answer for a block that could not be rendered.
+    public static func failure(_ reason: String, errors: [String] = []) -> JSONValue {
+        var result: [String: JSONValue] = ["ok": false, "error": ["message": .string(reason)]]
+        if !errors.isEmpty { result["errors"] = .array(errors.map(JSONValue.string)) }
+        return .object(result)
+    }
+
+    /// Records what the page throws so the agent can read it. Injected only
+    /// into preview renders, never into the live view in the transcript.
+    public static let errorCaptureScript = #"""
+    (() => {
+      const errors = [];
+      Object.defineProperty(window, '__rustcodeErrors', { value: errors });
+      const push = (text) => { if (errors.length < 20) errors.push(String(text).slice(0, 300)); };
+      window.addEventListener('error', (e) => push(e.message + (e.lineno ? ' (line ' + e.lineno + ')' : '')));
+      window.addEventListener('unhandledrejection', (e) => push('Unhandled rejection: ' + (e.reason && e.reason.message || e.reason)));
+      const original = console.error;
+      console.error = (...args) => { push('console.error: ' + args.join(' ')); original.apply(console, args); };
+      document.addEventListener('securitypolicyviolation', (e) => push('Blocked by the sandbox: ' + e.violatedDirective + ' ' + (e.blockedURI || '')));
+    })();
+    """#
 }
 
 /// A `rustcode-ui` fence found in assistant Markdown.

@@ -74,8 +74,72 @@ final class SmartUITests: XCTestCase {
         let off = ACPRequests.initialize(appVersion: "1", smartUI: false)
         let on = ACPRequests.initialize(appVersion: "1", smartUI: true)
         XCTAssertEqual(off["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"], .number(0))
-        XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"], .number(1))
+        XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"], .number(2))
         XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["visualizations"],
                        .number(Double(Visualization.capabilityLevel)))
+    }
+    // MARK: - Bundled libraries
+
+    func testALibraryTagBecomesInlineCodeOnce() {
+        let fragment = """
+            <canvas id="c"></canvas>
+            <script src="rustcode-lib:chart.js"></script>
+            <SCRIPT src='rustcode-lib:Chart.js' ></script>
+            <script>new Chart(document.getElementById('c'), {type: 'bar', data: {labels: [], datasets: []}});</script>
+            """
+        let expanded = SmartUI.expandingLibraries(in: fragment)
+        XCTAssertFalse(expanded.contains("rustcode-lib:"))
+        XCTAssertEqual(expanded.components(separatedBy: "Chart.js v\(SmartUILibrary.chartJS.version)").count - 1, 1)
+        XCTAssertTrue(expanded.hasPrefix("<canvas id=\"c\"></canvas>\n<script>\n"))
+        XCTAssertTrue(expanded.hasSuffix("datasets: []}});</script>"))
+        XCTAssertTrue(SmartUI.document(for: fragment).contains("Chart.js v4.4.7"))
+    }
+
+    func testUnknownLibrariesAndOrdinaryScriptsAreLeftAlone() {
+        let fragment = #"<script src="rustcode-lib:d3.js"></script><script src="https://cdn.example/x.js"></script><p>rustcode-lib</p>"#
+        XCTAssertEqual(SmartUI.expandingLibraries(in: fragment), fragment)
+        XCTAssertEqual(SmartUI.expandingLibraries(in: "<p>hi</p>"), "<p>hi</p>")
+    }
+
+    func testBundledCodeCannotCloseItsScriptElement() {
+        XCTAssertFalse(SmartUILibrary.chartJS.inlineSource.lowercased().contains("</script"))
+    }
+
+
+    func testSmartUIIsOnUntilTheUserTurnsItOff() {
+        let defaults = UserDefaults.standard
+        let was = defaults.object(forKey: SmartUI.enabledKey)
+        defer { defaults.set(was, forKey: SmartUI.enabledKey) }
+        defaults.removeObject(forKey: SmartUI.enabledKey)
+        XCTAssertTrue(SmartUI.isEnabled)
+        defaults.set(false, forKey: SmartUI.enabledKey)
+        XCTAssertFalse(SmartUI.isEnabled)
+        defaults.set(true, forKey: SmartUI.enabledKey)
+        XCTAssertTrue(SmartUI.isEnabled)
+    }
+
+    // MARK: - smart_ui_preview requests
+
+    func testPreviewRequestReadsHtmlAndSessionAndTheCardTitle() throws {
+        let request = try SmartUIPreviewRequest(params: ["sessionId": "s1", "html": .string(page)])
+        XCTAssertEqual(request.sessionId, "s1")
+        XCTAssertEqual(request.html, page)
+        XCTAssertEqual(request.title, "Slowest tests")
+        XCTAssertEqual(try SmartUIPreviewRequest(params: ["html": "<p>x</p>"]).title, "Interactive view")
+    }
+
+    func testPreviewRequestRejectsMissingEmptyAndOversizedHtml() {
+        let oversized = String(repeating: "x", count: SmartUI.maxSourceBytes + 1)
+        for params: JSONValue in [[:], ["html": 3], ["html": "  \n"], ["html": .string(oversized)]] {
+            XCTAssertThrowsError(try SmartUIPreviewRequest(params: params))
+        }
+    }
+
+    func testPreviewFailureCarriesTheReasonAndPageErrors() {
+        let failure = SmartUIPreviewRequest.failure("busy loop", errors: ["TypeError: x"])
+        XCTAssertEqual(failure["ok"], .bool(false))
+        XCTAssertEqual(failure["error"]?["message"], .string("busy loop"))
+        XCTAssertEqual(failure["errors"], .array([.string("TypeError: x")]))
+        XCTAssertNil(SmartUIPreviewRequest.failure("x")["errors"])
     }
 }
