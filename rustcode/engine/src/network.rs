@@ -214,6 +214,11 @@ pub(crate) fn root_schema_policy(
     } else {
         policy
     };
+    let policy = if s.smart_ui_client.is_some() && !compact_tool_prompt {
+        policy.with_smart_ui_preview_tool()
+    } else {
+        policy
+    };
     // Only where delegation is on, as for subagents.
     if s.orchestration_client.is_some() && s.delegation_active && !compact_tool_prompt {
         policy.with_orchestration_tools()

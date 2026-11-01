@@ -1470,6 +1470,13 @@ async fn execute_tool_batch_validated(
                     None,
                     std::time::Duration::ZERO,
                 )
+            } else if name_clone == crate::smart_ui::PREVIEW_TOOL_NAME {
+                // Rendered offscreen by the app; no side effects, no approval.
+                (
+                    crate::smart_ui::execute(&state_clone, &cancel_token_clone, &args_clone).await,
+                    None,
+                    std::time::Duration::ZERO,
+                )
             } else if crate::orchestration::is_tool(&name_clone) {
                 // Forwarded to the client that hosts the other threads, which
                 // asks the user before a message goes.

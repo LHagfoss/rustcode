@@ -74,6 +74,9 @@ A fenced block whose info string is exactly `rustcode-ui v1`:
 
 ## Before you send
 
+- When the `smart_ui_preview` tool is offered, render the block's HTML with
+  it first. Check the screenshot at the card's width and read any page
+  errors; fix them, then write the fence with the HTML you checked.
 - Is a control doing real work? Otherwise use `rustcode-viz` or Markdown.
 - Is it one compact component, readable at 320 px wide?
 - Does the reply still make sense if the view does not run? Put the key
