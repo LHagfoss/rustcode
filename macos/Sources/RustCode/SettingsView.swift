@@ -474,7 +474,7 @@ private struct GeneralSettings: View {
     @AppStorage(StreamingProse.revealKey) private var revealsText = true
     @AppStorage(ToolVerbosity.key) private var verbosity = ToolVerbosity.terminalDefault
     @AppStorage(ComposerPredictions.key) private var predictions = true
-    @AppStorage(SmartUI.enabledKey) private var smartUI = false
+    @AppStorage(SmartUI.enabledKey) private var smartUI = SmartUI.enabledByDefault
     @AppStorage(Orchestration.enabledKey) private var threadMessaging = false
     @AppStorage(DesktopModel.groupsByAttentionKey) private var groupsByAttention = true
     @AppStorage(TurnCompletionCard.enabledKey) private var showsTurnCompletion = true
@@ -566,9 +566,9 @@ private struct GeneralSettings: View {
                         .toggleStyle(.switch)
                 }
                 RowDivider()
-                SettingsRow(title: "Smart UI (experimental)",
+                SettingsRow(title: "Smart UI",
                             subtitle: smartUI == model.engineSmartUI
-                                ? "Let the agent reply with small interactive views when you ask for one. They run sandboxed, with no network, file or app access"
+                                ? "Let the agent reply with small interactive views when they help. They run sandboxed, with no network, file or app access"
                                 : "The agent learns this when the engine restarts; threads in progress keep running until then") {
                     HStack(spacing: 8) {
                         // The engine reads the setting at initialize.

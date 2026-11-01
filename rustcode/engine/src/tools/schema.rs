@@ -142,6 +142,9 @@ pub struct ToolSchemaPolicy {
     pub(crate) include_session_title_tool: bool,
     /// `localhost_preview`, offered only when the client has a preview (#2138).
     pub(crate) include_preview_tool: bool,
+    /// `smart_ui_preview`, offered only while Smart UI is on in a client
+    /// that renders previews.
+    pub(crate) include_smart_ui_preview_tool: bool,
     /// `list_sessions`, `message_session` and `wait_session`, offered only
     /// when the client hosts other threads (#2637).
     pub(crate) include_orchestration_tools: bool,
@@ -202,6 +205,7 @@ impl ToolSchemaPolicy {
             include_mcp_tools: true,
             include_session_title_tool: false,
             include_preview_tool: false,
+            include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
@@ -222,6 +226,7 @@ impl ToolSchemaPolicy {
             include_mcp_tools: false,
             include_session_title_tool: false,
             include_preview_tool: false,
+            include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
@@ -235,6 +240,7 @@ impl ToolSchemaPolicy {
             include_mcp_tools: true,
             include_session_title_tool: false,
             include_preview_tool: false,
+            include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
@@ -293,6 +299,12 @@ impl ToolSchemaPolicy {
     /// Plan mode and subagents never drive the user's preview.
     pub(crate) fn with_preview_tool(mut self) -> Self {
         self.include_preview_tool = self.profile == ToolSchemaProfile::Coding;
+        self
+    }
+
+    /// Offer `smart_ui_preview`, to the root coding profile only.
+    pub(crate) fn with_smart_ui_preview_tool(mut self) -> Self {
+        self.include_smart_ui_preview_tool = self.profile == ToolSchemaProfile::Coding;
         self
     }
 
@@ -793,6 +805,7 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     "complete_task",
     "ask_question",
     crate::preview::PREVIEW_TOOL_NAME,
+    crate::smart_ui::PREVIEW_TOOL_NAME,
     crate::orchestration::LIST_SESSIONS,
     crate::orchestration::MESSAGE_SESSION,
     crate::orchestration::WAIT_SESSION,
@@ -823,6 +836,8 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
     };
     !((tool.name == "set_session_title" && !policy.include_session_title_tool)
         || (tool.name == crate::preview::PREVIEW_TOOL_NAME && !policy.include_preview_tool)
+        || (tool.name == crate::smart_ui::PREVIEW_TOOL_NAME
+            && !policy.include_smart_ui_preview_tool)
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
@@ -2462,7 +2477,7 @@ One line, no headings or lists, and never one per call. Skip it only when the ba
 /// Short guidance for `rustcode-viz` blocks; the full format lives in
 /// `docs/visualizations.md` and the TUI renderer validates every payload.
 pub(crate) const VISUALIZATION_PROMPT_HINT: &str = "# Visualizations\n\
-When a chart, table, or tree beats prose, add a ```rustcode-viz fence with one JSON object: \
+When a chart, table, or tree beats prose (trends, comparisons, breakdowns, hierarchies), add a ```rustcode-viz fence even if not asked with one JSON object: \
 {\"version\":1,\"type\":\"bar_chart\",\"title\":\"..\",\"summary\":\"..\",\"items\":[{\"label\":\"..\",\"value\":1}]}; \
 \"table\" takes columns, rows (arrays), optional sort_by {column,descending}; \"tree\" takes nodes [{label,note,children}]. Max 30 bars, 50 rows, 120 nodes.\n\n";
 
@@ -2503,8 +2518,8 @@ pub(crate) fn append_visualization_hint(
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
 This app can run one small interactive component in a reply, written as a ```rustcode-ui v1 fence of self-contained HTML (no network). \
-Use it only when the user asks for an interactive view or controls such as sorting, filtering or sliders clearly help; \
-otherwise use Markdown or rustcode-viz. Before writing one, load the `smart-ui` skill for the format and limits.\n\n";
+Use it, even unasked, when controls such as sorting, filtering, sliders or toggles let the reader explore what a static chart cannot show; \
+for a plain chart, table or tree use rustcode-viz. Before writing one, load the `smart-ui` skill for the format and limits.\n\n";
 
 /// Sent instead of [`SMART_UI_PROMPT_HINT`] when the frontend could run the
 /// blocks but the user has the setting off. Without it an agent asked for
@@ -2539,6 +2554,9 @@ pub(crate) fn append_smart_ui_hint(
 pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy) {
     if policy.include_preview_tool {
         prompt.push_str(crate::preview::PREVIEW_PROMPT_HINT);
+    }
+    if policy.include_smart_ui_preview_tool {
+        prompt.push_str(crate::smart_ui::PREVIEW_PROMPT_HINT);
     }
     if policy.include_orchestration_tools {
         prompt.push_str(crate::orchestration::PROMPT_HINT);
@@ -2606,6 +2624,7 @@ pub(crate) fn tool_system_prompt_for_policy(
     let policy = ToolSchemaPolicy {
         include_session_title_tool: false,
         include_preview_tool: false,
+        include_smart_ui_preview_tool: false,
         include_orchestration_tools: false,
         ..policy
     };

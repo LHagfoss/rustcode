@@ -212,4 +212,39 @@ final class SmartUISoakTests: XCTestCase {
         print("[smart-ui] chart.js \(drawn ?? "nil")")
         XCTAssertEqual(drawn, "function:2")
     }
+
+    // MARK: - smart_ui_preview renders
+
+    private func preview(_ html: String) async -> JSONValue {
+        let key = SmartUI.enabledKey
+        let was = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer { UserDefaults.standard.set(was, forKey: key) }
+        return await SmartUIPreviewRenderer.shared.render(["sessionId": "s", "html": .string(html)])
+    }
+
+    func testPreviewReturnsAScreenshotSizeAndPageErrors() async throws {
+        let result = await preview("""
+            <title>Probe</title>
+            <div style="height: 900px; background: AccentColor">tall</div>
+            <script>fetch('https://example.com/').catch(() => {}); undefinedFunction();</script>
+            """)
+        XCTAssertEqual(result["ok"], .bool(true), "\(result)")
+        XCTAssertEqual(result["title"], .string("Probe"))
+        XCTAssertEqual(result["width"]?.doubleValue, SmartUI.previewWidth)
+        XCTAssertGreaterThanOrEqual(result["contentHeight"]?.intValue ?? 0, 900)
+        let data = try XCTUnwrap(result["image"]?["data"]?.stringValue.flatMap { Data(base64Encoded: $0) })
+        XCTAssertNotNil(NSImage(data: data))
+        let errors = result["errors"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        print("[smart-ui] preview errors \(errors)")
+        XCTAssertTrue(errors.contains { $0.contains("undefinedFunction") }, "\(errors)")
+    }
+
+    func testPreviewOfABusyLoopFailsInsteadOfHanging() async {
+        let clock = ContinuousClock()
+        let started = clock.now
+        let result = await preview("<title>Spin</title><script>setTimeout(() => { for (;;) {} }, 0);</script>")
+        XCTAssertEqual(result["ok"], .bool(false), "\(result)")
+        XCTAssertLessThan(clock.now - started, .seconds(15))
+    }
 }

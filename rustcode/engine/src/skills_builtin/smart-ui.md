@@ -1,6 +1,6 @@
 ---
 name: smart-ui
-description: Write a Smart UI (rustcode-ui v1) interactive component for the RustCode macOS chat. Use only when the prompt's Smart UI section says it is on and the user asks for an interactive view, or sorting, filtering, sliders or toggles clearly help.
+description: Write a Smart UI (rustcode-ui v1) interactive component for the RustCode macOS chat. Use when the prompt's Smart UI section says it is on and the user asks for an interactive view, or sorting, filtering, sliders or toggles would help them explore the answer, even unasked.
 triggers: smart ui, interactive view, rustcode-ui
 keywords: interactive, widget, component, html, slider, filter, sort, toggle
 ---
@@ -81,6 +81,9 @@ A fenced block whose info string is exactly `rustcode-ui v1`:
 
 ## Before you send
 
+- When the `smart_ui_preview` tool is offered, render the block's HTML with
+  it first. Check the screenshot at the card's width and read any page
+  errors; fix them, then write the fence with the HTML you checked.
 - Is a control doing real work? Otherwise use `rustcode-viz` or Markdown.
 - Is it one compact component, readable at 320 px wide?
 - Does the reply still make sense if the view does not run? Put the key

@@ -41,7 +41,7 @@ Shared fields:
 
 A typed content block or a tool-result artifact would need protocol changes
 in every provider adapter and client. Interactive HTML uses the same fence
-approach instead: the macOS app's opt-in [Smart UI](smart-ui.md) runs
+approach instead: the macOS app's [Smart UI](smart-ui.md) runs
 `rustcode-ui v1` blocks in a sandboxed web view.
 
 ## Widget allowlist (version 1)

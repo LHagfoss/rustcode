@@ -3,8 +3,8 @@
 Smart UI ([#2484](https://github.com/LHagfoss/rustcode/issues/2484)) lets
 the agent answer with a small interactive component, such as a filterable
 table or a view driven by a few controls, that the macOS app runs in the
-transcript. It is **experimental and off by default**: Settings › General ›
-Chat › Smart UI. The engine learns the setting when it starts, so after
+transcript. It is **on by default** (it shipped opt-in, and agents almost
+never reached it): Settings › General › Chat › Smart UI turns it off. The engine learns the setting when it starts, so after
 switching it Settings offers **Restart Engine** (shown once no chat is
 running).
 
@@ -73,6 +73,34 @@ no `smartUi` gets neither. It tells the agent to use Smart UI only when the user
 for an interactive view or controls clearly help, and to use Markdown or
 `rustcode-viz` otherwise. Subagent prompts and compact prompts never carry it.
 The engine announces `agentCapabilities._meta.rustcode.smartUi = 1`.
+
+## Agent preview (`smart_ui_preview`)
+
+The agent used to write blocks blind. Now, while Smart UI is on, the app
+advertises `smartUi = 2`, and the engine offers root sessions a
+`smart_ui_preview` tool (`rustcode/engine/src/smart_ui.rs`) plus a short
+`# Smart UI preview` prompt hint. The tool forwards the block body as a
+`_rustcode/smartUi/preview` request. `SmartUIPreviewRenderer`
+(`macos/Sources/RustCode/SmartUIPreviewRenderer.swift`) loads it in the same
+sandbox configuration as the live view, at `SmartUI.previewWidth` (560 pt)
+and the card's height limits, in a borderless window placed off every
+screen. It answers with:
+
+- a screenshot, attached to the conversation after the tool batch like a
+  `localhost_preview` one;
+- the content height, the card's max height and the element count;
+- what the page threw: `error` and `unhandledrejection` events,
+  `console.error` and CSP violations, which a document-start script records.
+  This script runs only in previews, never in the transcript's live view.
+
+The preview page's base URL is `https://smart-ui-preview.invalid/`. With no
+base URL the origin is opaque, and WebKit then reports every error as
+"Script error.". The host never resolves, and the content rule list and
+CSP still block every load. Renders run one at a time, each in a new web
+view that is torn down when it answers. A load over 5 s, a page that doesn't
+answer in 3 s (a busy loop) or more than 5,000 elements is a failed render
+with its reason. Nothing is shown to the user, so no approval is asked.
+Older apps (`smartUi = 1`) and other clients never see the tool.
 
 ## Runtime and lifecycle
 
@@ -164,7 +192,9 @@ clicks do not reach WebKit.
 
 ## Recommendation
 
-**Ship it limited**: opt-in, experimental, a single live view, with the
+It shipped limited: opt-in, experimental, a single live view, with the
 controls above. The cost is bounded and paid only when a block runs, and the
-isolation held in every check. Keep it off by default until it has been used
-for a while with real pointer input and longer sessions.
+isolation held in every check. Opt-in meant agents almost never used it, so
+it is now on by default, and the prompt asks for visuals even unasked.
+T3 Code saw the same thing: its rule "render a visual only when asked" took
+inline charts from 8 of 8 eval cases to 0 of 8 (pingdotgg/t3code#25766).
