@@ -318,7 +318,7 @@ fn clip(text: &str, limit: usize) -> (String, bool) {
     }
 }
 
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     clip(
         &text.split_whitespace().collect::<Vec<_>>().join(" "),
         MAX_ELEMENT_FIELD_CHARS,
@@ -452,7 +452,7 @@ fn format_elements(elements: &[Value], out: &mut String) {
     }
 }
 
-fn decode_screenshot(image: &Value) -> Result<(Vec<u8>, &'static str), String> {
+pub(crate) fn decode_screenshot(image: &Value) -> Result<(Vec<u8>, &'static str), String> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let data = image
         .get("data")
@@ -636,7 +636,7 @@ pub(crate) fn interpret_response(
 /// What the page threw since it loaded. A blank page with no reason sent
 /// the agent through builds and tests for ten rounds before it found a
 /// runtime error (session 01a16b37); the browser already knew.
-fn page_errors(response: &Value) -> String {
+pub(crate) fn page_errors(response: &Value) -> String {
     const SHOWN: usize = 8;
     let errors: Vec<String> = response
         .get("errors")
@@ -769,7 +769,7 @@ pub(crate) fn screenshot_attachment_message(paths: &[PathBuf]) -> Option<String>
         return None;
     }
     let mut text = format!(
-        "{}localhost_preview tool, not typed by the user: the screenshot(s) it just took]",
+        "{}preview tool, not typed by the user: the screenshot(s) it just took]",
         rustcode_core::TOOL_ATTACHMENT_PREFIX
     );
     for path in paths {

@@ -1492,6 +1492,7 @@ pub const TOOLS: &[Tool] = &[
     misc::ZOOM_CONTEXT,
     misc::FORGET_MEMORY,
     misc::LOCALHOST_PREVIEW,
+    misc::SMART_UI_PREVIEW,
     misc::LIST_SESSIONS,
     misc::MESSAGE_SESSION,
     misc::WAIT_SESSION,

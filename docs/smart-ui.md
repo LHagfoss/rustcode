@@ -66,6 +66,34 @@ for an interactive view or controls clearly help, and to use Markdown or
 `rustcode-viz` otherwise. Subagent prompts and compact prompts never carry it.
 The engine announces `agentCapabilities._meta.rustcode.smartUi = 1`.
 
+## Agent preview (`smart_ui_preview`)
+
+The agent used to write blocks blind. Now, while Smart UI is on, the app
+advertises `smartUi = 2`, and the engine offers root sessions a
+`smart_ui_preview` tool (`rustcode/engine/src/smart_ui.rs`) plus a short
+`# Smart UI preview` prompt hint. The tool forwards the block body as a
+`_rustcode/smartUi/preview` request. `SmartUIPreviewRenderer`
+(`macos/Sources/RustCode/SmartUIPreviewRenderer.swift`) loads it in the same
+sandbox configuration as the live view, at `SmartUI.previewWidth` (560 pt)
+and the card's height limits, in a borderless window placed off every
+screen. It answers with:
+
+- a screenshot, attached to the conversation after the tool batch like a
+  `localhost_preview` one;
+- the content height, the card's max height and the element count;
+- what the page threw: `error` and `unhandledrejection` events,
+  `console.error` and CSP violations, which a document-start script records.
+  This script runs only in previews, never in the transcript's live view.
+
+The preview page's base URL is `https://smart-ui-preview.invalid/`. With no
+base URL the origin is opaque, and WebKit then reports every error as
+"Script error.". The host never resolves, and the content rule list and
+CSP still block every load. Renders run one at a time, each in a new web
+view that is torn down when it answers. A load over 5 s, a page that doesn't
+answer in 3 s (a busy loop) or more than 5,000 elements is a failed render
+with its reason. Nothing is shown to the user, so no approval is asked.
+Older apps (`smartUi = 1`) and other clients never see the tool.
+
 ## Runtime and lifecycle
 
 `SmartUIHost` (`macos/Sources/RustCode/SmartUIView.swift`) owns **at most

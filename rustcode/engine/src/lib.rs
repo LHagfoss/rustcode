@@ -39,6 +39,7 @@ pub mod remote;
 pub mod serve;
 pub mod shell_env;
 pub mod skills;
+mod smart_ui;
 pub mod storage_cleanup;
 pub mod storage_migrations;
 pub mod storage_report;

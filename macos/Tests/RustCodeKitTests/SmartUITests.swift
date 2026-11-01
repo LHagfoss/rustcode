@@ -74,10 +74,11 @@ final class SmartUITests: XCTestCase {
         let off = ACPRequests.initialize(appVersion: "1", smartUI: false)
         let on = ACPRequests.initialize(appVersion: "1", smartUI: true)
         XCTAssertEqual(off["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"], .number(0))
-        XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"], .number(1))
+        XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["smartUi"], .number(2))
         XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["visualizations"],
                        .number(Double(Visualization.capabilityLevel)))
     }
+
     func testSmartUIIsOnUntilTheUserTurnsItOff() {
         let defaults = UserDefaults.standard
         let was = defaults.object(forKey: SmartUI.enabledKey)
@@ -88,5 +89,30 @@ final class SmartUITests: XCTestCase {
         XCTAssertFalse(SmartUI.isEnabled)
         defaults.set(true, forKey: SmartUI.enabledKey)
         XCTAssertTrue(SmartUI.isEnabled)
+    }
+
+    // MARK: - smart_ui_preview requests
+
+    func testPreviewRequestReadsHtmlAndSessionAndTheCardTitle() throws {
+        let request = try SmartUIPreviewRequest(params: ["sessionId": "s1", "html": .string(page)])
+        XCTAssertEqual(request.sessionId, "s1")
+        XCTAssertEqual(request.html, page)
+        XCTAssertEqual(request.title, "Slowest tests")
+        XCTAssertEqual(try SmartUIPreviewRequest(params: ["html": "<p>x</p>"]).title, "Interactive view")
+    }
+
+    func testPreviewRequestRejectsMissingEmptyAndOversizedHtml() {
+        let oversized = String(repeating: "x", count: SmartUI.maxSourceBytes + 1)
+        for params: JSONValue in [[:], ["html": 3], ["html": "  \n"], ["html": .string(oversized)]] {
+            XCTAssertThrowsError(try SmartUIPreviewRequest(params: params))
+        }
+    }
+
+    func testPreviewFailureCarriesTheReasonAndPageErrors() {
+        let failure = SmartUIPreviewRequest.failure("busy loop", errors: ["TypeError: x"])
+        XCTAssertEqual(failure["ok"], .bool(false))
+        XCTAssertEqual(failure["error"]?["message"], .string("busy loop"))
+        XCTAssertEqual(failure["errors"], .array([.string("TypeError: x")]))
+        XCTAssertNil(SmartUIPreviewRequest.failure("x")["errors"])
     }
 }
