@@ -1170,6 +1170,13 @@ private struct ChatView: View {
 
     private var title: String { model.selectedSession == nil ? "New Thread" : selected?.title ?? "RustCode" }
 
+    /// The title's natural width, so a short title is not padded out to the
+    /// header's minimum for it.
+    private var titleWidth: CGFloat {
+        let font = NSFont.preferredFont(forTextStyle: .headline)
+        return ceil((title as NSString).size(withAttributes: [.font: font]).width) + 2
+    }
+
     /// The folder this chat works in: its own, which may not be the default.
     private var projectName: String { model.chatProject.lastPathComponent }
 
@@ -1732,6 +1739,20 @@ private struct ChatView: View {
     /// The title bar's side margin, near its top and bottom ones.
     private static let headerInset: CGFloat = 10
 
+    private func titleLine(path width: CGFloat?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            ChatProjectMenu(model: model, name: projectName,
+                            path: width == nil ? projectName : model.chatProject.path.abbreviatingHome,
+                            maxPathWidth: width ?? ChatProjectMenu.maxPathWidth)
+            Text("/")
+                .font(.title3.weight(.light))
+                .foregroundStyle(.quaternary)
+                .accessibilityHidden(true)
+            Text(title).font(.headline).lineLimit(1)
+                .frame(minWidth: min(160, titleWidth), alignment: .leading)
+        }
+    }
+
     /// The chat's title bar: the title and project, and the sidebar buttons
     /// beside the traffic lights while the sidebar is hidden.
     private var header: some View {
@@ -1741,13 +1762,13 @@ private struct ChatView: View {
                     .padding(.leading, SidebarMetrics.barLeading - Self.headerInset)
             }
             // `~/code / Title`: the chat's folder, a divider, its title.
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                ChatProjectMenu(model: model, name: projectName, path: model.chatProject.path.abbreviatingHome)
-                Text("/")
-                    .font(.title3.weight(.light))
-                    .foregroundStyle(.quaternary)
-                    .accessibilityHidden(true)
-                Text(title).font(.headline).lineLimit(1)
+            // The title is what the bar names: when the bar is narrow, as
+            // with a side panel open, the folder gives way first, to a
+            // shorter path and then to its name alone.
+            ViewThatFits(in: .horizontal) {
+                titleLine(path: ChatProjectMenu.maxPathWidth)
+                titleLine(path: 120)
+                titleLine(path: nil)
             }
             Spacer()
             ForEach(model.pullWatches(in: model.selectedSession)) { watch in
@@ -2513,6 +2534,7 @@ private struct ChatProjectMenu: View {
     let path: String
     /// The footer's label is a folder and the folder's name.
     var style = Style.header
+    var maxPathWidth = ChatProjectMenu.maxPathWidth
 
     /// The widest the header's path grows before it is cut from the front.
     static let maxPathWidth: CGFloat = 260
@@ -2563,7 +2585,7 @@ private struct ChatProjectMenu: View {
                     // shows its last folders rather than pushing the title
                     // across the bar; the tooltip holds the whole path.
                     Text(path).truncationMode(.head)
-                        .frame(maxWidth: Self.maxPathWidth, alignment: .trailing)
+                        .frame(maxWidth: maxPathWidth, alignment: .trailing)
                     Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
                 }
                 .font(.callout)

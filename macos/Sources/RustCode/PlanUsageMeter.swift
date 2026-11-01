@@ -1,8 +1,8 @@
 import RustCodeKit
 import SwiftUI
 
-/// The plan's usage beside the composer's pills (#2545): a small ring of
-/// what is left in the tightest window, amber and then red as it runs low.
+/// The plan's usage beside the composer's pills (#2545): a short bar and the
+/// percentage of what is left in the tightest window, amber and then red as it runs low.
 /// Hovering asks for fresh numbers and shows `PlanUsagePanel` above it.
 struct PlanUsageMeter: View {
     let usage: PlanUsage
@@ -13,16 +13,17 @@ struct PlanUsageMeter: View {
     private var tightest: PlanUsage.Window? { usage.windows.min { $0.leftPercent < $1.leftPercent } }
 
     var body: some View {
-        ZStack {
-            Circle().stroke(.quaternary, lineWidth: 2)
+        HStack(spacing: 5) {
+            MeterBar(fraction: tightest?.leftFraction ?? 0, tint: tightest.map(PlanUsageMeter.tint) ?? .secondary, width: 16)
             if let tightest {
-                Circle()
-                    .trim(from: 0, to: tightest.leftFraction)
-                    .stroke(PlanUsageMeter.tint(tightest), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
+                // What is left, said: the header's bar counts what is used.
+                Text("\(tightest.leftPercent)%")
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
             }
         }
-        .frame(width: 14, height: 14)
         .padding(.horizontal, 8)
         .frame(height: 30)
         .contentShape(.rect)
