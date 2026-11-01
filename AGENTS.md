@@ -128,6 +128,10 @@ instructions for work in this repository.
   and answer an approval with a real click (System Events `click at`).
 - To see a card without a running turn: `approval command|edit|write|other|clear`
   for a tool approval, `completion [ship|failcmd]` for a turn summary.
+- Never copy `credentials.json` or `provider-accounts.json` into a scratch
+  `RUSTCODE_CONFIG_DIR`. A token refresh there rotates the OpenAI refresh
+  token, and the user's real sign-in then fails with "OpenAI token request
+  failed (HTTP 400)" (#2765). For live model turns, ask the user first.
 - `snap` does not draw Liquid Glass; use `screencapture` to judge glass. A
   window that is not key (`state` prints `key false`) draws switches and
   controls grey, so check that before calling a colour wrong.
