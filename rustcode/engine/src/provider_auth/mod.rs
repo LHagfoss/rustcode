@@ -158,6 +158,10 @@ pub struct AccountStatus {
     pub expires_at: Option<u64>,
     #[serde(default = "default_true")]
     pub active: bool,
+    /// The provider rejected the saved refresh token (`invalid_grant`): the
+    /// account must be signed in again before it can be used (#2765).
+    #[serde(default)]
+    pub needs_sign_in: bool,
 }
 
 fn default_true() -> bool {
@@ -397,6 +401,7 @@ async fn store_api_key(
         scopes: Vec::new(),
         expires_at: None,
         active: true,
+        needs_sign_in: false,
     };
     let old_key = secret_store()
         .get(&definition.id, account, "api-key")
@@ -1386,6 +1391,7 @@ mod tests {
             scopes: vec![],
             expires_at: None,
             active: true,
+            needs_sign_in: false,
         };
         let mut profile = ModelProfile {
             url: claude_cli::ENDPOINT.into(),
@@ -1442,6 +1448,7 @@ mod tests {
             scopes: vec![],
             expires_at: Some(99),
             active: true,
+            needs_sign_in: false,
         }
     }
 
@@ -1626,6 +1633,7 @@ mod tests {
             scopes: vec![],
             expires_at: None,
             active: true,
+            needs_sign_in: false,
         };
         let profile = ModelProfile {
             url: "https://api.openai.com/v1/responses".into(),

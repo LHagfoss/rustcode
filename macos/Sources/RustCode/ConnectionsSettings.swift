@@ -304,14 +304,23 @@ private struct ModelAccountRow: View {
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(.fill.tertiary, in: .capsule)
                 }
-                Text(account.active ? account.methodLabel : "\(account.methodLabel) · signed out")
-                    .font(.caption).foregroundStyle(.secondary)
+                if account.needsSignIn == true {
+                    // Refresh cannot fix a refused sign-in; say what does.
+                    Text("Sign-in expired · type /login \(account.provider) in a thread to sign in again")
+                        .font(.caption).foregroundStyle(Color.attention)
+                        .textSelection(.enabled)
+                } else {
+                    Text(account.active ? account.methodLabel : "\(account.methodLabel) · signed out")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 12)
             if pending { ProgressView().controlSize(.small) }
-            if account.active {
+            if account.active, account.needsSignIn != true {
                 Button("Refresh", action: refresh).buttonStyle(PillButtonStyle()).disabled(pending)
                     .help("Fetch this account's current model list")
+                Button("Sign out", action: signOut).buttonStyle(PillButtonStyle()).disabled(pending)
+            } else if account.needsSignIn == true {
                 Button("Sign out", action: signOut).buttonStyle(PillButtonStyle()).disabled(pending)
             }
         }

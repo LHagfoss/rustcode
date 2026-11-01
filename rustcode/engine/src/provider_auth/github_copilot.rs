@@ -479,6 +479,7 @@ pub(super) async fn login(
         scopes,
         expires_at: tokens.expires_at,
         active: true,
+        needs_sign_in: false,
     };
     let profiles = tokio::select! { _ = cancel.cancelled() => bail!("GitHub sign-in was cancelled"), profiles = fetch_catalog(&client,&account,&tokens.access_token) => profiles? };
     if cancel.is_cancelled() {
@@ -892,6 +893,7 @@ mod tests {
             scopes: vec!["read:user".into()],
             expires_at: None,
             active: true,
+            needs_sign_in: false,
         }
     }
 

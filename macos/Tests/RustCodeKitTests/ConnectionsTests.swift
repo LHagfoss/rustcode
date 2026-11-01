@@ -17,7 +17,7 @@ final class ConnectionsTests: XCTestCase {
         ],
         "accounts": [
             ["provider": "openai", "account": "me@example.com", "display": "Me", "method": "chat_gpt",
-             "active": true, "expiresAt": 1_900_000_000],
+             "active": true, "expiresAt": 1_900_000_000, "needsSignIn": true],
             ["provider": "anthropic", "account": "default", "display": "", "method": "api_key",
              "active": false, "expiresAt": nil],
         ],
@@ -31,6 +31,8 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertEqual(snapshot.github.pending, .init(code: "37B2-1C7B", url: "https://github.com/login/device"))
         XCTAssertEqual(snapshot.accounts.map(\.methodLabel), ["ChatGPT sign-in", "API key"])
         XCTAssertEqual(snapshot.accounts.map(\.id), ["openai/me@example.com", "anthropic/default"])
+        // An older engine sends no flag (#2765).
+        XCTAssertEqual(snapshot.accounts.map(\.needsSignIn), [true, nil])
     }
 
     func testNoActiveAccountWhenSignedOut() throws {
