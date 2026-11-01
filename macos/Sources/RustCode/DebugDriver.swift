@@ -1200,8 +1200,11 @@ enum DebugDriver {
             model.transcript.apply(.toolCall(id: "drive-c-edit", title: "edit_file", kind: "edit", status: .inProgress, input: nil))
             model.transcript.apply(.toolCallUpdate(id: "drive-c-edit", title: nil, status: .completed, output: "ok",
                                                    diffs: [FileDiff(path: "/tmp/btd6/src/rules.js", oldText: "a\n", newText: "b\nc\n")]))
-            for (index, (command, status)) in [("npm test -- rules", ToolStatus.completed), ("npm run lint", .failed),
-                                               ("npm run build", nil)].enumerated() {
+            // `completion failcmd`: the checks pass but another command failed.
+            let runs: [(String, ToolStatus?)] = parts.contains("failcmd")
+                ? [("npm test -- rules", .completed), ("cat missing.json", .failed)]
+                : [("npm test -- rules", .completed), ("npm run lint", .failed), ("npm run build", nil)]
+            for (index, (command, status)) in runs.enumerated() {
                 model.transcript.apply(.toolCall(id: "drive-c-\(index)", title: "run_command", kind: "execute",
                                                  status: .inProgress, input: nil, detail: command))
                 if let status {
