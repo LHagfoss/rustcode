@@ -1622,6 +1622,18 @@ struct TurnCompletionCard: View {
         } else if !last.isEmpty, last.allSatisfy({ $0.outcome == .passed }) {
             marks.append(Mark(text: "Checks passed", symbol: "checkmark.circle.fill", tint: .green,
                               help: names(last)))
+        } else if case let stopped = last.filter({ $0.outcome == .cancelled }), !stopped.isEmpty {
+            // Stopped before it reported: neither passed nor failed.
+            marks.append(Mark(text: "Checks stopped", symbol: "stop.circle", tint: .secondary,
+                              help: "Stopped before reporting:\n" + names(stopped)))
+        }
+        // A command that is not a check failing is still worth knowing,
+        // when no failed check already says something went wrong.
+        if failed.isEmpty, completion.failedCommands > 0 {
+            let count = completion.failedCommands
+            marks.append(Mark(text: count == 1 ? "1 command failed" : "\(count) commands failed",
+                              symbol: "exclamationmark.triangle.fill", tint: .orange,
+                              help: "Open the steps to see which"))
         }
         if let step = completion.pipeline?.steps.last {
             let done = step.outcome == .succeeded
