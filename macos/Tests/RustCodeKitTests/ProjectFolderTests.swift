@@ -73,4 +73,17 @@ final class ProjectFolderTests: XCTestCase {
         XCTAssertEqual(ProjectFolder.choice(threadOpen: true, canMove: false), .newThreadIn, "an engine that cannot move one")
         XCTAssertEqual(ProjectFolder.Choice.moveThread.title, "Change Thread Folder…")
     }
+
+    func testRecentChecksABoundedNumberOfFoldersAndSkipsArchived() {
+        let now = Date()
+        let sessions = (0..<50).map { index in
+            SessionSummary(id: "s\(index)", cwd: "/gone/\(index)", updatedAt: now.addingTimeInterval(-Double(index)))
+        }
+        var lookups = 0
+        let none = ProjectFolder.recent(sessions, excluding: URL(fileURLWithPath: "/x"), usable: { _ in lookups += 1; return false })
+        XCTAssertTrue(none.isEmpty)
+        XCTAssertEqual(lookups, 20)
+        let kept = ProjectFolder.recent(sessions, excluding: URL(fileURLWithPath: "/x"), archived: ["s0"], limit: 1, usable: { _ in true })
+        XCTAssertEqual(kept.map(\.path), ["/gone/1"])
+    }
 }
