@@ -23,7 +23,7 @@ pub(crate) mod sandbox;
 pub(crate) use policy::command_confirmation_scope;
 pub(crate) use policy::{
     approved_command_prefix_covers_call, command_confirmation_preview,
-    command_requires_confirmation, denied_command_prefix_covers_call,
+    command_requires_confirmation, denied_command_prefix_covers_call, is_help_or_version_command,
     persisted_approved_command_prefix, pull_request_base, reject_broad_git_stage,
     rememberable_command_forbid_prefix_for_call, rememberable_command_prefix_for_call,
 };

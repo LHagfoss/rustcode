@@ -208,7 +208,7 @@ fn ask_question_schema() -> Value {
         "type": "object",
         "properties": {
             "question": { "type": "string", "description": "Single-question shape" },
-            "options": { "type": "array", "items": { "type": "string" }, "description": "Single-question shape" },
+            "options": { "type": "array", "items": { "type": ["string", "object"] } },
             "is_multi_select": { "type": "boolean", "default": false },
             "questions": {
                 "type": "array",
@@ -536,7 +536,7 @@ fn wait_agent_schema() -> Value {
 
 pub const WAIT_AGENT: Tool = Tool {
     name: "wait_agent",
-    description: "Block until a subagent reaches a terminal state and return its bounded result; never poll. With ids, returns the first to finish.",
+    description: "Block until a subagent finishes and return its bounded result; never poll. With ids, returns the first to finish. Waits at least 30s.",
     arguments: r#"{"id": "subagent id", "ids": [1, 2]}"#,
     handler: async_agent_tool,
     requires_confirmation: false,
@@ -899,12 +899,7 @@ pub fn ask_question(args: &Value) -> Result<String, String> {
             ));
             if let Some(options) = item.get("options").and_then(|v| v.as_array()) {
                 for (i, opt) in options.iter().enumerate() {
-                    let label = opt
-                        .as_str()
-                        .map(str::to_owned)
-                        .or_else(|| opt.get("label").and_then(|v| v.as_str()).map(str::to_owned))
-                        .unwrap_or_default();
-                    out.push_str(&format!("\n{}. {}", i + 1, label));
+                    out.push_str(&format!("\n{}. {}", i + 1, question_option_text(opt)));
                 }
             }
             out.push_str("\nOther: (type custom response)\n");
@@ -926,10 +921,29 @@ pub fn ask_question(args: &Value) -> Result<String, String> {
 
     let mut out = format!("ASK_QUESTION: {} | Multi: {}", question, is_multi_select);
     for (i, opt) in options.iter().enumerate() {
-        out.push_str(&format!("\n{}. {}", i + 1, opt.as_str().unwrap_or("")));
+        out.push_str(&format!("\n{}. {}", i + 1, question_option_text(opt)));
     }
     out.push_str("\nOther: (type custom response)");
     Ok(out)
+}
+
+/// An option as a string, or `{label, description}` as `label — description`.
+fn question_option_text(option: &Value) -> String {
+    if let Some(label) = option.as_str() {
+        return label.to_owned();
+    }
+    let field = |key: &str| {
+        option
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    };
+    match (field("label"), field("description")) {
+        (Some(label), Some(description)) => format!("{label} — {description}"),
+        (Some(text), None) | (None, Some(text)) => text.to_owned(),
+        (None, None) => String::new(),
+    }
 }
 
 pub fn get_time(_args: &Value) -> Result<String, String> {

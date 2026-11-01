@@ -522,10 +522,18 @@ pub fn workspace_manager() -> Option<WorkspaceManager> {
     store().map(|session_store| session_store.workspace_manager())
 }
 
-pub fn create_subagent_workspace(session_id: &str, agent_id: u32) -> Result<PathBuf, String> {
+pub fn create_subagent_workspace(
+    session_id: &str,
+    agent_id: u32,
+    repo: &Path,
+) -> Result<PathBuf, String> {
     store()
         .ok_or_else(|| "active session directory unavailable".to_string())?
-        .create_subagent_workspace(session_id, agent_id)
+        .create_subagent_workspace(session_id, agent_id, repo)
+}
+
+pub fn is_git_work_tree(path: &Path) -> bool {
+    SessionStore::is_git_work_tree(path)
 }
 
 /// Migrate only the configured RustCode session store. Callers can inspect the
