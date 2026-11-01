@@ -318,6 +318,7 @@ pub struct AppState {
     /// when it advertised one.
     pub orchestration_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     pub preview_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
+    pub desktop_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     /// The client that renders `smart_ui_preview` calls, when Smart UI is on
     /// and the client advertised `_meta.rustcode.smartUi >= 2`. `None` hides
     /// the tool.
@@ -1788,6 +1789,7 @@ impl AppState {
             visualization_level: 0,
             smart_ui: SmartUi::Unsupported,
             preview_client: None,
+            desktop_client: None,
             smart_ui_client: None,
             orchestration_client: None,
             pending_preview_images: Vec::new(),

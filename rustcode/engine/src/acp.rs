@@ -540,6 +540,11 @@ async fn acp_load_session(
             connection,
             &session_id,
         );
+        state.desktop_client = preview::desktop_client_for(
+            server.client_has_desktop.load(Ordering::Relaxed),
+            connection,
+            &session_id,
+        );
         state.orchestration_client = preview::orchestration_client_for(
             server.client_has_orchestration.load(Ordering::Relaxed),
             connection,
@@ -847,6 +852,7 @@ struct AcpServer {
     /// The client advertised `_meta.rustcode.preview` (#2138), so its
     /// sessions get `localhost_preview`.
     client_has_preview: Arc<AtomicBool>,
+    client_has_desktop: Arc<AtomicBool>,
     /// The client renders `smart_ui_preview` calls (`smartUi >= 2`).
     client_has_smart_ui_preview: Arc<AtomicBool>,
     /// The client hosts other threads for `message_session` (#2637).
@@ -903,6 +909,7 @@ impl AcpServer {
             visualization_level: Arc::new(AtomicU8::new(0)),
             client_smart_ui: Arc::new(AtomicU8::new(0)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
+            client_has_desktop: Arc::new(AtomicBool::new(false)),
             client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
             client_has_orchestration: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
@@ -1139,6 +1146,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     client_smart_ui(&request.client_capabilities).as_u8(),
                     Ordering::Relaxed,
                 );
+                server.client_has_desktop.store(crate::desktop_control::supported(request.client_capabilities.meta.as_ref()), Ordering::Relaxed);
                 server.client_has_preview.store(
                     crate::preview::client_meta_supports_preview(
                         request.client_capabilities.meta.as_ref(),
@@ -1188,6 +1196,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         &_connection,
                         &session_id,
                     );
+                    state.desktop_client = preview::desktop_client_for(server.client_has_desktop.load(Ordering::Relaxed), &_connection, &session_id);
                     state.orchestration_client = preview::orchestration_client_for(
                         server.client_has_orchestration.load(Ordering::Relaxed),
                         &_connection,
@@ -2184,6 +2193,7 @@ mod tests {
             visualization_level: Arc::new(AtomicU8::new(0)),
             client_smart_ui: Arc::new(AtomicU8::new(0)),
             client_has_preview: Arc::new(AtomicBool::new(false)),
+            client_has_desktop: Arc::new(AtomicBool::new(false)),
             client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
             client_has_orchestration: Arc::new(AtomicBool::new(false)),
             presence: presence::Presence::default(),
