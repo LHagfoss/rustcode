@@ -267,12 +267,15 @@ public struct ToolFolding: Equatable, Sendable {
         }
     }
 
-    /// The thoughts of `work` not between two calls of one run.
+    /// The thoughts of `work` not between two calls of one run, and not
+    /// right before something the model said: that narration already tells
+    /// the step in words, and its thought's heading only repeated it.
     private static func thoughtsBetweenSteps(in work: ArraySlice<TranscriptItem>) -> [Int] {
         var thoughts: [Int] = []
         for index in work.indices where isThought(work[index]) {
             let before = work[..<index].last { !isThought($0) }
             let after = work[work.index(after: index)...].first { !isThought($0) }
+            if after.map(isSaid) ?? false { continue }
             if !(before.map(isCall) ?? false && after.map(isCall) ?? false) {
                 thoughts.append(work[index].id)
             }

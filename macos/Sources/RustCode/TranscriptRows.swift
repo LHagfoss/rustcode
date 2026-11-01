@@ -25,7 +25,10 @@ struct TranscriptRow: View, Equatable {
             if let turnFold {
                 VStack(alignment: .leading, spacing: 12) {
                     TurnSummary(fold: turnFold)
-                    if turnFold.isOpen { content.pipelineStep(node) }
+                    // A thought the work starts on is its heading only; the
+                    // model's own words under it say the same (see
+                    // `ToolFolding.thoughtsBetweenSteps`).
+                    if turnFold.isOpen, !isThought { content.pipelineStep(node) }
                 }
             } else if isNested {
                 content.pipelineStep(node)
@@ -53,6 +56,10 @@ struct TranscriptRow: View, Equatable {
             return tool.status == .failed || (fold?.failed ?? 0) > 0 ? .failed : .call
         default: return .call
         }
+    }
+
+    private var isThought: Bool {
+        if case .thinking = item.content { true } else { false }
     }
 
     /// Inside an opened turn a thought is one quiet line, not a box.
@@ -410,6 +417,7 @@ private struct AssistantMessage: View {
     /// A step of an opened turn: no footer, so the rail reads as one line
     /// of steps. Copy is in its menu.
     var isStep = false
+    @State private var isHovered = false
     @Environment(\.messageActions) private var messageActions
 
     private struct Parsed {
@@ -457,9 +465,17 @@ private struct AssistantMessage: View {
             }
             // Never while the reply is written, so the footer cannot claim
             // it is done. Copy sits below the reply, out of its text, and
-            // always shows (#2444).
-            if !isStreaming, !isStep { footer }
+            // always shows on the turn's reply (#2444). The model's words
+            // between steps of a running turn show theirs under the pointer
+            // only: a column of identical times read as noise. Its room is
+            // kept, so the chat does not move as the pointer passes.
+            if !isStreaming, !isStep {
+                footer
+                    .opacity(turn != nil || isHovered ? 1 : 0)
+                    .animation(.easeOut(duration: 0.12), value: isHovered)
+            }
         }
+        .onHover { isHovered = $0 }
         .messageMenu { [text, messageActions] in
             var items = [
                 MessageMenuItem(title: "Copy Reply", systemImage: "doc.on.doc") { Clipboard.copy(AssistantSummary.split(text).prose) },
