@@ -145,6 +145,7 @@ fn account_from_status(status: &CliStatus) -> AccountStatus {
         scopes: Vec::new(),
         expires_at: None,
         active: true,
+        needs_sign_in: false,
     }
 }
 

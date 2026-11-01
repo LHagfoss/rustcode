@@ -57,6 +57,9 @@ public struct ConnectionsSnapshot: Decodable, Equatable, Sendable {
         public var method: String
         public var active: Bool
         public var expiresAt: UInt64?
+        /// The provider refused the saved sign-in; it needs `/login` again
+        /// (#2765). Absent from older engines.
+        public var needsSignIn: Bool?
 
         public var id: String { "\(provider)/\(account)" }
 

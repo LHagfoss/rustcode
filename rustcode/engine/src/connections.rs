@@ -70,6 +70,8 @@ pub struct ModelAccount {
     pub method: crate::provider_auth::AuthMethod,
     pub active: bool,
     pub expires_at: Option<u64>,
+    /// The saved sign-in was refused; `/login` again (#2765).
+    pub needs_sign_in: bool,
 }
 
 pub async fn snapshot() -> ConnectionsSnapshot {
@@ -83,6 +85,7 @@ pub async fn snapshot() -> ConnectionsSnapshot {
             method: row.method,
             active: row.active,
             expires_at: row.expires_at,
+            needs_sign_in: row.needs_sign_in,
         })
         .collect();
     ConnectionsSnapshot {
@@ -389,6 +392,7 @@ mod tests {
                 method: crate::provider_auth::AuthMethod::ChatGpt,
                 active: true,
                 expires_at: Some(1_900_000_000),
+                needs_sign_in: false,
             }],
         };
         assert_eq!(
@@ -401,7 +405,8 @@ mod tests {
                     "error": null,
                 },
                 "accounts": [{"provider": "openai", "account": "me@example.com", "display": "Me",
-                              "method": "chat_gpt", "active": true, "expiresAt": 1_900_000_000u64}],
+                              "method": "chat_gpt", "active": true, "expiresAt": 1_900_000_000u64,
+                              "needsSignIn": false}],
             })
         );
     }

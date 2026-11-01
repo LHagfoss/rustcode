@@ -469,6 +469,7 @@ async fn finish_authorization(
         scopes: granted,
         expires_at: Some(expiry),
         active: true,
+        needs_sign_in: false,
     };
     let profiles = catalog
         .into_iter()
@@ -557,7 +558,26 @@ async fn refresh_locked(
         .send()
         .await
         .context("could not reach the OpenAI refresh endpoint")?;
-    let refreshed = parse_token_response(response).await?;
+    let refreshed = match parse_token_response(response).await {
+        Ok(refreshed) => refreshed,
+        Err(error) => {
+            if let Some(refusal) = error.downcast_ref::<TokenRequestError>()
+                && refusal.rejects_refresh_token()
+            {
+                // Remember it, so Connections can say the account needs a
+                // new sign-in instead of looking healthy.
+                let mut flagged = current.clone();
+                flagged.needs_sign_in = true;
+                let _ = super::upsert_account(flagged);
+                bail!(
+                    "Your ChatGPT sign-in ({}) has expired or was replaced ({refusal}). \
+                     Sign in again with `/login openai`.",
+                    current.display
+                );
+            }
+            return Err(error);
+        }
+    };
     if refreshed
         .token_type
         .as_deref()
@@ -584,6 +604,7 @@ async fn refresh_locked(
         bail!("ChatGPT plan access is no longer granted; run /login openai");
     }
     let mut updated = current;
+    updated.needs_sign_in = false;
     updated.scopes = new_scopes;
     updated.expires_at = Some(unix_now()?.saturating_add(refreshed.expires_in));
     let retained_id_token = if let Some(id_token) = refreshed.id_token {
@@ -807,12 +828,69 @@ fn validate_auth_endpoint(value: &str) -> Result<()> {
     Ok(())
 }
 
+/// A token endpoint's refusal: the HTTP status and the OAuth `error` code
+/// from its body. The description and the body itself are left out, so no
+/// token or account detail reaches a log or the chat.
+#[derive(Debug, PartialEq, Eq)]
+struct TokenRequestError {
+    status: u16,
+    code: Option<String>,
+}
+
+impl std::fmt::Display for TokenRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.code {
+            Some(code) => write!(
+                f,
+                "OpenAI token request failed (HTTP {} {code})",
+                self.status
+            ),
+            None => write!(f, "OpenAI token request failed (HTTP {})", self.status),
+        }
+    }
+}
+
+impl std::error::Error for TokenRequestError {}
+
+impl TokenRequestError {
+    fn from_body(status: u16, body: &str) -> Self {
+        let code = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|value| {
+                let error = value.get("error")?;
+                error
+                    .as_str()
+                    .or_else(|| error.get("code").and_then(serde_json::Value::as_str))
+                    .map(str::to_owned)
+            })
+            // An OAuth error code is a short snake_case word; anything else
+            // is not echoed.
+            .filter(|code| {
+                code.len() <= 64
+                    && code
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            });
+        Self { status, code }
+    }
+
+    /// The saved refresh token is no longer accepted: it expired, was
+    /// revoked, or was rotated by another copy of the credentials. Only a
+    /// new sign-in fixes it.
+    fn rejects_refresh_token(&self) -> bool {
+        matches!(self.status, 400 | 401)
+            && self
+                .code
+                .as_deref()
+                .is_some_and(|code| code == "invalid_grant" || code.starts_with("refresh_token"))
+    }
+}
+
 async fn parse_token_response(response: reqwest::Response) -> Result<TokenResponse> {
     if !response.status().is_success() {
-        bail!(
-            "OpenAI token request failed (HTTP {})",
-            response.status().as_u16()
-        );
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        return Err(TokenRequestError::from_body(status, &body).into());
     }
     response
         .json()
@@ -1059,6 +1137,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_rejected_refresh_token_is_named_without_its_details() {
+        let refusal = TokenRequestError::from_body(
+            400,
+            r#"{"error":"invalid_grant","error_description":"Refresh token rt_secret was already used"}"#,
+        );
+        assert_eq!(refusal.code.as_deref(), Some("invalid_grant"));
+        assert!(refusal.rejects_refresh_token());
+        let text = refusal.to_string();
+        assert_eq!(text, "OpenAI token request failed (HTTP 400 invalid_grant)");
+        assert!(!text.contains("rt_secret"));
+
+        let nested =
+            TokenRequestError::from_body(401, r#"{"error":{"code":"refresh_token_reused"}}"#);
+        assert!(nested.rejects_refresh_token());
+
+        let other = TokenRequestError::from_body(500, "<html>oops</html>");
+        assert_eq!(other.code, None);
+        assert!(!other.rejects_refresh_token());
+        let odd = TokenRequestError::from_body(400, r#"{"error":"Bearer abc.def"}"#);
+        assert_eq!(
+            odd.code, None,
+            "a code that is not a plain word is not echoed"
+        );
+    }
+
+    #[test]
     fn headless_instructions_name_the_url_and_the_callback_port() {
         let url =
             url::Url::parse("https://auth.openai.com/api/accounts/authorize?state=s").unwrap();
@@ -1234,6 +1338,7 @@ mod tests {
             scopes: vec![],
             expires_at: None,
             active: true,
+            needs_sign_in: false,
         };
         let profile = model.into_profile(&account);
         assert_eq!(
@@ -1261,6 +1366,7 @@ mod tests {
             scopes: vec![],
             expires_at: None,
             active: true,
+            needs_sign_in: false,
         };
         let windows = displayable_models(catalog)
             .into_iter()
