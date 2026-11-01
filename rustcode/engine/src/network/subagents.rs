@@ -665,7 +665,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 } else if !write_access && !is_read_only_subagent_call(tool_call) {
                     (
                         crate::tools::ToolExecutionOutput::failure_with_kind(
-                            "error: subagents are read-only by default; request write_access with allowed_paths explicitly".to_string(),
+                            READ_ONLY_REFUSAL.to_string(),
                             crate::tools::ToolErrorKind::PermissionDenied,
                             false,
                         ),
@@ -1097,6 +1097,11 @@ fn agent_notice(state: &mut AppState, message: String) {
 /// cancellation still ends it at once.
 const MAX_WAIT_AGENT_TIMEOUT_MS: u64 = 3_600_000;
 
+/// Shortest a `wait_agent` call waits. A child's turn takes model rounds, so a
+/// one-second wait only times out and spends a parent round per poll; a
+/// finished child or a message for the waiter still ends the wait early.
+const MIN_WAIT_AGENT_TIMEOUT_MS: u64 = 30_000;
+
 /// The targets of `wait_agent`: `ids`, or the single `id`.
 fn agent_ids_arg(args: &serde_json::Value) -> Vec<u32> {
     let parse = |value: &serde_json::Value| {
@@ -1266,11 +1271,6 @@ async fn handle_agent_tool_for_parent(
                 .and_then(|value| value.as_str())
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
-            if requested_cwd.is_some() && write_access && workspace_mode == "shared" {
-                return crate::tools::ToolExecutionOutput::failure(
-                    "error: cwd applies to read-only children and isolated workspaces; a write-enabled shared child works in its own copy of the session workspace".to_string(),
-                );
-            }
             let verification_label = verification_command
                 .as_deref()
                 .unwrap_or("none")
@@ -1358,55 +1358,63 @@ async fn handle_agent_tool_for_parent(
                     },
                     None => None,
                 };
+                // A shared child, read-only or not, works in the thread's
+                // workspace (or the cwd it was given); a writer is fenced by
+                // allowed_paths there rather than by a copy.
+                let working_directory = working_directory.or_else(|| {
+                    (write_access && workspace_mode == "shared")
+                        .then(|| s.effective_workspace_root())
+                        .flatten()
+                });
                 let id = s.next_subagent_id;
-                let plan = if workspace_mode == "isolated" {
-                    let Some(base_sha) = args
-                        .get("base_sha")
-                        .and_then(|value| value.as_str())
-                        .filter(|value| !value.trim().is_empty())
-                    else {
-                        return crate::tools::ToolExecutionOutput::failure(
-                            "error: isolated workspaces require an explicit base_sha".to_string(),
+                let plan = 'plan: {
+                    if workspace_mode == "isolated" {
+                        let source_cwd = working_directory
+                            .clone()
+                            .or_else(|| s.effective_workspace_root())
+                            .ok_or_else(|| "cannot determine source workspace".to_string());
+                        let Ok(source_cwd) = source_cwd else {
+                            return crate::tools::ToolExecutionOutput::failure(
+                                "error: cannot determine source workspace".to_string(),
+                            );
+                        };
+                        // Without a base, the child gets a worktree of the
+                        // workspace's current HEAD.
+                        let Some(base_sha) = args
+                            .get("base_sha")
+                            .and_then(|value| value.as_str())
+                            .filter(|value| !value.trim().is_empty())
+                        else {
+                            break 'plan SubagentWorkspacePlan::Worktree(source_cwd);
+                        };
+                        let name = args
+                            .get("workspace_name")
+                            .and_then(|value| value.as_str())
+                            .filter(|value| !value.trim().is_empty())
+                            .unwrap_or(&format!("agent-{id}"))
+                            .to_string();
+                        let task_id = args
+                            .get("task_id")
+                            .and_then(|value| value.as_str())
+                            .filter(|value| !value.trim().is_empty())
+                            .unwrap_or(&id.to_string())
+                            .to_string();
+                        let mut request = crate::config::WorkspaceRequest::for_task(
+                            source_cwd,
+                            name,
+                            base_sha,
+                            format!("session:{}", s.active_session_id),
+                            s.active_session_id.clone(),
+                            task_id,
                         );
-                    };
-                    let source_cwd = working_directory
-                        .clone()
-                        .or_else(|| s.effective_workspace_root())
-                        .ok_or_else(|| "cannot determine source workspace".to_string());
-                    let Ok(source_cwd) = source_cwd else {
-                        return crate::tools::ToolExecutionOutput::failure(
-                            "error: cannot determine source workspace".to_string(),
-                        );
-                    };
-                    let name = args
-                        .get("workspace_name")
-                        .and_then(|value| value.as_str())
-                        .filter(|value| !value.trim().is_empty())
-                        .unwrap_or(&format!("agent-{id}"))
-                        .to_string();
-                    let task_id = args
-                        .get("task_id")
-                        .and_then(|value| value.as_str())
-                        .filter(|value| !value.trim().is_empty())
-                        .unwrap_or(&id.to_string())
-                        .to_string();
-                    let mut request = crate::config::WorkspaceRequest::for_task(
-                        source_cwd,
-                        name,
-                        base_sha,
-                        format!("session:{}", s.active_session_id),
-                        s.active_session_id.clone(),
-                        task_id,
-                    );
-                    request.branch = args
-                        .get("branch")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string);
-                    Some(Some(request))
-                } else if write_access {
-                    Some(None)
-                } else {
-                    None
+                        request.branch = args
+                            .get("branch")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string);
+                        SubagentWorkspacePlan::Named(Box::new(request))
+                    } else {
+                        SubagentWorkspacePlan::Shared
+                    }
                 };
                 let reserved_id = crate::app::SubagentController.reserve_id(&mut s);
                 debug_assert_eq!(reserved_id.raw(), id);
@@ -1421,8 +1429,10 @@ async fn handle_agent_tool_for_parent(
             };
             // Creating a workspace runs git and copies files; do it without
             // the state lock so the session stays responsive meanwhile.
+            let (plan, working_directory, workspace_note) =
+                plan.or_shared_outside_git(working_directory);
             let workspace_root = match plan {
-                Some(Some(request)) => match crate::config::workspace_manager()
+                SubagentWorkspacePlan::Named(request) => match crate::config::workspace_manager()
                     .ok_or_else(|| "workspace persistence unavailable".to_string())
                     .and_then(|manager| manager.create(&request).map_err(|error| error.to_string()))
                 {
@@ -1433,10 +1443,11 @@ async fn handle_agent_tool_for_parent(
                         ));
                     }
                 },
-                Some(None) => {
+                SubagentWorkspacePlan::Worktree(repo) => {
                     match crate::config::create_subagent_workspace(
                         &owner_session_id,
                         reserved_id.raw(),
+                        &repo,
                     ) {
                         Ok(path) => Some(path),
                         Err(error) => {
@@ -1446,7 +1457,7 @@ async fn handle_agent_tool_for_parent(
                         }
                     }
                 }
-                None => None,
+                SubagentWorkspacePlan::Shared => None,
             };
             let (agent_id, supervisor, owner_session_id, child_model) = {
                 let mut s = state.lock().await;
@@ -1530,16 +1541,17 @@ async fn handle_agent_tool_for_parent(
                 .find(|agent| agent.id == agent_id)
                 .map(|agent| agent.status)
                 .unwrap_or(crate::app::SubAgentStatus::Queued);
-            crate::tools::ToolExecutionOutput::success(
-                serde_json::json!({
-                    "agent_id": agent_id,
-                    "nickname": format!("agent-{agent_id}"),
-                    "agent_type": agent_type,
-                    "model": child_model,
-                    "status": status,
-                })
-                .to_string(),
-            )
+            let mut receipt = serde_json::json!({
+                "agent_id": agent_id,
+                "nickname": format!("agent-{agent_id}"),
+                "agent_type": agent_type,
+                "model": child_model,
+                "status": status,
+            });
+            if let Some(note) = workspace_note {
+                receipt["workspace"] = serde_json::Value::String(note);
+            }
+            crate::tools::ToolExecutionOutput::success(receipt.to_string())
         }
         "send_agent" | "send_message" | "followup_task" => {
             if parent_id.is_none() && !state.lock().await.delegation_active {
@@ -1710,7 +1722,7 @@ async fn handle_agent_tool_for_parent(
                 .get("timeout_ms")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(60_000)
-                .clamp(1, MAX_WAIT_AGENT_TIMEOUT_MS);
+                .clamp(MIN_WAIT_AGENT_TIMEOUT_MS, MAX_WAIT_AGENT_TIMEOUT_MS);
             // Several targets: wait for whichever finishes first, then report
             // that one exactly as a single-target wait would.
             let id = if let [id] = ids[..] {
@@ -2175,6 +2187,51 @@ fn subagent_request_profile(
         .cloned()
 }
 
+/// Where a new child works.
+enum SubagentWorkspacePlan {
+    /// The thread's workspace (or the given cwd), fenced by allowed_paths
+    /// when the child writes.
+    Shared,
+    /// A named workspace from the workspace manager at an explicit base.
+    Named(Box<crate::config::WorkspaceRequest>),
+    /// A detached worktree of this repository's HEAD.
+    Worktree(std::path::PathBuf),
+}
+
+impl SubagentWorkspacePlan {
+    fn source(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Shared => None,
+            Self::Named(request) => Some(&request.source_cwd),
+            Self::Worktree(repo) => Some(repo),
+        }
+    }
+
+    /// An isolated plan needs a git repository. Outside one the child works
+    /// in the source folder instead, still fenced by allowed_paths, and the
+    /// returned note says so.
+    fn or_shared_outside_git(
+        self,
+        working_directory: Option<std::path::PathBuf>,
+    ) -> (Self, Option<std::path::PathBuf>, Option<String>) {
+        match self.source() {
+            Some(source) if !crate::config::is_git_work_tree(source) => {
+                let note = format!(
+                    "shared: {} is not a git repository, so the agent works there directly within allowed_paths",
+                    source.display()
+                );
+                let source = source.to_path_buf();
+                (Self::Shared, Some(source), Some(note))
+            }
+            _ => (self, working_directory, None),
+        }
+    }
+}
+
+/// What a read-only child hears when a call is not inspection. It cannot
+/// fix this itself, so it names who can.
+const READ_ONLY_REFUSAL: &str = "error: this subagent is read-only and the call was not recognised as read-only inspection. A subagent cannot grant itself write access: report what needs changing in your answer, and the parent can spawn a worker (agent_type \"worker\" with allowed_paths) to make the change.";
+
 fn is_read_only_subagent_call(call: &crate::tools::ToolCall) -> bool {
     if call.name != "run_command" {
         // The same set the read-only tool schema advertises: reads, web,
@@ -2203,6 +2260,16 @@ fn is_read_only_subagent_call(call: &crate::tools::ToolCall) -> bool {
                 .is_some_and(crate::tools::exec::has_shell_background_operator)
         {
             return false;
+        }
+        // `tool --help` only prints usage, even for a tool the command
+        // policy does not know.
+        if call
+            .arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(crate::tools::exec::is_help_or_version_command)
+        {
+            return true;
         }
     }
     crate::tools::is_read_only_call(call)
@@ -2669,7 +2736,7 @@ mod tests {
         assert_eq!(state.lock().await.subagents.len(), 3);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn wait_timeout_preserves_active_agent_and_idle_mail_delivers_before_followup() {
         let mut s = AppState::new();
         s.delegation_active = true;
@@ -2692,6 +2759,7 @@ mod tests {
             )
             .unwrap();
         let state = Arc::new(Mutex::new(s));
+        let started = tokio::time::Instant::now();
         let result = handle_agent_tool(
             &reqwest::Client::new(),
             &state,
@@ -2701,6 +2769,11 @@ mod tests {
         )
         .await;
         assert!(result.success && result.content.contains("timed out"));
+        // A one-millisecond poll is raised to the minimum wait.
+        assert!(
+            tokio::time::Instant::now() - started
+                >= std::time::Duration::from_millis(MIN_WAIT_AGENT_TIMEOUT_MS)
+        );
         assert!(supervisor.is_active(id));
         supervisor.shutdown_and_wait().await;
         let mut s = state.lock().await;
@@ -3221,9 +3294,20 @@ mod tests {
             call_id: None,
         };
 
-        assert!(is_read_only_subagent_call(&call(
-            serde_json::json!({"command":"gh pr list --limit 15 --state open"})
-        )));
+        for command in [
+            "gh pr list --limit 15 --state open",
+            // Brace expansion on a reading command only adds paths to read.
+            "rg -n 'x' rustcode/engine/src/tools/{mod.rs,schema.rs}",
+            "cat src/{a,b}.rs | head -5",
+            // Help and version text from a tool the policy does not know.
+            "agent-desktop --help && agent-desktop snapshot --help",
+            "cargo --version",
+        ] {
+            assert!(
+                is_read_only_subagent_call(&call(serde_json::json!({ "command": command }))),
+                "read-only agent must allow {command}"
+            );
+        }
         for arguments in [
             serde_json::json!({"command":"cargo test"}),
             serde_json::json!({"command":"echo x > /tmp/out"}),
@@ -3236,6 +3320,13 @@ mod tests {
             serde_json::json!({"command":"gh pr list", "network_access":"false"}),
             serde_json::json!({"command":"gh pr list", "filesystem_write_path":"/tmp"}),
             serde_json::json!({"command":"tail -f file &"}),
+            serde_json::json!({"command":"rm -rf src/{a,b}"}),
+            serde_json::json!({"command":"git checkout src/{a,b}"}),
+            serde_json::json!({"command":"cat {-n,x}"}),
+            serde_json::json!({"command":"touch name --help"}),
+            serde_json::json!({"command":"shutdown -h"}),
+            serde_json::json!({"command":"tool --help > out.txt"}),
+            serde_json::json!({"command":"tool --help && rm -rf x"}),
         ] {
             assert!(
                 !is_read_only_subagent_call(&call(arguments.clone())),
@@ -3625,14 +3716,6 @@ mod tests {
             "{}",
             missing.content
         );
-        let shared_writer = spawn(serde_json::json!({
-            "task": "edit", "write_access": true, "allowed_paths": ["src/"],
-            "cwd": directory.path()
-        }))
-        .await;
-        assert!(!shared_writer.success);
-        assert!(state.lock().await.subagents.is_empty());
-
         let child = spawn(serde_json::json!({"task": "look", "cwd": directory.path()})).await;
         assert!(child.success, "{}", child.content);
         tokio::time::timeout(std::time::Duration::from_secs(5), accepted)
@@ -3650,6 +3733,96 @@ mod tests {
             assert_eq!(
                 subagent_context_workspace_root(&s, subagent_execution_root(&s.subagents[0])),
                 Some(expected)
+            );
+        }
+
+        let supervisor = state.lock().await.subagent_supervisor.clone();
+        supervisor.shutdown_and_wait().await;
+        let _ = release.send(());
+    }
+
+    /// A worker (the default way a model asks for writes) used to fail with
+    /// `git worktree add exited with exit status: 128`: every writer got a
+    /// worktree of the engine's own directory. A shared writer now works in
+    /// the thread's workspace, fenced by allowed_paths, and an isolated one
+    /// outside git falls back to that instead of failing.
+    #[tokio::test]
+    async fn write_enabled_children_start_in_the_thread_workspace() {
+        let (url, accepted, release) = gated_subagent_server().await;
+        let state = delegated_test_state(url).await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        state.lock().await.workspace_root = Some(workspace.path().to_path_buf());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let spawn = |args: serde_json::Value| {
+            let state = Arc::clone(&state);
+            let cancel = cancel.clone();
+            async move {
+                handle_agent_tool_for_parent(
+                    &reqwest::Client::new(),
+                    &state,
+                    &cancel,
+                    "spawn_agent",
+                    &args,
+                    None,
+                )
+                .await
+            }
+        };
+
+        let worker = spawn(serde_json::json!({
+            "task": "edit", "agent_type": "worker", "allowed_paths": ["src/"]
+        }))
+        .await;
+        assert!(worker.success, "{}", worker.content);
+        tokio::time::timeout(std::time::Duration::from_secs(5), accepted)
+            .await
+            .unwrap()
+            .unwrap();
+        {
+            let s = state.lock().await;
+            let agent = &s.subagents[0];
+            assert!(agent.write_access);
+            assert_eq!(agent.workspace_root, None);
+            assert_eq!(
+                subagent_execution_root(agent).as_deref(),
+                Some(workspace.path())
+            );
+            // The contract fences writes to allowed_paths inside it.
+            let root = subagent_execution_root(agent);
+            let allowed = &agent.allowed_paths;
+            assert!(!call_paths_outside_contract(
+                &serde_json::json!({"path": "src/lib.rs"}),
+                root.as_deref(),
+                allowed
+            ));
+            assert!(call_paths_outside_contract(
+                &serde_json::json!({"path": "Cargo.toml"}),
+                root.as_deref(),
+                allowed
+            ));
+        }
+
+        // Not a git repository: isolation falls back to the shared folder.
+        let isolated = spawn(serde_json::json!({
+            "task": "edit", "agent_type": "worker", "allowed_paths": ["docs/"],
+            "workspace_mode": "isolated"
+        }))
+        .await;
+        assert!(isolated.success, "{}", isolated.content);
+        let receipt: serde_json::Value = serde_json::from_str(&isolated.content).unwrap();
+        assert!(
+            receipt["workspace"]
+                .as_str()
+                .is_some_and(|note| note.contains("not a git repository")),
+            "{receipt}"
+        );
+        {
+            let s = state.lock().await;
+            let agent = &s.subagents[1];
+            assert_eq!(agent.workspace_root, None);
+            assert_eq!(
+                subagent_execution_root(agent).as_deref(),
+                Some(workspace.path())
             );
         }
 

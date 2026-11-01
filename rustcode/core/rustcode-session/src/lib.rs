@@ -1121,10 +1121,13 @@ impl SessionStore {
         WorkspaceManager::new(&self.root)
     }
 
+    /// A detached git worktree of `repo` at its `HEAD`, for one subagent.
+    /// `repo` is the thread's workspace, not the engine's own directory.
     pub fn create_subagent_workspace(
         &self,
         session_id: &str,
         agent_id: u32,
+        repo: &Path,
     ) -> Result<PathBuf, String> {
         let root = self
             .session_dir(session_id)
@@ -1137,19 +1140,36 @@ impl SessionStore {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("create subagent directory: {error}"))?;
         }
-        let repo =
-            std::env::current_dir().map_err(|error| format!("resolve repository: {error}"))?;
-        let status = std::process::Command::new("git")
+        let output = std::process::Command::new("git")
             .args(["worktree", "add", "--detach"])
             .arg(&root)
             .arg("HEAD")
             .current_dir(repo)
-            .status()
+            .output()
             .map_err(|error| format!("create git worktree: {error}"))?;
-        if !status.success() {
-            return Err(format!("git worktree add exited with {status}"));
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "git worktree add in {} exited with {}: {}",
+                repo.display(),
+                output.status,
+                stderr.trim()
+            ));
         }
         Ok(root)
+    }
+
+    /// Whether `path` lies inside a git work tree.
+    pub fn is_git_work_tree(path: &Path) -> bool {
+        std::process::Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|output| {
+                output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true"
+            })
     }
 
     pub fn write_subagent_review_manifest(workspace: &Path, agent_id: u32) -> Option<PathBuf> {
@@ -1808,6 +1828,56 @@ mod tests {
 
     pub(super) fn message(role: &str, content: &str) -> ChatMessage {
         ChatMessage::new(role, content)
+    }
+
+    fn git(directory: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(directory)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// The worktree comes from the thread's repository, not from wherever
+    /// the engine process was started, and a failure says why.
+    #[test]
+    fn subagent_worktree_is_made_from_the_given_repository() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path().join("store"));
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("file.txt"), "content").unwrap();
+        git(&repo, &["add", "file.txt"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "initial",
+            ],
+        );
+        assert!(SessionStore::is_git_work_tree(&repo));
+
+        let worktree = store.create_subagent_workspace("123", 1, &repo).unwrap();
+        assert!(worktree.join("file.txt").is_file());
+
+        let plain = root.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(!SessionStore::is_git_work_tree(&plain));
+        let error = store
+            .create_subagent_workspace("123", 2, &plain)
+            .unwrap_err();
+        assert!(error.contains(&plain.display().to_string()), "{error}");
+        assert!(error.contains("not a git repository"), "{error}");
     }
 
     #[test]

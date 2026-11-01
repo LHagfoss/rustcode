@@ -2559,6 +2559,33 @@ fn validation_error_names_schema_path_and_valid_example() {
 }
 
 #[test]
+fn ask_question_accepts_label_objects_in_the_single_question_shape() {
+    let arguments = serde_json::json!({
+        "question": "Which source?",
+        "options": [
+            {"label": "CHANGELOG.md", "description": "Curated notes"},
+            "Releases API"
+        ]
+    });
+    validate_tool_calls(
+        &[ToolCall {
+            name: "ask_question".to_string(),
+            arguments: arguments.clone(),
+            call_id: None,
+        }],
+        MAX_MUTATING_CALLS_PER_RESPONSE,
+    )
+    .expect("label objects are valid options");
+
+    let summary = super::misc::ask_question(&arguments).unwrap();
+    assert!(
+        summary.contains("1. CHANGELOG.md — Curated notes"),
+        "{summary}"
+    );
+    assert!(summary.contains("2. Releases API"), "{summary}");
+}
+
+#[test]
 fn diagnose_reports_unknown_tool_as_unavailable() {
     let text = "```tool\n{\"name\": \"not_a_real_tool\", \"arguments\": {}}\n```";
     let diag = diagnose_failed_tool_call(text).expect("should diagnose unknown tool");

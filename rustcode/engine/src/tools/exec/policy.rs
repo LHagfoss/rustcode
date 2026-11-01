@@ -111,6 +111,20 @@ fn split_command_segments(cmd: &str) -> Vec<String> {
                 chars.next();
                 current.push_str("{}");
             }
+            // `dir/{a,b}` is brace expansion inside one word, not a group.
+            '{' if current
+                .chars()
+                .next_back()
+                .is_some_and(|last| !last.is_whitespace())
+                && brace_expansion_len(chars.clone()).is_some() =>
+            {
+                current.push('{');
+                for _ in 0..=brace_expansion_len(chars.clone()).unwrap_or_default() {
+                    if let Some(inner) = chars.next() {
+                        current.push(inner);
+                    }
+                }
+            }
             ';' | '\n' | '|' | '&' | '`' | '(' | ')' | '{' | '}' => {
                 segments.push(std::mem::take(&mut current));
             }
@@ -119,6 +133,24 @@ fn split_command_segments(cmd: &str) -> Vec<String> {
     }
     segments.push(current);
     segments
+}
+
+/// Length of a brace-expansion body (`a.rs,b.rs` in `{a.rs,b.rs}`) at the
+/// start of `rest`, the text after `{`: plain path characters with at least
+/// one comma, closed by `}`.
+fn brace_expansion_len(rest: impl Iterator<Item = char>) -> Option<usize> {
+    let mut length = 0;
+    let mut has_comma = false;
+    for character in rest {
+        match character {
+            '}' => return has_comma.then_some(length),
+            ',' => has_comma = true,
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' | '/' | '+' | '@' | ':' => {}
+            _ => return None,
+        }
+        length += 1;
+    }
+    None
 }
 
 fn split_deny_command_segments(command: &str) -> Vec<(String, bool)> {
@@ -468,12 +500,18 @@ fn is_read_only_gh_api(tokens: &[&str]) -> bool {
 /// inspection commands, and only an escaped space or `;` outside quotes
 /// (`Application\ Support`, `find -exec … \;`); other expansions and escapes
 /// stay unclassified.
-fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool)> {
+/// Words of a plain shell command, whether it expands `$HOME`, and whether it
+/// uses brace expansion (`dir/{a.rs,b.rs}`). A brace group is accepted only
+/// inside a word after a prefix that is not an option, so each alternative
+/// stays a positional argument (never a flag or the command name).
+fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool, bool)> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut quote = None;
     let mut started = false;
     let mut has_environment_expansion = false;
+    let mut has_brace_expansion = false;
+    let mut word_has_brace = false;
     let mut chars = command.chars().peekable();
 
     while let Some(ch) = chars.next() {
@@ -514,6 +552,7 @@ fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool)> {
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
+                    word_has_brace = false;
                 }
             }
             '\\' => match chars.next() {
@@ -527,6 +566,15 @@ fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool)> {
                 chars.next();
                 word.push_str("{}");
                 started = true;
+            }
+            '{' if !word.is_empty() && !word.starts_with('-') && !word_has_brace => {
+                let length = brace_expansion_len(chars.clone())?;
+                word.push('{');
+                for _ in 0..=length {
+                    word.push(chars.next()?);
+                }
+                word_has_brace = true;
+                has_brace_expansion = true;
             }
             '$' | '`' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | '{' | '}' => {
                 return None;
@@ -544,7 +592,7 @@ fn read_only_shell_words(command: &str) -> Option<(Vec<String>, bool)> {
     if started {
         words.push(word);
     }
-    Some((words, has_environment_expansion))
+    Some((words, has_environment_expansion, has_brace_expansion))
 }
 
 /// `find` only inspects unless an action writes or runs something. `-exec`
@@ -591,8 +639,119 @@ fn is_read_only_find(arguments: &[&str]) -> bool {
     true
 }
 
+/// Commands that only read, whatever arguments they get.
+fn is_plain_inspection_binary(binary: &str) -> bool {
+    matches!(
+        binary,
+        "arch"
+            | "basename"
+            | "blkid"
+            | "cat"
+            | "column"
+            | "cut"
+            | "date"
+            | "df"
+            | "dirname"
+            | "du"
+            | "echo"
+            | "false"
+            | "file"
+            | "free"
+            | "getent"
+            | "grep"
+            | "groups"
+            | "head"
+            | "hexdump"
+            | "id"
+            | "jq"
+            | "less"
+            | "logname"
+            | "ls"
+            | "lsblk"
+            | "lscpu"
+            | "lsmod"
+            | "lspci"
+            | "lsusb"
+            | "modinfo"
+            | "more"
+            | "netstat"
+            | "nl"
+            | "nproc"
+            | "od"
+            | "printf"
+            | "ps"
+            | "pwd"
+            | "readlink"
+            | "realpath"
+            | "rg"
+            | "sort"
+            | "ss"
+            | "stat"
+            | "strings"
+            | "tac"
+            | "tail"
+            | "test"
+            | "tr"
+            | "true"
+            | "type"
+            | "uname"
+            | "uniq"
+            | "uptime"
+            | "w"
+            | "wc"
+            | "which"
+            | "who"
+            | "whoami"
+            | "xxd"
+    )
+}
+
+/// Whether every command in `command` only asks a program for its help or
+/// version text: `tool --help`, `tool sub --help`, `tool --version`. The
+/// program is unknown, so this is no general read-only verdict; it backs the
+/// read-only subagent gate, whose calls still go through command approval.
+/// `-h` is left out on purpose: `shutdown -h` halts.
+pub(crate) fn is_help_or_version_command(command: &str) -> bool {
+    // BSD getopt stops at the first operand, so `touch name --help` creates
+    // `name` (and `--help`) instead of printing help.
+    const MUTATING: &[&str] = &[
+        "chmod", "chown", "cp", "dd", "halt", "install", "kill", "killall", "ln", "mkdir", "mv",
+        "pkill", "reboot", "rm", "rmdir", "shutdown", "tee", "touch", "truncate",
+    ];
+    let plain = |word: &str| {
+        !word.is_empty()
+            && !word.starts_with('-')
+            && word
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "._-:".contains(character))
+    };
+    if command.contains(['<', '>']) {
+        return false;
+    }
+    let segments = split_command_segments(command)
+        .into_iter()
+        .filter(|segment| !segment.trim().is_empty())
+        .collect::<Vec<_>>();
+    !segments.is_empty()
+        && segments.iter().all(|segment| {
+            let Some((words, false, false)) = read_only_shell_words(segment) else {
+                return false;
+            };
+            let [binary, middle @ .., flag] = words.as_slice() else {
+                return false;
+            };
+            matches!(flag.as_str(), "--help" | "--version")
+                && plain(binary)
+                && middle.len() <= 1
+                && middle.iter().all(|word| plain(word))
+                && (middle.is_empty() || !MUTATING.contains(&binary.as_str()))
+        })
+}
+
 fn is_read_only_segment(segment: &str) -> bool {
-    let Some((words, has_environment_expansion)) = read_only_shell_words(segment) else {
+    let Some((words, has_environment_expansion, has_brace_expansion)) =
+        read_only_shell_words(segment)
+    else {
         return false;
     };
     let tokens = words.iter().map(String::as_str).collect::<Vec<_>>();
@@ -612,20 +771,17 @@ fn is_read_only_segment(segment: &str) -> bool {
     if binary == Some("gh") && has_environment_expansion {
         return false;
     }
+    // Brace alternatives are extra positional arguments; only commands that
+    // read whatever paths they are given stay read-only with them.
+    if has_brace_expansion && !binary.is_some_and(is_plain_inspection_binary) {
+        return false;
+    }
     match binary {
         Some("git") => is_read_only_git(&tokens),
         Some("gh") => is_read_only_gh(&tokens),
         Some("command") => tokens.get(1) == Some(&"-v"),
         Some("find") => is_read_only_find(&tokens[1..]),
-        Some(
-            "arch" | "basename" | "blkid" | "cat" | "column" | "cut" | "date" | "df" | "dirname"
-            | "du" | "echo" | "false" | "file" | "free" | "getent" | "grep" | "groups" | "head"
-            | "hexdump" | "id" | "jq" | "less" | "logname" | "ls" | "lsblk" | "lscpu" | "lsmod"
-            | "lspci" | "lsusb" | "modinfo" | "more" | "netstat" | "nl" | "nproc" | "od" | "printf"
-            | "ps" | "pwd" | "readlink" | "realpath" | "rg" | "sort" | "ss" | "stat" | "strings"
-            | "tac" | "tail" | "test" | "tr" | "true" | "type" | "uname" | "uniq" | "uptime" | "w"
-            | "wc" | "which" | "who" | "whoami" | "xxd",
-        ) => true,
+        Some(binary) if is_plain_inspection_binary(binary) => true,
         Some("dmesg") => {
             // Reads the kernel ring buffer; `-C`/`--clear`/`--read-clear`
             // discard it.
