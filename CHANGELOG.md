@@ -1,3 +1,14 @@
+## [v0.115.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.115.0) - 2026-11-01
+
+### Features
+- The composer's usage meter shows the 5-hour window, and warns when the weekly window runs low. (#2767)
+- An expired or replaced ChatGPT sign-in now says to sign in again with `/login openai` instead of failing with HTTP 400. (#2768)
+- The Claude CLI subscription integration is removed. (#2774)
+- Add experimental, permission-gated native desktop automation on macOS. (#2775)
+- Betas: macOS prereleases can now be cut several times a day as `X.Y.Z-beta.N`. (#2777)
+- A subagent's panel is laid out like the chat: slim header, the chat's column and a floating composer. (#2779)
+- The app's floating panels, popovers and header buttons use the composer's blur instead of Liquid Glass, with rounder popovers. (#2778)
+- Subagents that edit files start again and work in the thread's folder. (#2780)
 ## [v0.115.0-rc.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.115.0-rc.1) - 2026-11-01
 
 ### Features
