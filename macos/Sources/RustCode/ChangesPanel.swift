@@ -144,7 +144,7 @@ struct ChangesPanel: View {
             if snapshot.files.isEmpty {
                 VStack(spacing: 0) {
                     summary(snapshot)
-                    notice("No changes", systemImage: "checkmark.circle")
+                    empty(snapshot)
                 }
             } else {
                 ScrollView {
@@ -158,6 +158,27 @@ struct ChangesPanel: View {
                 }
                 .environment(\.projectRoot, snapshot.root)
             }
+        }
+    }
+
+    /// Nothing to show. Right after the agent commits, the working tree is
+    /// clean but the work is on the branch: offer that view instead of
+    /// leaving "0 files" as the answer.
+    @ViewBuilder
+    private func empty(_ snapshot: ChangesSnapshot) -> some View {
+        if snapshot.scope == .workingTree, let branch = snapshot.branch, !["main", "master"].contains(branch) {
+            VStack(spacing: 10) {
+                Label("No uncommitted changes", systemImage: "checkmark.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Show what \(branch) changed") { store.compare(with: nil, folder: folder) }
+                    .buttonStyle(PillButtonStyle())
+                    .help("Compare the branch with its base")
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            notice(snapshot.scope == .workingTree ? "No uncommitted changes" : "No changes", systemImage: "checkmark.circle")
         }
     }
 
