@@ -310,3 +310,16 @@ final class GitToolPhraseTests: XCTestCase {
         XCTAssertEqual(ToolPhrase.phrase(call("git_status", nil), now: false), "Checked git status")
     }
 }
+
+/// The engine's PascalCase fallback detail is not shown under a tool's title.
+final class ToolNameFallbackTests: XCTestCase {
+    func testNameFallbackIsDropped() {
+        XCTAssertTrue(ToolPresentation.isNameFallback("GitStatus", of: "git_status"))
+        XCTAssertFalse(ToolPresentation.isNameFallback("shop.py", of: "git_diff"))
+        var transcript = Transcript()
+        transcript.apply(.toolCall(id: "g", title: "git_status", kind: nil, status: .inProgress, input: nil, detail: "GitStatus"))
+        guard case .tool(let tool) = transcript.items.last?.content else { return XCTFail("no tool") }
+        XCTAssertNil(tool.inputDetail)
+    }
+}
+

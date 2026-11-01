@@ -205,7 +205,8 @@ public struct Transcript: Equatable, Sendable {
             if let durationMs { items[items.count - 1].duration = Double(durationMs) / 1000 }
         case .toolCall(let id, let title, let kind, let status, let input, let engineDetail, let engineSummary):
             let rendered = input.map { $0.prettyPrinted() }
-            let detail = ToolPresentation.detail(input: input, output: nil) ?? engineDetail
+            let detail = ToolPresentation.detail(input: input, output: nil)
+                ?? engineDetail.flatMap { ToolPresentation.isNameFallback($0, of: title) ? nil : $0 }
             let summary = engineSummary.flatMap(ToolPresentation.summary) ?? ToolPresentation.summary(input: input)
             if let index = toolIndex(id), case .tool(var tool) = items[index].content {
                 tool.title = title
