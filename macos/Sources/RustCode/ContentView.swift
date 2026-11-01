@@ -457,7 +457,9 @@ private struct SessionSidebar: View {
                 if !model.sessionsLoaded {
                     ProgressView().controlSize(.small)
                 } else if model.visibleSessions.isEmpty {
-                    Text(model.showsArchived ? "No archived threads." : model.sessions.isEmpty ? "No threads in this project yet." : "No matching threads.")
+                    Text(model.showsArchived ? "No archived threads."
+                         : !model.sessions.isEmpty ? "No matching threads."
+                         : model.showsAllProjects ? "No threads yet." : "No threads in this project yet.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
