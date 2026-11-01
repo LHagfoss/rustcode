@@ -324,8 +324,11 @@ struct SettingsRow<Trailing: View>: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                 if let subtitle {
+                    // Wraps rather than cutting a sentence in its middle
+                    // ("wait f…h pair"); a long path wraps at its slashes.
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle)
+                        .lineLimit(3).truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
             }
