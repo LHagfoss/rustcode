@@ -60,8 +60,11 @@ jobs:
         with:
             matrix: '[{"os": "macos-latest", "target": "aarch64-apple-darwin", "name": "rustcode-macos-aarch64"}]'
 
+    # Skipped for a release candidate (a `vX.Y.Z-rc.N` tag): an RC ships the
+    # macOS CLI and app only, as a GitHub prerelease.
     build:
         needs: verify-tag
+        if: ${{ !(startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-')) }}
         uses: ./.github/workflows/build-rust.yml
         secrets: inherit
         with:
@@ -157,7 +160,7 @@ jobs:
     # ios/Scripts/install-on-iphone.sh re-signs it locally with the user's profile.
     ios-app:
         needs: verify-tag
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && !(startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-'))
         runs-on: macos-26
         defaults:
             run:
@@ -236,8 +239,13 @@ jobs:
                       artifacts/*.tar.gz
                       artifacts/*.zip
                   generate_release_notes: true
+                  # A release candidate is a prerelease: `releases/latest`,
+                  # which both updaters read, skips it.
+                  prerelease: ${{ contains(github.ref_name, '-') }}
+                  make_latest: ${{ !contains(github.ref_name, '-') }}
 
             - name: Update Homebrew Formula
+              if: ${{ !contains(github.ref_name, '-') }}
               env:
                   TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
                   TAG: ${{ github.ref_name }}
@@ -282,7 +290,7 @@ jobs:
     # The other platforms, added to the release once they finish, with the
     # manifest rewritten to cover every asset.
     release-rest:
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
         needs: [release, build, ios-app]
         runs-on: ubuntu-latest
         steps:
