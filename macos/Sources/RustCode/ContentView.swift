@@ -2516,9 +2516,11 @@ private struct EmptyChat: View {
                 .buttonStyle(.link)
                 .help("Examples of visualizations you can ask for (/visualize)")
             } else {
+                // A plain tip is text, not a link: only the guide's tip,
+                // which opens something, takes the link colour.
                 Label(Self.tips[tip].text, systemImage: Self.tips[tip].image)
                     .font(.callout)
-                    .foregroundStyle(Color.brand)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
         }
