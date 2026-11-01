@@ -60,7 +60,7 @@ jobs:
         with:
             matrix: '[{"os": "macos-latest", "target": "aarch64-apple-darwin", "name": "rustcode-macos-aarch64"}]'
 
-    # Skipped for a release candidate (a `vX.Y.Z-rc.N` tag): an RC ships the
+    # Skipped for a beta (a `vX.Y.Z-beta.N` tag): a beta ships the
     # macOS CLI and app only, as a GitHub prerelease.
     build:
         needs: verify-tag
@@ -239,7 +239,7 @@ jobs:
                       artifacts/*.tar.gz
                       artifacts/*.zip
                   generate_release_notes: true
-                  # A release candidate is a prerelease: `releases/latest`,
+                  # A beta is a prerelease: `releases/latest`,
                   # which both updaters read, skips it.
                   prerelease: ${{ contains(github.ref_name, '-') }}
                   make_latest: ${{ !contains(github.ref_name, '-') }}
