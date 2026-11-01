@@ -26,6 +26,15 @@ public enum ToolPresentation {
         return nil
     }
 
+    /// The engine's detail when a call has nothing to show is the tool's
+    /// own name in PascalCase (`git_status` → `GitStatus`); it only repeats
+    /// the title, in a programmer's spelling.
+    public static func isNameFallback(_ detail: String, of tool: String) -> Bool {
+        let pascal = tool.split(whereSeparator: { $0 == "_" || $0 == "-" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
+        return detail == pascal || detail == tool
+    }
+
     /// What the model said a call does: the `summary` every built-in tool
     /// takes, on one line.
     public static func summary(input: JSONValue?) -> String? {
