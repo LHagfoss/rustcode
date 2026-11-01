@@ -30,4 +30,23 @@ final class PlanUsageTests: XCTestCase {
         XCTAssertNil(PlanUsage(json: .null))
         XCTAssertNil(PlanUsage(json: ["source": "codex", "primary": nil, "secondary": nil]))
     }
+
+    /// The meter shows the 5-hour window; a low week is flagged, not shown (#2766).
+    func testTheMeterShowsTheShortWindowAndFlagsALowLongOne() throws {
+        func usage(_ short: Double, _ week: Double) throws -> PlanUsage {
+            try XCTUnwrap(PlanUsage(json: [
+                "primary": ["usedPercent": .number(short), "windowMinutes": 300],
+                "secondary": ["usedPercent": .number(week), "windowMinutes": 10080],
+            ]))
+        }
+        let normal = try usage(60, 26)
+        XCTAssertEqual(normal.shown?.leftPercent, 40)
+        XCTAssertNil(normal.lowLonger)
+        let lowWeek = try usage(10, 97)
+        XCTAssertEqual(lowWeek.shown?.leftPercent, 90)
+        XCTAssertEqual(lowWeek.lowLonger?.title, "Weekly")
+        let single = try XCTUnwrap(PlanUsage(json: ["primary": ["usedPercent": 30]]))
+        XCTAssertEqual(single.shown?.leftPercent, 70)
+        XCTAssertNil(single.lowLonger)
+    }
 }

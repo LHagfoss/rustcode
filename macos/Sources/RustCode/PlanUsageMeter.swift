@@ -2,26 +2,34 @@ import RustCodeKit
 import SwiftUI
 
 /// The plan's usage beside the composer's pills (#2545): a short bar and the
-/// percentage of what is left in the tightest window, amber and then red as it runs low.
+/// percentage left in the 5-hour window, amber and then red as it runs low.
 /// Hovering asks for fresh numbers and shows `PlanUsagePanel` above it.
 struct PlanUsageMeter: View {
     let usage: PlanUsage
     @Binding var hovering: Bool
     let refresh: () -> Void
 
-    /// The window closest to running out decides the ring.
-    private var tightest: PlanUsage.Window? { usage.windows.min { $0.leftPercent < $1.leftPercent } }
+    /// The 5-hour window decides the bar; a longer one only tints it when
+    /// it runs low (#2766).
+    private var shown: PlanUsage.Window? { usage.shown }
 
     var body: some View {
         HStack(spacing: 5) {
-            MeterBar(fraction: tightest?.leftFraction ?? 0, tint: tightest.map(PlanUsageMeter.tint) ?? .secondary, width: 16)
-            if let tightest {
+            MeterBar(fraction: shown?.leftFraction ?? 0, tint: barTint, width: 16)
+            if let shown {
                 // What is left, said: the header's bar counts what is used.
-                Text("\(tightest.leftPercent)%")
+                Text("\(shown.leftPercent)%")
                     .font(.caption.weight(.medium))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
+            }
+            if let low = usage.lowLonger {
+                // The week running out stays visible beside the 5-hour number.
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(PlanUsageMeter.tint(low))
+                    .help("\(low.title): \(low.leftPercent)% left")
             }
         }
         .padding(.horizontal, 8)
@@ -38,6 +46,8 @@ struct PlanUsageMeter: View {
         .accessibilityLabel("Plan usage")
         .accessibilityValue(usage.windows.map { "\($0.title) \($0.leftPercent) percent left" }.joined(separator: ", "))
     }
+
+    private var barTint: Color { shown.map(PlanUsageMeter.tint) ?? .secondary }
 
     /// Brand while there is room; amber under a fifth, red under a twentieth.
     static func tint(_ window: PlanUsage.Window) -> Color {
