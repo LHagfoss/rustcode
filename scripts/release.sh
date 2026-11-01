@@ -142,14 +142,17 @@ Release automation for the rustcode workspace.
 
 Required:
   --version VERSION    Semver version to release (e.g. 0.52.0). A suffix
-                       makes a release candidate (e.g. 0.53.0-rc.1): only the
-                       macOS CLI and app are built, published as a GitHub
-                       prerelease that Homebrew and the updaters skip.
+                       makes a beta (e.g. 0.53.0-beta.1): only the macOS CLI
+                       and app are built, published as a GitHub prerelease
+                       that Homebrew and the updaters skip.
 
 Optional:
   --patch              Derive version: patch bump over max(latest tag, Cargo.toml)
   --minor              Derive version: minor bump over max(latest tag, Cargo.toml)
   --major              Derive version: major bump over max(latest tag, Cargo.toml)
+  --beta               Derive the next beta of the upcoming release, e.g.
+                       0.115.0-beta.3 after 0.115.0-beta.2. Cut as many as
+                       needed; the next --patch/--minor ships 0.115.0 itself.
   --date DATE          Release date (YYYY-MM-DD), defaults to today
   --category CATEGORY  Changelog category (Features|Fixes|Chores|…); default: Features
   --notes-file FILE    Path to a file containing changelog notes
@@ -175,6 +178,7 @@ Examples:
   scripts/release.sh --patch --category Fixes --notes-file release-notes.md --yes
   scripts/release.sh --version 0.52.0 --category Fixes --notes-file release-notes.md
   scripts/release.sh --patch --dry-run
+  scripts/release.sh --beta --notes-file notes.md --yes
   scripts/release.sh --version 0.52.0 --from-phase tag --yes
 EOF
 }
@@ -197,9 +201,9 @@ parse_args() {
             --dry-run)    DRY_RUN=true; shift ;;
             --yes)        YES=true; shift ;;
             --full-verify) FULL_VERIFY=true; shift ;;
-            --patch|--minor|--major)
+            --patch|--minor|--major|--beta)
                 if [[ -n "$BUMP_PART" ]]; then
-                    die "Only one of --patch, --minor, --major may be given."
+                    die "Only one of --patch, --minor, --major, --beta may be given."
                 fi
                 BUMP_PART="${1#--}"; shift ;;
             --from-phase)
@@ -234,7 +238,10 @@ parse_args() {
     fi
 
     # Derive the version from the latest tag / package version.
-    if [[ -z "$VERSION" && -n "$BUMP_PART" ]]; then
+    if [[ -z "$VERSION" && "$BUMP_PART" == beta ]]; then
+        VERSION="$(derive_beta_version)"
+        info "Derived version: $VERSION (next beta)"
+    elif [[ -z "$VERSION" && -n "$BUMP_PART" ]]; then
         VERSION="$(derive_bump_version "$BUMP_PART")"
         info "Derived version: $VERSION (--$BUMP_PART over latest release)"
     fi
@@ -285,7 +292,7 @@ get_current_version() {
 
 # Compare two semver strings; returns 0 if a > b, 1 otherwise.
 # Semver precedence: X.Y.Z first, and a release outranks its own release
-# candidates (0.115.0 > 0.115.0-rc.2 > 0.115.0-rc.1); plain `sort -V` puts
+# betas (0.115.0 > 0.115.0-beta.2 > 0.115.0-beta.1); plain `sort -V` puts
 # the bare version first.
 semver_gt() {
     local a="$1" b="$2" a_core="${1%%-*}" b_core="${2%%-*}" sorted last
@@ -303,12 +310,38 @@ semver_gt() {
     [[ "$last" == "$a" ]]
 }
 
+# Greatest version on stdin by semver precedence, or empty. `sort -V`
+# alone ranks 0.115.0-beta.1 above 0.115.0.
+max_version() {
+    local v best=""
+    while IFS= read -r v; do
+        [[ -n "$v" ]] || continue
+        if [[ -z "$best" ]] || semver_gt "$v" "$best"; then
+            best="$v"
+        fi
+    done
+    printf '%s\n' "$best"
+}
+
 # Latest released version from tags (without the leading v), or empty.
 latest_tag_version() {
     git -C "$REPO_ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' |
         sed 's/^v//' |
         sort -V |
-        tail -n1
+        tail -n 200 |
+        max_version
+}
+
+# Next beta of the upcoming release: X.Y.Z-beta.N, where X.Y.Z is what
+# --patch would ship and N is one past the highest beta already tagged for it.
+derive_beta_version() {
+    local core n=0 tag num
+    core="$(derive_bump_version patch)"
+    while IFS= read -r tag; do
+        num="${tag##*-beta.}"
+        [[ "$num" =~ ^[0-9]+$ ]] && (( 10#$num > n )) && n=$((10#$num))
+    done < <(git -C "$REPO_ROOT" tag --list "v$core-beta.*")
+    printf '%s-beta.%s\n' "$core" "$((n + 1))"
 }
 
 # Bump a base X.Y.Z version; pre-release suffixes are dropped.
@@ -337,7 +370,7 @@ derive_bump_version() {
     if [[ -n "${tag:-}" ]] && semver_gt "$tag" "$current"; then
         base="$tag"
     fi
-    # After a release candidate, the next release is that version itself.
+    # After a beta, the next release is that version itself.
     if [[ "$base" == *-* ]]; then
         printf '%s\n' "${base%%-*}"
         return
@@ -523,7 +556,7 @@ phase_update_versions() {
     local pbxproj="$REPO_ROOT/$IOS_PROJECT"
     [[ -f "$pbxproj" ]] || die "iOS project not found: $pbxproj"
     tmp="$(mktemp)"
-    # The App Store version is plain X.Y.Z; a release candidate's suffix
+    # The App Store version is plain X.Y.Z; a beta's suffix
     # stays out of it (the build number already drops it).
     sed -e 's/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = '"${VERSION%%-*}"';/' \
         -e 's/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = '"$(ios_build_number "$VERSION")"';/' \
@@ -539,7 +572,7 @@ phase_update_versions() {
 IOS_PROJECT="ios/RustCode.xcodeproj/project.pbxproj"
 
 # 0.72.3 -> 72003: monotonic across releases, as CFBundleVersion must be.
-# A release candidate: a version with a pre-release suffix, `0.115.0-rc.1`.
+# A beta: a version with a pre-release suffix, `0.115.0-beta.1`.
 is_prerelease() {
     [[ "$VERSION" == *-* ]]
 }
@@ -1083,7 +1116,7 @@ phase_verify_release() {
         "rustcode-windows-x86_64.zip"
         "SHA256SUMS"
     )
-    # A release candidate ships the macOS CLI and app only (build.yml).
+    # A beta ships the macOS CLI and app only (build.yml).
     if is_prerelease; then
         expected_assets=(
             "rustcode-macos-aarch64.tar.gz"
@@ -1153,7 +1186,7 @@ phase_verify_release() {
     local prerelease
     prerelease="$(echo "$release_info" | jq -r '.isPrerelease')"
     if is_prerelease && [[ "$prerelease" != "true" ]]; then
-        die "v$VERSION is a release candidate but was not published as a prerelease; stable updaters would pick it up."
+        die "v$VERSION is a beta but was not published as a prerelease; stable updaters would pick it up."
     fi
     if ! is_prerelease && [[ "$prerelease" == "true" ]]; then
         die "v$VERSION was published as a prerelease; the updaters will not see it."
@@ -1167,9 +1200,9 @@ phase_verify_distribution() {
     if is_prerelease; then
         # Homebrew and both updaters follow `releases/latest`, which skips a
         # prerelease: nothing to verify there, and nothing changed for users.
-        info "  Release candidate: Homebrew and the updaters stay on the last stable release."
+        info "  Beta: Homebrew and the updaters stay on the last stable release."
         info "  Install it from https://github.com/LHagfoss/rustcode/releases/tag/v$VERSION"
-        info "Release candidate v$VERSION complete."
+        info "Beta v$VERSION complete."
         return
     fi
 
@@ -1386,12 +1419,15 @@ run_tests() {
     if [[ "$(bump_version 0.51.7 patch)" == "0.51.8" ]] && \
        [[ "$(bump_version 0.51.7 minor)" == "0.52.0" ]] && \
        [[ "$(bump_version 0.51.7 major)" == "1.0.0" ]] && \
-       [[ "$(bump_version 1.2.3-rc.1 patch)" == "1.2.4" ]] && \
+       [[ "$(bump_version 1.2.3-beta.1 patch)" == "1.2.4" ]] && \
        [[ "$(ios_build_number 0.72.3)" == "72003" ]] && \
-       [[ "$(ios_build_number 1.0.0-rc.1)" == "1000000" ]] && \
-       semver_gt 0.115.0 0.115.0-rc.1 && ! semver_gt 0.115.0-rc.1 0.115.0 && \
-       semver_gt 0.115.0-rc.2 0.115.0-rc.1 && semver_gt 0.115.0-rc.1 0.114.0 && \
+       [[ "$(ios_build_number 1.0.0-beta.1)" == "1000000" ]] && \
+       semver_gt 0.115.0 0.115.0-beta.1 && ! semver_gt 0.115.0-beta.1 0.115.0 && \
+       semver_gt 0.115.0-beta.2 0.115.0-beta.1 && semver_gt 0.115.0-beta.1 0.114.0 && \
        semver_gt 0.114.10 0.114.9 && ! semver_gt 0.114.0 0.114.0 && \
+       semver_gt 0.115.0-beta.10 0.115.0-beta.9 && \
+       [[ "$(printf '0.115.0-beta.2\n0.115.0\n0.114.9\n' | max_version)" == "0.115.0" ]] && \
+       [[ "$(printf '0.115.0-beta.1\n0.114.9\n' | max_version)" == "0.115.0-beta.1" ]] && \
        ! bump_version 1.2.3 bogus >/dev/null 2>&1; then
         info "  ✓ bumps, pre-release ordering and invalid input correct"
     else
