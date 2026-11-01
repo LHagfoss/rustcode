@@ -57,6 +57,19 @@ public struct PlanUsage: Equatable, Sendable {
         if windows.isEmpty { return nil }
     }
 
+    /// The window the composer's meter shows: the shortest, the 5-hour one
+    /// on a ChatGPT plan, which is what limits work in the moment. The
+    /// others are in the hover panel.
+    public var shown: Window? {
+        windows.min { ($0.minutes ?? .max) < ($1.minutes ?? .max) }
+    }
+
+    /// A longer window running low (under a fifth left) while the meter
+    /// shows the short one, so a nearly spent week is not hidden.
+    public var lowLonger: Window? {
+        windows.filter { $0 != shown && $0.leftPercent < 20 }.min { $0.leftPercent < $1.leftPercent }
+    }
+
     /// The meter's tooltip: one line per window.
     public func summary(now: Date = Date()) -> String {
         let lines = windows.map { "\($0.title): \($0.detail(now: now))" }
