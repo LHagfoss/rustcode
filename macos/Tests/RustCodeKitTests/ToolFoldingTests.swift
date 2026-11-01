@@ -129,20 +129,21 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertFalse(folding.hidden.contains(list[4].id), "the card shows")
     }
 
-    // Opened, the work shows as it happened: what was said and thought
-    // between steps, and each run of calls as one row of what it did.
+    // Opened, the work shows as it happened: what was said, a thought where
+    // nothing was said about it, and each run of calls as one row of what it did.
     func testAnOpenedTurnShowsItsWork() {
         let list = items("usttrtrststs")
         let folding = ToolFolding(items: list, verbosity: .low, open: [key(list[1])], running: false)
         XCTAssertEqual(folding.turn(for: list[1].id)?.isOpen, true)
-        XCTAssertEqual(folding.hidden, [list[3].id, list[4].id, list[5].id], "each run stays one row, its thoughts in it")
+        XCTAssertEqual(folding.hidden, [list[3].id, list[4].id, list[5].id, list[6].id],
+                       "each run stays one row, its thoughts in it, and words stand for their thought")
         XCTAssertEqual(folding.fold(for: list[2].id)?.label, "Ran 3 commands")
         XCTAssertEqual(folding.fold(for: list[8].id)?.label, "Ran cmd 8")
         XCTAssertEqual(folding.nested, Set((2...10).map { list[$0].id }))
-        XCTAssertFalse(folding.hidden.contains(list[6].id), "the thought before the model speaks shows")
+        XCTAssertTrue(folding.hidden.contains(list[6].id), "the thought before the model speaks is left to its words")
         XCTAssertFalse(folding.isNested(list[11].id), "the answer is the turn's own")
         let both = ToolFolding(items: list, verbosity: .low, open: [key(list[1]), list[2].id], running: false)
-        XCTAssertEqual(both.hidden, [list[4].id], "an opened run shows its calls")
+        XCTAssertEqual(both.hidden, [list[4].id, list[6].id], "an opened run shows its calls")
     }
 
     // A turn that stopped before its answer ends on its last words, under
@@ -241,7 +242,10 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertFalse(folding.hidden.contains(list[1].id), "the row is drawn on it")
         XCTAssertFalse(folding.hidden.contains(list[6].id), "the answer shows")
         let open = ToolFolding(items: list, verbosity: .low, open: [key(list[1])], running: false)
-        XCTAssertFalse(open.hidden.contains(list[2].id), "opened, the thought shows between steps")
+        XCTAssertTrue(open.hidden.contains(list[2].id), "opened, the words that follow stand for the thought")
+        let quiet = items("usrtts")
+        let opened = ToolFolding(items: quiet, verbosity: .low, open: [key(quiet[1])], running: false)
+        XCTAssertFalse(opened.hidden.contains(quiet[2].id), "a thought before a call, with nothing said, shows")
         let reply = items("urs")
         XCTAssertTrue(ToolFolding(items: reply, verbosity: .low, open: [], running: false).hidden.isEmpty,
                       "a reply without calls keeps its thought")
