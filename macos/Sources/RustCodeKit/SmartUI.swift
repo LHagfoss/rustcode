@@ -15,7 +15,14 @@ public enum SmartUI {
     public static let enabledKey = "smartUIEnabled"
     public static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
     /// The `_meta.rustcode.smartUi` version advertised while it is on.
-    public static let capabilityVersion = 1
+    /// Version 2 also answers `previewMethod`, so the engine offers the agent
+    /// `smart_ui_preview` (`engine/src/smart_ui.rs`).
+    public static let capabilityVersion = 2
+    /// The engine's request to render a block offscreen for the agent.
+    public static let previewMethod = "_rustcode/smartUi/preview"
+    /// The card width a preview is rendered at: a typical chat column less
+    /// the card's padding.
+    public static let previewWidth = 560.0
 
     /// Largest fragment that runs; a bigger one shows as source.
     public static let maxSourceBytes = 64 * 1024
@@ -68,6 +75,52 @@ public enum SmartUI {
         </body></html>
         """
     }
+}
+
+/// A `_rustcode/smartUi/preview` request: the block body the agent wants to
+/// see before it writes the fence.
+public struct SmartUIPreviewRequest: Sendable, Equatable {
+    public let sessionId: String?
+    public let html: String
+
+    public enum Failure: Error, Equatable, Sendable {
+        case invalid(String)
+    }
+
+    public init(params: JSONValue) throws {
+        guard let html = params["html"]?.stringValue else { throw Failure.invalid("`html` must be a string") }
+        guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.invalid("empty block") }
+        guard html.utf8.count <= SmartUI.maxSourceBytes else {
+            throw Failure.invalid("larger than \(SmartUI.maxSourceBytes / 1024) KB")
+        }
+        self.html = html
+        sessionId = params["sessionId"]?.stringValue
+    }
+
+    /// The title the card would show.
+    public var title: String { SmartUIBlock.element("title", in: html) ?? "Interactive view" }
+
+    /// The answer for a block that could not be rendered.
+    public static func failure(_ reason: String, errors: [String] = []) -> JSONValue {
+        var result: [String: JSONValue] = ["ok": false, "error": ["message": .string(reason)]]
+        if !errors.isEmpty { result["errors"] = .array(errors.map(JSONValue.string)) }
+        return .object(result)
+    }
+
+    /// Records what the page throws so the agent can read it. Injected only
+    /// into preview renders, never into the live view in the transcript.
+    public static let errorCaptureScript = #"""
+    (() => {
+      const errors = [];
+      Object.defineProperty(window, '__rustcodeErrors', { value: errors });
+      const push = (text) => { if (errors.length < 20) errors.push(String(text).slice(0, 300)); };
+      window.addEventListener('error', (e) => push(e.message + (e.lineno ? ' (line ' + e.lineno + ')' : '')));
+      window.addEventListener('unhandledrejection', (e) => push('Unhandled rejection: ' + (e.reason && e.reason.message || e.reason)));
+      const original = console.error;
+      console.error = (...args) => { push('console.error: ' + args.join(' ')); original.apply(console, args); };
+      document.addEventListener('securitypolicyviolation', (e) => push('Blocked by the sandbox: ' + e.violatedDirective + ' ' + (e.blockedURI || '')));
+    })();
+    """#
 }
 
 /// A `rustcode-ui` fence found in assistant Markdown.

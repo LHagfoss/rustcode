@@ -281,7 +281,9 @@ final class SmartUIHost: NSObject, ObservableObject {
         activeID = nil
     }
 
-    private func makeWebView(rules: WKContentRuleList?) -> SmartUIWebView {
+    /// The sandbox every Smart UI page runs in, live or previewed for the
+    /// agent (`SmartUIPreviewRenderer`).
+    static func sandboxConfiguration(rules: WKContentRuleList?) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -291,6 +293,11 @@ final class SmartUIHost: NSObject, ObservableObject {
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.allowsAirPlayForMediaPlayback = false
         if let rules { configuration.userContentController.add(rules) }
+        return configuration
+    }
+
+    private func makeWebView(rules: WKContentRuleList?) -> SmartUIWebView {
+        let configuration = Self.sandboxConfiguration(rules: rules)
         let view = SmartUIWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = self
         view.uiDelegate = self
@@ -304,7 +311,7 @@ final class SmartUIHost: NSObject, ObservableObject {
     /// Blocks every load with a scheme that reaches outside the page. The
     /// content policy already forbids them; this holds if a page's markup
     /// gets around it.
-    private static func compiledRules() async -> WKContentRuleList? {
+    static func compiledRules() async -> WKContentRuleList? {
         if let rules { return rules }
         let schemes = ["https?", "wss?", "file", "ftp", "blob"]
         let json = "[" + schemes.map {
@@ -318,7 +325,7 @@ final class SmartUIHost: NSObject, ObservableObject {
 
     /// The document's own height (its scroll height never drops below the
     /// view's) and its element count.
-    private static let measure = "[Math.ceil(document.documentElement.getBoundingClientRect().height), document.getElementsByTagName('*').length]"
+    static let measure = "[Math.ceil(document.documentElement.getBoundingClientRect().height), document.getElementsByTagName('*').length]"
 
     private func startWatchdog(_ view: SmartUIWebView, id: String) {
         watchdog?.cancel()

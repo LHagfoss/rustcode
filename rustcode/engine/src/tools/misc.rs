@@ -324,6 +324,28 @@ pub const WAIT_SESSION: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+fn smart_ui_preview_schema() -> Value {
+    crate::smart_ui::schema()
+}
+
+/// Renders a Smart UI block in the macOS app before the agent writes it.
+/// Offered only while Smart UI is on and the app can render previews; the
+/// call is forwarded to the app, so this handler is only the fallback.
+pub const SMART_UI_PREVIEW: Tool = Tool {
+    name: crate::smart_ui::PREVIEW_TOOL_NAME,
+    description: "Render a rustcode-ui v1 block's HTML offscreen exactly as the chat card will show it (same sandbox, width and height limits) and get back a screenshot, the content height, the element count and any errors the page threw. Nothing is shown to the user. Use it before writing the block, then write the fence with the HTML you checked.",
+    arguments: r##"{"html": "<title>Slowest tests</title><table>…</table><script>…</script>"}"##,
+    handler: smart_ui_preview_unavailable,
+    requires_confirmation: false,
+    schema: smart_ui_preview_schema,
+    capabilities: &[],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn smart_ui_preview_unavailable(_args: &Value) -> Result<String, String> {
+    Err(crate::smart_ui::UNAVAILABLE_MESSAGE.to_owned())
+}
+
 fn localhost_preview_unavailable(_args: &Value) -> Result<String, String> {
     Err(crate::preview::UNAVAILABLE_MESSAGE.to_owned())
 }

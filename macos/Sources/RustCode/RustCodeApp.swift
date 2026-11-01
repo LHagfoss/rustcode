@@ -3083,6 +3083,14 @@ final class DesktopModel: ObservableObject {
                 guard let result = await self?.answerOrchestration(params) else { return }
                 try? await connection.respond(id: id, result: result)
             }
+        case .request(let id, let method, let params) where method == SmartUI.previewMethod:
+            // Rendered offscreen for the agent; the user sees nothing until
+            // the block arrives in the reply.
+            guard let connection = engine?.connection else { return }
+            Task {
+                let result = await SmartUIPreviewRenderer.shared.render(params)
+                try? await connection.respond(id: id, result: result)
+            }
         case .request(let id, let method, let params) where method == ACPMethod.preview:
             // Show the page the agent is about to use, and answer off the
             // inbound loop: the first request waits for the user's approval.
