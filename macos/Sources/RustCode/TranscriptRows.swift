@@ -1451,8 +1451,19 @@ private struct ActivityRow<Extra: View>: View {
 
 private struct FailedCount: View {
     let count: Int
+    /// On a whole turn's row: a call that failed along the way, as when the
+    /// agent reproduces a crash on purpose, is not the turn failing. Said as
+    /// a count in amber; a run's own row keeps the red.
+    var inTurn = false
+
     var body: some View {
-        Text(count == 1 ? "· failed" : "· \(count) failed").foregroundStyle(.red.opacity(0.85))
+        if inTurn {
+            Text(count == 1 ? "· 1 call failed" : "· \(count) calls failed")
+                .foregroundStyle(Color.orange.opacity(0.85))
+                .help("Calls that failed during the turn. Open the work to see them.")
+        } else {
+            Text(count == 1 ? "· failed" : "· \(count) failed").foregroundStyle(.red.opacity(0.85))
+        }
     }
 }
 
@@ -1470,7 +1481,7 @@ private struct TurnSummary: View {
             if fold.elapsed != nil {
                 Text("· \(fold.calls) tool \(fold.calls == 1 ? "call" : "calls")").foregroundStyle(.tertiary)
             }
-            if fold.failed > 0 { FailedCount(count: fold.failed) }
+            if fold.failed > 0 { FailedCount(count: fold.failed, inTurn: true) }
         }
     }
 }
