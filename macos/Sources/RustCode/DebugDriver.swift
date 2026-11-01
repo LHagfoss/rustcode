@@ -648,6 +648,30 @@ enum DebugDriver {
                 let data = (try? JSONEncoder().encode(answer)) ?? Data()
                 try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("orch.json"))
             }
+        case "approval":
+            // `approval command|edit|write|other|clear`: a sample tool approval
+            // above the composer, to see the card without a running turn.
+            guard parts.count > 1, parts[1] != "clear", let session = model.selectedSession else {
+                model.permissionQueue.removeAll { $0.toolCallId.hasPrefix("driver-") }
+                break
+            }
+            let samples: [String: (String, JSONValue)] = [
+                "command": ("run_command", .object(["command": .string("git switch -c fix/calc-addition"), "summary": .string("Create isolated fix branch")])),
+                "edit": ("replace_file_content", .object(["path": .string("calc.py"), "summary": .string("Fix add to sum its arguments"),
+                                                          "target_content": .string("def add(a, b):\n    return a - b"),
+                                                          "replacement_content": .string("def add(a, b):\n    return a + b")])),
+                "write": ("write_to_file", .object(["path": .string("notes/todo.md"), "content": .string("# Todo\n\n- ship it\n- test it\n")])),
+                "other": ("GitCommit", .object(["message": .string("fix(calc): add instead of subtract"), "all": .bool(true)])),
+            ]
+            guard let (tool, input) = samples[parts[1]] else { break }
+            let options: [JSONValue] = [
+                .object(["optionId": .string("allow_once"), "name": .string("Allow once"), "kind": .string("allow_once")]),
+                .object(["optionId": .string("allow_always"), "name": .string("Always allow `git switch -c fix/calc-addition`"), "kind": .string("allow_always")]),
+                .object(["optionId": .string("reject_once"), "name": .string("Reject"), "kind": .string("reject_once")]),
+            ]
+            let params: JSONValue = .object(["sessionId": .string(session), "options": .array(options),
+                                             "toolCall": .object(["toolCallId": .string("driver-\(parts[1])"), "title": .string(tool), "rawInput": input])])
+            if let request = PermissionRequest(rpcId: .number(-1), params: params) { model.permissionQueue.append(request) }
         case "grant":
             // `grant always|once|deny`: answer a thread's request to message another.
             if let grant = model.threadGrant {

@@ -1,18 +1,30 @@
 import RustCodeKit
 import SwiftUI
 
-/// A tool approval: what the engine wants to run and one button per option.
+/// A tool approval: what the engine wants to do in words, the command or
+/// the edit as the transcript shows it, and one button per option. Raw
+/// arguments stay behind "Details" for the tools it cannot shape.
 struct PermissionCard: View {
     @ObservedObject var model: DesktopModel
     let request: PermissionRequest
+    @State private var showsDetails = false
+
+    private var preview: PermissionPreview { request.preview }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Permission requested", systemImage: "hand.raised.fill")
-                .font(.headline)
-                .foregroundStyle(Color.attention)
-            Text(request.title).textSelection(.enabled)
-            if let input = request.input {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            if let body = preview.body { content(body) }
+            if !preview.notes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(preview.notes, id: \.self) { note in
+                        Label(note, systemImage: "exclamationmark.shield")
+                            .font(.callout)
+                            .foregroundStyle(Color.attention)
+                    }
+                }
+            }
+            if showsDetails, let input = request.input {
                 ScrollView {
                     Text(input.prettyPrinted())
                         .font(.system(.caption, design: .monospaced))
@@ -24,27 +36,134 @@ struct PermissionCard: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .background(.fill.quaternary, in: .rect(cornerRadius: 8))
             }
-            HStack {
-                if request.autoApproveOption != nil {
-                    Button("Approve All from Now On") { Task { await model.setAutoApprove(true) } }
-                        .buttonStyle(PillButtonStyle())
-                        .help("Auto-approve tools from now on. Turn it off in Settings.")
-                }
-                Spacer()
-                ForEach(request.options) { option in
-                    if option.kind?.isAllow == true {
-                        Button(option.name) { Task { await model.answer(request, with: option) } }
-                            .brandProminent()
-                    } else {
-                        Button(option.name) { Task { await model.answer(request, with: option) } }
-                            .buttonStyle(PillButtonStyle())
-                    }
-                }
-            }
-            .controlSize(.large)
+            actions
         }
         .padding(16)
         .attentionCard()
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "hand.raised.fill")
+                .foregroundStyle(Color.attention)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(preview.headline)
+                    .font(.headline)
+                if let summary = preview.summary {
+                    Text(summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 8)
+            Text("Needs approval")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Color.attention)
+            if request.input != nil {
+                Button(showsDetails ? "Hide details" : "Details") {
+                    withAnimation(.snappy(duration: 0.2)) { showsDetails.toggle() }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .pointingHandCursor()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func content(_ body: PermissionPreview.Body) -> some View {
+        switch body {
+        case .command(let command, let cwd):
+            VStack(alignment: .leading, spacing: 4) {
+                ScrollView {
+                    (Text("$ ").foregroundStyle(.secondary) + Text(command))
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
+                .frame(maxHeight: 140)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(.fill.quaternary, in: .rect(cornerRadius: 8))
+                if let cwd {
+                    Label(cwd, systemImage: "folder")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        case .edit(let change):
+            ScrollView {
+                FileChangeView(change: change, showsHeader: true)
+                    .padding(.trailing, 4)
+            }
+            .frame(maxHeight: 260)
+            .fixedSize(horizontal: false, vertical: true)
+        case .fields(let fields):
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+                ForEach(fields) { field in
+                    GridRow {
+                        Text(field.label)
+                            .foregroundStyle(.secondary)
+                            .gridColumnAlignment(.trailing)
+                        Text(field.value)
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .font(.callout)
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 8) {
+            if request.autoApproveOption != nil {
+                Button("Auto-approve from now on") { Task { await model.setAutoApprove(true) } }
+                    .buttonStyle(.link)
+                    .font(.callout)
+                    .pointingHandCursor()
+                    .help("Approve every tool call without asking. Turn it off in Settings.")
+            }
+            Spacer()
+            // Reject first and the one-time allow last, so the main action
+            // sits at the trailing edge like a dialog's default button.
+            ForEach(ordered) { option in
+                let button = Button(label(option)) { Task { await model.answer(request, with: option) } }
+                    .help(option.name)
+                if option.kind == .allowOnce {
+                    button.brandProminent()
+                } else {
+                    button.buttonStyle(PillButtonStyle())
+                }
+            }
+        }
+        .controlSize(.large)
+    }
+
+    private var ordered: [PermissionOption] {
+        let rank: (PermissionOption) -> Int = {
+            switch $0.kind {
+            case .rejectOnce?, .rejectAlways?: 0
+            case .allowAlways?: 1
+            case .allowOnce?: 2
+            case nil: 1
+            }
+        }
+        return request.options.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
+    }
+
+    /// The engine names an always-allow after the whole command; the button
+    /// keeps it short and the tooltip keeps the full name.
+    private func label(_ option: PermissionOption) -> String {
+        if option.kind == .allowAlways, option.name.contains("`") { return "Always allow this" }
+        return option.name
     }
 }
 

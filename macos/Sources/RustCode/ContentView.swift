@@ -553,6 +553,7 @@ extension SessionSidebar {
                    isSelected: SubagentInfo.chatRowSelected(session.id, selected: model.selectedSession,
                                                             viewingAgent: model.viewedAgent?.id),
                    needsAnswer: model.permissionQueue.contains { $0.sessionId == session.id },
+                   waitingFor: model.permissionQueue.first { $0.sessionId == session.id }.map(SessionRow.waiting),
                    isRunning: model.runningSessions.contains(session.id),
                    hasUnseenReply: model.unseenReplies.contains(session.id),
                    searchSnippet: model.searchSnippet(for: session),
@@ -961,6 +962,9 @@ struct SessionRow: View {
     var showsProject = false
     let isSelected: Bool
     let needsAnswer: Bool
+    /// What the chat waits for, said in the row so the sidebar tells which
+    /// approval or question it is without opening the chat.
+    var waitingFor: String?
     let isRunning: Bool
     /// A turn finished while another chat was on screen.
     var hasUnseenReply = false
@@ -984,7 +988,13 @@ struct SessionRow: View {
                         Spacer(minLength: 0)
                         indicator
                     }
-                    if let searchSnippet {
+                    if searchSnippet == nil, let waitingFor {
+                        Text(waitingFor)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.attention)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    } else if let searchSnippet {
                         Text(highlighted(searchSnippet))
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1070,6 +1080,12 @@ struct SessionRow: View {
             rest = match.upperBound..<text.endIndex
         }
         return text
+    }
+
+    /// "Approve: Edit calc.py", or the question a chat asks.
+    static func waiting(_ request: PermissionRequest) -> String {
+        if let question = request.question { return "Asks: " + question.text }
+        return "Approve: " + request.preview.headline
     }
 
     /// "now" for the last minute, then "5 min. ago", "3 hours ago"…
