@@ -99,6 +99,26 @@ auth_methods = ["api_key"]
 }
 
 #[test]
+fn anthropic_is_configured_for_api_key_authentication_only() {
+    let provider = AppConfig::default()
+        .providers
+        .into_iter()
+        .find(|provider| provider.id == "anthropic")
+        .expect("Anthropic provider is available by default");
+
+    assert_eq!(provider.display_name, "Anthropic");
+    assert_eq!(provider.api_key_env.as_deref(), Some("ANTHROPIC_API_KEY"));
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some("https://api.anthropic.com/v1")
+    );
+    assert_eq!(
+        provider.auth_methods,
+        vec![crate::provider_auth::AuthMethod::ApiKey]
+    );
+}
+
+#[test]
 fn provider_override_can_disable_a_builtin_auth_method() {
     let file: TomlConfig = toml::from_str(
         r#"[[providers]]

@@ -9,9 +9,7 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
         let binding = s
             .active_model_profile()
             .and_then(|profile| profile.credential.clone());
-        let chatgpt_plan = binding
-            .as_ref()
-            .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli());
+        let chatgpt_plan = binding.as_ref().is_some_and(|binding| binding.is_chatgpt());
         let chatgpt_sign_in = binding.as_ref().is_some_and(|binding| binding.is_chatgpt());
         let key = s
             .config
@@ -28,8 +26,8 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
         )
     };
 
-    // Subscription flows (ChatGPT plan, Claude Code CLI) have no account quota
-    // endpoint; quota windows arrive with their responses instead. Show the last reported short window
+    // ChatGPT plan profiles have no account quota endpoint; quota windows
+    // arrive with their responses instead. Show the last reported short window
     // and never probe a proxy route.
     if chatgpt_plan {
         // A ChatGPT sign-in's responses carry no windows; a signed-in Codex

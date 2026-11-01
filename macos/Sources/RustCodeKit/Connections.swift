@@ -53,7 +53,7 @@ public struct ConnectionsSnapshot: Decodable, Equatable, Sendable {
         public var provider: String
         public var account: String
         public var display: String
-        /// `api_key`, `chat_gpt`, `github_copilot` or `claude_cli`.
+        /// `api_key`, `chat_gpt`, `github_copilot`, or legacy `claude_cli`.
         public var method: String
         public var active: Bool
         public var expiresAt: UInt64?
@@ -68,7 +68,7 @@ public struct ConnectionsSnapshot: Decodable, Equatable, Sendable {
             case "api_key": "API key"
             case "chat_gpt": "ChatGPT sign-in"
             case "github_copilot": "GitHub Copilot"
-            case "claude_cli": "Claude Code CLI"
+            case "claude_cli": "Unsupported Claude CLI (legacy)"
             default: method
             }
         }

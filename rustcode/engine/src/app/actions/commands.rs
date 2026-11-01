@@ -930,13 +930,13 @@ pub(crate) async fn compact_history(
         if s.history.len() < 2 {
             return "Not enough messages to compact.".to_owned();
         }
-        // Subscription-backed profiles have no plain summarizer endpoint; their
+        // ChatGPT plan profiles have no plain summarizer endpoint; their
         // summary goes through the session's own transport (#2548).
         let chatgpt_plan_profile = s.active_model_profile().is_some_and(|profile| {
             profile
                 .credential
                 .as_ref()
-                .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli())
+                .is_some_and(|binding| binding.is_chatgpt())
         });
         (
             s.api_base_url.clone(),
