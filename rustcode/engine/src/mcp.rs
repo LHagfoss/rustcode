@@ -33,10 +33,11 @@ type ProgressListeners = Arc<Mutex<HashMap<i64, mpsc::UnboundedSender<()>>>>;
 /// server's config sets no `timeout_secs`.
 pub(crate) const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
-/// A request that keeps reporting progress may still run at most this many
-/// timeouts in total, so a server that only ever reports progress cannot hold
-/// a turn forever.
-const MAX_PROGRESS_EXTENSIONS: u32 = 60;
+/// A request that keeps reporting progress may run at most this many timeouts
+/// in total, so a server that only ever reports progress cannot hold a turn
+/// forever. Counted in time, not notifications: a server that reports often
+/// must not use the allowance up sooner than one that reports rarely.
+const MAX_TOTAL_TIMEOUTS: u32 = 61;
 
 enum Transport {
     Stdio { tx: mpsc::Sender<Value> },
@@ -1193,14 +1194,19 @@ impl McpClient {
 
         let timeout = self.request_timeout();
         let mut rx = rx;
-        let mut extensions = 0;
+        // Each progress notification restarts the wait for the next sign of
+        // life; the total stays bounded by `MAX_TOTAL_TIMEOUTS`.
+        let started = tokio::time::Instant::now();
+        let total_deadline = started + timeout.saturating_mul(MAX_TOTAL_TIMEOUTS);
+        let mut idle_deadline = started + timeout;
         let outcome = loop {
+            let wake = idle_deadline.min(total_deadline);
             tokio::select! {
                 response = &mut rx => break Ok(response),
-                Some(()) = progress_rx.recv(), if extensions < MAX_PROGRESS_EXTENSIONS => {
-                    extensions += 1;
+                Some(()) = progress_rx.recv() => {
+                    idle_deadline = tokio::time::Instant::now() + timeout;
                 }
-                () = tokio::time::sleep(timeout) => break Err(()),
+                () = tokio::time::sleep_until(wake) => break Err(wake >= total_deadline),
             }
         };
         self.progress.lock().await.remove(&id);
@@ -1230,7 +1236,16 @@ impl McpClient {
                     "Server closed connection before responding; server reported: {diagnostics}"
                 ));
             }
-            Err(()) => {
+            Err(true) => {
+                self.pending.lock().await.remove(&id);
+                return Err(format!(
+                    "MCP request still running after {}s, the most a call may take with \
+                     progress (raise `timeout_secs` for server '{}' to allow longer)",
+                    timeout.saturating_mul(MAX_TOTAL_TIMEOUTS).as_secs(),
+                    self.name
+                ));
+            }
+            Err(false) => {
                 self.pending.lock().await.remove(&id);
                 return Err(format!(
                     "MCP request timed out after {}s without a response or progress \
@@ -2765,6 +2780,26 @@ mod tests {
         assert!(
             result.is_ok(),
             "progress must keep the call alive: {result:?}"
+        );
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tool_call_frequent_progress_keeps_extending() {
+        // More notifications than the old 60-extension cap, then a few more
+        // spaced under the timeout: the call is alive the whole time.
+        let progress = "echo '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":3,\"progress\":1}}';";
+        let body = format!(
+            "i=0; while [ $i -lt 80 ]; do {progress} i=$((i+1)); done; \
+             sleep 0.6; {progress} sleep 0.6; {progress} sleep 0.6; {progress} sleep 0.6;"
+        );
+        let client = slow_tool_server("chatty_server", &body).await;
+
+        let result = client.call_tool("slow", json!({})).await;
+
+        assert!(
+            result.is_ok(),
+            "frequent progress must not use up the allowance: {result:?}"
         );
         client.shutdown().await;
     }
