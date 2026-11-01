@@ -1,3 +1,10 @@
+## [v0.115.0-rc.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.115.0-rc.1) - 2026-11-01
+
+### Features
+- Add experimental, permission-gated native desktop automation on macOS (#2775).
+- Show the 5-hour window on the composer's usage meter and warn when the weekly window runs low (#2767).
+- Ask users to renew expired or replaced ChatGPT sign-ins instead of failing with HTTP 400 (#2768).
+- Remove Claude CLI subscription authentication and inference while preserving legacy configuration compatibility (#2774).
 ## [v0.114.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.114.0) - 2026-11-01
 
 ### Features
