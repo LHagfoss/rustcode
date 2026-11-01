@@ -343,20 +343,38 @@ struct AgentPanel: View {
     @Environment(\.closePanel) private var close
     @FocusState private var focused: Bool
 
-    private var info: SubagentInfo { agent.info }
+    @State private var width: CGFloat = 0
+    @State private var composerHeight: CGFloat = 0
 
+    private var info: SubagentInfo { agent.info }
+    private var layout: ChatColumnLayout { ChatColumnLayout(width: Double(width)) }
+
+    /// Laid out as the chat is: a slim bar on top, the messages in the
+    /// chat's column, and the composer floating over their foot with the
+    /// messages fading out under it.
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header.padding(20)
-            Divider()
-            conversation
-            AgentComposer(model: model, info: info, focused: $focused)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 14)
-                .padding(.top, 6)
+        VStack(spacing: 0) {
+            bar
+            ZStack(alignment: .bottom) {
+                conversation
+                AgentComposer(model: model, info: info, focused: $focused)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+                    .frame(maxWidth: CGFloat(ChatColumnLayout.maxColumn))
+                    .padding(.horizontal, CGFloat(layout.padding))
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: .infinity)
+                    .background(alignment: .bottom) {
+                        LinearGradient(stops: [.init(color: Color.chatBackground.opacity(0), location: 0),
+                                               .init(color: Color.chatBackground, location: 0.4)],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: composerHeight + 16 + 36)
+                            .allowsHitTesting(false)
+                    }
+            }
         }
-        .frame(maxWidth: 980, maxHeight: .infinity) // The chat column's width.
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .environment(\.chatLayout, layout)
         .onAppear { focused = true }
         // Another agent opened in place: its own draft, ready to type.
         .onChange(of: info.id) { _, _ in focused = true }
@@ -366,38 +384,66 @@ struct AgentPanel: View {
         model.sessions.first { $0.id == model.selectedSession }?.title ?? "Thread"
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    /// The chat header's bar: back to the thread on the left, as the chat's
+    /// title sits, and the agent's state on the right.
+    private var bar: some View {
+        HStack(spacing: 10) {
             Button { close() } label: {
-                Label(parentTitle, systemImage: "chevron.left").lineLimit(1)
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left").font(.system(size: 12, weight: .semibold))
+                    Text(parentTitle).lineLimit(1)
+                }
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(.fill.tertiary, in: .capsule)
+                .contentShape(.capsule)
             }
             .buttonStyle(.plain)
-            .font(.callout)
-            .foregroundStyle(.secondary)
             .pointingHandCursor()
             .keyboardShortcut(.cancelAction)
             .help("Back to the thread that started \(info.name) (Esc)")
             .accessibilityLabel("Back to \(parentTitle)")
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(spacing: 6) {
                 AgentStatusMark(agent: info)
-                Text(info.name).font(.headline)
-                Text(info.agentType).font(.callout).foregroundStyle(.secondary)
+                Text(info.name).font(.headline).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let quiet = info.quietLabel(now: context.date)
+                Text([info.status.label, info.model, info.elapsed(now: context.date), quiet]
+                    .compactMap { $0 }.joined(separator: " · "))
+                    .font(.callout)
+                    .foregroundStyle(quiet == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(.fill.tertiary, in: .capsule)
+            }
+        }
+        .padding(.horizontal, 10)
+        // Clear of the traffic lights while the sidebar is hidden.
+        .padding(.leading, model.showsSidebar ? 0 : SidebarMetrics.barLeading - 10)
+        .frame(height: SidebarMetrics.barHeight)
+        .padding(.top, SidebarMetrics.barTopInset)
+        .padding(.bottom, 8)
+        .background(WindowDragArea())
+    }
+
+    /// What the agent was asked and may do, at the top of its messages and
+    /// scrolling with them, as a new thread's first message does.
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(info.agentType).font(.callout.weight(.medium))
                 Text("subagent").font(.caption).foregroundStyle(.secondary)
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(.fill.tertiary, in: .capsule)
                 if info.writeAccess {
                     Text("writes").font(.caption).padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Color.orange.opacity(0.18), in: .capsule)
-                }
-                Spacer()
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let quiet = info.quietLabel(now: context.date)
-                    Text([info.status.label, info.model, info.elapsed(now: context.date), quiet]
-                        .compactMap { $0 }.joined(separator: " · "))
-                        .font(.callout)
-                        .foregroundStyle(quiet == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
-                        .monospacedDigit()
-                        .lineLimit(1)
                 }
             }
             Text(info.task)
@@ -420,7 +466,8 @@ struct AgentPanel: View {
 
     private var conversation: some View {
         AgentConversation(transcript: agent.transcript, isLoading: agent.loadedCount < 0,
-                          completion: info.isActive ? nil : info.completion)
+                          completion: info.isActive ? nil : info.completion,
+                          info: info, layout: layout, bottomInset: composerHeight + 16 + 16) { details.card() }
             .equatable()
             .id(info.id)
     }
@@ -514,17 +561,24 @@ private struct AgentContract: View {
 /// header's status and timers ticking do not lay out every message again;
 /// and only the latest `window` rows are drawn until asked for more, so a
 /// long-running child opens at once, as the main chat draws a window too.
-private struct AgentConversation: View, Equatable {
+private struct AgentConversation<Lead: View>: View, Equatable {
     let transcript: Transcript
     let isLoading: Bool
     let completion: String?
+    /// What `lead` shows, so it is drawn again only when that changes.
+    let info: SubagentInfo
+    let layout: ChatColumnLayout
+    /// Room under the last message for the composer floating over it.
+    let bottomInset: CGFloat
+    @ViewBuilder let lead: () -> Lead
     @State private var shown = Self.window
 
     /// Rows drawn when the panel opens, and added per "Show earlier".
-    static let window = 40
+    static var window: Int { 40 }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.transcript == rhs.transcript && lhs.isLoading == rhs.isLoading && lhs.completion == rhs.completion
+            && lhs.info == rhs.info && lhs.layout == rhs.layout && lhs.bottomInset == rhs.bottomInset
     }
 
     var body: some View {
@@ -533,6 +587,7 @@ private struct AgentConversation: View, Equatable {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    lead()
                     if items.isEmpty {
                         Text(isLoading ? "Loading…" : "Nothing yet.")
                             .foregroundStyle(.secondary)
@@ -556,7 +611,11 @@ private struct AgentConversation: View, Equatable {
                     }
                     Color.clear.frame(height: 1).id("end")
                 }
-                .padding(20)
+                .padding(.top, 8)
+                .padding(.bottom, bottomInset)
+                .frame(maxWidth: CGFloat(layout.column))
+                .padding(.horizontal, CGFloat(layout.padding))
+                .frame(maxWidth: .infinity)
             }
             .onAppear { proxy.scrollTo("end", anchor: .bottom) }
             .onChange(of: items.count) { _, _ in
