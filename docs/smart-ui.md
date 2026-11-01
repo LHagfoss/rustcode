@@ -68,16 +68,18 @@ The engine announces `agentCapabilities._meta.rustcode.smartUi = 1`.
 
 ## Runtime and lifecycle
 
-`SmartUIHost` (`macos/Sources/RustCode/SmartUIView.swift`) owns **at most
-one** web view:
+`SmartUIHost` (`macos/Sources/RustCode/SmartUIView.swift`) runs **at most
+three** pages at once (`SmartUIHost.maxLive`; #2484 ran one):
 
 - No web view or WebContent process exists until a block runs. A block runs
   automatically when it finishes streaming in front of you. Blocks in a chat
   you open later show a **Run interactive view** button.
-- Running another block tears the current page down and starts a new web
-  view. Reloading pages into one web view grows its WebContent process
-  ([preview.md](preview.md#measurements) measured 78 → 616 MB). A new view
-  lets the old process exit.
+- Each run gets a new web view in its own card. Starting a fourth page stops
+  the one that started longest ago, and its card shows the Run button
+  again. This is not a failure, so it does not show source. Reloading pages
+  into one web view grows its WebContent process
+  ([preview.md](preview.md#measurements) measured 78 → 616 MB), so a new
+  view per run lets the old process exit.
 - A page out of sight for 30 s is torn down. The Stop button tears it down
   at once.
 - While the page fits the card, wheel events pass to the transcript, so
@@ -135,11 +137,12 @@ Comparison:
 - **Native `rustcode-viz`**: no process, no code. It draws only its six
   types, and its interactions are limited to hover, column sort and tree
   folding.
-- **One reusable web view (this design)**: about 30 MB while a block runs and
-  nothing otherwise, about 60 ms to show, any interaction. It costs one
-  WebContent process at a time.
-- **One web view per block**: rejected. The memory cost scales with the
-  number of blocks in a transcript.
+- **Up to three web views (this design)**: about 30 MB per running block
+  and nothing otherwise, about 60 ms to show, any interaction. At most three
+  WebContent processes, about 90 MB. The first design ran one, which made a
+  reply or chat with several views stop all but the last.
+- **One web view per block, unbounded**: rejected. The memory cost scales
+  with the number of blocks in a transcript.
 - **Tailwind or another CSS library**: not bundled. A prebuilt Tailwind file
   is tens of KB, added to every page and outside the agent's control. System
   colors and a few lines of CSS were enough for the samples.
