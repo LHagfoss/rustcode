@@ -1,7 +1,7 @@
 import RustCodeKit
 import SwiftUI
 
-/// The chat header's context meter: a thin ring filling with the share of the
+/// The chat header's context meter: a short bar filling with the share of the
 /// context window in use, and `34k / 128k` beside it, on the same Liquid Glass
 /// capsule as the toolbar clusters. The tooltip adds the session's tokens.
 struct UsageCapsule: View {
@@ -9,15 +9,7 @@ struct UsageCapsule: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            ZStack {
-                Circle().stroke(.quaternary, lineWidth: 2)
-                Circle()
-                    .trim(from: 0, to: usage.fraction)
-                    .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
-            .frame(width: 12, height: 12)
-            .animation(.snappy(duration: 0.3), value: usage.fraction)
+            MeterBar(fraction: usage.fraction, tint: tint)
             Text(usage.label)
                 .font(.caption.weight(.medium))
                 .monospacedDigit()
@@ -40,5 +32,27 @@ struct UsageCapsule: View {
         case ..<0.95: .attention
         default: .red
         }
+    }
+}
+
+/// A short level bar for a meter. A partial ring read as a spinner that never
+/// stopped, and the composer's and header's rings, one counting what is used
+/// and one what is left, looked alike.
+struct MeterBar: View {
+    let fraction: Double
+    let tint: Color
+    var width: CGFloat = 18
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule().fill(.quaternary)
+            Capsule()
+                .fill(tint)
+                // A sliver stays visible at a fresh start, so it reads as a level.
+                .frame(width: max(width * min(max(fraction, 0), 1), 3))
+        }
+        .frame(width: width, height: 5)
+        .animation(.snappy(duration: 0.3), value: fraction)
+        .accessibilityHidden(true)
     }
 }
