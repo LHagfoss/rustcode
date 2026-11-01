@@ -39,6 +39,26 @@ pub(crate) const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 /// must not use the allowance up sooner than one that reports rarely.
 const MAX_TOTAL_TIMEOUTS: u32 = 61;
 
+/// Sends `notifications/cancelled` for a stdio request when dropped while
+/// still armed.
+struct CancelOnDrop {
+    tx: mpsc::Sender<Value>,
+    id: i64,
+    armed: bool,
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.tx.try_send(json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": self.id, "reason": "The client stopped waiting"},
+            }));
+        }
+    }
+}
+
 enum Transport {
     Stdio { tx: mpsc::Sender<Value> },
     // Boxed: `reqwest::Client` alone is ~280 bytes and would bloat every
@@ -1192,6 +1212,14 @@ impl McpClient {
             return Err(format!("Failed to send request: {error}"));
         }
 
+        // Until it is answered, a request given up on (timed out, or its
+        // turn stopped and this future dropped) is cancelled on the server,
+        // which would otherwise keep working on a call nobody waits for.
+        let mut cancel = CancelOnDrop {
+            tx: tx.clone(),
+            id,
+            armed: method != "initialize",
+        };
         let timeout = self.request_timeout();
         let mut rx = rx;
         // Each progress notification restarts the wait for the next sign of
@@ -1210,6 +1238,10 @@ impl McpClient {
             }
         };
         self.progress.lock().await.remove(&id);
+        // Answered, or the server is gone: nothing left to cancel.
+        if outcome.is_ok() {
+            cancel.armed = false;
+        }
         let resp = match outcome {
             Ok(Ok(resp)) => resp,
             Ok(Err(_)) => {
@@ -2815,6 +2847,30 @@ mod tests {
 
         assert!(error.contains("timed out after 1s"), "{error}");
         assert!(error.contains("timeout_secs"), "{error}");
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tool_call_timeout_cancels_on_the_server() {
+        // The mock records the line after the tool call; on a timeout that
+        // is the cancellation for request 3.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("after");
+        let body = format!(
+            "read cancel; echo \"$cancel\" > {}; sleep 2;",
+            log.display()
+        );
+        let client = slow_tool_server("cancel_server", &body).await;
+
+        let error = client
+            .call_tool("slow", json!({}))
+            .await
+            .expect_err("times out");
+        assert!(error.contains("timed out"), "{error}");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let line = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(line.contains("notifications/cancelled"), "{line}");
+        assert!(line.contains("\"requestId\":3"), "{line}");
         client.shutdown().await;
     }
 
