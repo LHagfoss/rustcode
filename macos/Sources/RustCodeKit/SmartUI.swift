@@ -10,10 +10,14 @@ public enum SmartUI {
     public static let version = 1
     public static var infoString: String { "\(infoName) v\(version)" }
 
-    /// The setting that turns Smart UI on. Off by default; the engine is told
-    /// at `initialize`, so a change applies once the engine restarts.
+    /// The setting that turns Smart UI on. On by default (#2484 shipped it
+    /// opt-in; agents rarely used it); the engine is told at `initialize`,
+    /// so a change applies once the engine restarts.
     public static let enabledKey = "smartUIEnabled"
-    public static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
+    public static let enabledByDefault = true
+    public static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? enabledByDefault
+    }
     /// The `_meta.rustcode.smartUi` version advertised while it is on.
     public static let capabilityVersion = 1
 

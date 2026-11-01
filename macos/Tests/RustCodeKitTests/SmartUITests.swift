@@ -78,4 +78,15 @@ final class SmartUITests: XCTestCase {
         XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["visualizations"],
                        .number(Double(Visualization.capabilityLevel)))
     }
+    func testSmartUIIsOnUntilTheUserTurnsItOff() {
+        let defaults = UserDefaults.standard
+        let was = defaults.object(forKey: SmartUI.enabledKey)
+        defer { defaults.set(was, forKey: SmartUI.enabledKey) }
+        defaults.removeObject(forKey: SmartUI.enabledKey)
+        XCTAssertTrue(SmartUI.isEnabled)
+        defaults.set(false, forKey: SmartUI.enabledKey)
+        XCTAssertFalse(SmartUI.isEnabled)
+        defaults.set(true, forKey: SmartUI.enabledKey)
+        XCTAssertTrue(SmartUI.isEnabled)
+    }
 }
