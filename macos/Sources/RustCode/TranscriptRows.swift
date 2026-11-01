@@ -1594,16 +1594,18 @@ struct TurnCompletionCard: View {
         var marks: [Mark] = []
         // A check run again counts as its last run: a failure that was
         // fixed and rerun passed.
-        var last: [String: TurnCompletion.Check.Outcome] = [:]
-        for check in completion.checks { last[check.summary.label] = check.outcome }
-        let failed = last.filter { $0.value == .failed }.keys.sorted()
+        let last = completion.lastRuns
+        let failed = last.filter { $0.outcome == .failed }
+        func names(_ checks: [TurnCompletion.Check]) -> String {
+            checks.map(\.command).joined(separator: "\n")
+        }
         if !failed.isEmpty {
             marks.append(Mark(text: failed.count == 1 ? "1 check failed" : "\(failed.count) checks failed",
                               symbol: "xmark.circle.fill", tint: .red,
-                              help: "Failed on its last run: \(failed.joined(separator: ", "))"))
-        } else if !last.isEmpty, last.values.allSatisfy({ $0 == .passed }) {
+                              help: "Failed on its last run:\n" + names(failed)))
+        } else if !last.isEmpty, last.allSatisfy({ $0.outcome == .passed }) {
             marks.append(Mark(text: "Checks passed", symbol: "checkmark.circle.fill", tint: .green,
-                              help: last.keys.sorted().joined(separator: ", ")))
+                              help: names(last)))
         }
         if let step = completion.pipeline?.steps.last {
             let done = step.outcome == .succeeded

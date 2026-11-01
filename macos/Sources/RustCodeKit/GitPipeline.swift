@@ -103,20 +103,54 @@ public struct GitPipeline: Equatable, Sendable {
         return kinds
     }
 
-    /// A chain's commands, quoted text left whole.
+    /// A chain's commands, quoted text left whole. A here-document's body
+    /// and end line stay on the command that reads them: they are text fed
+    /// to it, and a commit message line like `test: cover parser` split off
+    /// on its own read as running tests.
     static func segments(_ command: String) -> [String] {
+        var parts: [String] = []
+        var body: [Substring] = []
+        var delimiter: String?
+        func flush() {
+            guard !body.isEmpty else { return }
+            if parts.isEmpty { parts.append("") }
+            parts[parts.count - 1] += "\n" + body.joined(separator: "\n")
+            body = []
+        }
+        for line in command.split(separator: "\n", omittingEmptySubsequences: false) {
+            if let open = delimiter {
+                body.append(line)
+                if line.trimmingCharacters(in: .whitespaces) == open {
+                    delimiter = nil
+                    flush()
+                }
+                continue
+            }
+            parts += split(String(line))
+            let text = String(line)
+            if let match = heredoc.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+               let range = Range(match.range(at: 1), in: text) {
+                delimiter = String(text[range])
+            }
+        }
+        flush()
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// One line's commands, split at `;`, `&&` and `||` outside quotes.
+    private static func split(_ line: String) -> [String] {
         var parts: [String] = []
         var current = ""
         var quote: Character?
         var previous: Character?
-        for character in command {
+        for character in line {
             if let open = quote {
                 if character == open { quote = nil }
                 current.append(character)
             } else if character == "\"" || character == "'" {
                 quote = character
                 current.append(character)
-            } else if character == ";" || character == "\n" || (character == "&" && previous == "&")
+            } else if character == ";" || (character == "&" && previous == "&")
                         || (character == "|" && previous == "|") {
                 if character == "&" || character == "|" { current.removeLast() }
                 parts.append(current)
@@ -127,8 +161,11 @@ public struct GitPipeline: Equatable, Sendable {
             previous = character
         }
         parts.append(current)
-        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return parts
     }
+
+    /// `<<EOF`, `<<-'EOF'` or `<< "EOF"`, but not a `<<<` here-string.
+    private static let heredoc = try! NSRegularExpression(pattern: #"(?<!<)<<(?!<)-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?"#)
 
     /// The pull request URL `gh pr create` printed.
     static func pullRequestURL(in output: String?) -> URL? {
