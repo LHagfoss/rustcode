@@ -78,6 +78,33 @@ final class SmartUITests: XCTestCase {
         XCTAssertEqual(on["clientCapabilities"]?["_meta"]?["rustcode"]?["visualizations"],
                        .number(Double(Visualization.capabilityLevel)))
     }
+    // MARK: - Bundled libraries
+
+    func testALibraryTagBecomesInlineCodeOnce() {
+        let fragment = """
+            <canvas id="c"></canvas>
+            <script src="rustcode-lib:chart.js"></script>
+            <SCRIPT src='rustcode-lib:Chart.js' ></script>
+            <script>new Chart(document.getElementById('c'), {type: 'bar', data: {labels: [], datasets: []}});</script>
+            """
+        let expanded = SmartUI.expandingLibraries(in: fragment)
+        XCTAssertFalse(expanded.contains("rustcode-lib:"))
+        XCTAssertEqual(expanded.components(separatedBy: "Chart.js v\(SmartUILibrary.chartJS.version)").count - 1, 1)
+        XCTAssertTrue(expanded.hasPrefix("<canvas id=\"c\"></canvas>\n<script>\n"))
+        XCTAssertTrue(expanded.hasSuffix("datasets: []}});</script>"))
+        XCTAssertTrue(SmartUI.document(for: fragment).contains("Chart.js v4.4.7"))
+    }
+
+    func testUnknownLibrariesAndOrdinaryScriptsAreLeftAlone() {
+        let fragment = #"<script src="rustcode-lib:d3.js"></script><script src="https://cdn.example/x.js"></script><p>rustcode-lib</p>"#
+        XCTAssertEqual(SmartUI.expandingLibraries(in: fragment), fragment)
+        XCTAssertEqual(SmartUI.expandingLibraries(in: "<p>hi</p>"), "<p>hi</p>")
+    }
+
+    func testBundledCodeCannotCloseItsScriptElement() {
+        XCTAssertFalse(SmartUILibrary.chartJS.inlineSource.lowercased().contains("</script"))
+    }
+
 
     func testSmartUIIsOnUntilTheUserTurnsItOff() {
         let defaults = UserDefaults.standard

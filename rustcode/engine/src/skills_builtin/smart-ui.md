@@ -64,6 +64,13 @@ A fenced block whose info string is exactly `rustcode-ui v1`:
 - Inline `<style>` and plain `<script>` only. No frameworks, imports, CDN,
   fetch, external files, storage or navigation: all are blocked. Embed the
   data.
+- For charts, use the bundled Chart.js (v4, global `Chart`) instead of
+  drawing by hand: `<canvas id="c"></canvas>` then
+  `<script src="rustcode-lib:chart.js"></script>` and a script that calls
+  `new Chart(...)`. It ships with the app, so it costs nothing against the
+  64 KB limit. Set `options.maintainAspectRatio: false` on a sized wrapper,
+  or keep the default ratio. Read colors from CSS (`getComputedStyle`) so the
+  chart follows light and dark mode.
 - Use system colors (`Canvas`, `CanvasText`, `AccentColor`, `GrayText`) and
   the system font so it matches light and dark mode and the transcript.
   No fixed background colors, gradients or shadows.

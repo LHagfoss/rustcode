@@ -196,6 +196,23 @@ final class SmartUISoakTests: XCTestCase {
         sample("stopped")
         if let current { XCTAssertNil(processStats(current), "the last WebContent process outlived teardown") }
     }
+    func testABundledChartJSPageDrawsAChart() async throws {
+        let (view, _) = try await run("""
+            <title>Chart</title>
+            <canvas id="c" width="300" height="150"></canvas>
+            <script src="rustcode-lib:chart.js"></script>
+            <script>
+            window.chart = new Chart(document.getElementById('c'), {
+              type: 'bar', options: {animation: false},
+              data: {labels: ['a', 'b'], datasets: [{label: 'x', data: [1, 2]}]}});
+            </script>
+            """)
+        try await Task.sleep(for: .milliseconds(500))
+        let drawn = await evaluate("typeof Chart + ':' + (window.chart ? window.chart.data.datasets[0].data.length : 'none')", in: view) as? String
+        print("[smart-ui] chart.js \(drawn ?? "nil")")
+        XCTAssertEqual(drawn, "function:2")
+    }
+
     // MARK: - smart_ui_preview renders
 
     private func preview(_ html: String) async -> JSONValue {
