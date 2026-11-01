@@ -1,0 +1,137 @@
+# The Rust release build for a set of targets, shared by build.yml's macOS
+# and Linux/Windows jobs so the macOS app and the release can start as soon
+# as the macOS binary is ready instead of waiting for the slowest platform.
+name: Build Rust
+
+on:
+    workflow_call:
+        inputs:
+            matrix:
+                description: JSON list of {os, target, name}
+                required: true
+                type: string
+
+permissions:
+    contents: read
+
+env:
+    CARGO_TERM_COLOR: always
+    SCCACHE_GHA_ENABLED: "true"
+    RUSTC_WRAPPER: "sccache"
+
+jobs:
+    build:
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include: ${{ fromJSON(inputs.matrix) }}
+
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: ${{ matrix.target }}
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: ${{ matrix.target }}
+
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Set up mold linker (Linux)
+              if: runner.os == 'Linux'
+              uses: rui314/setup-mold@v1
+
+            - name: Build release
+              shell: bash
+              env:
+                  # ThinLTO makes the Windows MSVC release link disproportionately slow.
+                  # Keep the optimized release profile, but skip LTO for this platform.
+                  CARGO_PROFILE_RELEASE_LTO: ${{ runner.os == 'Windows' && 'off' || 'thin' }}
+              # The `rustcode` binary is built by the rustcode-tui package;
+              # the root package is a library since the TUI extraction.
+              run: cargo build --locked --release --target ${{ matrix.target }} -p rustcode-tui
+
+            - name: Show compiler cache stats
+              if: always()
+              shell: bash
+              run: ${SCCACHE_PATH} --show-stats
+
+            # Developer ID signing switches on once all five MACOS_* secrets
+            # exist (docs/macos-release-signing.md); until then the binary
+            # ships as the linker signed it and this prints a notice.
+            - name: Check macOS signing secrets
+              id: signing
+              if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'macOS'
+              shell: bash
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: scripts/macos-release-signing.sh check
+
+            - name: Import Developer ID certificate
+              if: steps.signing.outputs.enabled == 'true'
+              shell: bash
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: scripts/macos-release-signing.sh import
+
+            # A bare executable cannot be stapled: it is signed and submitted,
+            # and Gatekeeper finds the ticket online.
+            - name: Sign and notarize macOS binary
+              if: steps.signing.outputs.enabled == 'true'
+              shell: bash
+              env:
+                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+              run: |
+                  scripts/macos-release-signing.sh sign target/${{ matrix.target }}/release/rustcode
+                  ditto -c -k --keepParent target/${{ matrix.target }}/release/rustcode "$RUNNER_TEMP/rustcode-cli-notarize.zip"
+                  scripts/macos-release-signing.sh notarize "$RUNNER_TEMP/rustcode-cli-notarize.zip"
+
+            - name: Remove signing keychain
+              if: always() && steps.signing.outputs.enabled == 'true'
+              shell: bash
+              run: scripts/macos-release-signing.sh cleanup
+
+            - name: Package Linux / macOS binary
+              if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os != 'Windows'
+              shell: bash
+              run: |
+                  cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
+                  chmod +x ${{ matrix.name }}
+                  tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
+
+            - name: Package Windows binary
+              if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
+              shell: powershell
+              run: |
+                  Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
+                  Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
+
+            - name: Upload artifact
+              if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ${{ matrix.name }}
+                  # Each runner produces only one of these archives;
+                  # unmatched patterns are skipped, not an error.
+                  path: |
+                      ${{ matrix.name }}.tar.gz
+                      ${{ matrix.name }}.zip
+

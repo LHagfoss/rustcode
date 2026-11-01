@@ -52,138 +52,28 @@ jobs:
                       exit 1
                   fi
 
+    # macOS on its own, so swift-app and the release wait only for it.
+    build-macos:
+        needs: verify-tag
+        uses: ./.github/workflows/build-rust.yml
+        secrets: inherit
+        with:
+            matrix: '[{"os": "macos-latest", "target": "aarch64-apple-darwin", "name": "rustcode-macos-aarch64"}]'
+
     build:
         needs: verify-tag
-        runs-on: ${{ matrix.os }}
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    - os: ubuntu-24.04
-                      target: x86_64-unknown-linux-gnu
-                      name: rustcode-linux-x86_64
-                    - os: ubuntu-24.04-arm
-                      target: aarch64-unknown-linux-gnu
-                      name: rustcode-linux-aarch64
-                    - os: macos-latest
-                      target: aarch64-apple-darwin
-                      name: rustcode-macos-aarch64
-                    - os: windows-latest
-                      target: x86_64-pc-windows-msvc
-                      name: rustcode-windows-x86_64
-
-        steps:
-            - uses: actions/checkout@v7
-
-            - name: Install Rust toolchain
-              uses: dtolnay/rust-toolchain@stable
-              with:
-                  targets: ${{ matrix.target }}
-
-            - name: Rust Cache
-              uses: Swatinem/rust-cache@v2
-              with:
-                  shared-key: ${{ matrix.target }}
-
-            - name: Configure shared compiler cache
-              uses: mozilla-actions/sccache-action@v0.0.11
-
-            - name: Set up mold linker (Linux)
-              if: runner.os == 'Linux'
-              uses: rui314/setup-mold@v1
-
-            - name: Build release
-              shell: bash
-              env:
-                  # ThinLTO makes the Windows MSVC release link disproportionately slow.
-                  # Keep the optimized release profile, but skip LTO for this platform.
-                  CARGO_PROFILE_RELEASE_LTO: ${{ runner.os == 'Windows' && 'off' || 'thin' }}
-              # The `rustcode` binary is built by the rustcode-tui package;
-              # the root package is a library since the TUI extraction.
-              run: cargo build --locked --release --target ${{ matrix.target }} -p rustcode-tui
-
-            - name: Show compiler cache stats
-              if: always()
-              shell: bash
-              run: ${SCCACHE_PATH} --show-stats
-
-            # Developer ID signing switches on once all five MACOS_* secrets
-            # exist (docs/macos-release-signing.md); until then the binary
-            # ships as the linker signed it and this prints a notice.
-            - name: Check macOS signing secrets
-              id: signing
-              if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'macOS'
-              shell: bash
-              env:
-                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
-                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-              run: scripts/macos-release-signing.sh check
-
-            - name: Import Developer ID certificate
-              if: steps.signing.outputs.enabled == 'true'
-              shell: bash
-              env:
-                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
-                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-              run: scripts/macos-release-signing.sh import
-
-            # A bare executable cannot be stapled: it is signed and submitted,
-            # and Gatekeeper finds the ticket online.
-            - name: Sign and notarize macOS binary
-              if: steps.signing.outputs.enabled == 'true'
-              shell: bash
-              env:
-                  MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
-                  MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-                  MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-                  MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-                  MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-              run: |
-                  scripts/macos-release-signing.sh sign target/${{ matrix.target }}/release/rustcode
-                  ditto -c -k --keepParent target/${{ matrix.target }}/release/rustcode "$RUNNER_TEMP/rustcode-cli-notarize.zip"
-                  scripts/macos-release-signing.sh notarize "$RUNNER_TEMP/rustcode-cli-notarize.zip"
-
-            - name: Remove signing keychain
-              if: always() && steps.signing.outputs.enabled == 'true'
-              shell: bash
-              run: scripts/macos-release-signing.sh cleanup
-
-            - name: Package Linux / macOS binary
-              if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os != 'Windows'
-              shell: bash
-              run: |
-                  cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
-                  chmod +x ${{ matrix.name }}
-                  tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
-
-            - name: Package Windows binary
-              if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
-              shell: powershell
-              run: |
-                  Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
-                  Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
-
-            - name: Upload artifact
-              if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-              uses: actions/upload-artifact@v7
-              with:
-                  name: ${{ matrix.name }}
-                  # Each runner produces only one of these archives;
-                  # unmatched patterns are skipped, not an error.
-                  path: |
-                      ${{ matrix.name }}.tar.gz
-                      ${{ matrix.name }}.zip
+        uses: ./.github/workflows/build-rust.yml
+        secrets: inherit
+        with:
+            matrix: >-
+                [{"os": "ubuntu-24.04", "target": "x86_64-unknown-linux-gnu", "name": "rustcode-linux-x86_64"},
+                 {"os": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu", "name": "rustcode-linux-aarch64"},
+                 {"os": "windows-latest", "target": "x86_64-pc-windows-msvc", "name": "rustcode-windows-x86_64"}]
 
     # Build Swift sources only on macOS and reuse the arm64 engine artifact,
     # avoiding another Rust compile and leaving Linux/Windows jobs unchanged.
     swift-app:
-        needs: build
+        needs: build-macos
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         runs-on: macos-26
         steps:
@@ -309,17 +199,18 @@ jobs:
                       rustcode-ios-simulator.zip
                       rustcode-ios-unsigned.xcarchive.zip
 
+    # Published as soon as the macOS CLI and app are ready: Homebrew and the
+    # updater need only those. release-rest attaches the other platforms.
     release:
         if: startsWith(github.ref, 'refs/tags/v')
-        needs: [build, swift-app, ios-app]
+        needs: [build-macos, swift-app]
         runs-on: ubuntu-latest
         steps:
-            - name: Download artifacts
+            - name: Download macOS artifacts
               uses: actions/download-artifact@v8
               with:
-                  # Removed the trailing slash to correctly flatten files
-                  # when using merge-multiple: true
                   path: artifacts
+                  pattern: rustcode-macos-*
                   merge-multiple: true
 
             - name: Generate SHA256 manifest
@@ -328,13 +219,8 @@ jobs:
                   set -euo pipefail
                   cd artifacts
                   files=(
-                      rustcode-linux-aarch64.tar.gz
-                      rustcode-linux-x86_64.tar.gz
                       rustcode-macos-aarch64.tar.gz
                       rustcode-macos-aarch64-swift-app.zip
-                      rustcode-ios-simulator.zip
-                      rustcode-ios-unsigned.xcarchive.zip
-                      rustcode-windows-x86_64.zip
                   )
                   for file in "${files[@]}"; do
                       test -f "$file"
@@ -345,7 +231,6 @@ jobs:
               id: create_release
               uses: softprops/action-gh-release@v2
               with:
-                  # Targets only the archives inside the root artifacts directory
                   files: |
                       artifacts/SHA256SUMS
                       artifacts/*.tar.gz
@@ -393,3 +278,48 @@ jobs:
                   git add Formula/rustcode.rb
                   git commit -m "Update rustcode to ${TAG}"
                   git push origin main
+
+    # The other platforms, added to the release once they finish, with the
+    # manifest rewritten to cover every asset.
+    release-rest:
+        if: startsWith(github.ref, 'refs/tags/v')
+        needs: [release, build, ios-app]
+        runs-on: ubuntu-latest
+        steps:
+            - name: Download artifacts
+              uses: actions/download-artifact@v8
+              with:
+                  path: artifacts
+                  merge-multiple: true
+
+            - name: Generate SHA256 manifest
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cd artifacts
+                  files=(
+                      rustcode-linux-aarch64.tar.gz
+                      rustcode-linux-x86_64.tar.gz
+                      rustcode-macos-aarch64.tar.gz
+                      rustcode-macos-aarch64-swift-app.zip
+                      rustcode-ios-simulator.zip
+                      rustcode-ios-unsigned.xcarchive.zip
+                      rustcode-windows-x86_64.zip
+                  )
+                  for file in "${files[@]}"; do
+                      test -f "$file"
+                  done
+                  sha256sum "${files[@]}" | LC_ALL=C sort -k2,2 > SHA256SUMS
+
+            - name: Attach the remaining assets
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ github.ref_name }}
+              run: |
+                  cd artifacts
+                  gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+                      SHA256SUMS \
+                      rustcode-linux-aarch64.tar.gz rustcode-linux-x86_64.tar.gz \
+                      rustcode-windows-x86_64.zip \
+                      rustcode-ios-simulator.zip rustcode-ios-unsigned.xcarchive.zip
