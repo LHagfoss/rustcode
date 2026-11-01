@@ -17,6 +17,9 @@ pub(crate) const USAGE_META_VERSION: u32 = 1;
 /// assistant message; input re-counts the conversation on every request, so
 /// it is what a provider bills and far larger than the context in use.
 pub(crate) fn usage_update(state: &crate::app::AppState) -> SessionUpdate {
+    // Built once: it scans the skill folders and rebuilds the system prompt,
+    // with the session lock held.
+    let breakdown = crate::controller::ContextBreakdown::from_state(state);
     let (used, estimated) = match state.current_token_usage.as_ref() {
         Some(usage) => (u64::from(usage.prompt_tokens), false),
         None => {
@@ -26,7 +29,6 @@ pub(crate) fn usage_update(state: &crate::app::AppState) -> SessionUpdate {
                 .map(|message| message.content.len())
                 .sum();
             // The system prompt, tools and skills ride on every request too.
-            let breakdown = crate::controller::ContextBreakdown::from_state(state);
             let overhead = breakdown.system_prompt_tokens
                 + breakdown.system_tools_tokens
                 + breakdown.skills_tokens;
@@ -57,7 +59,7 @@ pub(crate) fn usage_update(state: &crate::app::AppState) -> SessionUpdate {
             "outputTokens": output,
             "cachedTokens": cached,
             "responses": responses,
-            "context": context_breakdown(state),
+            "context": context_breakdown_json(state, &breakdown),
         }),
     );
     SessionUpdate::UsageUpdate(UsageUpdate::new(used, size).meta(meta))
@@ -71,7 +73,16 @@ pub(crate) const CONTEXT_META_VERSION: u32 = 2;
 /// Category names and order match the TUI legend. `reserves` is null when the
 /// active profile's reserves do not describe the window in view.
 pub(crate) fn context_breakdown(state: &crate::app::AppState) -> serde_json::Value {
-    let breakdown = crate::controller::ContextBreakdown::from_state(state);
+    context_breakdown_json(
+        state,
+        &crate::controller::ContextBreakdown::from_state(state),
+    )
+}
+
+fn context_breakdown_json(
+    state: &crate::app::AppState,
+    breakdown: &crate::controller::ContextBreakdown,
+) -> serde_json::Value {
     let categories = crate::controller::CONTEXT_CATEGORY_LABELS
         .iter()
         .zip(breakdown.category_tokens())
