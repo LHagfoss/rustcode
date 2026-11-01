@@ -31,6 +31,14 @@ self-contained HTML fragment:
   `<meta name="description">` is the line under it.
 - Styles and scripts are inline. No framework, package or build step. System
   colors (`Canvas`, `CanvasText`, `AccentColor`) follow light and dark mode.
+- Bundled libraries: `<script src="rustcode-lib:chart.js"></script>` is
+  replaced with Chart.js 4.4.7 inline before the page loads
+  (`SmartUI.expandingLibraries`). The code ships in the app
+  (`macos/Sources/RustCodeKit/Vendor/ChartJS.swift`, MIT, with its license
+  and checksum). Nothing is fetched and the policy is unchanged. It loads once
+  per page, even with several tags. It doesn't count against the 64 KB limit,
+  which applies to the block as written. An unknown name stays as written, and
+  the policy blocks it.
 - Limits: 64 KB of source and 5,000 elements. The view is 48–720 pt tall and
   fits its content; taller content scrolls inside the card.
 
@@ -143,6 +151,11 @@ Comparison:
 - **Tailwind or another CSS library**: not bundled. A prebuilt Tailwind file
   is tens of KB, added to every page and outside the agent's control. System
   colors and a few lines of CSS were enough for the samples.
+- **Chart.js**: bundled (205 KB, inlined only into pages that name it).
+  Hand-drawn SVG charts were the weakest part of agent-written pages, and
+  T3 Code's agents get chart libraries from CDNs. Ours can't reach a CDN, so
+  the library ships with the app. d3 isn't bundled: it is larger and harder
+  for an agent to use well in one block.
 
 Not measured: hours of real use under Instruments, and scrolling smoothness
 with a live card. The rendered card was checked in the debug app, but its

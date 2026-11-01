@@ -50,6 +50,35 @@ public enum SmartUI {
         return info.split(whereSeparator: \.isWhitespace).first.map(String.init) == infoName
     }
 
+    /// The scheme a fragment names a bundled library with:
+    /// `<script src="rustcode-lib:chart.js"></script>`.
+    public static let libraryScheme = "rustcode-lib"
+
+    /// `fragment` with each bundled-library tag replaced by the library's
+    /// code, inline. Nothing is fetched: the code ships with the app, so the
+    /// page stays inside `script-src 'unsafe-inline'`. An unknown name is
+    /// left as written, and the policy blocks it.
+    public static func expandingLibraries(in fragment: String) -> String {
+        guard fragment.range(of: libraryScheme, options: .caseInsensitive) != nil else { return fragment }
+        let pattern = #"<script\s+src\s*=\s*["']\#(libraryScheme):([A-Za-z0-9._-]+)["']\s*>\s*</script\s*>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return fragment }
+        var result = ""
+        var rest = fragment.startIndex
+        var included = Set<SmartUILibrary>()
+        for match in regex.matches(in: fragment, range: NSRange(fragment.startIndex..., in: fragment)) {
+            guard let whole = Range(match.range, in: fragment), let name = Range(match.range(at: 1), in: fragment),
+                  let library = SmartUILibrary(rawValue: fragment[name].lowercased()) else { continue }
+            result += fragment[rest..<whole.lowerBound]
+            // Each library loads once, at its first tag.
+            if included.insert(library).inserted {
+                result += "<script>\n\(library.inlineSource)\n</script>"
+            }
+            rest = whole.upperBound
+        }
+        result += fragment[rest...]
+        return result
+    }
+
     /// The page loaded into the web view: the policy and base styles first,
     /// then the fragment as written. A fragment's own `<meta>` policy can only
     /// narrow this one; browsers enforce every policy present.
@@ -64,9 +93,31 @@ public enum SmartUI {
         body { font: 13px -apple-system, system-ui, sans-serif; color: CanvasText; overflow-wrap: anywhere; }
         </style>
         </head><body>
-        \(fragment)
+        \(expandingLibraries(in: fragment))
         </body></html>
         """
+    }
+}
+
+/// A JavaScript library bundled with the app for Smart UI pages. Pages
+/// cannot reach a CDN, so the useful ones ship here (docs/smart-ui.md).
+public enum SmartUILibrary: String, CaseIterable, Sendable {
+    /// Chart.js, the global `Chart`.
+    case chartJS = "chart.js"
+
+    public var version: String {
+        switch self {
+        case .chartJS: return Self.chartJSVersion
+        }
+    }
+
+    /// The library's code, safe to put inside a `<script>` element.
+    var inlineSource: String {
+        let source: String
+        switch self {
+        case .chartJS: source = Self.chartJSSource
+        }
+        return source.replacingOccurrences(of: "</script", with: "<\\/script", options: .caseInsensitive)
     }
 }
 
