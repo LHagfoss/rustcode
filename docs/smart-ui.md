@@ -3,8 +3,8 @@
 Smart UI ([#2484](https://github.com/LHagfoss/rustcode/issues/2484)) lets
 the agent answer with a small interactive component, such as a filterable
 table or a view driven by a few controls, that the macOS app runs in the
-transcript. It is **experimental and off by default**: Settings › General ›
-Chat › Smart UI. The engine learns the setting when it starts, so after
+transcript. It is **on by default** (it shipped opt-in, and agents almost
+never reached it): Settings › General › Chat › Smart UI turns it off. The engine learns the setting when it starts, so after
 switching it Settings offers **Restart Engine** (shown once no chat is
 running).
 
@@ -179,7 +179,9 @@ clicks do not reach WebKit.
 
 ## Recommendation
 
-**Ship it limited**: opt-in, experimental, a single live view, with the
+It shipped limited: opt-in, experimental, a single live view, with the
 controls above. The cost is bounded and paid only when a block runs, and the
-isolation held in every check. Keep it off by default until it has been used
-for a while with real pointer input and longer sessions.
+isolation held in every check. Opt-in meant agents almost never used it, so
+it is now on by default, and the prompt asks for visuals even unasked.
+T3 Code saw the same thing: its rule "render a visual only when asked" took
+inline charts from 8 of 8 eval cases to 0 of 8 (pingdotgg/t3code#25766).

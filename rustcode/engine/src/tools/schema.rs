@@ -2477,7 +2477,7 @@ One line, no headings or lists, and never one per call. Skip it only when the ba
 /// Short guidance for `rustcode-viz` blocks; the full format lives in
 /// `docs/visualizations.md` and the TUI renderer validates every payload.
 pub(crate) const VISUALIZATION_PROMPT_HINT: &str = "# Visualizations\n\
-When a chart, table, or tree beats prose, add a ```rustcode-viz fence with one JSON object: \
+When a chart, table, or tree beats prose (trends, comparisons, breakdowns, hierarchies), add a ```rustcode-viz fence even if not asked with one JSON object: \
 {\"version\":1,\"type\":\"bar_chart\",\"title\":\"..\",\"summary\":\"..\",\"items\":[{\"label\":\"..\",\"value\":1}]}; \
 \"table\" takes columns, rows (arrays), optional sort_by {column,descending}; \"tree\" takes nodes [{label,note,children}]. Max 30 bars, 50 rows, 120 nodes.\n\n";
 
@@ -2518,8 +2518,8 @@ pub(crate) fn append_visualization_hint(
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
 This app can run one small interactive component in a reply, written as a ```rustcode-ui v1 fence of self-contained HTML (no network). \
-Use it only when the user asks for an interactive view or controls such as sorting, filtering or sliders clearly help; \
-otherwise use Markdown or rustcode-viz. Before writing one, load the `smart-ui` skill for the format and limits.\n\n";
+Use it, even unasked, when controls such as sorting, filtering, sliders or toggles let the reader explore what a static chart cannot show; \
+for a plain chart, table or tree use rustcode-viz. Before writing one, load the `smart-ui` skill for the format and limits.\n\n";
 
 /// Sent instead of [`SMART_UI_PROMPT_HINT`] when the frontend could run the
 /// blocks but the user has the setting off. Without it an agent asked for

@@ -1,6 +1,6 @@
 ---
 name: smart-ui
-description: Write a Smart UI (rustcode-ui v1) interactive component for the RustCode macOS chat. Use only when the prompt's Smart UI section says it is on and the user asks for an interactive view, or sorting, filtering, sliders or toggles clearly help.
+description: Write a Smart UI (rustcode-ui v1) interactive component for the RustCode macOS chat. Use when the prompt's Smart UI section says it is on and the user asks for an interactive view, or sorting, filtering, sliders or toggles would help them explore the answer, even unasked.
 triggers: smart ui, interactive view, rustcode-ui
 keywords: interactive, widget, component, html, slider, filter, sort, toggle
 ---
