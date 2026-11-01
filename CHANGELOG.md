@@ -1,3 +1,27 @@
+## [v0.114.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.114.0) - 2026-11-01
+
+### Features
+- Smart UI: the agent now renders its interactive view offscreen and checks a screenshot before it sends it. (#2756)
+- Smart UI is now on by default, and the agent shows charts for trends and comparisons without being asked. (#2757)
+- Smart UI views can use a bundled Chart.js for charts, with no network access. (#2758)
+- Smart UI keeps up to three interactive views running at once instead of stopping all but the last. (#2759)
+- Make the new-thread heading more prominent and show helpful tips for RustCode features. (#2734)
+- Keep composer text steady when focusing or leaving the input. (#2735)
+- Tool approvals show the command or the diff instead of raw JSON, and the sidebar says what a waiting thread needs. (#2736)
+- Git steps in a turn read "Staged calc.py" and "Committed “…”" instead of "Ran GitAdd". (#2737)
+- MCP tools that report progress often no longer time out partway through a long call. (#2738)
+- The turn summary no longer says "Checks passed" when one of several test suites failed. (#2739)
+- Opened turns read as narration and steps without repeated thought lines, and in-progress narration no longer stacks timestamps. (#2740)
+- The context and plan-usage meters are now level bars that can't be mistaken for spinners, and the thread title stays readable with a side panel open. (#2741)
+- Settings descriptions wrap instead of being cut off mid-sentence. (#2742)
+- Clicking Branch again in the Changes panel keeps the base branch you picked. (#2743)
+- The empty sidebar no longer mentions "this project" while showing all projects. (#2744)
+- The Changes panel offers the branch's changes when nothing is left uncommitted. (#2747)
+- `rustcode mcp add --force` keeps a server's `timeout_secs`. (#2750)
+- The turn summary flags failed commands and stopped checks again. (#2751)
+- Stopping a turn or timing out an MCP tool call now tells the server to stop that work. (#2752)
+- Tool rows no longer show names like `GitStatus` as their detail. (#2754)
+- A finished turn no longer looks failed when one call failed along the way. (#2755)
 ## [v0.113.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.113.0) - 2026-10-31
 
 ### Features
