@@ -1428,6 +1428,9 @@ pub fn tool_capabilities(name: &str) -> &'static [ToolCapability] {
 /// Plan mode is intentionally deny-by-default for tools not explicitly known
 /// to be read-only or user-facing.
 pub fn allowed_in_plan_mode(name: &str) -> bool {
+    if name == crate::desktop_control::TOOL_NAME {
+        return false;
+    }
     use ToolCapability::*;
     let capabilities = tool_capabilities(name);
     capabilities.iter().all(|cap| {
@@ -1492,6 +1495,7 @@ pub const TOOLS: &[Tool] = &[
     misc::ZOOM_CONTEXT,
     misc::FORGET_MEMORY,
     misc::LOCALHOST_PREVIEW,
+    misc::DESKTOP_CONTROL,
     misc::SMART_UI_PREVIEW,
     misc::LIST_SESSIONS,
     misc::MESSAGE_SESSION,

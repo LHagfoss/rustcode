@@ -110,7 +110,7 @@ public enum ACPRequests {
     /// user at the setting instead of guessing a format.
     /// `orchestration` advertises the thread host (#2637), only while the
     /// user has threads messaging each other turned on.
-    public static func initialize(appVersion: String, smartUI: Bool = false, orchestration: Bool = false) -> JSONValue {
+    public static func initialize(appVersion: String, smartUI: Bool = false, orchestration: Bool = false, desktop: Bool = false) -> JSONValue {
         var rustcode: [String: JSONValue] = [
             "visualizations": .number(Double(Visualization.capabilityLevel)),
             "preview": .number(Double(rustcodePreviewCapabilityVersion)),
@@ -118,6 +118,7 @@ public enum ACPRequests {
         ]
         rustcode["smartUi"] = .number(Double(smartUI ? SmartUI.capabilityVersion : 0))
         if orchestration { rustcode["orchestration"] = .number(Double(Orchestration.capabilityVersion)) }
+        if desktop { rustcode["desktop"] = 1 }
         return [
             "protocolVersion": .number(Double(acpProtocolVersion)),
             // The app offers no client-side filesystem or terminal: the engine

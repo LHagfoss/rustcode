@@ -49,6 +49,38 @@ pub(crate) fn preview_client_for(
     })
 }
 
+pub(crate) struct AcpDesktopClient {
+    pub(crate) connection: ConnectionTo<Client>,
+    pub(crate) session_id: String,
+}
+impl crate::preview::PreviewClient for AcpDesktopClient {
+    fn request(&self, params: Value) -> crate::preview::PreviewFuture {
+        let connection = self.connection.clone();
+        let params = preview_request_params(&self.session_id, params);
+        Box::pin(async move {
+            let message = UntypedMessage::new(crate::desktop_control::METHOD, params)
+                .map_err(|e| e.to_string())?;
+            connection
+                .send_request(message)
+                .block_task()
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+pub(crate) fn desktop_client_for(
+    supported: bool,
+    connection: &ConnectionTo<Client>,
+    session_id: &str,
+) -> Option<std::sync::Arc<dyn crate::preview::PreviewClient>> {
+    supported.then(|| {
+        std::sync::Arc::new(AcpDesktopClient {
+            connection: connection.clone(),
+            session_id: session_id.to_owned(),
+        }) as std::sync::Arc<dyn crate::preview::PreviewClient>
+    })
+}
+
 /// The other half of `message_session` and its tools (#2637): each call
 /// becomes a `_rustcode/orchestration` request naming the calling session.
 pub(crate) struct AcpOrchestrationClient {

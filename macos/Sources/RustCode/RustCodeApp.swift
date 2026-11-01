@@ -479,6 +479,8 @@ final class DesktopModel: ObservableObject {
     }
     /// Prompt turns in flight. Each chat runs its own turns, so a new chat is
     /// ready while another one works.
+    let desktopAutomation = DesktopAutomationBridge()
+    @Published private(set) var engineDesktopAutomation = false
     @Published private(set) var turnActivity = TurnActivity()
     /// Chats with a prompt turn running, which the sidebar shows as a spinner.
     var runningSessions: Set<String> { turnActivity.sessions }
@@ -1223,6 +1225,7 @@ final class DesktopModel: ObservableObject {
             engine = process
             // Grants belong to the sessions of the engine they were given in.
             preview.revokeAgentAccess()
+            desktopAutomation.reset()
             inboundTask = Task { [weak self] in
                 for await inbound in process.connection.inbound {
                     await self?.handle(inbound)
@@ -1231,12 +1234,14 @@ final class DesktopModel: ObservableObject {
             }
             let smartUI = SmartUI.isEnabled
             let orchestration = Orchestration.isEnabled
+            let desktop = DesktopAutomation.isEnabled
             let result = try await process.connection.request(
                 ACPMethod.initialize,
-                params: ACPRequests.initialize(appVersion: "0.1.0", smartUI: smartUI, orchestration: orchestration),
+                params: ACPRequests.initialize(appVersion: "0.1.0", smartUI: smartUI, orchestration: orchestration, desktop: desktop),
                 timeout: .seconds(10))
             engineSmartUI = smartUI
             engineOrchestration = orchestration
+            engineDesktopAutomation = desktop
             capabilities = try AgentInfo(initializeResult: result)
             try await process.connection.notify("initialized", params: [:])
             await refreshSessions()
@@ -2619,6 +2624,9 @@ final class DesktopModel: ObservableObject {
             failure = "The turn failed."
             TurnNotifier.shared.notify(session: id, title: chatTitle(id), body: "The turn failed: \(error)")
         }
+        // A late desktop approval must not outlive this turn, even if a queued
+        // turn in the same chat starts immediately afterwards.
+        desktopAutomation.revoke(session: id)
         // The turn is over, so the engine no longer waits on its requests.
         permissionQueue.removeAll { $0.sessionId == id }
         // A thought the turn ended on stops its clock, and no card keeps spinning.
@@ -2806,6 +2814,7 @@ final class DesktopModel: ObservableObject {
 
     func cancel() async {
         guard let connection = engine?.connection, let id = selectedSession, busy else { return }
+        desktopAutomation.revoke(session: id)
         do {
             try await connection.notify(ACPMethod.sessionCancel, params: ACPRequests.session(id))
             // ACP: after `session/cancel` the client answers the session's
@@ -3089,6 +3098,17 @@ final class DesktopModel: ObservableObject {
             guard let connection = engine?.connection else { return }
             Task {
                 let result = await SmartUIPreviewRenderer.shared.render(params)
+                try? await connection.respond(id: id, result: result)
+            }
+        case .request(let id, let method, let params) where method == DesktopAutomation.method:
+            guard let connection = engine?.connection, let session = params["sessionId"]?.stringValue else { return }
+            let title = chatTitle(session)
+            let ticket = desktopAutomation.ticket(for: session)
+            Task { [weak self] in
+                guard let self else { return }
+                let result = await self.desktopAutomation.run(params, chatTitle: title, ticket: ticket) { [weak self] in
+                    self?.engine?.connection === connection && (self?.runningSessions.contains(session) ?? false)
+                }
                 try? await connection.respond(id: id, result: result)
             }
         case .request(let id, let method, let params) where method == ACPMethod.preview:

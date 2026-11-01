@@ -476,6 +476,7 @@ private struct GeneralSettings: View {
     @AppStorage(ComposerPredictions.key) private var predictions = true
     @AppStorage(SmartUI.enabledKey) private var smartUI = SmartUI.enabledByDefault
     @AppStorage(Orchestration.enabledKey) private var threadMessaging = false
+    @AppStorage(DesktopAutomation.enabledKey) private var desktopAutomation = false
     @AppStorage(DesktopModel.groupsByAttentionKey) private var groupsByAttention = true
     @AppStorage(TurnCompletionCard.enabledKey) private var showsTurnCompletion = true
     @AppStorage(NewThreadBanner.key) private var banner = ""
@@ -579,6 +580,24 @@ private struct GeneralSettings: View {
                         Toggle("Smart UI", isOn: $smartUI)
                             .labelsHidden()
                             .toggleStyle(.switch)
+                    }
+                }
+                RowDivider()
+                SettingsRow(title: "Desktop automation (experimental)",
+                            subtitle: desktopAutomation == model.engineDesktopAutomation
+                                ? "Let the agent request access to native apps. You approve every action, even with auto-approve on. Requires agent-desktop and macOS Accessibility permission."
+                                : "Restart the engine to apply this setting. Turning it off blocks actions immediately.") {
+                    HStack(spacing: 8) {
+                        Link("Setup…", destination: URL(string: "https://agent-browser.dev/desktop/installation")!)
+                            .buttonStyle(PillButtonStyle())
+                        if desktopAutomation != model.engineDesktopAutomation, model.runningSessions.isEmpty {
+                            Button("Restart Engine") { Task { await model.restartEngine() } }.buttonStyle(PillButtonStyle())
+                        }
+                        Toggle("Desktop automation", isOn: $desktopAutomation)
+                            .labelsHidden().toggleStyle(.switch)
+                            .onChange(of: desktopAutomation) { _, enabled in
+                                if !enabled { model.desktopAutomation.reset() }
+                            }
                     }
                 }
                 RowDivider()
@@ -1369,7 +1388,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var keywords: [String] {
         switch self {
         case .general: ["appearance", "theme", "dark", "light", "notifications", "project", "folder", "fade", "sidebar", "group",
-                        "predictions", "smart ui", "tool calls", "verbosity", "auto-approve", "yolo",
+                        "predictions", "smart ui", "tool calls", "verbosity", "auto-approve", "yolo", "desktop automation", "accessibility", "agent-desktop",
                         "discord", "rich presence", "model", "effort", "reasoning", "new threads", "new chats",
                         "banner", "picture", "image", "ascii", "wallpaper"]
         case .keybinds: ["keyboard", "shortcuts", "hotkeys", "keys"]

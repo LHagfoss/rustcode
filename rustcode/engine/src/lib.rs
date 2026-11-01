@@ -19,6 +19,7 @@ mod context;
 pub mod controller;
 pub mod daemon;
 use crate::app::{AppState, ChatMessage};
+mod desktop_control;
 pub mod discord_rpc;
 pub mod doctor;
 mod keep_awake;

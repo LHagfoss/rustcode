@@ -4927,6 +4927,27 @@ fn visualization_hint_needs_a_rendering_frontend_and_a_root_prompt() {
 }
 
 #[test]
+fn desktop_control_is_only_offered_to_capable_root_sessions() {
+    let has_desktop = |policy| {
+        native_tools_schema_for_context(policy, &[])
+            .0
+            .iter()
+            .any(|tool| tool["function"]["name"] == crate::desktop_control::TOOL_NAME)
+    };
+    let root = ToolSchemaPolicy::root(false);
+    assert!(!has_desktop(root));
+    assert!(has_desktop(root.with_desktop_tool()));
+    for policy in [
+        ToolSchemaPolicy::read_only_inspection(),
+        ToolSchemaPolicy::subagent(),
+        ToolSchemaPolicy::subagent_with_delegation(),
+    ] {
+        assert!(!has_desktop(policy.with_desktop_tool()));
+    }
+    assert!(!allowed_in_plan_mode(crate::desktop_control::TOOL_NAME));
+}
+
+#[test]
 fn localhost_preview_is_offered_only_with_a_client_preview() {
     let has_preview = |schemas: &[serde_json::Value]| {
         schemas

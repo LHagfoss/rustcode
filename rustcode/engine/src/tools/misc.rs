@@ -238,6 +238,23 @@ pub const ASK_QUESTION: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+fn desktop_control_schema() -> Value {
+    crate::desktop_control::schema()
+}
+fn desktop_control_unavailable(_: &Value) -> Result<String, String> {
+    Err("Desktop control is unavailable in this client.".into())
+}
+pub const DESKTOP_CONTROL: Tool = Tool {
+    name: crate::desktop_control::TOOL_NAME,
+    description: "Control a user-approved native macOS application. Snapshot an app, then click or type using its returned ref; observe again to verify. Each operation requires user approval.",
+    arguments: r#"{"action":"snapshot","app":"Finder"}"#,
+    handler: desktop_control_unavailable,
+    requires_confirmation: false,
+    schema: desktop_control_schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 fn localhost_preview_schema() -> Value {
     crate::preview::operation_schema()
 }

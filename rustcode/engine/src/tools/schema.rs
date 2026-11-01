@@ -142,6 +142,7 @@ pub struct ToolSchemaPolicy {
     pub(crate) include_session_title_tool: bool,
     /// `localhost_preview`, offered only when the client has a preview (#2138).
     pub(crate) include_preview_tool: bool,
+    pub(crate) include_desktop_tool: bool,
     /// `smart_ui_preview`, offered only while Smart UI is on in a client
     /// that renders previews.
     pub(crate) include_smart_ui_preview_tool: bool,
@@ -205,6 +206,7 @@ impl ToolSchemaPolicy {
             include_mcp_tools: true,
             include_session_title_tool: false,
             include_preview_tool: false,
+            include_desktop_tool: false,
             include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
             profile: ToolSchemaProfile::Coding,
@@ -226,6 +228,7 @@ impl ToolSchemaPolicy {
             include_mcp_tools: false,
             include_session_title_tool: false,
             include_preview_tool: false,
+            include_desktop_tool: false,
             include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
             profile: ToolSchemaProfile::ReadOnlyInspection,
@@ -240,6 +243,7 @@ impl ToolSchemaPolicy {
             include_mcp_tools: true,
             include_session_title_tool: false,
             include_preview_tool: false,
+            include_desktop_tool: false,
             include_smart_ui_preview_tool: false,
             include_orchestration_tools: false,
             profile: ToolSchemaProfile::ReadOnlySubagent,
@@ -295,8 +299,12 @@ impl ToolSchemaPolicy {
         self
     }
 
-    /// Offer `localhost_preview`. Only the root coding profile can use it:
-    /// Plan mode and subagents never drive the user's preview.
+    /// Desktop control is offered only to root coding sessions.
+    pub(crate) fn with_desktop_tool(mut self) -> Self {
+        self.include_desktop_tool = self.profile == ToolSchemaProfile::Coding;
+        self
+    }
+
     pub(crate) fn with_preview_tool(mut self) -> Self {
         self.include_preview_tool = self.profile == ToolSchemaProfile::Coding;
         self
@@ -805,6 +813,7 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     "complete_task",
     "ask_question",
     crate::preview::PREVIEW_TOOL_NAME,
+    crate::desktop_control::TOOL_NAME,
     crate::smart_ui::PREVIEW_TOOL_NAME,
     crate::orchestration::LIST_SESSIONS,
     crate::orchestration::MESSAGE_SESSION,
@@ -836,6 +845,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
     };
     !((tool.name == "set_session_title" && !policy.include_session_title_tool)
         || (tool.name == crate::preview::PREVIEW_TOOL_NAME && !policy.include_preview_tool)
+        || (tool.name == crate::desktop_control::TOOL_NAME && !policy.include_desktop_tool)
         || (tool.name == crate::smart_ui::PREVIEW_TOOL_NAME
             && !policy.include_smart_ui_preview_tool)
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
@@ -2555,6 +2565,9 @@ pub(crate) fn append_preview_hint(prompt: &mut String, policy: ToolSchemaPolicy)
     if policy.include_preview_tool {
         prompt.push_str(crate::preview::PREVIEW_PROMPT_HINT);
     }
+    if policy.include_desktop_tool {
+        prompt.push_str(crate::desktop_control::PROMPT_HINT);
+    }
     if policy.include_smart_ui_preview_tool {
         prompt.push_str(crate::smart_ui::PREVIEW_PROMPT_HINT);
     }
@@ -2624,6 +2637,7 @@ pub(crate) fn tool_system_prompt_for_policy(
     let policy = ToolSchemaPolicy {
         include_session_title_tool: false,
         include_preview_tool: false,
+        include_desktop_tool: false,
         include_smart_ui_preview_tool: false,
         include_orchestration_tools: false,
         ..policy

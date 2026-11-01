@@ -213,6 +213,11 @@ pub(crate) fn root_schema_policy(
     } else {
         policy
     };
+    let policy = if s.desktop_client.is_some() && !compact_tool_prompt {
+        policy.with_desktop_tool()
+    } else {
+        policy
+    };
     let policy = if s.smart_ui_client.is_some() && !compact_tool_prompt {
         policy.with_smart_ui_preview_tool()
     } else {
