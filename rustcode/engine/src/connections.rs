@@ -66,7 +66,7 @@ pub struct ModelAccount {
     pub provider: String,
     pub account: String,
     pub display: String,
-    /// `api_key`, `chat_gpt`, `github_copilot` or `claude_cli`.
+    /// `api_key`, `chat_gpt`, `github_copilot`, or legacy `claude_cli`.
     pub method: crate::provider_auth::AuthMethod,
     pub active: bool,
     pub expires_at: Option<u64>,

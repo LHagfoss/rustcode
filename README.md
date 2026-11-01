@@ -31,8 +31,8 @@
 
 `rustcode` is a lightweight terminal (TUI) coding agent. It started as a way to
 test Apple's on-device Foundation Models and turned into a much deeper project.
-It works with Ollama, any OpenAI-compatible API, and your existing ChatGPT,
-GitHub Copilot or Claude subscription.
+It works with Ollama, OpenAI-compatible APIs, Anthropic's API, and your existing
+ChatGPT or GitHub Copilot plan.
 
 ## Install
 
@@ -85,7 +85,7 @@ Connect a provider from inside the TUI:
 | --- | --- |
 | `/login` | ChatGPT plan sign-in or an API-key provider |
 | `/login github-copilot` | GitHub Copilot ([setup](docs/github-copilot.md)) |
-| `/login claude` | A Claude subscription through the local Claude Code CLI |
+| `/login anthropic` | Anthropic API key (`ANTHROPIC_API_KEY`) |
 | `/accounts`, `/account`, `/logout` | Manage saved accounts |
 | `/model` | Switch model profile |
 

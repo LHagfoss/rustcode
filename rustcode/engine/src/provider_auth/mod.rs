@@ -1,7 +1,6 @@
 //! Provider credentials live in the OS credential store. This module keeps
 //! only non-secret account bindings in RustCode's owner-only config folder.
 
-pub(crate) mod claude_cli;
 pub(crate) mod codex_usage;
 pub(crate) mod github_copilot;
 mod openai;
@@ -27,8 +26,8 @@ pub enum AuthMethod {
     ChatGpt,
     #[serde(rename = "github_copilot")]
     GitHubCopilot,
-    /// Requests are served by the locally installed Claude Code CLI, which
-    /// keeps its own sign-in. RustCode holds no credential for this method.
+    /// Legacy config compatibility only. Credential resolution rejects this
+    /// method; Claude Code CLI subscription access is no longer supported.
     ClaudeCli,
 }
 
@@ -118,8 +117,8 @@ impl CredentialRef {
         self.provider == "github-copilot" && self.method == AuthMethod::GitHubCopilot
     }
 
-    pub fn is_claude_cli(&self) -> bool {
-        self.provider == claude_cli::PROVIDER && self.method == AuthMethod::ClaudeCli
+    fn is_claude_cli(&self) -> bool {
+        self.provider == "claude" && self.method == AuthMethod::ClaudeCli
     }
 }
 
@@ -190,6 +189,11 @@ pub async fn resolve_profile_credential(profile: &ModelProfile) -> Result<Option
         return Ok(profile.resolved_api_key());
     };
     validate_binding_shape(binding)?;
+    if binding.is_claude_cli() {
+        bail!(
+            "Claude Code CLI subscription sign-in is no longer supported; use Anthropic API credentials or configure another provider"
+        );
+    }
     let accounts = load_accounts()?;
     let account = accounts
         .iter()
@@ -216,8 +220,9 @@ pub async fn resolve_profile_credential(profile: &ModelProfile) -> Result<Option
         AuthMethod::GitHubCopilot => github_copilot::resolve_access_token(profile, account)
             .await
             .map(Some),
-        // The CLI authenticates its own requests; there is nothing to resolve.
-        AuthMethod::ClaudeCli => Ok(None),
+        AuthMethod::ClaudeCli => bail!(
+            "Claude Code CLI subscription sign-in is no longer supported; use Anthropic API credentials or configure another provider"
+        ),
     }
 }
 
@@ -286,21 +291,7 @@ pub async fn execute_command_with_progress(
         ["login", provider, account] if provider.eq_ignore_ascii_case("github-copilot") => {
             github_copilot::login(config, Some(account), cancel, progress, mode).await
         }
-        ["login", provider] | ["refresh", provider] | ["account", "refresh", provider]
-            if provider.eq_ignore_ascii_case(claude_cli::PROVIDER) =>
-        {
-            claude_cli::login(config, cancel).await
-        }
-        ["account", "refresh"] | ["refresh"]
-            if config
-                .models
-                .iter()
-                .find(|profile| profile.name == config.default.big())
-                .and_then(|profile| profile.credential.as_ref())
-                .is_some_and(CredentialRef::is_claude_cli) =>
-        {
-            claude_cli::login(config, cancel).await
-        }
+
         ["account", "refresh"] | ["refresh"]
             if config
                 .models
@@ -327,9 +318,31 @@ pub async fn execute_command_with_progress(
                 .await?
                 .ok_or_else(|| anyhow!("no active Copilot account has that account ID"))
         }
+        ["account", "refresh"] | ["refresh"]
+            if config
+                .models
+                .iter()
+                .find(|profile| profile.name == config.default.big())
+                .and_then(|profile| profile.credential.as_ref())
+                .is_some_and(CredentialRef::is_claude_cli) =>
+        {
+            bail!(
+                "Claude Code CLI subscription sign-in is no longer supported; use Anthropic API credentials or configure another provider"
+            )
+        }
         ["account", "refresh"] | ["refresh"] => openai::refresh_catalog(config, None)
             .await?
             .ok_or_else(|| anyhow!("select an active ChatGPT profile or provide its account ID")),
+        ["account", "refresh", provider]
+        | ["refresh", provider]
+        | ["account", "refresh", provider, _]
+        | ["refresh", provider, _]
+            if provider.eq_ignore_ascii_case("claude") =>
+        {
+            bail!(
+                "Claude Code CLI subscription sign-in is no longer supported; use Anthropic API credentials or configure another provider"
+            )
+        }
         ["account", "refresh", provider] | ["refresh", provider] => {
             openai::refresh_catalog_for_provider(config, provider, None).await
         }
@@ -346,6 +359,11 @@ pub async fn execute_command_with_progress(
         ["login", provider, "new"] if provider.eq_ignore_ascii_case("openai") => {
             let guard = openai::login_guard().await?;
             openai::login(config, Some("new"), guard, mode, progress).await
+        }
+        ["login", provider] if provider.eq_ignore_ascii_case("claude") => {
+            bail!(
+                "Claude subscription sign-in is currently unavailable; use `/login anthropic api-key ANTHROPIC_API_KEY` for Anthropic API access"
+            )
         }
         ["login", provider] => {
             let definition = provider_definition(config, provider)?;
@@ -366,7 +384,7 @@ pub async fn execute_command_with_progress(
         ["logout", provider] => logout(provider, None).await,
         ["logout", provider, account] => logout(provider, Some(account)).await,
         _ => bail!(
-            "use /login [list], /login openai [account|new] [--browser|--headless], /login github-copilot [account|new] [--browser|--headless], /login claude, /login <provider> api-key <ENV_VAR>, /auth status, /accounts, /account, /refresh [provider] [account], or /logout <provider> [account]"
+            "use /login [list], /login openai [account|new] [--browser|--headless], /login github-copilot [account|new] [--browser|--headless], /login <provider> api-key <ENV_VAR>, /auth status, /accounts, /account, /refresh [provider] [account], or /logout <provider> [account]"
         ),
     }
 }
@@ -507,10 +525,6 @@ pub(crate) async fn sign_out(provider: &str, account: &str) -> Result<String> {
 }
 
 async fn logout(provider: &str, account: Option<&str>) -> Result<AuthCommandResult> {
-    let claude_cli = provider.eq_ignore_ascii_case(claude_cli::PROVIDER);
-    if claude_cli {
-        crate::network::claude_cli::shutdown_all();
-    }
     let _copilot_lock = if provider.eq_ignore_ascii_case("github-copilot") {
         github_copilot::cancel_login();
         Some(github_copilot::account_lock().await)
@@ -572,9 +586,7 @@ async fn logout(provider: &str, account: Option<&str>) -> Result<AuthCommandResu
             removed.push(row.account);
         }
     }
-    let status = if claude_cli {
-        " The Claude Code CLI itself stays signed in; run `claude auth logout` to sign it out."
-    } else if cleanup_failed {
+    let status = if cleanup_failed {
         " Local keychain cleanup was incomplete; the account is disabled in RustCode."
     } else {
         ""
@@ -693,7 +705,7 @@ fn account_panel_message(config: &AppConfig) -> String {
         .is_some_and(|binding| {
             matches!(
                 binding.method,
-                AuthMethod::ChatGpt | AuthMethod::GitHubCopilot | AuthMethod::ClaudeCli
+                AuthMethod::ChatGpt | AuthMethod::GitHubCopilot
             )
         });
     if refreshable {
@@ -723,12 +735,7 @@ pub fn provider_usage_summary(config: &AppConfig) -> String {
     {
         return "GitHub Copilot subscription usage, AI credits, and model access are managed by GitHub. Local token totals do not measure remaining Copilot quota; check your GitHub Copilot usage settings.".into();
     }
-    if active
-        .and_then(|profile| profile.credential.as_ref())
-        .is_some_and(CredentialRef::is_claude_cli)
-    {
-        return "Claude usage and plan limits are managed by Anthropic and counted against the account signed in to the Claude Code CLI. Local token totals do not measure remaining plan quota; the limit windows the CLI reports appear here after a response.".into();
-    }
+
     if active
         .and_then(|profile| profile.credential.as_ref())
         .is_some_and(CredentialRef::is_chatgpt)
@@ -826,13 +833,12 @@ pub fn apply_auth_result(
     if merged.is_empty() {
         return None;
     }
-    if binding.is_copilot() || binding.is_claude_cli() {
+    if binding.is_copilot() {
         config.models.retain(|candidate| {
             candidate.credential.as_ref() != Some(binding)
                 || merged.iter().any(|model| model.model == candidate.model)
         });
     }
-
     let preferred_model = config
         .models
         .iter()
@@ -986,8 +992,6 @@ fn unique_account_scoped_name(
         .collect::<String>();
     let prefix = if binding.is_copilot() {
         "copilot"
-    } else if binding.is_claude_cli() {
-        "claude"
     } else {
         "chatgpt"
     };
@@ -1031,7 +1035,7 @@ fn auth_method_label(method: AuthMethod) -> &'static str {
         AuthMethod::ApiKey => "api-key",
         AuthMethod::ChatGpt => "ChatGPT",
         AuthMethod::GitHubCopilot => "GitHub Copilot",
-        AuthMethod::ClaudeCli => "Claude Code CLI",
+        AuthMethod::ClaudeCli => "Unsupported Claude CLI (legacy)",
     }
 }
 
@@ -1090,12 +1094,10 @@ fn validate_profile_endpoint(profile: &ModelProfile, account: &AccountStatus) ->
             bail!("Copilot credentials require a supported model endpoint");
         }
     }
-    if account.method == AuthMethod::ClaudeCli
-        && (account.provider != claude_cli::PROVIDER
-            || account.endpoint != claude_cli::ENDPOINT
-            || profile.url != claude_cli::ENDPOINT)
-    {
-        bail!("Claude Code CLI profiles cannot be pointed at a network endpoint");
+    if account.method == AuthMethod::ClaudeCli {
+        bail!(
+            "Claude Code CLI subscription sign-in is no longer supported; use Anthropic API credentials or configure another provider"
+        );
     }
     if account.method == AuthMethod::ChatGpt && !is_canonical_chatgpt_responses_url(&profile.url) {
         bail!("ChatGPT credentials may only be used with https://api.openai.com/v1/responses");
@@ -1368,47 +1370,61 @@ mod tests {
         assert!(!format!("{binding:?}").contains("acct"));
     }
 
-    #[test]
-    fn claude_cli_binding_is_keyless_and_rejects_network_endpoints() {
-        let binding = CredentialRef {
-            provider: "claude".into(),
-            account: "org1".into(),
-            method: AuthMethod::ClaudeCli,
+    #[tokio::test]
+    async fn claude_subscription_login_and_legacy_profiles_are_rejected() {
+        let config = AppConfig::default();
+        let login_error = execute_command("/login claude", &config)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(login_error.contains("subscription sign-in is currently unavailable"));
+        assert!(login_error.contains("/login anthropic api-key ANTHROPIC_API_KEY"));
+        for command in [
+            "/refresh claude",
+            "/refresh claude legacy",
+            "/account refresh claude",
+            "/account refresh claude legacy",
+        ] {
+            let error = execute_command(command, &config)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("no longer supported"), "{command}: {error}");
+        }
+
+        let profile = ModelProfile {
+            url: "claude-cli://local".into(),
+            credential: Some(CredentialRef {
+                provider: "claude".into(),
+                account: "legacy".into(),
+                method: AuthMethod::ClaudeCli,
+            }),
+            ..Default::default()
         };
+        let profile_error = resolve_profile_credential(&profile)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            profile_error.contains("Claude Code CLI subscription sign-in is no longer supported")
+        );
+    }
+
+    #[test]
+    fn legacy_claude_cli_binding_is_still_recognized() {
+        let binding: CredentialRef = serde_json::from_value(serde_json::json!({
+            "provider": "claude",
+            "account": "org1",
+            "method": "claude_cli"
+        }))
+        .unwrap();
+        assert!(binding.is_claude_cli());
+        assert!(!binding.is_chatgpt() && !binding.is_copilot());
         assert!(
             serde_json::to_string(&binding)
                 .unwrap()
                 .contains("\"claude_cli\"")
         );
-        assert!(binding.is_claude_cli() && !binding.is_chatgpt() && !binding.is_copilot());
-        let account = AccountStatus {
-            provider: "claude".into(),
-            account: "org1".into(),
-            method: AuthMethod::ClaudeCli,
-            display: "Claude pro plan".into(),
-            endpoint: claude_cli::ENDPOINT.into(),
-            client_id: None,
-            scopes: vec![],
-            expires_at: None,
-            active: true,
-            needs_sign_in: false,
-        };
-        let mut profile = ModelProfile {
-            url: claude_cli::ENDPOINT.into(),
-            credential: Some(binding),
-            ..Default::default()
-        };
-        validate_profile_endpoint(&profile, &account).unwrap();
-        profile.url = "https://api.anthropic.com/v1/messages".into();
-        assert!(validate_profile_endpoint(&profile, &account).is_err());
-        let mut moved = account.clone();
-        moved.endpoint = "https://attacker.example".into();
-        profile.url = moved.endpoint.clone();
-        assert!(validate_profile_endpoint(&profile, &moved).is_err());
-
-        let status = status_message_for(&AppConfig::default(), &[account]);
-        assert!(status.contains("claude (Claude Code CLI)"));
-        assert!(status.contains("Claude pro plan"));
     }
 
     #[test]
