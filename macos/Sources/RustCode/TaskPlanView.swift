@@ -30,7 +30,7 @@ struct TaskPlanButton: View {
             .buttonStyle(.plain)
             .help("Task plan: \(plan.done) of \(plan.steps.count) steps marked done by the agent")
             .accessibilityLabel("Task plan, \(plan.done) of \(plan.steps.count) steps marked done")
-            .popover(isPresented: $model.showsTaskPlan, arrowEdge: .bottom) {
+            .floatingPopover(isPresented: $model.showsTaskPlan) {
                 TaskPlanPanel(model: model, items: chat.transcript.items)
             }
         }

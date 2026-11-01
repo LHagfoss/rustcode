@@ -58,14 +58,14 @@ struct PreviewPanel: View {
             .font(.callout)
             .padding(.horizontal, 12)
             .frame(height: 28)
-            .glassSurface(in: .capsule)
+            .blurSurface(in: .capsule)
             if !preview.agentAccess.isEmpty {
                 Button { preview.revokeAgentAccess() } label: {
                     Label("Agent", systemImage: "hand.raised.slash")
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 10)
                         .frame(height: 28)
-                        .glassSurface(in: .capsule)
+                        .blurSurface(in: .capsule)
                 }
                 .buttonStyle(.plain)
                 .help("The agent can use this preview. Click to revoke its access.")
@@ -115,7 +115,7 @@ struct PreviewPanel: View {
             .truncationMode(.middle)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .glassSurface(in: .capsule)
+            .blurSurface(in: .capsule)
             .padding(.bottom, 12)
             .padding(.horizontal, 16)
             .allowsHitTesting(false)

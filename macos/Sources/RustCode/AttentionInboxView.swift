@@ -56,7 +56,7 @@ struct AttentionInboxButton: View {
                     .accessibilityHidden(true)
             }
         }
-        .popover(isPresented: $model.showsInbox, arrowEdge: .bottom) {
+        .floatingPopover(isPresented: $model.showsInbox) {
             AttentionInboxPanel(model: model) { model.showsInbox = false }
         }
     }
@@ -112,7 +112,7 @@ struct AttentionInboxPanel: View {
                 .frame(maxHeight: 420)
             }
         }
-        .frame(width: 360)
+        .frame(width: 360, alignment: .leading)
     }
 }
 

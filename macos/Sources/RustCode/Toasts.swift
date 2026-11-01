@@ -144,7 +144,7 @@ private struct ToastView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .glassSurface(in: .rect(cornerRadius: 14))
+        .blurSurface(in: .rect(cornerRadius: 14))
         .contentShape(.rect)
         .offset(offset)
         .opacity(1 - ToastSwipe.fade(for: offset))

@@ -37,35 +37,11 @@ extension View {
         }
     }
 
-    /// Liquid Glass on macOS 26 and later, the floating material before that.
-    /// The SDK check keeps the package building with Xcode releases older than 26.
-    @ViewBuilder
-    func glassSurface(in shape: some Shape) -> some View {
-        #if compiler(>=6.2)
-        if #available(macOS 26, *) {
-            glassEffect(.regular, in: shape)
-        } else {
-            floatingSurface(in: shape)
-        }
-        #else
+    /// What floats over the chat (panels, pills, bars): the composer's
+    /// blurred material rather than Liquid Glass, so every floating surface
+    /// in the app reads as one.
+    func blurSurface(in shape: some Shape) -> some View {
         floatingSurface(in: shape)
-        #endif
-    }
-
-    /// Liquid Glass that answers the pointer, for a floating button: it
-    /// lights under the pointer and flexes when pressed. A material capsule
-    /// before macOS 26.
-    @ViewBuilder
-    func interactiveGlassSurface(in shape: some Shape) -> some View {
-        #if compiler(>=6.2)
-        if #available(macOS 26, *) {
-            glassEffect(.regular.interactive(), in: shape)
-        } else {
-            floatingSurface(in: shape)
-        }
-        #else
-        floatingSurface(in: shape)
-        #endif
     }
 
     /// A card in the transcript: a quiet fill with an optional coloured hairline.

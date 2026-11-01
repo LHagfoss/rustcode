@@ -240,7 +240,7 @@ struct LinkedThreads: View {
         .font(.caption)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .glassSurface(in: .capsule)
+        .blurSurface(in: .capsule)
     }
 
     private func chip(_ link: OrchestrationLink) -> some View {
@@ -263,7 +263,7 @@ struct LinkedThreads: View {
         .font(.caption)
         .padding(.horizontal, 10)
         .frame(height: 26)
-        .glassSurface(in: .capsule)
+        .blurSurface(in: .capsule)
     }
 
     private func open(_ id: String) {

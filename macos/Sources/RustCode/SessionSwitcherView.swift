@@ -1,7 +1,7 @@
 import RustCodeKit
 import SwiftUI
 
-/// ⌘K: a Liquid Glass panel in the upper middle of the window for jumping to a chat
+/// ⌘K: a blurred panel in the upper middle of the window for jumping to a chat
 /// (`SessionSwitcher`). Type to search, ↑↓ to move, ⏎ to open, ⇥ to switch
 /// between All and Project, Esc to close.
 /// The open chat stays as it is until a row is picked.
@@ -85,7 +85,7 @@ private struct SessionSwitcherPanel: View {
         // The rows and the footer's band are clipped to the panel's shape,
         // or their square bottom corners show past the glass's round ones.
         .clipShape(Self.shape)
-        .glassSurface(in: Self.shape)
+        .blurSurface(in: Self.shape)
         .shadow(color: .black.opacity(0.18), radius: 30, y: 14)
         .background {
             // Esc closes from wherever focus is.

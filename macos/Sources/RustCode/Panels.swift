@@ -33,8 +33,8 @@ private struct ClickAwayPanel<Panel: View>: ViewModifier {
                     panel()
                         .environment(\.closePanel, close)
                         .background(Color.chatBackground)
-                        .clipShape(.rect(cornerRadius: 16))
-                        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1) }
+                        .clipShape(.rect(cornerRadius: 20))
+                        .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1) }
                         .shadow(color: .black.opacity(0.22), radius: 28, y: 12)
                         .padding(28)
                         .background {
@@ -58,5 +58,81 @@ extension View {
         modifier(ClickAwayPanel(isPresented: item.wrappedValue != nil, close: { item.wrappedValue = nil }) {
             if let value = item.wrappedValue { content(value) }
         })
+    }
+}
+
+/// A popover drawn by the window instead of AppKit: the composer's blurred
+/// material, rounder corners and no arrow, where `.popover` is Liquid Glass
+/// on macOS 26. The button marks itself with `floatingPopover`; the window's
+/// root draws what is open with `floatingPopoverHost`, over everything, so
+/// nothing laid out after the button covers or clips it. A click outside or
+/// Esc closes it.
+struct FloatingPopoverItem {
+    let anchor: Anchor<CGRect>
+    let content: AnyView
+    let close: @MainActor () -> Void
+}
+
+struct FloatingPopoverKey: PreferenceKey {
+    static let defaultValue: [FloatingPopoverItem] = []
+    static func reduce(value: inout [FloatingPopoverItem], nextValue: () -> [FloatingPopoverItem]) {
+        value += nextValue()
+    }
+}
+
+enum FloatingPopoverMetrics {
+    static let cornerRadius: CGFloat = 20
+    /// The gap between the button and the panel.
+    static let gap: CGFloat = 6
+    /// The least room kept between the panel and the window's edge.
+    static let margin: CGFloat = 10
+}
+
+extension View {
+    func floatingPopover<Panel: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> Panel) -> some View {
+        anchorPreference(key: FloatingPopoverKey.self, value: .bounds) { anchor in
+            guard isPresented.wrappedValue else { return [] }
+            return [FloatingPopoverItem(anchor: anchor, content: AnyView(content()),
+                                        close: { isPresented.wrappedValue = false })]
+        }
+    }
+
+    func floatingPopoverHost() -> some View {
+        overlayPreferenceValue(FloatingPopoverKey.self) { items in
+            GeometryReader { proxy in
+                if let item = items.last {
+                    let button = proxy[item.anchor]
+                    // Under the button, on whichever side of it has room:
+                    // its leading edge in the window's left half, its
+                    // trailing edge in the right.
+                    let leading = button.midX < proxy.size.width / 2
+                    ZStack(alignment: leading ? .topLeading : .topTrailing) {
+                        Color.black.opacity(0.001)
+                            .contentShape(.rect)
+                            .onTapGesture { item.close() }
+                        // At its ideal size, as a popover is: a scrolling
+                        // list in it caps its own height.
+                        item.content
+                            .fixedSize()
+                            .environment(\.closePanel, item.close)
+                            .clipShape(.rect(cornerRadius: FloatingPopoverMetrics.cornerRadius))
+                            .floatingSurface(in: .rect(cornerRadius: FloatingPopoverMetrics.cornerRadius))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: FloatingPopoverMetrics.cornerRadius)
+                                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                            }
+                            .background {
+                                Button("Close", action: item.close).keyboardShortcut(.cancelAction).hidden()
+                            }
+                            .padding(.top, button.maxY + FloatingPopoverMetrics.gap)
+                            .padding(.leading, leading ? max(FloatingPopoverMetrics.margin, button.minX) : FloatingPopoverMetrics.margin)
+                            .padding(.trailing, leading ? FloatingPopoverMetrics.margin
+                                     : max(FloatingPopoverMetrics.margin, proxy.size.width - button.maxX))
+                            .transition(.scale(scale: 0.97, anchor: leading ? .topLeading : .topTrailing).combined(with: .opacity))
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: leading ? .topLeading : .topTrailing)
+                }
+            }
+        }
     }
 }
