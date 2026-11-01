@@ -290,3 +290,19 @@ final class ToolFoldingTests: XCTestCase {
         XCTAssertEqual(folding.fold(for: list[2].id)?.count, 3)
     }
 }
+
+/// Git tool steps read as what they did, never the engine's `GitAdd` fallback.
+final class GitToolPhraseTests: XCTestCase {
+    private func call(_ title: String, _ input: String?, detail: String? = nil) -> ToolItem {
+        ToolItem(callId: "c", title: title, status: .completed, input: input, inputDetail: detail)
+    }
+
+    func testGitStepsReadAsWords() {
+        XCTAssertEqual(ToolPhrase.phrase(call("git_add", #"{"paths": ["src/calc.py"]}"#, detail: "GitAdd"), now: false), "Staged calc.py")
+        XCTAssertEqual(ToolPhrase.phrase(call("git_add", #"{"paths": ["a", "b", "c", "d"]}"#), now: true), "Staging a, b and 2 more")
+        XCTAssertEqual(ToolPhrase.phrase(call("git_add", nil, detail: "GitAdd"), now: false), "Staged changes")
+        XCTAssertEqual(ToolPhrase.phrase(call("git_commit", "{\"message\": \"fix: add\\n\\nbody\"}", detail: "GitCommit"), now: false),
+                       "Committed “fix: add”")
+        XCTAssertEqual(ToolPhrase.phrase(call("git_status", nil), now: false), "Checked git status")
+    }
+}

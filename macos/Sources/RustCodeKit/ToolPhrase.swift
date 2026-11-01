@@ -78,11 +78,37 @@ public enum ToolPhrase {
     /// skill, an agent or another tool reads as what the model said it does,
     /// `Find Tab handlers`, which already starts with its verb.
     public static func phrase(_ call: ToolItem, now: Bool) -> String {
+        if let git = gitPhrase(call, now: now) { return git }
         let kind = kind(of: call)
         if [.search, .skill, .agent, .other].contains(kind), let summary = call.summary { return summary }
         let verb = now ? kind.verbs.now : kind.verbs.done
         guard let object = object(of: call, kind: kind) else { return "\(verb) a \(kind.nouns.one)" }
         return "\(verb) \(object)"
+    }
+
+    /// The built-in git tools in words, `Staged calc.py` or `Committed
+    /// “fix: add”`, instead of `Ran` and whatever detail the engine had: for
+    /// a call without a path that was the tool's own name, `GitAdd`.
+    static func gitPhrase(_ call: ToolItem, now: Bool) -> String? {
+        let input = call.input.flatMap { try? JSONDecoder().decode(JSONValue.self, from: Data($0.utf8)) }
+        switch call.title {
+        case "git_add":
+            let names = (input?["paths"]?.arrayValue ?? []).compactMap(\.stringValue)
+                .map { URL(fileURLWithPath: $0).lastPathComponent }
+            let what = switch names.count {
+            case 0: "changes"
+            case 1...3: names.joined(separator: ", ")
+            default: names.prefix(2).joined(separator: ", ") + " and \(names.count - 2) more"
+            }
+            return (now ? "Staging " : "Staged ") + what
+        case "git_commit":
+            let message = input?["message"]?.stringValue
+                .flatMap { $0.split(whereSeparator: \.isNewline).first.map(String.init) }
+            return (now ? "Committing" : "Committed") + (message.map { " “\($0)”" } ?? "")
+        case "git_status": return now ? "Checking git status" : "Checked git status"
+        case "git_diff": return now ? "Reading the diff" : "Read the diff"
+        default: return nil
+        }
     }
 
     private static func object(of call: ToolItem, kind: Kind) -> String? {
