@@ -1516,11 +1516,11 @@ fn default_provider_definitions() -> Vec<ProviderDefinition> {
             base_url: Some("https://api.githubcopilot.com".into()),
         },
         ProviderDefinition {
-            id: crate::provider_auth::claude_cli::PROVIDER.into(),
-            display_name: "Claude (Claude Code CLI)".into(),
-            api_key_env: None,
-            auth_methods: vec![crate::provider_auth::AuthMethod::ClaudeCli],
-            base_url: None,
+            id: "anthropic".into(),
+            display_name: "Anthropic".into(),
+            api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            auth_methods: vec![crate::provider_auth::AuthMethod::ApiKey],
+            base_url: Some("https://api.anthropic.com/v1".into()),
         },
         ProviderDefinition {
             id: "generic".to_string(),

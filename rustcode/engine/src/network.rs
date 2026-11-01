@@ -46,7 +46,6 @@ pub mod compaction;
 
 #[path = "network/anthropic_messages.rs"]
 pub(crate) mod anthropic_messages;
-pub(crate) mod claude_cli;
 
 #[path = "network/retry.rs"]
 pub(crate) mod retry;
@@ -1125,14 +1124,7 @@ pub async fn probe_function_calling(
     if ambiguous_profile {
         return false;
     }
-    if profile
-        .as_ref()
-        .and_then(|profile| profile.credential.as_ref())
-        .is_some_and(crate::provider_auth::CredentialRef::is_claude_cli)
-    {
-        // Tools reach the CLI over its own channel; there is no endpoint to probe.
-        return true;
-    }
+
     let chatgpt_plan = profile
         .as_ref()
         .and_then(|profile| profile.credential.as_ref())
@@ -1473,13 +1465,13 @@ async fn prepare_turn_request_pass(
         ) = {
             let s = state.lock().await;
             let local_model = s.active_model_is_local();
-            // A plan profile (ChatGPT, Claude CLI) is summarized through the
-            // session's own transport (#2548), like any other profile.
+            // A ChatGPT plan profile is summarized through the session's own
+            // transport (#2548), like any other profile.
             let plan_profile = s
                 .active_model_profile()
                 .as_ref()
                 .and_then(|profile| profile.credential.as_ref())
-                .is_some_and(|binding| binding.is_chatgpt() || binding.is_claude_cli());
+                .is_some_and(|binding| binding.is_chatgpt());
             let deterministic_compaction =
                 // An automatic compaction that barely shrank the history means
                 // the retained tail itself fills the window. Another summarizer

@@ -113,14 +113,9 @@ pub(crate) async fn account_refresh(
     snapshot_value().await
 }
 
-/// The `/account refresh` words for an account. Claude CLI has one sign-in,
-/// so it is named by provider alone.
+/// The `/account refresh` words for a provider account.
 fn refresh_command(provider: &str, account: &str) -> String {
-    if provider.eq_ignore_ascii_case(crate::provider_auth::claude_cli::PROVIDER) {
-        format!("account refresh {provider}")
-    } else {
-        format!("account refresh {provider} {account}")
-    }
+    format!("account refresh {provider} {account}")
 }
 
 #[cfg(test)]
@@ -153,13 +148,6 @@ mod tests {
         assert_eq!(
             refresh_command("openai", "abc"),
             "account refresh openai abc"
-        );
-        assert_eq!(
-            refresh_command(crate::provider_auth::claude_cli::PROVIDER, "x"),
-            format!(
-                "account refresh {}",
-                crate::provider_auth::claude_cli::PROVIDER
-            )
         );
     }
 }
