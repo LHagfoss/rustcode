@@ -189,13 +189,43 @@ final class SmartUISoakTests: XCTestCase {
         let current = webContentPID(SmartUIHost.shared.webView)
         let lingering = pids.subtracting(current.map { [$0] } ?? []).filter { processStats($0) != nil }
         print("[smart-ui] WebContent processes used: \(pids.count); old ones still running: \(lingering.count)")
-        XCTAssertLessThanOrEqual(lingering.count, 1, "old Smart UI processes kept running")
+        // The other live pages (up to maxLive - 1) plus at most one exiting.
+        XCTAssertLessThanOrEqual(lingering.count, SmartUIHost.maxLive, "old Smart UI processes kept running")
 
         SmartUIHost.shared.stop()
         try await Task.sleep(for: .seconds(5))
         sample("stopped")
         if let current { XCTAssertNil(processStats(current), "the last WebContent process outlived teardown") }
     }
+
+    func testSeveralPagesStayLiveAndTheOldestStopsPastTheLimit() async throws {
+        let host = SmartUIHost.shared
+        let blocks = (0...SmartUIHost.maxLive).map { block("<title>View \($0)</title><p>\($0)</p>") }
+        let containers = blocks.map { _ in NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 100)) }
+        containers.forEach { window.contentView!.addSubview($0) }
+        let deadline = ContinuousClock.now + .seconds(10)
+        for (block, container) in zip(blocks, containers).prefix(SmartUIHost.maxLive) {
+            host.activate(block)
+            host.attach(to: container, id: block.id)
+        }
+        while blocks.prefix(SmartUIHost.maxLive).contains(where: { host.webView(for: $0.id)?.superview == nil }),
+              ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        for (block, container) in zip(blocks, containers).prefix(SmartUIHost.maxLive) {
+            XCTAssertTrue(host.isLive(block.id))
+            XCTAssertTrue(host.webView(for: block.id)?.superview === container, "a page is not in its own card")
+        }
+        // One more stops the oldest; the others keep running.
+        host.activate(blocks[SmartUIHost.maxLive])
+        XCTAssertFalse(host.isLive(blocks[0].id))
+        XCTAssertNil(host.webView(for: blocks[0].id))
+        XCTAssertNil(host.failures[blocks[0].id], "an evicted page is not a failure")
+        XCTAssertEqual(host.liveIDs, blocks.dropFirst().map(\.id))
+        // Stopping one leaves the rest.
+        host.stop(blocks[1].id)
+        XCTAssertEqual(host.liveIDs, blocks.dropFirst(2).map(\.id))
+        containers.forEach { $0.removeFromSuperview() }
+    }
+
     func testABundledChartJSPageDrawsAChart() async throws {
         let (view, _) = try await run("""
             <title>Chart</title>

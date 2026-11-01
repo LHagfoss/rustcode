@@ -52,7 +52,7 @@ struct SmartUIView: View {
     }
 
     private func card(title: String, summary: String?) -> some View {
-        let isActive = host.activeID == block.id
+        let isActive = host.isLive(block.id)
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "sparkles.rectangle.stack").foregroundStyle(.secondary)
@@ -64,7 +64,7 @@ struct SmartUIView: View {
                 .buttonStyle(.borderless)
                 .help(showsSource ? "Hide the block's source" : "Show the block's source")
                 if isActive {
-                    Button { host.stop() } label: { Image(systemName: "stop.circle") }
+                    Button { host.stop(block.id) } label: { Image(systemName: "stop.circle") }
                         .buttonStyle(.borderless)
                         .help("Stop the interactive view")
                 }
@@ -75,8 +75,8 @@ struct SmartUIView: View {
                 Text(summary).font(.callout).foregroundStyle(.secondary)
             }
             if isActive {
-                SmartUIWebContainer(host: host)
-                    .frame(height: host.height)
+                SmartUIWebContainer(host: host, id: block.id)
+                    .frame(height: host.height(for: block.id))
                     .frame(maxWidth: .infinity)
             } else {
                 Button { host.activate(block) } label: {
@@ -158,18 +158,19 @@ struct SmartUIView: View {
     }
 }
 
-/// Where the live page sits in the active block's card.
+/// Where a live page sits in its block's card.
 private struct SmartUIWebContainer: NSViewRepresentable {
     @ObservedObject var host: SmartUIHost
+    let id: String
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
-        host.attach(to: container)
+        host.attach(to: container, id: id)
         return container
     }
 
     func updateNSView(_ container: NSView, context: Context) {
-        host.attach(to: container)
+        host.attach(to: container, id: id)
     }
 
     static func dismantleNSView(_ container: NSView, coordinator: ()) {
@@ -177,36 +178,55 @@ private struct SmartUIWebContainer: NSViewRepresentable {
     }
 }
 
-/// Owns the one Smart UI web view. It is created only when a block runs, and
-/// each page gets a new one: reloading pages into one web view grows its
-/// WebContent process (docs/preview.md), while a new view lets the old
-/// process go. A page out of sight for `hiddenGrace` is torn down.
+/// Owns the Smart UI web views: at most `maxLive` pages run at once, so a
+/// reply with a few views, or a chat with several, keeps them live (#2484
+/// ran one at a time). Running one more stops the page that started
+/// longest ago, which then shows its Run button. A page is created only
+/// when its block runs, and each run gets a new web view: reloading pages
+/// into one web view grows its WebContent process (docs/preview.md), while
+/// a new view lets the old process go. A page out of sight for
+/// `hiddenGrace` is torn down.
 ///
 /// Isolation: a non-persistent data store shared with nothing, a content
 /// policy that allows only inline script and style, a rule list that blocks
 /// every network and file load, no navigation after the first load, no
 /// popups, panels, downloads or media capture, and no script message handler.
-/// The app reads the page's height by evaluating a fixed expression, which is
-/// also the watchdog: a page that stops answering is torn down.
+/// The app reads each page's height by evaluating a fixed expression, which
+/// is also the watchdog: a page that stops answering is torn down.
 @MainActor
 final class SmartUIHost: NSObject, ObservableObject {
     static let shared = SmartUIHost()
 
-    /// The block whose page is live.
-    @Published private(set) var activeID: String?
-    /// The live page's fitted height.
-    @Published private(set) var height = SmartUI.minHeight
+    /// Pages that may run at once. Each costs one WebContent process,
+    /// about 30 MB (docs/smart-ui.md, Measurements).
+    static let maxLive = 3
+
+    /// One running block.
+    final class Page {
+        let id: String
+        let webView: SmartUIWebView
+        var height = SmartUI.minHeight
+        var loaded = false
+        var watchdog: Task<Void, Never>?
+        var hiddenTeardown: Task<Void, Never>?
+        weak var container: NSView?
+
+        init(id: String, webView: SmartUIWebView) {
+            self.id = id
+            self.webView = webView
+        }
+    }
+
+    /// Blocks whose page is live or starting, oldest run first.
+    @Published private(set) var liveIDs: [String] = []
+    /// Fitted heights of live pages.
+    @Published private(set) var heights: [String: Double] = [:]
     /// Blocks whose page was stopped, with the reason; they show source.
     @Published private(set) var failures: [String: String] = [:]
 
-    /// Test hook: the live web view.
-    private(set) var webView: SmartUIWebView?
-    private var watchdog: Task<Void, Never>?
-    private var hiddenTeardown: Task<Void, Never>?
-    private var loaded = false
-    /// The active block's container. The web view is made after the rule
-    /// list compiles, which can be after the container appeared.
-    private weak var container: NSView?
+    private var pages: [String: Page] = [:]
+    /// Containers that appeared before their page's web view was made.
+    private var waitingContainers: [String: NSView] = [:]
     private static var rules: WKContentRuleList?
 
     static let hiddenGrace = Duration.seconds(30)
@@ -214,71 +234,96 @@ final class SmartUIHost: NSObject, ObservableObject {
     static let answerDeadline = Duration.seconds(3)
     static let pollInterval = Duration.milliseconds(500)
 
-    /// Run `block`'s page, replacing any other.
+    func isLive(_ id: String) -> Bool { liveIDs.contains(id) }
+    func height(for id: String) -> Double { heights[id] ?? SmartUI.minHeight }
+
+    /// Test hooks: the most recently run page's web view and height.
+    var webView: SmartUIWebView? { liveIDs.last.flatMap { pages[$0]?.webView } }
+    var height: Double { liveIDs.last.map(height(for:)) ?? SmartUI.minHeight }
+    func webView(for id: String) -> SmartUIWebView? { pages[id]?.webView }
+
+    /// Run `block`'s page. When `maxLive` pages already run, the oldest stops.
     func activate(_ block: SmartUIBlock) {
-        guard case .ready = block.state, activeID != block.id, failures[block.id] == nil else { return }
-        tearDown()
-        activeID = block.id
-        height = SmartUI.minHeight
-        let document = SmartUI.document(for: block.body)
+        guard case .ready = block.state, !isLive(block.id), failures[block.id] == nil else { return }
+        while liveIDs.count >= Self.maxLive, let oldest = liveIDs.first { tearDown(oldest) }
         let id = block.id
+        liveIDs.append(id)
+        heights[id] = SmartUI.minHeight
+        let document = SmartUI.document(for: block.body)
         Task {
             let rules = await Self.compiledRules()
-            guard activeID == id, webView == nil else { return }
+            guard isLive(id), pages[id] == nil else { return }
             let view = makeWebView(rules: rules)
-            webView = view
-            loaded = false
+            let page = Page(id: id, webView: view)
+            pages[id] = page
             view.loadHTMLString(document, baseURL: nil)
-            if let container { attach(to: container) }
-            startWatchdog(view, id: id)
+            if let container = waitingContainers.removeValue(forKey: id) { attach(to: container, id: id) }
+            startWatchdog(page)
         }
     }
 
-    /// Stop the live page; its block shows the Run button again.
-    func stop() { tearDown() }
+    /// Stop one page; its block shows the Run button again.
+    func stop(_ id: String) { tearDown(id) }
 
-    func attach(to container: NSView) {
-        self.container = container
-        hiddenTeardown?.cancel()
-        hiddenTeardown = nil
-        guard let webView, webView.superview !== container else { return }
+    /// Stop every page.
+    func stop() { for id in liveIDs { tearDown(id) } }
+
+    func attach(to container: NSView, id: String) {
+        guard let page = pages[id] else {
+            if isLive(id) { waitingContainers[id] = container }
+            return
+        }
+        page.container = container
+        page.hiddenTeardown?.cancel()
+        page.hiddenTeardown = nil
+        let webView = page.webView
+        guard webView.superview !== container else { return }
         webView.removeFromSuperview()
         webView.frame = container.bounds
         webView.autoresizingMask = [.width, .height]
         container.addSubview(webView)
     }
 
+    /// Attach the most recently run page (tests).
+    func attach(to container: NSView) {
+        if let id = liveIDs.last { attach(to: container, id: id) }
+    }
+
     func detach(from container: NSView) {
-        if self.container === container { self.container = nil }
-        guard let webView, webView.superview === container else { return }
-        webView.removeFromSuperview()
-        hiddenTeardown?.cancel()
-        hiddenTeardown = Task { [weak self] in
+        for (id, waiting) in waitingContainers where waiting === container { waitingContainers[id] = nil }
+        guard let page = pages.values.first(where: { $0.webView.superview === container }) else { return }
+        if page.container === container { page.container = nil }
+        page.webView.removeFromSuperview()
+        page.hiddenTeardown?.cancel()
+        let id = page.id
+        page.hiddenTeardown = Task { [weak self] in
             try? await Task.sleep(for: Self.hiddenGrace)
-            guard !Task.isCancelled, let self, self.webView?.superview == nil else { return }
-            self.tearDown()
+            guard !Task.isCancelled, let self, let page = self.pages[id], page.webView.superview == nil else { return }
+            self.tearDown(id)
         }
     }
 
-    private func fail(_ reason: String) {
-        if let activeID { failures[activeID] = reason }
-        tearDown()
+    private func fail(_ id: String, _ reason: String) {
+        failures[id] = reason
+        tearDown(id)
     }
 
-    private func tearDown() {
-        watchdog?.cancel()
-        watchdog = nil
-        hiddenTeardown?.cancel()
-        hiddenTeardown = nil
-        if let webView {
-            webView.stopLoading()
-            webView.navigationDelegate = nil
-            webView.uiDelegate = nil
-            webView.removeFromSuperview()
+    private func tearDown(_ id: String) {
+        if let page = pages.removeValue(forKey: id) {
+            page.watchdog?.cancel()
+            page.hiddenTeardown?.cancel()
+            page.webView.stopLoading()
+            page.webView.navigationDelegate = nil
+            page.webView.uiDelegate = nil
+            page.webView.removeFromSuperview()
         }
-        webView = nil
-        container = nil
-        activeID = nil
+        waitingContainers[id] = nil
+        liveIDs.removeAll { $0 == id }
+        heights[id] = nil
+    }
+
+    private func page(for webView: WKWebView) -> Page? {
+        pages.values.first { $0.webView === webView }
     }
 
     /// The sandbox every Smart UI page runs in, live or previewed for the
@@ -297,8 +342,7 @@ final class SmartUIHost: NSObject, ObservableObject {
     }
 
     private func makeWebView(rules: WKContentRuleList?) -> SmartUIWebView {
-        let configuration = Self.sandboxConfiguration(rules: rules)
-        let view = SmartUIWebView(frame: .zero, configuration: configuration)
+        let view = SmartUIWebView(frame: .zero, configuration: Self.sandboxConfiguration(rules: rules))
         view.navigationDelegate = self
         view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = false
@@ -327,31 +371,33 @@ final class SmartUIHost: NSObject, ObservableObject {
     /// view's) and its element count.
     static let measure = "[Math.ceil(document.documentElement.getBoundingClientRect().height), document.getElementsByTagName('*').length]"
 
-    private func startWatchdog(_ view: SmartUIWebView, id: String) {
-        watchdog?.cancel()
-        watchdog = Task { [weak self] in
+    private func startWatchdog(_ page: Page) {
+        page.watchdog?.cancel()
+        let id = page.id
+        let view = page.webView
+        page.watchdog = Task { [weak self] in
             let started = ContinuousClock.now
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.pollInterval)
-                guard let self, !Task.isCancelled, self.webView === view, self.activeID == id else { return }
-                if !self.loaded {
-                    if ContinuousClock.now - started > Self.loadDeadline { self.fail("the page did not finish loading") }
+                guard let self, !Task.isCancelled, let page = self.pages[id], page.webView === view else { return }
+                if !page.loaded {
+                    if ContinuousClock.now - started > Self.loadDeadline { self.fail(id, "the page did not finish loading") }
                     continue
                 }
                 // Out of a window WebKit suspends the page; nothing to measure.
                 guard view.window != nil else { continue }
                 guard let (scrollHeight, elements) = await Self.evaluate(Self.measure, in: view) else {
-                    if self.webView === view { self.fail("the page stopped responding") }
+                    if self.pages[id]?.webView === view { self.fail(id, "the page stopped responding") }
                     return
                 }
-                guard self.webView === view else { return }
+                guard self.pages[id]?.webView === view else { return }
                 if elements > SmartUI.maxElements {
-                    self.fail("the page built more than \(SmartUI.maxElements) elements")
+                    self.fail(id, "the page built more than \(SmartUI.maxElements) elements")
                     return
                 }
                 let fitted = min(max(Double(scrollHeight), SmartUI.minHeight), SmartUI.maxHeight)
                 view.contentFits = Double(scrollHeight) <= SmartUI.maxHeight
-                if abs(fitted - self.height) >= 1 { self.height = fitted }
+                if abs(fitted - (self.heights[id] ?? 0)) >= 1 { self.heights[id] = fitted }
             }
         }
     }
@@ -384,7 +430,7 @@ extension SmartUIHost: WKNavigationDelegate {
     /// Only the initial `about:blank` document and in-page anchors; no link,
     /// form, redirect, frame or download goes anywhere.
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        guard webView === self.webView,
+        guard page(for: webView) != nil,
               navigationAction.targetFrame?.isMainFrame == true,
               !navigationAction.shouldPerformDownload,
               navigationAction.request.url?.scheme == "about" else { return .cancel }
@@ -392,18 +438,17 @@ extension SmartUIHost: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard webView === self.webView else { return }
-        loaded = true
+        page(for: webView)?.loaded = true
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        guard webView === self.webView else { return }
-        fail("the page failed to load")
+        guard let page = page(for: webView) else { return }
+        fail(page.id, "the page failed to load")
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        guard webView === self.webView else { return }
-        fail("the page used too much memory or crashed")
+        guard let page = page(for: webView) else { return }
+        fail(page.id, "the page used too much memory or crashed")
     }
 }
 

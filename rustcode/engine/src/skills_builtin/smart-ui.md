@@ -23,10 +23,10 @@ If you cannot name the control and what it changes, do not write Smart UI.
 
 ## Size it to the task
 
-- One component per reply. The app runs one interactive view at a time; an
-  earlier one in the chat stops and shows a Run button when a later one
-  starts. For several independent views, give the interactive one Smart UI
-  and the others `rustcode-viz` or Markdown.
+- One component per question. The app keeps up to three interactive views
+  running at once; starting a fourth stops the oldest, which shows a Run
+  button. Two views in one reply are fine when each answers its own part;
+  for a static chart beside them, use `rustcode-viz`.
 - Aim for under 300 px tall and a handful of controls. The card is the chat
   column's width (it can be narrow, ~320 px) and 48–720 pt tall; taller
   content scrolls inside it.
