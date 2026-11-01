@@ -27,6 +27,21 @@ public struct TurnCompletion: Equatable, Sendable {
         }
     }
 
+    /// Each check as of its last run: a failure that was fixed and run
+    /// again counts as passed. Runs are matched by their command, spacing
+    /// aside, not by their words: `swift-test.sh` and `cargo test` both read
+    /// "Ran tests", and a failure of one must not hide behind the other.
+    public var lastRuns: [Check] {
+        var order: [String] = []
+        var last: [String: Check] = [:]
+        for check in checks {
+            let key = check.command.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            if last[key] == nil { order.append(key) }
+            last[key] = check
+        }
+        return order.compactMap { last[$0] }
+    }
+
     /// One changed file and its lines, over the whole turn.
     public struct FileStat: Equatable, Sendable {
         public var path: String
@@ -115,7 +130,11 @@ public struct TurnCompletion: Equatable, Sendable {
 
     /// A command that verifies work: tests, type checks, lints, builds.
     public static func isCheck(_ command: String) -> Bool {
-        let words = command.lowercased()
+        // Each command's own line: a here-document's body is text fed to it.
+        let commands = GitPipeline.segments(command)
+            .map { $0.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "" }
+            .joined(separator: " ; ")
+        let words = commands.lowercased()
             .split(whereSeparator: { $0.isWhitespace || $0 == "&" || $0 == ";" || $0 == "|" || $0 == "(" || $0 == ")" })
             .map(String.init)
         let checkWords: Set<String> = ["test", "tests", "check", "clippy", "lint", "pytest", "jest", "vitest", "mocha",

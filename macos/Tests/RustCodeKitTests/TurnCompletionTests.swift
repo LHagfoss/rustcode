@@ -62,4 +62,32 @@ final class TurnCompletionTests: XCTestCase {
         XCTAssertEqual(completions.count, 1, "a turn with no edits or checks has no card")
         XCTAssertEqual(completions.values.first?.checks.map(\.outcome), [.cancelled])
     }
+
+    /// Two suites that both read "Ran tests" stay apart: the Swift failure
+    /// is not hidden by the cargo pass, while a rerun of the same command
+    /// still replaces its earlier failure.
+    func testLastRunsMatchByCommandNotLabel() {
+        var transcript = Transcript()
+        let start = Date()
+        transcript.appendUser("fix it")
+        transcript.beginTurn(at: start)
+        run(&transcript, id: "c1", command: "scripts/swift-test.sh", status: .failed)
+        run(&transcript, id: "c2", command: "cargo test --workspace", status: .failed)
+        run(&transcript, id: "c3", command: "cargo  test   --workspace", status: .completed)
+        transcript.apply(.agentText("Done."))
+        transcript.finishTurn(at: start.addingTimeInterval(5))
+
+        let completion = try! XCTUnwrap(TurnCompletion.byLastReply(transcript.items).values.first)
+        XCTAssertEqual(completion.lastRuns.map(\.outcome), [.failed, .passed])
+        XCTAssertEqual(completion.lastRuns.map(\.command), ["scripts/swift-test.sh", "cargo  test   --workspace"])
+    }
+
+    /// A commit message fed through a here-document is not a command.
+    func testHeredocBodyIsNotACommand() {
+        let command = "git commit -F - <<'EOF'\ntest: cover parser\n\nmake it pass\nEOF\ngit push"
+        XCTAssertEqual(GitPipeline.segments(command),
+                       ["git commit -F - <<'EOF'\ntest: cover parser\n\nmake it pass\nEOF", "git push"])
+        XCTAssertFalse(TurnCompletion.isCheck(command))
+        XCTAssertEqual(GitPipeline.segments("cat <<< \"x\"; ls"), ["cat <<< \"x\"", "ls"])
+    }
 }
