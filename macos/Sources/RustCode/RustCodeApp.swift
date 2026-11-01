@@ -208,7 +208,21 @@ final class DesktopModel: ObservableObject {
         _modify { yield &chat.transcript }
     }
     @Published var sessions: [SessionSummary] = [] {
-        didSet { refreshAttention() }
+        didSet {
+            refreshAttention()
+            recentFoldersCache = nil
+        }
+    }
+    /// The new thread folder menu's Recent list. The menu's content is built
+    /// on every redraw of the header, and the list checks folders on disk.
+    private var recentFoldersCache: (key: String, folders: [URL])?
+
+    func recentFolders(excluding current: URL) -> [URL] {
+        let key = current.standardizedFileURL.path + "|\(archivedSessions.count)"
+        if let cache = recentFoldersCache, cache.key == key { return cache.folders }
+        let folders = ProjectFolder.recent(sessions, excluding: current, archived: archivedSessions)
+        recentFoldersCache = (key, folders)
+        return folders
     }
     @Published var selectedSession: String? {
         didSet {

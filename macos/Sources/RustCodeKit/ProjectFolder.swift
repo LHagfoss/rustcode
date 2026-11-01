@@ -64,16 +64,23 @@ public enum ProjectFolder {
     /// The folders recent threads worked in, newest first, without `current`
     /// and repeats, so a new thread can start in one without the file dialog.
     /// `usable` filters out folders that are gone.
+    /// At most `maxChecked` distinct folders are looked up on disk, so many
+    /// threads from deleted folders, or an unplugged volume, cannot stall
+    /// the menu. Archived threads are left out.
     public static func recent(
-        _ sessions: [SessionSummary], excluding current: URL, limit: Int = 5,
-        usable: (URL) -> Bool = isUsable
+        _ sessions: [SessionSummary], excluding current: URL, archived: Set<String> = [],
+        limit: Int = 5, maxChecked: Int = 20, usable: (URL) -> Bool = isUsable
     ) -> [URL] {
         var seen: Set<String> = [current.standardizedFileURL.path]
         var folders: [URL] = []
+        var checked = 0
         for session in sessions.sorted(by: { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) })
-        where !session.cwd.isEmpty {
+        where !session.cwd.isEmpty && !archived.contains(session.id) {
             let folder = URL(fileURLWithPath: session.cwd, isDirectory: true).standardizedFileURL
-            guard seen.insert(folder.path).inserted, usable(folder) else { continue }
+            guard seen.insert(folder.path).inserted else { continue }
+            guard checked < maxChecked else { break }
+            checked += 1
+            guard usable(folder) else { continue }
             folders.append(folder)
             if folders.count == limit { break }
         }

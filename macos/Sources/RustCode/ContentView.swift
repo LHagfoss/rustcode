@@ -2548,7 +2548,7 @@ private struct ChatProjectMenu: View {
                 Button("Choose Folder for This Thread…", systemImage: "folder.badge.gearshape") {
                     Task { await model.chooseChatProject() }
                 }
-                let recent = ProjectFolder.recent(model.sessions, excluding: folder)
+                let recent = model.recentFolders(excluding: folder)
                 if !recent.isEmpty {
                     Section("Recent") {
                         ForEach(recent, id: \.path) { recentFolder in
