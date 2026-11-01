@@ -290,6 +290,9 @@ public struct CommandSummary: Equatable, Sendable {
             if arguments.contains(where: { ["-d", "-D", "--delete"].contains($0) }) {
                 return make(.branch, "Deleted branch", names.first, 4)
             }
+            if arguments.contains(where: { ["-m", "-M", "--move"].contains($0) }) {
+                return make(.branch, "Renamed branch", names.count > 1 ? "\(names[0]) to \(names[1])" : names.first.map { "to \($0)" }, 4)
+            }
             if let name = names.first, !arguments.contains(where: { $0.hasPrefix("--") || $0 == "-a" || $0 == "-r" }) {
                 return make(.branch, "Created branch", name, 4)
             }

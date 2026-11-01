@@ -26,6 +26,8 @@ final class CommandSummaryTests: XCTestCase {
         XCTAssertEqual(line("git push -u origin feat/x"), "Pushed to feat/x")
         XCTAssertEqual(line("git push origin HEAD"), "Pushed")
         XCTAssertEqual(line("git switch -c fix/tui-thing"), "Created branch fix/tui-thing")
+        XCTAssertEqual(line("git branch -m old new"), "Renamed branch old to new")
+        XCTAssertEqual(line("git branch -M main"), "Renamed branch to main")
         XCTAssertEqual(line("git checkout main"), "Switched to main")
         XCTAssertEqual(line("git status --short --branch"), "Checked git status")
         XCTAssertEqual(line("git -C repo log --oneline -5"), "Read git history")
