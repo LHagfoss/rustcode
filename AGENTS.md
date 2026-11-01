@@ -123,6 +123,14 @@ instructions for work in this repository.
   rebuild that binary, and the app then talks to the old engine.
 - Synthesized wheel, drag and pinch events do not reach SwiftUI views from the
   driver. Say in the PR when real pointer input was not exercised.
+- `submit` holds the driver until the turn ends, so later commands wait.
+  During a turn, capture with `screencapture -x -o -l "$(cat <dir>/window)"`
+  and answer an approval with a real click (System Events `click at`).
+- To see a card without a running turn: `approval command|edit|write|other|clear`
+  for a tool approval, `completion [ship|failcmd]` for a turn summary.
+- `snap` does not draw Liquid Glass; use `screencapture` to judge glass. A
+  window that is not key (`state` prints `key false`) draws switches and
+  controls grey, so check that before calling a colour wrong.
 
 ## Naming
 
