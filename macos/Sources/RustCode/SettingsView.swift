@@ -430,6 +430,11 @@ struct SettingsSegments<Value: Hashable>: View {
             ForEach(options, id: \.value) { option in
                 let selected = option.value == selection
                 Button {
+                    // The picked segment again changes nothing, as with the
+                    // system's picker: a binding with side effects, like the
+                    // Changes panel's Branch, would otherwise rerun them and
+                    // reset the base the reader chose.
+                    guard !selected else { return }
                     withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { selection = option.value }
                 } label: {
                     Text(option.name)
