@@ -19,8 +19,34 @@ permissions:
     contents: read
 
 jobs:
+    # A release PR only bumps MARKETING_VERSION / CURRENT_PROJECT_VERSION in
+    # the project; the code it ships passed on main. Skip the macOS runner
+    # for it, as ci.yml does for the Rust checks (scripts/ci-version-only.sh).
+    changes:
+        name: detect version-only change
+        runs-on: ubuntu-24.04
+        outputs:
+            version_only: ${{ steps.check.outputs.version_only }}
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+            - id: check
+              shell: bash
+              env:
+                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+              run: |
+                  if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && bash scripts/ci-version-only.sh "$BASE_SHA"; then
+                      echo "Release metadata only; reusing checks from the code PRs"
+                      echo "version_only=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "version_only=false" >> "$GITHUB_OUTPUT"
+                  fi
+
     ios:
         name: iOS build and test
+        needs: changes
+        if: needs.changes.outputs.version_only != 'true'
         runs-on: macos-26
         timeout-minutes: 30
         defaults:
