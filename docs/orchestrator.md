@@ -158,10 +158,10 @@ mode and subagents never get any of them. Each call is forwarded as today:
 | --- | --- | --- |
 | `list_sessions` | M1 | M1 + `harness`, `status`, `worktree` |
 | `read_session` | `{ session_id, last_turns?: 1..10 }` (default 3) | `{ title, status, turns: [{ user, assistant, files_changed }] }` (bounded, 16 KiB) |
-| `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message |
+| `start_session` | `{ prompt, title?, harness?, model?, effort?, worktree?: bool, project?: path }` | `{ session_id, link_id, harness, model?, effort? }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, and `model` one the harness lists (a missing provider prefix is filled in when only one model fits); otherwise nothing starts and the error names the usable harnesses or the closest models. The answer reports the model and effort the thread actually runs, and the approval card shows harness · model · effort |
 | `message_session` | M1 | M1 |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed` |
-| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness }] }` — one worktree thread per harness, same prompt; the user compares results in the app |
+| `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness, model?, effort? }] }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
 
 Checked in the engine before anything is sent (`validate`): `prompt` is
 required and at most 8 KiB; `title` at most 200 characters; `harness`,

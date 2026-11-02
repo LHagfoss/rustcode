@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
 import { emptyExtras } from "./compose";
-import { resolveGrant } from "./host";
+import { answerOrchestration, resolveGrant } from "./host";
 import {
   agentHistory,
   answerPermission,
@@ -178,6 +178,22 @@ describe("engine controller with the mock engine", () => {
     expect(selected()!.items.length).toBe(items);
     closeReport();
     expect(useApp.getState().report).toBeNull();
+  });
+
+  test("a delegated thread must name a harness that can run and a model it lists", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const caller = useApp.getState().sessions[0]!.id;
+    const start = (args: Record<string, string>) =>
+      answerOrchestration({ sessionId: caller, tool: "start_session", args: { prompt: "do it", ...args } });
+    const error = (r: Awaited<ReturnType<typeof start>>) =>
+      (r.error as { message: string } | undefined)?.message ?? "";
+
+    expect(error(await start({ harness: "nope" }))).toContain("the ones that can run now are rustcode");
+    expect(error(await start({ harness: "claude-code" }))).toContain("Claude Code cannot run a thread");
+    const wrong = error(await start({ harness: "rustcode", model: "gpt-6" }));
+    expect(wrong).toContain("has no model “gpt-6”");
+    expect(wrong).toContain("chatgpt/gpt-6-");
   });
 
   test("a new thread streams a turn, asks for approval and finishes", async () => {
