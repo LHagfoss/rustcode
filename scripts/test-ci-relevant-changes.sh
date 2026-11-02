@@ -46,7 +46,7 @@ expect_relevant "workspace library changes run code CI" 'rustcode/core/rustcode-
 expect_relevant "workspace library manifest changes run code CI" 'rustcode/core/rustcode-tools/Cargo.toml'
 expect_relevant "engine package source runs code CI" 'rustcode/engine/src/network.rs'
 expect_relevant "tui package source runs code CI" 'rustcode/tui/src/ui/render.rs'
-expect_relevant "desktop package manifest runs code CI" 'rustcode/desktop/Cargo.toml'
+expect_relevant "desktop app source runs code CI" 'apps/desktop/src/main.tsx'
 expect_relevant "android app manifest runs code CI" 'apps/android/package.json'
 expect_relevant "android app source runs code CI" 'apps/android/app/session.tsx'
 expect_relevant "shared protocol package runs code CI" 'packages/protocol/src/index.ts'

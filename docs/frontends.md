@@ -9,7 +9,8 @@ frontend carries only its own rendering and input code.
 | Frontend | Location | How it links core |
 | --- | --- | --- |
 | Terminal UI | `rustcode/tui` (`rustcode-tui`, owns the `rustcode` binary) | `rustcode = { path = "../.." }` |
-| Native desktop (GPUI, macOS) | `rustcode/desktop` (`rustcode-app`) | `rustcode = { path = "../.." }` |
+| Desktop (Tauri, React) | `apps/desktop` | spawns `rustcode --acp` (ACP over stdio) |
+| macOS (SwiftUI, being replaced) | `macos/` | spawns `rustcode --acp` (ACP over stdio) |
 | ACP | in-tree (`engine/src/acp.rs`, driven by the CLI) | same crate |
 | Daemon / headless | in-tree (`engine/src/daemon.rs`, CLI flags) | same crate |
 | Mobile | remote only — see `docs/mobile.md` | JSON protocol, never links Rust |
@@ -23,8 +24,9 @@ frontends. It drives `rustcode::controller` and is documented in
 `rustcode::controller` (`engine/src/controller/`) is the UI-neutral contract
 for controlling and observing a session: `InteractiveController`,
 `ControllerHandle`, `ControllerEvent` / `ControllerUpdate`,
-`ControllerSnapshot`, `Command`. New frontends drive this; `rustcode/desktop`
-is the reference implementation.
+`ControllerSnapshot`, `Command`. Frontends that link the crate drive this. The
+desktop apps instead run `rustcode --acp`, whose surface is wider (see
+[`acp.md`](acp.md) and [`desktop.md`](desktop.md)).
 
 The terminal UI lives in its own crate and follows the same seam
 (enforced by `scripts/check-frontend-seam.sh`). It drives `controller` for
@@ -50,8 +52,7 @@ extending the view over reaching past `controller`.
 
 ## Rules
 
-- Nothing under `rustcode/core/`, `rustcode/engine/`, or
-  `rustcode/desktop/` may reference `ratatui` or `crossterm`; the terminal
+- Nothing under `rustcode/core/` or `rustcode/engine/` may reference `ratatui` or `crossterm`; the terminal
   stack lives only in `rustcode/tui`.
 - Dependency direction is strictly frontend → core. `rustcode` must never
   depend on a frontend crate, not even optionally: Cargo rejects the cycle
