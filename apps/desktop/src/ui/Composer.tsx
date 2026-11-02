@@ -78,7 +78,7 @@ function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
   return [...prefixed, ...others].slice(0, 40);
 }
 
-const LINE = 18;
+const LINE = 19;
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -422,7 +422,7 @@ export const Composer = memo(function Composer({
       <div
         className={cx(
           // Frosted and floating over the transcript; focus steps the surface, no ring or colour.
-          "rc-composer relative z-10 flex flex-col gap-1.5 rounded-xl p-2",
+          "rc-composer relative z-10 flex flex-col gap-1.5 rounded-2xl p-2.5",
           dropping && "outline-2 outline-accent outline-dashed",
         )}
         onMouseDown={(e) => {
@@ -474,7 +474,7 @@ export const Composer = memo(function Composer({
           {extras.command && (
             // One line of the field's own height, so the command and its argument read as one entry.
             <Tooltip label={extras.command.description}>
-              <span className="flex h-[18px] shrink-0 items-center rounded-xs bg-accent/12 px-1 font-semibold text-body text-accent leading-[18px]">
+              <span className="flex h-[19px] shrink-0 items-center rounded-xs bg-accent/12 px-1 font-semibold text-body text-accent leading-[19px]">
                 {extras.command.name}
               </span>
             </Tooltip>
@@ -494,7 +494,7 @@ export const Composer = memo(function Composer({
               <div
                 ref={mirror}
                 aria-hidden
-                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-body text-fg leading-[18px]"
+                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-body text-fg leading-[19px]"
               >
                 {splitUrls(draft).map((part, i) =>
                   part.url ? (
@@ -525,7 +525,7 @@ export const Composer = memo(function Composer({
               aria-label="Message"
               spellCheck
               className={cx(
-                "relative block w-full resize-none bg-transparent text-body leading-[18px] outline-none placeholder:text-fg-faint",
+                "relative block w-full resize-none bg-transparent text-body leading-[19px] outline-none placeholder:text-fg-faint",
                 hasUrl && "text-transparent caret-fg selection:bg-accent/30",
               )}
             />
@@ -583,7 +583,7 @@ export const Composer = memo(function Composer({
                 aria-label="Send"
                 disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
                 onClick={() => send(false)}
-                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fg-muted/25"
+                className="ml-1 flex size-[30px] items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fill-strong disabled:text-fg-muted"
               >
                 <ArrowUp size={14} strokeWidth={2.75} />
               </button>
@@ -592,7 +592,7 @@ export const Composer = memo(function Composer({
         </div>
       </div>
       {/* The tray under the box: where the thread works and what it brings, after the SwiftUI footer. */}
-      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[58px] items-end gap-0.5 rounded-b-xl px-1.5 pt-[18px] pb-1.5">
+      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[58px] items-end gap-0.5 rounded-b-2xl px-2 pt-[18px] pb-1.5">
         <FolderMenu thread={thread} cwd={cwd} />
         {!thread && <WorktreeToggle draft={draft} compact={compact} />}
         {thread?.worktree && (
@@ -775,13 +775,13 @@ function AttachmentStrip({
                   pictures.findIndex((p) => p.alt === a.name),
                 )
               }
-              className="block rounded-md"
+              className="block rounded-xl"
             >
               <img
                 src={`data:${a.mimeType};base64,${a.data}`}
                 alt={a.name}
                 title={a.name}
-                className="size-[52px] rounded-md object-cover shadow-1"
+                className="size-[76px] rounded-xl object-cover shadow-1"
               />
             </button>
             {/* Inside the corner, so the strip's scroll never crops it. */}
@@ -789,7 +789,7 @@ function AttachmentStrip({
               type="button"
               aria-label={`Remove ${a.name}`}
               onClick={() => onRemove(a.id)}
-              className="rc-glass absolute top-1 right-1 flex size-[18px] items-center justify-center rounded-full text-fg opacity-0 shadow-1 hover:bg-surface-3 group-hover:opacity-100 focus-visible:opacity-100"
+              className="rc-glass absolute top-1.5 right-1.5 flex size-[20px] items-center justify-center rounded-full text-fg opacity-0 shadow-1 hover:bg-surface-3 group-hover:opacity-100 focus-visible:opacity-100"
             >
               <X size={11} strokeWidth={2.5} />
             </button>

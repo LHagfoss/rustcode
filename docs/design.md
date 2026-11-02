@@ -92,12 +92,13 @@ the accent marks state (on, selected, linked), it does not shout.
 | sm | 6 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
 | md | 8 | `rounded-md` | Buttons that are not pills, sidebar rows, menu items, list rows, inputs, tooltips |
 | lg | 12 | `rounded-lg` | Cards (tool output, error card, settings groups), popovers, menus, toasts, pictures in replies |
-| xl | 16 | `rounded-xl` | The composer, dialogs, the command palette, large panels |
+| xl | 16 | `rounded-xl` | Dialogs, the command palette, large panels, composer picture thumbnails |
+| 2xl | 22 | `rounded-2xl` | The composer and its tray: the one surface the hand returns to |
 | full | — | `rounded-full` | Pills, toolbar clusters, switches, segmented controls, avatars, dots |
 
 A theme's `radius` (`sharp`, `default`, `round`) scales the steps
-(`sharp`: 2/3/4/6/8, `round`: 6/8/10/16/20); components only ever name a
-step. No arbitrary radii (`rounded-[14px]`), no `rounded-2xl`+. A child
+(`sharp`: 2/3/4/6/8/10, `round`: 6/8/10/16/20/26); components only ever name a
+step. No arbitrary radii (`rounded-[14px]`), no `rounded-3xl`+. A child
 inside a padded parent uses the step below the parent's.
 
 ## Borders
@@ -162,17 +163,17 @@ gutter, between groups), 24 (between sections). The chat column is at most
 
 ## Type
 
-macOS text styles, SF Pro / SF Mono:
+macOS text styles one point up (read at a laptop's distance), SF Pro / SF Mono:
 
 | Class | Size / line | Use |
 |---|---|---|
-| `text-caption` | 10/13 | Metadata, badges |
-| `text-sub` | 11/14 | Sidebar secondary lines, section headers |
-| `text-callout` | 12/16 | Controls, chips, secondary copy |
-| `text-body` | 13/18 | Body, rows, transcript |
-| `text-title3` | 15/20 | Card titles |
-| `text-title2` | 17/22 | Page titles (Settings) |
-| `text-title` | 22/28 | Empty-state heading |
+| `text-caption` | 11/14 | Metadata, badges |
+| `text-sub` | 12/15 | Sidebar secondary lines, section headers |
+| `text-callout` | 13/17 | Controls, chips, secondary copy |
+| `text-body` | 14/19 | Body, rows, transcript |
+| `text-title3` | 16/21 | Card titles |
+| `text-title2` | 18/23 | Page titles (Settings) |
+| `text-title` | 23/29 | Empty-state heading |
 
 Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
 that change use `tabular`.
@@ -298,7 +299,7 @@ panels `rounded-xl`.
   page (title2 heading, then groups) beside it.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
-- **Composer:** `.rc-composer rounded-xl p-2` in the denser glass
+- **Composer:** `.rc-composer rounded-2xl p-2.5` in the denser glass
   (`--rc-glass-bg-strong`, `surface-2` at 90% on focus), a soft shadow
   above and below plus the edge ring; no ring or colour on focus. Its
   controls rest one step above it: the **+** and the model pill are
@@ -306,7 +307,7 @@ panels `rounded-xl`.
   tray (`.rc-composer-tray`) is tucked under the box as in the SwiftUI app:
   12px narrower each side, its top 18px hidden behind the box (which sits
   above it in z), only its rounded bottom showing; solid `surface-2`, no
-  border. The tray is `min-h-[58px]` with `px-1.5 pb-1.5`, so its 28px
+  border. The tray is `min-h-[58px]` with `px-2 pb-1.5`, so its 28px
   buttons have the same 6px above them (to the box's edge) as at its
   sides and foot. The transcript scrolls under both (its bottom padding is the
   stack's height) and fades out from 56px above the box.
