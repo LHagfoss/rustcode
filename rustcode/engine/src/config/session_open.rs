@@ -210,9 +210,19 @@ mod tests {
         let config = tempfile::tempdir().unwrap();
         let id = session(config.path());
         drop(hold_elsewhere(config.path(), &id, SessionHolder::App));
-        // The file and its record remain; nobody holds the lock.
+        // The file and its record remain; nobody holds the lock. A child another
+        // test forks while the lock is held shares its flock until the child
+        // execs (#2360), so the lock may stay busy for a moment under a full
+        // parallel run: wait for it with a generous deadline.
         assert!(open_lock_path(config.path(), &id).unwrap().exists());
-        assert_eq!(session_open_by(config.path(), &id), None);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while session_open_by(config.path(), &id).is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lock stayed held after its holder let go"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert!(hold_session_open(config.path(), &id, SessionHolder::Remote));
         release_session_open(&id, SessionHolder::Remote);
     }
