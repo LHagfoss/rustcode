@@ -134,7 +134,9 @@ impl ClientSink for AcpClientSink {
     fn request_permission(&self, mut request: RequestPermissionRequest) -> PermissionFuture {
         request.session_id = self.session_id.clone().into();
         let connection = self.connection.clone();
+        let waiting = crate::thread_status::waiting(&self.session_id);
         Box::pin(async move {
+            let _waiting = waiting;
             match connection.send_request(request).block_task().await {
                 Ok(response) => response,
                 Err(error) => {

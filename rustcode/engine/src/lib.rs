@@ -2,7 +2,7 @@
 // future type; past ~20 handlers its layout exceeds the default query depth
 // in release builds only, where v0.90.0 failed on every target. The binary
 // that lays it out carries the same limit.
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 pub mod evidence;
 #[macro_use]
@@ -12,6 +12,7 @@ pub mod app;
 mod atomic_file;
 pub mod benchmark;
 pub mod capabilities;
+mod checkpoints;
 pub mod clipboard;
 pub mod config;
 pub mod connections;
@@ -47,9 +48,11 @@ pub mod storage_cleanup;
 pub mod storage_migrations;
 pub mod storage_report;
 mod symbols;
+mod thread_status;
 pub mod tools;
 pub mod update;
 mod workspace_intelligence;
+mod worktrees;
 
 // Declared apart from the list above so it cannot collide with `remote`, the
 // protocol module of issue #1907; fold it into that tree once both have landed.

@@ -289,6 +289,11 @@ pub(crate) async fn run_prompt(
     turns: std::sync::Weak<super::session::SessionTurnState>,
 ) -> Result<StopReason, agent_client_protocol::Error> {
     let turn = scheduled_turn.begin().await;
+    // Running from here; the checkpoint is taken once the turn holds the
+    // session, so a queued prompt never snapshots a turn still editing.
+    let _status = crate::thread_status::turn(&session_id);
+    let user_index = crate::checkpoints::next_user_index(&state.lock().await.history);
+    crate::checkpoints::before_turn(&session_id, &cwd, &text, Some(user_index)).await;
     // ACP turns get the same identity as terminal turns. Remote projection,
     // cancel, and the live transcript all key off it.
     let turn_id = {

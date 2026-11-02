@@ -53,6 +53,12 @@ pub(crate) struct Capabilities {
     /// RustCode, through the injected `rustcode mcp-orchestrator` for an
     /// external harness (`docs/orchestrator.md`).
     pub orchestration: bool,
+    /// The engine snapshots the thread before every turn when its cwd is
+    /// in a git repository (`_rustcode/checkpoints/*`).
+    pub checkpoints: bool,
+    /// The thread can start in its own git worktree (`session/new`
+    /// `_meta.rustcode.worktree`); the engine prepares the cwd for any harness.
+    pub worktree: bool,
 }
 
 impl Capabilities {
@@ -71,6 +77,8 @@ impl Capabilities {
             smart_ui: true,
             rustcode_extensions: true,
             orchestration: true,
+            checkpoints: true,
+            worktree: true,
         }
     }
 
@@ -99,6 +107,8 @@ impl Capabilities {
             // Both kinds take a per-thread MCP server (ACP `mcpServers`,
             // Codex `config.mcp_servers`); it needs a unix socket.
             orchestration: cfg!(unix),
+            checkpoints: true,
+            worktree: true,
         }
     }
 }
@@ -525,7 +535,8 @@ mod tests {
                 "images": true, "models": "static", "effort": true,
                 "permission_modes": ["default", "auto_edit", "full_access"],
                 "subagents": true, "slash_commands": true, "smart_ui": true,
-                "rustcode_extensions": true, "orchestration": true
+                "rustcode_extensions": true, "orchestration": true,
+                "checkpoints": true, "worktree": true
             })
         );
         let codex = serde_json::to_value(Capabilities::external(HarnessKind::Codex)).unwrap();
@@ -535,7 +546,8 @@ mod tests {
                 "steer": "live", "cancel": true, "resume": true, "rewind": false,
                 "images": true, "models": "dynamic", "effort": true,
                 "permission_modes": [], "subagents": false, "slash_commands": false,
-                "smart_ui": false, "rustcode_extensions": false, "orchestration": cfg!(unix)
+                "smart_ui": false, "rustcode_extensions": false, "orchestration": cfg!(unix),
+                "checkpoints": true, "worktree": true
             })
         );
         let acp = serde_json::to_value(Capabilities::external(HarnessKind::Acp)).unwrap();

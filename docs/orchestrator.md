@@ -35,12 +35,40 @@ Refuses (`error.data.reason = "dirty"` or `"unpushed"`) when the worktree has
 uncommitted changes or commits not on any remote branch, unless `force`.
 Removes the branch only when it is merged into the base.
 
+Built (`rustcode/engine/src/worktrees.rs`). Details:
+
+- Errors are `invalid_params` with `data: { "reason", "message" }`; besides
+  `dirty` and `unpushed`, `reason` is `not_git`, `no_base`, `not_managed`
+  (remove of a path RustCode did not create) or `failed`.
+- `Worktree` also carries `base_ref`: the branch `HEAD` pointed at (or the
+  `base` given), which remove checks "merged" against. Remove answers
+  `{ "removed": true, "branch_removed": bool }`.
+- `<repo-name>` is the main checkout's directory name, so a worktree made
+  from inside another worktree files under the same repository. A record
+  beside each worktree (`worktrees/<repo-name>/.<slug>.json`) keeps `base`,
+  `base_ref` and `session_ids`; git is the source of truth for which exist.
+- Title suggestion: the leading verb picks the type (`fix…`, `docs…`,
+  `refactor…`, `test…`, `perf…`, `chore`/`bump`/`update…`, else `feat`),
+  filler words are dropped, the slug is cut at a word within 40 bytes;
+  an empty title gives `feat/thread`.
+- `unpushed` counts commits of the branch that are neither on a remote
+  branch nor in `base`; `ahead`/`behind` are against the upstream when set,
+  else `base`.
+
 ### Starting a thread in a worktree
 
 `session/new` `_meta.rustcode.worktree = { "repo": "/abs/repo", "branch"?: "…", "title"?: "…" }`
 creates the worktree first and uses its path as the session cwd. The response
 `_meta.rustcode.worktree` carries the `Worktree`. `session/list` entries carry
 `_meta.rustcode.worktree` (path, branch, repo) and `_meta.rustcode.status`.
+
+Built for the built-in and every external harness (the worktree is made
+before the harness starts, `base` is also taken). The thread's worktree is
+kept in its directory (`worktree.json`) and `session/load` answers carry it
+too, with `_meta.rustcode.status` and `_meta.rustcode.checkpoints`. A failed
+create fails `session/new` with the error above. The worktree is created on
+the request's dispatch, so a very large checkout delays other requests
+while git checks it out.
 
 ## Thread status
 
@@ -53,6 +81,18 @@ creates the worktree first and uses its path as the session cwd. The response
 - A thread whose worktree branch has a PR that merges becomes `done`
   automatically (engine checks via the existing PR watch, `_rustcode/pulls/watch`),
   and sends `session/update` with `_meta.rustcode.status`.
+
+Built (`rustcode/engine/src/thread_status.rs`). Every change of a thread's
+status, derived or stored, is sent as `session/update` with a
+`session_info_update` whose only content is `_meta.rustcode.status`.
+`needs_input` covers tool approvals and questions of built-in turns and
+permission requests of external harnesses. A new turn on a `review` or
+`done` thread clears the stored status (it is worked on again; `idle` once
+the turn ends). The stored status is `status.json` in the thread's
+directory. Auto-`done` needs a watch on the pull request
+(`_rustcode/pulls/watch/start` from that thread): when a check of it sees the
+pull request merged and the thread runs in a worktree, the thread becomes
+`done`. Without a watch nothing polls GitHub.
 
 ## Checkpoints
 
@@ -74,6 +114,36 @@ checkpoints, capability `checkpoints: false`.
   `"conversation": "kept"`.
 - Refs are pruned when the thread is deleted, and kept to the last 50 turns.
 
+Built (`rustcode/engine/src/checkpoints.rs`). Details:
+
+- The snapshot is taken once the turn holds the thread (a queued prompt waits
+  for the turn before it), for built-in turns from the app or a remote, and
+  for external harness turns. It covers the whole work tree of the
+  repository the cwd is in, starting from a copy of the user's index so
+  unchanged files are not hashed again. It is skipped, with a debug line,
+  past 3 s or when the repository's index is over 48 MiB; the turn runs
+  either way. The commit's message holds the prompt (up to 4 KiB) and, for
+  built-in turns, the chat position `_rustcode/rewind` takes.
+- `turn` numbers count checkpoints (1, 2, …), not chat messages.
+- `list` also answers `"available": bool` (whether the thread's cwd is in a
+  git repository); per-thread `checkpoints: false` is in the `session/new` /
+  `session/load` answer (`_meta.rustcode.checkpoints` and
+  `_meta.rustcode.harness.capabilities.checkpoints`).
+- `diff` files carry `old_path` for a rename and `"truncated": true` when the
+  patch was cut (256 KiB per file, 2 MiB in all).
+- `restore` refuses while the thread runs. It writes back the files the
+  checkpoint has that changed, and deletes files that are new since and not
+  ignored (with directories that end up empty); ignored files, the index,
+  HEAD and the stash are left alone. It answers
+  `{ "restored": true, "conversation": "rewound" | "kept" }`: `rewound` only
+  for an open built-in thread whose message still matches, otherwise `kept`
+  (with `rewind_error` when the rewind was refused). The rewind runs first,
+  so a busy chat changes nothing.
+- Pruned on thread delete where the engine deletes it
+  (`config::delete_session_file`: the TUI and CLI). A client that deletes a
+  thread's directory itself leaves its refs; they are ordinary refs under
+  `refs/rustcode/checkpoints/<session_id>/`.
+
 ## Orchestration tools v2
 
 Built (`rustcode/engine/src/orchestration.rs`). Offered to root coding turns
@@ -92,6 +162,17 @@ mode and subagents never get any of them. Each call is forwarded as today:
 | `message_session` | M1 | M1 |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed` |
 | `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort? }] (2..4), title? }` | `{ links: [{ session_id, link_id, harness }] }` — one worktree thread per harness, same prompt; the user compares results in the app |
+
+Checked in the engine before anything is sent (`validate`): `prompt` is
+required and at most 8 KiB; `title` at most 200 characters; `harness`,
+`model`, `effort` non-empty strings when given; `worktree` a boolean;
+`project` an absolute path; `fan_out` takes 2 to 4 entries, each with a
+`harness`, and no entry twice (the same harness on two models is fine).
+The engine waits for the client's answer 15 min for `start_session` and
+`fan_out` (approval, worktrees, harness start), `timeout_ms` + 30 s for
+`wait_session`, and 10 min otherwise. Answers over 16 KiB are cut.
+
+The version 2 prompt hint replaces the M1 one (about 80 tokens, tested).
 
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it; at most 4 active links per thread; no chains; the
@@ -142,13 +223,7 @@ too, since the engine prepares the cwd), `orchestration: bool`: always `true`
 for the built-in harness (the tools still need a version 2 client); for an
 external one, `true` in the `_rustcode/harnesses` snapshot where the engine
 can inject the server (unix), and in a thread's answer whether it did.
-Checked in the engine before anything is sent (`validate`): `prompt` is
-required and at most 8 KiB; `title` at most 200 characters; `harness`,
-`model`, `effort` non-empty strings when given; `worktree` a boolean;
-`project` an absolute path; `fan_out` takes 2 to 4 entries, each with a
-`harness`, and no entry twice (the same harness on two models is fine).
-The engine waits for the client's answer 15 min for `start_session` and
-`fan_out` (approval, worktrees, harness start), `timeout_ms` + 30 s for
-`wait_session`, and 10 min otherwise. Answers over 16 KiB are cut.
-
-The version 2 prompt hint replaces the M1 one (about 80 tokens, tested).
+`checkpoints` and `worktree` are `true` for every harness in the snapshot (the
+engine does both); a thread's answer sets `checkpoints` to whether its cwd is
+in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
+`checkpoints` and `threadStatus` (each `1`).

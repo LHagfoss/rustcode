@@ -544,6 +544,10 @@ impl ExternalSession {
     /// Run one turn.
     pub(crate) async fn prompt(&self, prompt: Vec<ContentBlock>) -> Result<StopReason, String> {
         let _turn = self.turn.lock().await;
+        let _status = crate::thread_status::turn(&self.id);
+        if self.persist {
+            crate::checkpoints::before_turn(&self.id, &self.cwd, &prompt_text(&prompt), None).await;
+        }
         let cancel = Arc::new(Notify::new());
         *self
             .cancel
