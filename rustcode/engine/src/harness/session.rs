@@ -56,6 +56,8 @@ pub(crate) struct StartOptions {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub log_session: Option<String>,
+    /// The `rustcode mcp-orchestrator` to add to the harness's session.
+    pub orchestrator: Option<crate::orchestration::hub::Launch>,
 }
 
 pub(crate) enum Adapter {
@@ -306,6 +308,7 @@ pub(crate) struct ExternalSession {
     transcript: Arc<StdMutex<Transcript>>,
     closed: AtomicBool,
     persist: bool,
+    orchestrator: StdMutex<Option<crate::orchestration::hub::Launch>>,
 }
 
 impl ExternalSession {
@@ -358,7 +361,16 @@ impl ExternalSession {
             transcript,
             closed: AtomicBool::new(false),
             persist,
+            orchestrator: StdMutex::new(None),
         })
+    }
+
+    /// Give the harness the orchestration tools from its next start.
+    pub(crate) fn set_orchestrator(&self, launch: Option<crate::orchestration::hub::Launch>) {
+        *self
+            .orchestrator
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = launch;
     }
 
     pub(crate) fn record(&self) -> HarnessRecord {
@@ -444,6 +456,11 @@ impl ExternalSession {
             dead.kill();
         }
         let record = self.record();
+        let orchestrator = self
+            .orchestrator
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
         let adapter = Adapter::start(
             &self.harness,
             &self.cwd,
@@ -452,6 +469,7 @@ impl ExternalSession {
                 model: record.model.clone(),
                 effort: record.effort.clone(),
                 log_session: self.persist.then(|| self.id.clone()),
+                orchestrator,
             },
             self.out.clone(),
         )
@@ -526,6 +544,10 @@ impl ExternalSession {
     /// Run one turn.
     pub(crate) async fn prompt(&self, prompt: Vec<ContentBlock>) -> Result<StopReason, String> {
         let _turn = self.turn.lock().await;
+        let _status = crate::thread_status::turn(&self.id);
+        if self.persist {
+            crate::checkpoints::before_turn(&self.id, &self.cwd, &prompt_text(&prompt), None).await;
+        }
         let cancel = Arc::new(Notify::new());
         *self
             .cancel

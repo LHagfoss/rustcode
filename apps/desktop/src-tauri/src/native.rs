@@ -176,9 +176,23 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Uncommitted changes against HEAD, plus untracked files.
+/// A ref or commit the webview names as the base of a branch diff: no
+/// option-like or odd characters, and it must resolve to a commit.
+fn valid_base(base: &str) -> bool {
+    !base.is_empty()
+        && base.len() <= 200
+        && !base.starts_with('-')
+        && !base.contains("..")
+        && base
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._/@~^-".contains(c))
+}
+
+/// Uncommitted changes against HEAD, plus untracked files. With `base`
+/// (a worktree's base commit or branch), everything since the branch left
+/// it: its commits and the working tree, against their merge base.
 #[tauri::command(async)]
-pub fn git_changes(cwd: String) -> Result<GitChanges, String> {
+pub fn git_changes(cwd: String, base: Option<String>) -> Result<GitChanges, String> {
     let cwd = absolute_dir(&cwd)?;
     git(&cwd, &["rev-parse", "--is-inside-work-tree"])
         .map_err(|_| "This folder is not a git repository.".to_string())?;
@@ -186,7 +200,24 @@ pub fn git_changes(cwd: String) -> Result<GitChanges, String> {
         .ok()
         .map(|b| b.trim().to_string());
     let has_head = git(&cwd, &["rev-parse", "--verify", "HEAD"]).is_ok();
-    let base: &[&str] = if has_head { &["HEAD"] } else { &[] };
+    let since = match base.as_deref() {
+        Some(base) => {
+            if !valid_base(base) {
+                return Err("Not a valid base revision.".into());
+            }
+            let commit = format!("{base}^{{commit}}");
+            git(&cwd, &["rev-parse", "--verify", "--quiet", &commit])
+                .map_err(|_| format!("{base} is not a commit here."))?;
+            Some(git(&cwd, &["merge-base", base, "HEAD"])?.trim().to_string())
+        }
+        None => None,
+    };
+    let base: Vec<&str> = match &since {
+        Some(sha) => vec![sha.as_str()],
+        None if has_head => vec!["HEAD"],
+        None => vec![],
+    };
+    let base = base.as_slice();
 
     let mut files = Vec::new();
     let status = git(&cwd, &[&["diff", "--name-status", "-M"], base].concat())?;
@@ -249,6 +280,45 @@ pub fn git_changes(cwd: String) -> Result<GitChanges, String> {
         files,
         diff,
     })
+}
+
+/// Opens a Terminal window in an existing folder (a worktree's, from its
+/// thread menu).
+#[tauri::command(async)]
+pub fn open_terminal_at(path: String) -> Result<(), String> {
+    let path = absolute_dir(&path)?;
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(["-a", "Terminal"])
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err("Opening a terminal is only supported on macOS so far.".into())
+    }
+}
+
+/// Whether the system's Reduce transparency setting is on, which the web
+/// view does not report through `prefers-reduced-transparency`.
+#[tauri::command(async)]
+pub fn reduce_transparency() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("defaults")
+            .args(["read", "com.apple.universalaccess", "reduceTransparency"])
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim() == "1")
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 /// The engine refuses larger images (`MAX_ENCODED_IMAGE_LEN`).
@@ -328,6 +398,24 @@ mod tests {
         assert!(open_login_terminal(vec!["rm".into(), "-rf".into()]).is_err());
         assert!(open_login_terminal(vec!["/tmp/codex".into()]).is_err());
         assert!(open_login_terminal(vec![]).is_err());
+    }
+
+    #[test]
+    fn checks_branch_bases() {
+        assert!(valid_base("main"));
+        assert!(valid_base("origin/main"));
+        assert!(valid_base("abc123"));
+        assert!(valid_base("HEAD~2"));
+        assert!(!valid_base("--output=/tmp/x"));
+        assert!(!valid_base("a..b"));
+        assert!(!valid_base("main; rm"));
+        assert!(!valid_base(""));
+    }
+
+    #[test]
+    fn refuses_terminal_outside_folders() {
+        assert!(open_terminal_at("relative".into()).is_err());
+        assert!(open_terminal_at("/no/such/folder/here".into()).is_err());
     }
 
     #[test]

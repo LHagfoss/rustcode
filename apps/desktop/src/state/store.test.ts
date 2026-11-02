@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
+import { resolveGrant } from "./host";
 import {
   agentHistory,
   answerPermission,
@@ -17,7 +18,10 @@ import {
   setDefaultHarness,
   setHarnessEnabled,
   setNewThreadChoice,
+  setOrchestration,
   setProjectCwd,
+  setThreadStatus,
+  statusOf,
   submit,
   togglePin,
   trashThread,
@@ -124,7 +128,7 @@ describe("engine controller with the mock engine", () => {
 
   test("thread actions: pin, archive, rename and trash", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().sessions.length === 3);
+    await until(() => useApp.getState().sessions.length === 4);
     const id = useApp.getState().sessions[1]!.id;
     togglePin(id);
     expect(useApp.getState().pinned).toEqual([id]);
@@ -196,5 +200,41 @@ describe("engine controller with the mock engine", () => {
     const done = submit("yolo hi");
     await until(() => selected()?.configOptions.find((o) => o.id === "effort")?.current === "low");
     await done;
+  });
+
+  test("a fan-out asks once, starts a worktree thread per harness and returns their answers", async () => {
+    setOrchestration(true);
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.worktrees === true);
+    setProjectCwd("/Users/you/code/rustcode");
+    await submit("fan out: update the greeting");
+    await until(() => useApp.getState().grant !== null);
+    expect(useApp.getState().grant?.kind).toBe("fan_out");
+    resolveGrant("always");
+    await until(() => useApp.getState().links.fanOuts.length === 1);
+    const fan = useApp.getState().links.fanOuts[0]!;
+    expect(fan.links).toHaveLength(2);
+    await until(() => !selected()?.running, 5000);
+    const s = useApp.getState();
+    const targets = s.links.links.map((l) => l.target);
+    expect(targets.every((t) => s.threads[t]?.worktree?.branch.startsWith("feat/"))).toBe(true);
+    expect(s.links.links.every((l) => l.state === "done")).toBe(true);
+    const reply = selected()!
+      .items.filter((i) => i.kind === "assistant")
+      .at(-1);
+    expect(reply?.kind === "assistant" && reply.text).toContain("Here is what came back");
+    // "Allow for This Thread" is kept: the next start does not ask.
+    expect(s.links.grants[selected()!.id]).toContain("start");
+  });
+
+  test("review and done marks, and the engine's auto-done", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    const id = useApp.getState().sessions[0]!.id;
+    await setThreadStatus(id, "review");
+    expect(statusOf(useApp.getState(), id)).toBe("review");
+    await setThreadStatus(id, "idle");
+    expect(statusOf(useApp.getState(), id)).toBe("idle");
+    expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
   });
 });

@@ -3,11 +3,18 @@
 // engine's option names, ordered reject → always → allow once (prominent).
 // Keys (when no text field has focus): 1–9 pick an option in button order.
 
-import { CircleArrowUp, Hand, MessageCircleQuestion, ShieldAlert } from "lucide-react";
+import {
+  CheckCheck,
+  ChevronRight,
+  CircleArrowUp,
+  Hand,
+  MessageCircleQuestion,
+  ShieldAlert,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { isAllow, type PermissionOption, type PermissionRequest } from "../acp/types";
-import { answerPermission, answerQuestionOptions, answerQuestionText } from "../state/store";
+import { answerPermission, answerQuestionOptions, answerQuestionText, approveAll } from "../state/store";
 import { cx, Kbd, Pill, Tooltip } from "./primitives";
 import { DiffView } from "./Rows";
 
@@ -50,89 +57,108 @@ function Shell({ children, label }: { children: React.ReactNode; label: string }
   );
 }
 
-export function PermissionCard({ request }: { request: PermissionRequest }) {
-  const [details, setDetails] = useState(false);
+/**
+ * An approval as one slim bar over the composer: what it wants, Details to
+ * open the command, diff and raw input, and the engine's options. When the
+ * turn waits on several at once (a batch), "1 of N" and Approve all.
+ */
+export function PermissionCard({ request, pending = 1 }: { request: PermissionRequest; pending?: number }) {
+  const command = field(request.input, "command");
+  const summary = field(request.input, "summary");
+  const [details, setDetails] = useState(request.diffs.length > 0 && request.diffs.length <= 1);
   const options = useMemo(() => orderedOptions(request.options), [request.options]);
   const pick = (i: number) => {
     const option = options[i];
     if (option) answerPermission(request, option);
   };
   useDigitKeys(options.length, pick);
-  const command = field(request.input, "command");
   const cwd = field(request.input, "cwd") ?? field(request.input, "workdir");
-  const summary = field(request.input, "summary");
   const note = field(request.input, "reason");
+  const expandable = request.input !== undefined || request.diffs.length > 0;
   return (
-    <Shell label="Approval needed">
-      <div className="flex items-start gap-2.5">
-        <Hand size={15} className="mt-0.5 shrink-0 text-attention" fill="currentColor" fillOpacity={0.2} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-semibold text-body">{request.title}</div>
-          {summary && <div className="text-callout text-fg-2">{summary}</div>}
+    <section
+      aria-label="Approval needed"
+      className="surface flex flex-col gap-2 rounded-[18px] border border-fg/10 px-2.5 py-2 rc-in"
+    >
+      <div className="flex min-h-[30px] items-center gap-2">
+        <Hand size={14} className="ml-1 shrink-0 text-attention" fill="currentColor" fillOpacity={0.2} />
+        <button
+          type="button"
+          disabled={!expandable}
+          aria-expanded={details}
+          onClick={() => setDetails(!details)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-left enabled:hover:bg-fill-3"
+        >
+          <span className="shrink-0 font-semibold text-body">{request.title}</span>
+          {(summary || command) && (
+            <span className={cx("min-w-0 truncate text-callout text-fg-2", !summary && "font-mono")}>
+              {summary ?? command}
+            </span>
+          )}
+          {expandable && (
+            <ChevronRight
+              size={11}
+              className={cx("shrink-0 text-fg-3 transition-transform duration-200", details && "rotate-90")}
+            />
+          )}
+        </button>
+        {pending > 1 && <span className="shrink-0 text-caption text-fg-2 tabular">1 of {pending}</span>}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {options.map((o, i) => {
+            const backtick = o.kind === "allow_always" && o.name.includes("`");
+            return (
+              <Tooltip key={o.id} label={backtick ? o.name : `${o.name} (${i + 1})`}>
+                <Pill prominent={o.kind === "allow_once"} onClick={() => pick(i)}>
+                  {backtick ? "Always allow this" : o.name}
+                </Pill>
+              </Tooltip>
+            );
+          })}
+          {pending > 1 && (
+            <Tooltip label={`Allow all ${pending} waiting requests once`}>
+              <Pill prominent onClick={() => approveAll(request.sessionId)}>
+                <CheckCheck size={13} /> Approve all
+              </Pill>
+            </Tooltip>
+          )}
         </div>
-        <span className="shrink-0 font-medium text-attention text-caption">Needs approval</span>
-        {request.input !== undefined && (
-          <button
-            type="button"
-            onClick={() => setDetails(!details)}
-            className="shrink-0 text-brand text-caption hover:underline"
-          >
-            {details ? "Hide details" : "Details"}
-          </button>
-        )}
       </div>
-      {command && (
-        <div>
-          <pre className="selectable m-0 max-h-[140px] overflow-auto rounded-lg bg-fill-3 p-2.5 font-mono text-callout whitespace-pre-wrap">
-            <span className="text-fg-2">$ </span>
-            {command}
-          </pre>
-          {cwd && (
-            <div className="mt-1 truncate text-caption text-fg-2" dir="rtl">
-              <bdi>{cwd}</bdi>
+      {details && (
+        <div className="flex flex-col gap-2 px-1 pb-1">
+          {command && (
+            <div>
+              <pre className="selectable m-0 max-h-[140px] overflow-auto rounded-lg bg-fill-3 p-2.5 font-mono text-callout whitespace-pre-wrap">
+                <span className="text-fg-2">$ </span>
+                {command}
+              </pre>
+              {cwd && (
+                <div className="mt-1 truncate text-caption text-fg-2" dir="rtl">
+                  <bdi>{cwd}</bdi>
+                </div>
+              )}
             </div>
+          )}
+          {request.diffs.length > 0 && (
+            <div className="flex max-h-[260px] flex-col gap-2 overflow-y-auto">
+              {request.diffs.map((d, i) => (
+                <DiffView key={i} diff={d} />
+              ))}
+            </div>
+          )}
+          {note && (
+            <div className="flex items-center gap-1.5 text-attention text-callout">
+              <ShieldAlert size={13} />
+              {note}
+            </div>
+          )}
+          {!command && !request.diffs.length && request.input !== undefined && (
+            <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-lg bg-fill-3 p-2.5 font-mono text-caption">
+              {JSON.stringify(request.input, null, 2)}
+            </pre>
           )}
         </div>
       )}
-      {request.diffs.length > 0 && (
-        <div className="flex max-h-[260px] flex-col gap-2 overflow-y-auto">
-          {request.diffs.map((d, i) => (
-            <DiffView key={i} diff={d} />
-          ))}
-        </div>
-      )}
-      {note && (
-        <div className="flex items-center gap-1.5 text-attention text-callout">
-          <ShieldAlert size={13} />
-          {note}
-        </div>
-      )}
-      {details && (
-        <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-lg bg-fill-3 p-2.5 font-mono text-caption">
-          {JSON.stringify(request.input, null, 2)}
-        </pre>
-      )}
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        {options.map((o, i) => {
-          const backtick = o.kind === "allow_always" && o.name.includes("`");
-          return (
-            <Tooltip key={o.id} label={backtick ? o.name : undefined}>
-              <Pill size="lg" prominent={o.kind === "allow_once"} onClick={() => pick(i)}>
-                {backtick ? "Always allow this" : o.name}
-                <span
-                  className={cx(
-                    "font-mono text-caption",
-                    o.kind === "allow_once" ? "text-white/60" : "text-fg-3",
-                  )}
-                >
-                  {i + 1}
-                </span>
-              </Pill>
-            </Tooltip>
-          );
-        })}
-      </div>
-    </Shell>
+    </section>
   );
 }
 
@@ -233,10 +259,10 @@ export function QuestionCard({ request }: { request: PermissionRequest }) {
   );
 }
 
-export function AttentionCard({ request }: { request: PermissionRequest }) {
+export function AttentionCard({ request, pending = 1 }: { request: PermissionRequest; pending?: number }) {
   return request.question ? (
     <QuestionCard key={`${request.rpcId}`} request={request} />
   ) : (
-    <PermissionCard key={`${request.rpcId}`} request={request} />
+    <PermissionCard key={`${request.rpcId}`} request={request} pending={pending} />
   );
 }

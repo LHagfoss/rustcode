@@ -163,6 +163,18 @@ fn parse_options(value: Option<&Value>) -> Vec<SessionConfigOption> {
         .unwrap_or_default()
 }
 
+/// The MCP servers the child's session gets: the orchestrator, when the
+/// thread has one.
+fn mcp_servers(options: &StartOptions) -> Value {
+    Value::Array(
+        options
+            .orchestrator
+            .iter()
+            .map(crate::orchestration::hub::Launch::acp_server)
+            .collect(),
+    )
+}
+
 impl AcpAdapter {
     pub(crate) async fn connect(
         harness: &ResolvedHarness,
@@ -206,6 +218,7 @@ impl AcpAdapter {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let cwd_text = cwd.to_string_lossy().into_owned();
+        let mcp_servers = mcp_servers(&options);
 
         let mut native = None;
         let mut session = Value::Null;
@@ -214,7 +227,7 @@ impl AcpAdapter {
             let loaded = peer
                 .request_within(
                     "session/load",
-                    json!({"sessionId": resume, "cwd": cwd_text, "mcpServers": []}),
+                    json!({"sessionId": resume, "cwd": cwd_text, "mcpServers": mcp_servers}),
                     HANDSHAKE_TIMEOUT,
                 )
                 .await;
@@ -237,7 +250,7 @@ impl AcpAdapter {
             session = peer
                 .request_within(
                     "session/new",
-                    json!({"cwd": cwd_text, "mcpServers": []}),
+                    json!({"cwd": cwd_text, "mcpServers": mcp_servers}),
                     HANDSHAKE_TIMEOUT,
                 )
                 .await

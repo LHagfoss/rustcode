@@ -121,8 +121,20 @@ fn server_capabilities() -> AgentCapabilities {
                 "rewind": 1,
                 "sessionMove": 1,
                 "pullRequests": 3,
+                "worktrees": 1,
+                "checkpoints": 1,
+                "threadStatus": 1,
             }),
         )]))
+}
+
+/// `_rustcode/rewind` for a checkpoint restore that also rewinds the chat.
+pub(crate) fn rewind_chat(
+    state: &mut crate::app::AppState,
+    user_index: usize,
+    text: &str,
+) -> Result<serde_json::Value, agent_client_protocol::Error> {
+    rewind::rewind(state, user_index, text)
 }
 
 fn session_id_is_active(sessions: &HashMap<String, AcpSession>, session_id: &str) -> bool {
@@ -204,6 +216,12 @@ fn session_info(
     }
     if let Some(timestamp) = session_updated_at(meta) {
         info = info.updated_at(timestamp.to_rfc3339());
+    }
+    // Orchestrator v2: the thread's status and worktree (`docs/orchestrator.md`).
+    let status = crate::thread_status::current(&session_id).as_str();
+    extra = crate::worktrees::merge_rustcode_meta(Some(extra), "status", status.into());
+    if let Some(worktree) = crate::worktrees::list_meta(&session_id) {
+        extra = crate::worktrees::merge_rustcode_meta(Some(extra), "worktree", worktree);
     }
     info.meta = Some(extra);
     info
@@ -513,7 +531,14 @@ async fn acp_load_session(
                 agent_client_protocol::Error::invalid_params().data("session is already active")
             );
         }
-        return harnesses::load_session(&server.external, &request, record, connection).await;
+        return harnesses::load_session(
+            &server.external,
+            &request,
+            record,
+            connection,
+            server.client_has_orchestration.load(Ordering::Relaxed),
+        )
+        .await;
     }
     let cwd = canonical_acp_cwd(&request.cwd, "session/load")?;
     let (meta, history) = crate::config::load_session_by_id(&session_id).ok_or_else(|| {
@@ -561,7 +586,7 @@ async fn acp_load_session(
             connection,
             &session_id,
         );
-        state.orchestration_client = preview::orchestration_client_for(
+        (state.orchestration_client, state.orchestration_version) = preview::orchestration_for(
             server.client_has_orchestration.load(Ordering::Relaxed),
             connection,
             &session_id,
@@ -872,7 +897,8 @@ struct AcpServer {
     /// The client renders `smart_ui_preview` calls (`smartUi >= 2`).
     client_has_smart_ui_preview: Arc<AtomicBool>,
     /// The client hosts other threads for `message_session` (#2637).
-    client_has_orchestration: Arc<AtomicBool>,
+    /// The orchestration version the client advertised; 0 for none.
+    client_has_orchestration: Arc<AtomicU8>,
     /// Discord Rich Presence, for a client that asked for it (#2179).
     presence: presence::Presence,
     /// `/remote` shares and their pairing offers.
@@ -950,7 +976,7 @@ impl AcpServer {
             client_has_preview: Arc::new(AtomicBool::new(false)),
             client_has_desktop: Arc::new(AtomicBool::new(false)),
             client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
-            client_has_orchestration: Arc::new(AtomicBool::new(false)),
+            client_has_orchestration: Arc::new(AtomicU8::new(0)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
             external: harnesses::ExternalSessions::default(),
@@ -1064,6 +1090,8 @@ fn start_pull_watching(connection: &agent_client_protocol::ConnectionTo<Client>)
             }
             if lease.is_some() {
                 crate::pull_watch::check_due(&store, |watch, events| {
+                    // A worktree thread whose pull request merged is done.
+                    crate::thread_status::on_pull_watch(watch);
                     let _ = notify.send_notification(PullWatchNotification {
                         watch: watch.clone(),
                         events: events.to_vec(),
@@ -1194,6 +1222,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     client_smart_ui(&request.client_capabilities).as_u8(),
                     Ordering::Relaxed,
                 );
+                let status_connection = _connection.clone();
+                crate::thread_status::set_notifier(move |session_id, update| {
+                    let _ = status_connection
+                        .send_notification(SessionNotification::new(session_id, update));
+                });
                 server.client_has_desktop.store(crate::desktop_control::supported(request.client_capabilities.meta.as_ref()), Ordering::Relaxed);
                 server.client_has_preview.store(
                     crate::preview::client_meta_supports_preview(
@@ -1208,7 +1241,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     Ordering::Relaxed,
                 );
                 server.client_has_orchestration.store(
-                    crate::orchestration::client_meta_supports(
+                    crate::orchestration::client_meta_version(
                         request.client_capabilities.meta.as_ref(),
                     ),
                     Ordering::Relaxed,
@@ -1229,16 +1262,30 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             {
                 let server = server.clone();
                 async move |request: NewSessionRequest, responder, _connection| {
+                    // `_meta.rustcode.worktree`: the thread starts in a new worktree.
+                    let (request, worktree) = match crate::worktrees::prepare_new(request) {
+                        Ok(prepared) => prepared,
+                        Err(error) => return responder.respond_with_error(error),
+                    };
                     // An external harness starts a process, which can take a
                     // while; it does not hold the dispatch loop.
                     if let Some(asked) = harnesses::external_request(&request) {
                         let external = server.external.clone();
+                        let orchestration = server.client_has_orchestration.load(Ordering::Relaxed);
                         let connection = _connection.clone();
                         return _connection.spawn(async move {
-                            match harnesses::new_session(&external, request, asked, &connection)
-                                .await
+                            match harnesses::new_session(
+                                &external,
+                                request,
+                                asked,
+                                &connection,
+                                orchestration,
+                            )
+                            .await
                             {
-                                Ok(response) => responder.respond(response)?,
+                                Ok(response) => responder.respond(
+                                    crate::worktrees::finish_new(response, worktree.as_ref()),
+                                )?,
                                 Err(error) => responder.respond_with_error(error)?,
                             }
                             Ok(())
@@ -1260,11 +1307,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         &session_id,
                     );
                     state.desktop_client = preview::desktop_client_for(server.client_has_desktop.load(Ordering::Relaxed), &_connection, &session_id);
-                    state.orchestration_client = preview::orchestration_client_for(
-                        server.client_has_orchestration.load(Ordering::Relaxed),
-                        &_connection,
-                        &session_id,
-                    );
+                    (state.orchestration_client, state.orchestration_version) =
+                        preview::orchestration_for(
+                            server.client_has_orchestration.load(Ordering::Relaxed),
+                            &_connection,
+                            &session_id,
+                        );
                     state.smart_ui_client = preview::smart_ui_client_for(
                         state.smart_ui == crate::app::SmartUi::On
                             && server.client_has_smart_ui_preview.load(Ordering::Relaxed),
@@ -1325,9 +1373,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             terminal_overflow,
                         },
                     );
-                    responder.respond(
+                    responder.respond(crate::worktrees::finish_new(
                         NewSessionResponse::new(session_id.clone()).config_options(config_options),
-                    )?;
+                        worktree.as_ref(),
+                    ))?;
                     // Commands, then the session's opening usage, so the client
                     // shows its context meter from the start rather than only
                     // after the first turn ends (#2414 follow-up).
@@ -1653,6 +1702,104 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             },
             agent_client_protocol::on_receive_request!(),
         )
+        // Orchestrator v2 (`docs/orchestrator.md`): worktrees, thread status
+        // and checkpoints. Each runs git, so none holds the dispatch loop.
+        .on_receive_request(
+            async move |request: crate::worktrees::CreateRequest, responder, connection| {
+                connection.spawn(async move {
+                    let created = tokio::task::spawn_blocking(move || crate::worktrees::create(&request)).await;
+                    match created {
+                        Ok(Ok(worktree)) => responder.respond(serde_json::json!(worktree))?,
+                        Ok(Err(error)) => responder.respond_with_error(error.into_acp())?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::worktrees::ListRequest, responder, connection| {
+                connection.spawn(async move {
+                    let listed = tokio::task::spawn_blocking(move || crate::worktrees::list(&request.repo)).await;
+                    match listed {
+                        Ok(Ok(worktrees)) => responder.respond(serde_json::json!({ "worktrees": worktrees }))?,
+                        Ok(Err(error)) => responder.respond_with_error(error.into_acp())?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::worktrees::RemoveRequest, responder, connection| {
+                connection.spawn(async move {
+                    let removed = tokio::task::spawn_blocking(move || crate::worktrees::remove(&request.path, request.force)).await;
+                    match removed {
+                        Ok(Ok(answer)) => responder.respond(answer)?,
+                        Ok(Err(error)) => responder.respond_with_error(error.into_acp())?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::thread_status::SetStatusRequest, responder, _connection| {
+                match crate::thread_status::set(&request.session_id, &request.status) {
+                    Ok(()) => responder.respond(serde_json::json!({})),
+                    Err(message) => responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(message)),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::checkpoints::ListRequest, responder, connection| {
+                connection.spawn(async move {
+                    let answer = tokio::task::spawn_blocking(move || crate::checkpoints::answer_list(&request)).await;
+                    match answer {
+                        Ok(Ok(answer)) => responder.respond(answer)?,
+                        Ok(Err(error)) => responder.respond_with_error(error)?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::checkpoints::DiffRequest, responder, connection| {
+                connection.spawn(async move {
+                    let answer = tokio::task::spawn_blocking(move || crate::checkpoints::answer_diff(&request)).await;
+                    match answer {
+                        Ok(Ok(answer)) => responder.respond(answer)?,
+                        Ok(Err(error)) => responder.respond_with_error(error)?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: crate::checkpoints::RestoreRequest, responder, connection| {
+                    // Only an open built-in thread rewinds its conversation.
+                    let state = server.session_handle(&request.session_id).await.map(|(state, _)| state);
+                    connection.spawn(async move {
+                        match crate::checkpoints::answer_restore(&request, state).await {
+                            Ok(answer) => responder.respond(answer)?,
+                            Err(error) => responder.respond_with_error(error)?,
+                        }
+                        Ok(())
+                    })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .on_receive_request(
             async move |_request: WarmRequest, responder, connection| {
                 connection.spawn(async move {
@@ -1863,7 +2010,9 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             {
                 let server = server.clone();
                 async move |request: LoadSessionRequest, responder, connection| {
+                    let session_id = request.session_id.to_string();
                     let response = acp_load_session(&server, request, &connection).await?;
+                    let response = crate::worktrees::finish_load(response, &session_id);
                     responder.respond(response)
                 }
             },
@@ -2383,7 +2532,7 @@ mod tests {
             client_has_preview: Arc::new(AtomicBool::new(false)),
             client_has_desktop: Arc::new(AtomicBool::new(false)),
             client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
-            client_has_orchestration: Arc::new(AtomicBool::new(false)),
+            client_has_orchestration: Arc::new(AtomicU8::new(0)),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
             external: harnesses::ExternalSessions::default(),

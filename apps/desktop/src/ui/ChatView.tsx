@@ -6,8 +6,10 @@ import {
   CircleCheck,
   CircleDashed,
   CircleDot,
+  Eye,
   FileDiff,
   Folder,
+  GitBranch,
   GitPullRequest,
   ListChecks,
   PanelLeft,
@@ -16,9 +18,10 @@ import {
   TriangleAlert,
   Users,
 } from "lucide-react";
-import { Popover } from "radix-ui";
+import { DropdownMenu, Popover } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
-import { agentActive, leftPercent, shownWindow, windowDetail, windowTitle } from "../acp/rustcode";
+import { agentActive } from "../acp/rustcode";
+import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
 import {
   refreshSessions,
@@ -26,107 +29,23 @@ import {
   setPanel,
   setProjectCwd,
   setTerminalOpen,
+  setThreadStatus,
+  setView,
   startNewThread,
+  statusOf,
   toggleSidebar,
   useApp,
+  worktreeOf,
 } from "../state/store";
-import { formatTokens, type ThreadState } from "../state/thread";
+import type { ThreadState } from "../state/thread";
 import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
+import { LinkedThreads } from "./Links";
+import { NewThreadBanner } from "./NewThreadBanner";
 import { Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
+import { StatusChip } from "./Status";
+import { useLightsInset } from "./Titlebar";
 import { Transcript } from "./Transcript";
-
-export function UsageCapsule({ thread }: { thread: ThreadState }) {
-  const usage = thread.usage;
-  const plan = useApp((s) => s.planUsage[thread.id]);
-  const shown = plan ? shownWindow(plan) : undefined;
-  if (!usage?.size && !shown) return null;
-  if (!usage?.size) return <PlanMeter thread={thread} />;
-  const fraction = Math.min(1, usage.used / usage.size);
-  const tint = fraction < 0.8 ? "bg-brand" : fraction < 0.95 ? "bg-attention" : "bg-danger";
-  const detail = [
-    `${Math.round((1 - fraction) * 100)}% context left${usage.estimated ? " (estimated)" : ""}`,
-    usage.inputTokens !== undefined
-      ? `${formatTokens(usage.inputTokens)} in · ${formatTokens(usage.outputTokens ?? 0)} out`
-      : undefined,
-    usage.cachedTokens ? `${formatTokens(usage.cachedTokens)} cached` : undefined,
-    ...(plan
-      ? [
-          "",
-          ...plan.windows.map((w) => `${windowTitle(w)}: ${windowDetail(w)}`),
-          plan.source === "codex" ? "As the Codex CLI reports for your ChatGPT plan" : undefined,
-        ]
-      : []),
-  ]
-    .filter(Boolean)
-    .join("\n");
-  return (
-    <Tooltip label={<span className="whitespace-pre-line">{detail}</span>}>
-      <div
-        className="flex h-7 items-center gap-2 rounded-full bg-fill-3 px-2.5"
-        role="meter"
-        aria-label="Context used"
-        aria-valuemin={0}
-        aria-valuemax={usage.size}
-        aria-valuenow={usage.used}
-      >
-        <div className="h-[5px] w-[18px] overflow-hidden rounded-full bg-fg-4">
-          <div
-            className={cx("h-full rounded-full transition-[width] duration-300 ease-snappy", tint)}
-            style={{ width: `max(3px, ${fraction * 100}%)` }}
-          />
-        </div>
-        <span className="font-medium text-caption text-fg-2 tabular">
-          {formatTokens(usage.used)} / {formatTokens(usage.size)}
-        </span>
-        {shown && <PlanDot left={leftPercent(shown)} title={windowTitle(shown)} />}
-      </div>
-    </Tooltip>
-  );
-}
-
-/** The plan's shortest window, as the capsule's second part: `5-hour 58%`. */
-function PlanDot({ left, title }: { left: number; title: string }) {
-  const tint = left > 20 ? "text-fg-2" : left > 5 ? "text-attention" : "text-danger";
-  return (
-    <span
-      className={cx(
-        "flex items-center gap-1 border-hairline border-l pl-2 font-medium text-caption tabular",
-        tint,
-      )}
-    >
-      <span
-        className="relative size-[11px] rounded-full"
-        style={{ background: `conic-gradient(currentColor ${left * 3.6}deg, var(--rc-fg-4) 0)` }}
-      />
-      {title} {left}%
-    </span>
-  );
-}
-
-function PlanMeter({ thread }: { thread: ThreadState }) {
-  const plan = useApp((s) => s.planUsage[thread.id]);
-  const shown = plan ? shownWindow(plan) : undefined;
-  if (!plan || !shown) return null;
-  return (
-    <Tooltip
-      label={
-        <span className="whitespace-pre-line">
-          {plan.windows.map((w) => `${windowTitle(w)}: ${windowDetail(w)}`).join("\n")}
-        </span>
-      }
-    >
-      <div
-        className="flex h-7 items-center rounded-full bg-fill-3 px-2.5"
-        role="meter"
-        aria-label="Plan usage left"
-        aria-valuenow={leftPercent(shown)}
-      >
-        <PlanDot left={leftPercent(shown)} title={windowTitle(shown)} />
-      </div>
-    </Tooltip>
-  );
-}
 
 function PlanButton({ thread }: { thread: ThreadState }) {
   if (!thread.plan.length) return null;
@@ -179,13 +98,62 @@ function PlanButton({ thread }: { thread: ThreadState }) {
   );
 }
 
-function Header({ thread }: { thread?: ThreadState }) {
+/** The thread's status chip; a click marks it for review, done, or clears it. */
+function ThreadStatusMenu({ threadId }: { threadId: string }) {
+  const status = useApp((s) => statusOf(s, threadId));
+  const wt = useApp((s) => worktreeOf(s, threadId));
+  const item =
+    "flex w-full items-center gap-2 rounded-[8px] px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-brand-fill data-[highlighted]:text-white";
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Thread status"
+          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-3 px-2.5 text-callout text-fg-2 hover:bg-fill-2 data-[state=open]:bg-fill-1"
+        >
+          {wt && (
+            <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">
+              <GitBranch size={11} className="shrink-0" />
+              <span className="truncate">{wt.branch}</span>
+            </span>
+          )}
+          {status === "idle" ? <CircleDashed size={12} /> : <StatusChip status={status} className="-mx-1" />}
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          className="surface z-50 min-w-[190px] rounded-[12px] border border-hairline p-1"
+        >
+          <DropdownMenu.Item className={item} onSelect={() => setView({ kind: "review", threadId })}>
+            <FileDiff size={13} /> Review Changes
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-hairline" />
+          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "review")}>
+            <Eye size={13} /> Mark for Review
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "done")}>
+            <CircleCheck size={13} /> Mark Done
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "idle")}>
+            <CircleDashed size={13} /> Clear Status
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boolean }) {
   const panel = useApp((s) => s.panel);
   const terminalOpen = useApp((s) => s.terminalOpen);
   const agentsOn = useApp((s) => !!s.agent?.agents) && (thread?.harness?.capabilities.subagents ?? true);
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const working = useApp((s) => (thread ? (s.agents[thread.id] ?? []).filter(agentActive).length : 0));
   const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const lightsInset = useLightsInset();
   const projectCwd = useApp((s) => s.projectCwd);
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
   const title = thread ? (thread.title ?? listed ?? "New thread") : "New Thread";
@@ -194,9 +162,12 @@ function Header({ thread }: { thread?: ThreadState }) {
     <header
       data-tauri-drag-region
       className={cx(
-        "flex h-[42px] shrink-0 items-center gap-2.5 bg-chat/95 pt-1.5 pb-2 pr-2.5",
-        sidebarHidden ? "pl-[80px]" : "pl-2.5",
+        "relative z-10 flex h-[42px] shrink-0 items-center gap-2.5 pt-1.5 pb-2 pr-2.5 transition-[background-color] duration-300",
+        // Over a new thread's banner: frosted, its foot fading into the banner.
+        overBanner ? "rc-frost" : "bg-chat/95",
+        !sidebarHidden && "pl-2.5",
       )}
+      style={sidebarHidden ? { paddingLeft: lightsInset } : undefined}
     >
       {sidebarHidden && (
         <Cluster>
@@ -222,8 +193,8 @@ function Header({ thread }: { thread?: ThreadState }) {
         {cwd && <span className="font-light text-fg-4 text-title3">/</span>}
         <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
       </div>
+      {thread && <ThreadStatusMenu threadId={thread.id} />}
       {thread && <PlanButton thread={thread} />}
-      {thread && <UsageCapsule thread={thread} />}
       <Cluster>
         {thread && agentsOn && (
           <ClusterButton
@@ -269,11 +240,12 @@ function Header({ thread }: { thread?: ThreadState }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ banner }: { banner: boolean }) {
   const projectCwd = useApp((s) => s.projectCwd);
   return (
     <div className="flex flex-col items-center gap-3.5 pb-6 text-center">
-      <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />
+      {/* A banner is drawn behind the chat instead of the icon. */}
+      {!banner && <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />}
       <h2 className="font-semibold text-title">What should we build?</h2>
       <div className="flex max-w-[560px] items-center gap-1.5 text-callout text-fg-2">
         <Folder size={13} />
@@ -342,6 +314,8 @@ export function ChatView() {
   const [stackHeight, setStackHeight] = useState(140);
   const [dismissed, setDismissed] = useState<string | undefined>();
   const [width, setWidth] = useState(1000);
+  const [height, setHeight] = useState(800);
+  const banner = useBanner();
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -355,7 +329,10 @@ export function ChatView() {
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => setWidth(el.offsetWidth));
+    const observer = new ResizeObserver(() => {
+      setWidth(el.offsetWidth);
+      setHeight(el.offsetHeight);
+    });
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -364,12 +341,23 @@ export function ChatView() {
   const request = thread?.permissions[0];
   const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
   const side = width >= 600 ? 28 : width >= 360 ? 20 : 16;
+  const showsBanner = isNew && !!banner.name;
 
   return (
-    <main ref={rootRef} className="relative flex min-w-0 flex-1 flex-col bg-chat" aria-label="Chat">
-      <Header thread={thread} />
+    <main ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-chat" aria-label="Chat">
+      {showsBanner && (
+        <NewThreadBanner
+          key={banner.style}
+          name={banner.name}
+          style={banner.style}
+          height={Math.round(height / 2)}
+          className="!absolute top-0 left-0 rc-fade-in"
+        />
+      )}
+      <Header thread={thread} overBanner={showsBanner} />
       {thread && !thread.loading ? (
-        <Transcript thread={thread} bottomInset={stackHeight + 36} />
+        // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
+        <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 36} />
       ) : thread?.loading ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-callout text-fg-2">
           <Spinner />
@@ -396,7 +384,7 @@ export function ChatView() {
         )}
         style={{ paddingLeft: side, paddingRight: side }}
       >
-        {isNew && <EmptyState />}
+        {isNew && <EmptyState banner={showsBanner} />}
         <EngineBanner />
         {error && (
           <ErrorBanner
@@ -407,7 +395,13 @@ export function ChatView() {
             }}
           />
         )}
-        {request && <AttentionCard request={request} />}
+        {thread && <LinkedThreads threadId={thread.id} />}
+        {request && (
+          <AttentionCard
+            request={request}
+            pending={thread?.permissions.filter((p) => !p.question).length ?? 1}
+          />
+        )}
         <Composer thread={thread} compact={width < 600} />
       </div>
     </main>

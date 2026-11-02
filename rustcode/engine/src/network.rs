@@ -225,7 +225,7 @@ pub(crate) fn root_schema_policy(
     };
     // Only where delegation is on, as for subagents.
     if s.orchestration_client.is_some() && s.delegation_active && !compact_tool_prompt {
-        policy.with_orchestration_tools()
+        policy.with_orchestration_tools(s.orchestration_version)
     } else {
         policy
     }

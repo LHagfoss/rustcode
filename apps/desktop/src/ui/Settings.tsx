@@ -19,6 +19,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
+import { chooseBanner, removeBanner, setBannerStyle, useBanner } from "../lib/banner";
 import { linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { pickFolder } from "../lib/native";
 import { validateDefault } from "../state/harness";
@@ -31,6 +32,7 @@ import {
   type SettingsSection,
   setDefaultHarness,
   setOnboarding,
+  setOrchestration,
   setProjectCwd,
   setSmartUi,
   setTheme,
@@ -38,7 +40,9 @@ import {
   useApp,
 } from "../state/store";
 import { DefaultsForm, HarnessList } from "./Harnesses";
+import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Pill, Spinner, Switch } from "./primitives";
+import { TitlebarRow } from "./Titlebar";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
   { id: "general", label: "General", icon: Gear },
@@ -115,10 +119,12 @@ function General() {
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   const smartUi = useApp((s) => s.smartUi);
   const smartUiPending = useApp((s) => s.smartUiPending);
+  const orchestration = useApp((s) => s.orchestration);
+  const orchestrationPending = useApp((s) => s.orchestrationPending);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const shortcuts: [string, string][] = [
     ["New thread", "⌘N"],
-    ["Switch thread", "⌘K"],
+    ["Command palette: threads, actions", "⌘K"],
     ["Settings", "⌘,"],
     ["Toggle sidebar", "⌘B"],
     ["Find in thread", "⌘F"],
@@ -151,6 +157,23 @@ function General() {
             title="Restart the engine to apply"
             subtitle="The engine learns the Smart UI setting when it starts."
           >
+            <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
+              Restart Engine
+            </Pill>
+          </Row>
+        )}
+        <Row
+          title="Threads can start and message other threads"
+          subtitle="An agent can list and read this project's threads, message one, start new threads (in their own worktrees, on any harness) and run one task on several harnesses to compare. You approve each first: Allow for This Thread, Allow Once or Don't Allow."
+        >
+          <Switch
+            label="Threads can start and message other threads"
+            checked={orchestration}
+            onChange={setOrchestration}
+          />
+        </Row>
+        {orchestrationPending && (
+          <Row title="Restart the engine to apply" subtitle="The engine learns this setting when it starts.">
             <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
               Restart Engine
             </Pill>
@@ -535,7 +558,67 @@ function Appearance() {
           </button>
         ))}
       </div>
+      <BannerSetting />
     </Group>
+  );
+}
+
+/** Settings ▸ Appearance ▸ New thread banner, after SettingsView.swift. */
+function BannerSetting() {
+  const banner = useBanner();
+  const choose = () =>
+    void chooseBanner().catch((e) =>
+      toast(`Could not use that picture: ${e instanceof Error ? e.message : e}`, "warning"),
+    );
+  return (
+    <div>
+      <Row
+        title="New thread banner"
+        subtitle={
+          banner.name
+            ? "Behind the top of new threads, fading toward the message field"
+            : "A wide picture over new threads, drawn in text or as is. Cropped to fit"
+        }
+      >
+        <div className="flex shrink-0 items-center gap-2">
+          {banner.name && (
+            <>
+              <div
+                role="radiogroup"
+                aria-label="Banner style"
+                className="flex h-7 rounded-full bg-fill-3 p-0.5"
+              >
+                {(["ascii", "picture"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    role="radio"
+                    aria-checked={banner.style === v}
+                    onClick={() => setBannerStyle(v)}
+                    className={cx(
+                      "rounded-full px-3 font-medium text-callout",
+                      banner.style === v ? "bg-fill-1 text-fg" : "text-fg-2 hover:text-fg",
+                    )}
+                  >
+                    {v === "ascii" ? "Text" : "Picture"}
+                  </button>
+                ))}
+              </div>
+              <Pill onClick={() => void removeBanner()}>Remove</Pill>
+            </>
+          )}
+          <Pill onClick={choose}>{banner.name ? "Change…" : "Choose…"}</Pill>
+        </div>
+      </Row>
+      {banner.name && (
+        // As a new thread shows it, at a size that reads.
+        <div className="px-3.5 pb-3.5">
+          <div className="overflow-hidden rounded-xl bg-chat">
+            <NewThreadBanner key={banner.style} name={banner.name} style={banner.style} height={240} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -577,13 +660,13 @@ export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!;
   return (
-    <div className="fixed inset-0 z-30 flex bg-chat" role="dialog" aria-label="Settings">
+    <div className="fixed inset-0 z-30 flex" role="dialog" aria-label="Settings">
       <nav className="flex w-[240px] shrink-0 flex-col bg-sidebar" aria-label="Settings sections">
-        <div data-tauri-drag-region className="flex h-[34px] items-end pr-2.5 pl-20">
+        <TitlebarRow className="pr-2.5">
           <ChromeButton label="Back to chat" tooltip="Back (Esc)" onClick={() => openSettings(null)}>
             <ChevronLeft size={16} />
           </ChromeButton>
-        </div>
+        </TitlebarRow>
         <div className="px-5 pt-4 pb-1 font-semibold text-caption text-fg-2">Settings</div>
         <div className="flex flex-col gap-0.5 px-2.5">
           {SECTIONS.map((s) => (
@@ -605,7 +688,7 @@ export function Settings() {
           ))}
         </div>
       </nav>
-      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className="min-w-0 flex-1 overflow-y-auto bg-chat">
         <div className="mx-auto max-w-[720px] px-[clamp(24px,5%,64px)] pb-16">
           <h2 className="pt-10 pb-3 font-semibold text-title2">{current.label}</h2>
           {section === "general" && <General />}

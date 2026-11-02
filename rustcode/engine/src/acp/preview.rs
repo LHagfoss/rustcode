@@ -104,6 +104,22 @@ impl crate::preview::PreviewClient for AcpOrchestrationClient {
     }
 }
 
+/// The host and version for a session whose client advertised orchestration
+/// `version` (0 for none).
+pub(crate) fn orchestration_for(
+    version: u8,
+    connection: &ConnectionTo<Client>,
+    session_id: &str,
+) -> (
+    Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
+    u8,
+) {
+    (
+        orchestration_client_for(version >= 1, connection, session_id),
+        version,
+    )
+}
+
 pub(crate) fn orchestration_client_for(
     supported: bool,
     connection: &ConnectionTo<Client>,

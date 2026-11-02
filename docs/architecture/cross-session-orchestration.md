@@ -1,7 +1,10 @@
 # Cross-session agent orchestration
 
-Status: milestone 1 is implemented (#2637, #2638); the later milestones are
-proposed. The macOS app is the first target; TUI parity is a later, optional
+Status: milestone 1 is implemented (#2637, #2638). Orchestration v2
+([orchestrator.md](../orchestrator.md)) is built on the engine side:
+`read_session`, `start_session` and `fan_out` for clients advertising
+version 2, and the same tools for external harnesses through
+`rustcode mcp-orchestrator`. The remaining milestones are proposed. The macOS app is the first target; TUI parity is a later, optional
 follow-up.
 
 ## As built (M1)
@@ -338,6 +341,9 @@ macOS (`swift test` in `macos/`, RustCodeKit):
 
 ### Later milestones
 
-- M2: `read_session` and cross-project `list_sessions` behind the read grant.
-- M3: `start_session` (new or resumed) in a user-selected project.
+- M2: `read_session` (engine side built in v2; the client carries it out)
+  and cross-project `list_sessions` behind the read grant.
+- M3: `start_session` in a user-selected project, and `fan_out` (engine side
+  built in v2, see [orchestrator.md](../orchestrator.md)); resuming an
+  existing thread is not covered.
 - M4: terminal-owned sessions through the remote gateway; TUI chips.

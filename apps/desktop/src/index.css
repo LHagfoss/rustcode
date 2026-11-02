@@ -91,17 +91,17 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --rc-sidebar: #2a2a2d;
-    --rc-chat: #1e1e20;
+    --rc-sidebar: #18181b;
+    --rc-chat: #111113;
     --rc-fg: rgb(255 255 255 / 0.88);
     --rc-fg-2: rgb(255 255 255 / 0.55);
     --rc-fg-3: rgb(255 255 255 / 0.28);
     --rc-fg-4: rgb(255 255 255 / 0.16);
     --rc-fill-1: rgb(255 255 255 / 0.16);
     --rc-fill-2: rgb(255 255 255 / 0.11);
-    --rc-fill-3: rgb(255 255 255 / 0.07);
-    --rc-fill-4: rgb(255 255 255 / 0.045);
-    --rc-hairline: rgb(255 255 255 / 0.09);
+    --rc-fill-3: rgb(255 255 255 / 0.06);
+    --rc-fill-4: rgb(255 255 255 / 0.038);
+    --rc-hairline: rgb(255 255 255 / 0.065);
     --rc-brand: #7fa3bd;
     --rc-brand-fill: #4f6d83;
     --rc-attention: #ffd60a;
@@ -109,8 +109,8 @@
     --rc-green: #32d74b;
     --rc-orange: #ff9f0a;
     --rc-blue: #0a84ff;
-    --rc-surface: rgb(46 46 50 / 0.82);
-    --rc-field: rgb(255 255 255 / 0.06);
+    --rc-surface: rgb(30 30 34 / 0.84);
+    --rc-field: rgb(255 255 255 / 0.05);
     --rc-code-keyword: #fc5fa3;
     --rc-code-string: #fc6a5d;
     --rc-code-comment: #7f8c98;
@@ -123,17 +123,17 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --rc-sidebar: #2a2a2d;
-  --rc-chat: #1e1e20;
+  --rc-sidebar: #18181b;
+  --rc-chat: #111113;
   --rc-fg: rgb(255 255 255 / 0.88);
   --rc-fg-2: rgb(255 255 255 / 0.55);
   --rc-fg-3: rgb(255 255 255 / 0.28);
   --rc-fg-4: rgb(255 255 255 / 0.16);
   --rc-fill-1: rgb(255 255 255 / 0.16);
   --rc-fill-2: rgb(255 255 255 / 0.11);
-  --rc-fill-3: rgb(255 255 255 / 0.07);
-  --rc-fill-4: rgb(255 255 255 / 0.045);
-  --rc-hairline: rgb(255 255 255 / 0.09);
+  --rc-fill-3: rgb(255 255 255 / 0.06);
+  --rc-fill-4: rgb(255 255 255 / 0.038);
+  --rc-hairline: rgb(255 255 255 / 0.065);
   --rc-brand: #7fa3bd;
   --rc-brand-fill: #4f6d83;
   --rc-attention: #ffd60a;
@@ -141,8 +141,8 @@
   --rc-green: #32d74b;
   --rc-orange: #ff9f0a;
   --rc-blue: #0a84ff;
-  --rc-surface: rgb(46 46 50 / 0.82);
-  --rc-field: rgb(255 255 255 / 0.06);
+  --rc-surface: rgb(30 30 34 / 0.84);
+  --rc-field: rgb(255 255 255 / 0.05);
   --rc-code-keyword: #fc5fa3;
   --rc-code-string: #fc6a5d;
   --rc-code-comment: #7f8c98;
@@ -150,6 +150,73 @@
   --rc-code-type: #5dd8ff;
   --rc-diff-add: rgb(50 215 75 / 0.14);
   --rc-diff-del: rgb(255 69 58 / 0.14);
+}
+
+/*
+ * In the macOS app the window is transparent and the system's sidebar
+ * material (NSVisualEffectView, `windowEffects` in tauri.conf.json) shows
+ * behind the sidebar: the sidebar paints only a light tint over it, and the
+ * chat stays opaque. `vibrant` is set on <html> by main.tsx in the app on
+ * macOS only. The system drops the material itself when Reduce transparency
+ * is on; the solid fallback below covers the web view's own surfaces.
+ */
+:root.vibrant {
+  --rc-sidebar: rgb(246 246 248 / 0.28);
+  --rc-surface: rgb(250 250 252 / 0.72);
+}
+
+:root.vibrant[data-theme="dark"] {
+  --rc-sidebar: rgb(16 16 18 / 0.46);
+  --rc-surface: rgb(28 28 32 / 0.74);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root.vibrant:not([data-theme="light"]) {
+    --rc-sidebar: rgb(16 16 18 / 0.46);
+    --rc-surface: rgb(28 28 32 / 0.74);
+  }
+}
+
+:root.vibrant body {
+  background: transparent;
+}
+
+/* Reduce transparency: the media query where the web view supports it, else the `reduce-transparency` class main.tsx sets from the system setting. */
+:root.vibrant.reduce-transparency body {
+  background: var(--rc-chat);
+}
+:root.vibrant.reduce-transparency {
+  --rc-sidebar: #eeeef0;
+  --rc-surface: #f6f6f8;
+}
+:root.vibrant.reduce-transparency[data-theme="dark"] {
+  --rc-sidebar: #18181b;
+  --rc-surface: #2e2e32;
+}
+@media (prefers-color-scheme: dark) {
+  :root.vibrant.reduce-transparency:not([data-theme="light"]) {
+    --rc-sidebar: #18181b;
+    --rc-surface: #2e2e32;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root.vibrant body {
+    background: var(--rc-chat);
+  }
+  :root.vibrant {
+    --rc-sidebar: #eeeef0;
+    --rc-surface: #f6f6f8;
+  }
+  :root.vibrant[data-theme="dark"] {
+    --rc-sidebar: #18181b;
+    --rc-surface: #2e2e32;
+  }
+}
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+  :root.vibrant:not([data-theme="light"]) {
+    --rc-sidebar: #18181b;
+    --rc-surface: #2e2e32;
+  }
 }
 
 @layer base {
@@ -217,11 +284,31 @@
   }
 }
 
+/* What floats over the chat (composer, popovers, menus, dialogs, toasts): one blurred material. */
 @utility surface {
   background: var(--rc-surface);
-  backdrop-filter: saturate(1.6) blur(24px);
-  -webkit-backdrop-filter: saturate(1.6) blur(24px);
-  box-shadow: var(--shadow-float);
+  backdrop-filter: saturate(1.8) blur(28px);
+  -webkit-backdrop-filter: saturate(1.8) blur(28px);
+  box-shadow:
+    var(--shadow-float),
+    inset 0 0 0 0.5px var(--rc-hairline);
+}
+
+:root.reduce-transparency .surface {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .surface {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+/* A scrolling list that fades out over its last `--rc-fade` px, above whatever floats at its foot. */
+@utility fade-bottom {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rc-fade, 56px)), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rc-fade, 56px)), transparent);
 }
 
 @utility tabular {
@@ -317,4 +404,137 @@
 ::highlight(rc-find-current) {
   background-color: #ffd60a;
   color: #000;
+}
+
+/*
+ * Motion: every control answers hover, press and focus within 120–180 ms,
+ * ease-out; popovers, menus, dialogs and toasts fade and scale in and out.
+ * Everything collapses under prefers-reduced-motion (above).
+ */
+@keyframes rc-out {
+  to {
+    opacity: 0;
+    transform: translateY(2px) scale(0.98);
+  }
+}
+
+@keyframes rc-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rc-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@layer base {
+  button,
+  a,
+  [role="option"],
+  [role="menuitem"],
+  [role="switch"],
+  summary {
+    transition:
+      background-color 140ms ease-out,
+      color 140ms ease-out,
+      opacity 140ms ease-out,
+      box-shadow 160ms ease-out,
+      transform 120ms ease-out;
+  }
+
+  button:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.985);
+  }
+
+  :focus-visible {
+    transition: outline-offset 120ms ease-out;
+  }
+}
+
+/* Radix popovers, menus and tooltips: in from their side, out on close. */
+[data-radix-popper-content-wrapper] > [data-state="open"],
+[data-radix-popper-content-wrapper] > [data-state="delayed-open"],
+[data-radix-popper-content-wrapper] > [data-state="instant-open"] {
+  animation: rc-pop 160ms var(--ease-snappy);
+  transform-origin: var(--radix-popper-transform-origin);
+}
+
+[data-radix-popper-content-wrapper] > [data-state="closed"] {
+  animation: rc-out 120ms ease-in forwards;
+}
+
+[role="dialog"][data-state="open"],
+[role="alertdialog"] {
+  animation: rc-in 180ms var(--ease-snappy);
+}
+
+[role="dialog"][data-state="closed"] {
+  animation: rc-out 120ms ease-in forwards;
+}
+
+/* Dialog overlays fade. */
+.rc-overlay[data-state="open"] {
+  animation: rc-fade 160ms ease-out;
+}
+
+.rc-overlay[data-state="closed"] {
+  animation: rc-fade 120ms ease-in reverse forwards;
+}
+
+/* A streaming reply: each new block fades in instead of popping. */
+.rc-stream > * {
+  animation: rc-fade 180ms ease-out;
+}
+
+/* Rows that open (tool calls, thoughts, completion cards): their body slides in. */
+.rc-expand {
+  animation: rc-in 160ms var(--ease-snappy);
+}
+
+/* A bar over the new-thread banner: frosted, its foot fading into the banner rather than a hard edge. */
+.rc-frost::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -12px 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--rc-chat) 45%, transparent);
+  backdrop-filter: saturate(1.6) blur(20px);
+  -webkit-backdrop-filter: saturate(1.6) blur(20px);
+  mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  pointer-events: none;
+}
+
+.rc-fade-in {
+  animation: rc-fade 400ms ease-out;
+}
+
+/* The composer's tray: a step lighter than the chat, tucked under the box. */
+.rc-tray {
+  background: color-mix(in srgb, var(--rc-fg) 6%, var(--rc-chat));
+  box-shadow: inset 0 0 0 0.5px var(--rc-hairline);
+}
+
+/* Drilling into a panel's page and back. */
+@keyframes rc-drill {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+@keyframes rc-drill-back {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+}
+.rc-drill {
+  animation: rc-drill 220ms var(--ease-snappy);
+}
+.rc-drill-back {
+  animation: rc-drill-back 220ms var(--ease-snappy);
 }

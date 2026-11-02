@@ -17,10 +17,49 @@ use tauri::ipc::Channel;
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum EngineEvent {
-    Line { line: String },
-    Open { engine: String },
-    Closed { reason: String },
-    Log { line: String },
+    Line {
+        line: String,
+    },
+    /// Lines that were already buffered together (a replay, a burst of chunks):
+    /// one channel message, and one task in the webview, instead of one per line.
+    Lines {
+        lines: Vec<String>,
+    },
+    Open {
+        engine: String,
+    },
+    Closed {
+        reason: String,
+    },
+    Log {
+        line: String,
+    },
+}
+
+/// At most this many lines, or about this many bytes, go in one `Lines` message.
+const BATCH_LINES: usize = 1024;
+const BATCH_BYTES: usize = 4 * 1024 * 1024;
+
+/// Blocks for one line, then takes every further line that is already complete
+/// in the buffer, without waiting for more. `None` at the end of the stream.
+fn read_batch<R: std::io::Read>(reader: &mut BufReader<R>) -> std::io::Result<Option<Vec<String>>> {
+    let mut lines = Vec::new();
+    let mut bytes = 0;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 {
+            return Ok((!lines.is_empty()).then_some(lines));
+        }
+        while line.ends_with('\n') || line.ends_with('\r') {
+            line.pop();
+        }
+        bytes += line.len();
+        lines.push(line);
+        let more = reader.buffer().contains(&b'\n');
+        if !more || lines.len() >= BATCH_LINES || bytes >= BATCH_BYTES {
+            return Ok(Some(lines));
+        }
+    }
 }
 
 const BACKOFF_START: Duration = Duration::from_millis(500);
@@ -40,7 +79,15 @@ pub struct Engine {
     /// Set by `restart`: start again at once instead of after the backoff.
     restart_now: AtomicBool,
     generation: AtomicU64,
+    /// Started by `prestart`, before the webview attached: the first `start`
+    /// adopts that engine instead of restarting it.
+    prestarted: AtomicBool,
+    /// What the engine said before the webview attached (its `open`, early logs).
+    early: Mutex<Vec<EngineEvent>>,
 }
+
+/// Events kept for a webview that has not attached yet.
+const EARLY_MAX: usize = 200;
 
 /// `$RUSTCODE_ENGINE`, else the workspace's debug build in a dev build, else
 /// the bundled sidecar next to the app binary, else `rustcode` on PATH.
@@ -71,16 +118,45 @@ pub fn resolve_engine() -> PathBuf {
 
 impl Engine {
     fn emit(&self, event: EngineEvent) {
-        if let Some(channel) = self.channel.lock().unwrap().as_ref() {
+        let guard = self.channel.lock().unwrap();
+        if let Some(channel) = guard.as_ref() {
             let _ = channel.send(event);
+        } else if self.prestarted.load(Ordering::SeqCst) {
+            let mut early = self.early.lock().unwrap();
+            if early.len() < EARLY_MAX {
+                early.push(event);
+            }
         }
+    }
+
+    /// Start the engine as the app launches, while the webview still loads, so
+    /// it has initialized by the time the page asks (saves its startup time).
+    pub fn prestart(self: &Arc<Self>) {
+        if self.supervising.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.prestarted.store(true, Ordering::SeqCst);
+        let engine = Arc::clone(self);
+        thread::spawn(move || engine.supervise());
     }
 
     /// Attach the webview's channel and make sure an engine runs. A webview
     /// reload attaches a new channel; the running engine gets a fresh `open`.
     pub fn start(self: &Arc<Self>, channel: Channel<EngineEvent>) {
-        *self.channel.lock().unwrap() = Some(channel);
+        {
+            // Under the channel lock, so nothing the engine says slips between the early events and the channel.
+            let mut guard = self.channel.lock().unwrap();
+            for event in self.early.lock().unwrap().drain(..) {
+                let _ = channel.send(event);
+            }
+            *guard = Some(channel);
+        }
         self.stopping.store(false, Ordering::SeqCst);
+        if self.prestarted.swap(false, Ordering::SeqCst) {
+            // The first page adopts the engine started at launch; its `open` was in the early events
+            // or is still to come.
+            return;
+        }
         if self.supervising.swap(true, Ordering::SeqCst) {
             // Already running: hand the new page a clean engine.
             self.restart();
@@ -175,7 +251,7 @@ impl Engine {
     }
 
     /// Run one engine process until it exits; returns why it ended.
-    fn run_once(&self, path: &PathBuf) -> Result<String, String> {
+    fn run_once(self: &Arc<Self>, path: &PathBuf) -> Result<String, String> {
         let mut child = Command::new(path)
             .arg("--acp")
             .stdin(Stdio::piped())
@@ -196,25 +272,28 @@ impl Engine {
             engine: path.display().to_string(),
         });
 
-        let stdout_channel = self.channel.lock().unwrap().clone();
+        // The readers look the channel up per message: the engine may start before the page attaches.
+        let engine = Arc::clone(self);
         let out = thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                if let Some(channel) = &stdout_channel {
-                    let _ = channel.send(EngineEvent::Line { line });
-                }
+            let mut reader = BufReader::with_capacity(256 * 1024, stdout);
+            while let Ok(Some(mut lines)) = read_batch(&mut reader) {
+                engine.emit(if lines.len() == 1 {
+                    EngineEvent::Line {
+                        line: lines.pop().unwrap_or_default(),
+                    }
+                } else {
+                    EngineEvent::Lines { lines }
+                });
             }
         });
-        let stderr_channel = self.channel.lock().unwrap().clone();
+        let engine = Arc::clone(self);
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines() {
                 let Ok(line) = line else { break };
                 if cfg!(debug_assertions) {
                     eprintln!("[engine] {line}");
                 }
-                if let Some(channel) = &stderr_channel {
-                    let _ = channel.send(EngineEvent::Log { line });
-                }
+                engine.emit(EngineEvent::Log { line });
             }
         });
 
@@ -243,5 +322,47 @@ impl Engine {
             Some(code) => format!("The engine exited (code {code})."),
             None => "The engine stopped.".to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn batches_lines_already_buffered() {
+        let mut reader = BufReader::new(Cursor::new(b"a\nb\r\nc\n".to_vec()));
+        assert_eq!(
+            read_batch(&mut reader).unwrap(),
+            Some(vec!["a".into(), "b".into(), "c".into()])
+        );
+        assert_eq!(read_batch(&mut reader).unwrap(), None);
+    }
+
+    #[test]
+    fn keeps_a_last_line_without_newline() {
+        // A line still being written waits for the next read rather than going out half.
+        let mut reader = BufReader::new(Cursor::new(b"a\nb".to_vec()));
+        assert_eq!(read_batch(&mut reader).unwrap(), Some(vec!["a".into()]));
+        assert_eq!(read_batch(&mut reader).unwrap(), Some(vec!["b".into()]));
+        assert_eq!(read_batch(&mut reader).unwrap(), None);
+    }
+
+    #[test]
+    fn caps_a_batch() {
+        let text = "x\n".repeat(BATCH_LINES + 5);
+        let mut reader = BufReader::with_capacity(1 << 20, Cursor::new(text.into_bytes()));
+        assert_eq!(read_batch(&mut reader).unwrap().unwrap().len(), BATCH_LINES);
+        assert_eq!(read_batch(&mut reader).unwrap().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn lines_event_matches_the_webview_shape() {
+        let json = serde_json::to_string(&EngineEvent::Lines {
+            lines: vec!["{}".into()],
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"type":"lines","lines":["{}"]}"#);
     }
 }

@@ -175,6 +175,7 @@ pub(crate) fn spawn_question_requests(
                 break;
             }
             let request = question_permission_request(&session_id, &question_id, &prompt);
+            let _waiting = crate::thread_status::waiting(&session_id);
             let answer = request_connection
                 .send_request(request)
                 .block_task()

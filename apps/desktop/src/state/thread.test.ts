@@ -9,6 +9,7 @@ import {
   emptyThread,
   finishLoad,
   finishTurn,
+  foldingBatch,
   formatDuration,
   requeueSteers,
   thoughtHeadings,
@@ -139,5 +140,67 @@ describe("helpers", () => {
     expect(formatDuration(12_000)).toBe("12s");
     expect(formatDuration(65_000)).toBe("1m 5s");
     expect(thoughtHeadings("**Reading**\ntext **Editing files**")).toEqual(["Reading", "Editing files"]);
+  });
+});
+
+describe("folding a batch", () => {
+  const updates: SessionUpdate[] = [];
+  for (let i = 0; i < 50; i++) {
+    updates.push({ kind: "user", text: `q${i}` });
+    updates.push({ kind: "thought", text: "**T**", summary: true });
+    updates.push({ kind: "toolCall", id: `c${i}`, title: "rg", diffs: [] });
+    updates.push({ kind: "toolCallUpdate", id: `c${i}`, status: "completed", outputDelta: "ok", diffs: [] });
+    updates.push({ kind: "agent", text: "Hel" });
+    updates.push({ kind: "agent", text: "lo" });
+  }
+
+  test("gives the same thread as folding one update at a time", () => {
+    const plain = apply(updates);
+    let batched = emptyThread("s", "/p");
+    foldingBatch(() => {
+      batched = apply(updates, batched);
+    });
+    const shape = (s: typeof plain) => ({
+      items: s.items.map(({ id: _id, ...rest }) => rest),
+      tools: Object.keys(s.toolIndex).length,
+    });
+    expect(shape(batched)).toEqual(shape(plain));
+  });
+
+  test("never changes arrays made before the batch", () => {
+    const before = apply(updates.slice(0, 6));
+    const items = before.items;
+    const copy = items.slice();
+    const toolIndex = { ...before.toolIndex };
+    foldingBatch(() => {
+      apply(updates.slice(6), before);
+    });
+    expect(before.items).toBe(items);
+    expect(items).toEqual(copy);
+    expect(before.toolIndex).toEqual(toolIndex);
+  });
+
+  test("arrays from a finished batch are not changed by the next one", () => {
+    let first = emptyThread("s", "/p");
+    foldingBatch(() => {
+      first = apply(updates.slice(0, 6), first);
+    });
+    const length = first.items.length;
+    foldingBatch(() => {
+      apply(updates.slice(6, 12), first);
+    });
+    expect(first.items.length).toBe(length);
+  });
+
+  test("a streamed chunk closes only the open thought at the tail", () => {
+    const s = apply([
+      { kind: "thought", text: "a", summary: false },
+      { kind: "agent", text: "x" },
+      { kind: "thought", text: "b", summary: false },
+      { kind: "user", text: "next" },
+    ]);
+    expect(s.items.filter((i) => i.kind === "thought").every((t) => t.kind === "thought" && t.done)).toBe(
+      true,
+    );
   });
 });

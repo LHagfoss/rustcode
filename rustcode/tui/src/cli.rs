@@ -200,6 +200,22 @@ pub enum Commands {
         #[command(subcommand)]
         command: McpCommands,
     },
+
+    /// Stdio MCP server that gives an external harness thread the
+    /// orchestration tools; started by the engine, not by hand
+    #[command(name = "mcp-orchestrator", hide = true)]
+    McpOrchestrator {
+        /// The thread the harness runs
+        #[arg(long)]
+        session: String,
+        /// The parent engine's orchestrator socket
+        #[arg(long)]
+        socket: std::path::PathBuf,
+        /// The per-thread token the parent engine issued. Normally passed in
+        /// `RUSTCODE_ORCHESTRATOR_TOKEN` instead, so it is not visible in `ps`.
+        #[arg(long)]
+        token: Option<String>,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1127,6 +1143,26 @@ mod tests {
         assert!(
             Cli::try_parse_from(["rustcode", "cron", "history", "job-1", "--limit", "51"]).is_err()
         );
+    }
+
+    #[test]
+    fn mcp_orchestrator_takes_its_session_socket_and_token() {
+        let cli = Cli::try_parse_from([
+            "rustcode",
+            "mcp-orchestrator",
+            "--session",
+            "abc",
+            "--socket",
+            "/tmp/o.sock",
+            "--token",
+            "t",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::McpOrchestrator { session, socket, token })
+                if session == "abc" && socket == std::path::Path::new("/tmp/o.sock") && token.as_deref() == Some("t")
+        ));
     }
 
     fn mcp_add(args: &[&str]) -> Result<rustcode::config::McpServerConfig, String> {

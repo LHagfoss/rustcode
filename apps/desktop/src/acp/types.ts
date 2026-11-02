@@ -2,6 +2,7 @@
 // SwiftUI app's RustCodeKit (ACPTypes.swift, FileDiff.swift, SessionUsage.swift).
 
 import { arr, bool, type Json, type JsonObject, num, obj, rustcodeMeta, str } from "./jsonrpc";
+import { parseStatus, parseWorktree, type ThreadStatus, type Worktree } from "./v2";
 
 export const ACP_PROTOCOL_VERSION = 1;
 /** Version of the `_meta.rustcode` question payload this client understands. */
@@ -92,7 +93,14 @@ export function parseAgentInfo(result: Json): AgentInfo {
  * its own sandbox), Smart UI as the setting says, and no preview or
  * visualizations yet.
  */
-export function initializeParams(appVersion: string, options: { smartUi?: boolean } = {}): JsonObject {
+export function initializeParams(
+  appVersion: string,
+  options: { smartUi?: boolean; orchestration?: number; visualizations?: number } = {},
+): JsonObject {
+  const rustcode: JsonObject = { smartUi: options.smartUi ? 1 : 0 };
+  // Threads that start and message other threads (docs/orchestrator.md): only while the setting is on.
+  if (options.orchestration) rustcode.orchestration = options.orchestration;
+  if (options.visualizations) rustcode.visualizations = options.visualizations;
   return {
     protocolVersion: ACP_PROTOCOL_VERSION,
     clientCapabilities: {
@@ -100,7 +108,7 @@ export function initializeParams(appVersion: string, options: { smartUi?: boolea
       terminal: false,
       // Smart UI blocks run in the transcript (docs/smart-ui.md); 0 while the setting is off,
       // so the agent can name the setting instead of writing a block that shows as source.
-      _meta: { rustcode: { smartUi: options.smartUi ? 1 : 0 } },
+      _meta: { rustcode },
     },
     clientInfo: { name: "rustcode-desktop", title: "RustCode", version: appVersion },
   };
@@ -115,6 +123,10 @@ export interface SessionSummary {
   updatedAt?: number;
   model?: string;
   harness?: string;
+  /** The worktree the thread runs in (`_meta.rustcode.worktree`). */
+  worktree?: Worktree;
+  /** Engine-reported status (`_meta.rustcode.status`). */
+  status?: ThreadStatus;
 }
 
 export function parseSessionList(result: Json): { sessions: SessionSummary[]; nextCursor?: string } {
@@ -126,8 +138,11 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
     if (!id) continue;
     const stamp = str(e?.updatedAt);
     const meta = obj(e?._meta);
-    const harness = rustcodeMeta(e)?.harness;
+    const rc = rustcodeMeta(e);
+    const harness = rc?.harness;
     sessions.push({
+      worktree: parseWorktree(rc?.worktree),
+      status: parseStatus(rc?.status),
       id,
       cwd: str(e?.cwd) ?? "",
       title: str(e?.title),

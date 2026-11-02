@@ -1,6 +1,6 @@
 // The engine's ACP router is one deeply nested future type, laid out in
 // this binary; see the same limit in the engine crate.
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 mod cli;
 mod inline_terminal;

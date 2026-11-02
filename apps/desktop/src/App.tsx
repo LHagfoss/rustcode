@@ -8,20 +8,25 @@ import {
   setPanel,
   setSwitcher,
   setTerminalOpen,
+  setView,
   startNewThread,
   toggleSidebar,
   useApp,
 } from "./state/store";
 import { AgentsPanel } from "./ui/AgentViews";
 import { ChatView } from "./ui/ChatView";
+import { CommandPalette } from "./ui/CommandPalette";
+import { GrantDialog } from "./ui/Links";
 import { cx, Pill } from "./ui/primitives";
 import { Sidebar } from "./ui/Sidebar";
-import { Switcher } from "./ui/Switcher";
 
 const Settings = lazy(() => import("./ui/Settings").then((m) => ({ default: m.Settings })));
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const ChangesPanel = lazy(() => import("./ui/ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
 const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
+const Board = lazy(() => import("./ui/Board").then((m) => ({ default: m.Board })));
+const Review = lazy(() => import("./ui/Review").then((m) => ({ default: m.Review })));
+const Compare = lazy(() => import("./ui/Compare").then((m) => ({ default: m.Compare })));
 const PullsPanel = lazy(() => import("./ui/PullRequests").then((m) => ({ default: m.PullsPanel })));
 
 function useTheme() {
@@ -55,6 +60,16 @@ function useShortcuts() {
       } else if (mod && e.key === ".") {
         e.preventDefault();
         void cancel();
+      } else if (
+        e.key === "Escape" &&
+        !s.settings &&
+        s.view.kind !== "chat" &&
+        !s.switcherOpen &&
+        !s.grant &&
+        !s.confirm &&
+        !(e.target as HTMLElement | null)?.closest("input, textarea, select")
+      ) {
+        setView({ kind: "chat" });
       } else if (e.key === "Escape" && s.settings && !s.onboardingOpen) {
         const target = e.target as HTMLElement | null;
         if (!target?.closest("input, textarea")) openSettings(null);
@@ -77,7 +92,7 @@ function ConfirmDialog() {
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="rc-confirm-title"
-        className="surface w-[340px] rounded-[18px] border border-hairline p-5 shadow-panel rc-in"
+        className="surface w-[min(420px,calc(100vw-48px))] rounded-[18px] border border-hairline p-5 shadow-panel rc-in"
         onKeyDown={(e) => e.key === "Escape" && closeConfirm()}
       >
         <h2 id="rc-confirm-title" className="font-semibold text-body">
@@ -86,6 +101,17 @@ function ConfirmDialog() {
         <p className="mt-1.5 text-callout text-fg-2">{confirm.message}</p>
         <div className="mt-4 flex justify-end gap-2">
           <Pill onClick={closeConfirm}>Cancel</Pill>
+          {confirm.alt && (
+            <Pill
+              danger
+              onClick={() => {
+                closeConfirm();
+                confirm.alt?.run();
+              }}
+            >
+              {confirm.alt.action}
+            </Pill>
+          )}
           <Pill
             prominent
             autoFocus
@@ -131,12 +157,22 @@ export function App() {
   const settings = useApp((s) => s.settings);
   const onboarding = useApp((s) => s.onboardingOpen);
   const panel = useApp((s) => s.panel);
+  const view = useApp((s) => s.view);
   return (
     <Tooltip.Provider delayDuration={600}>
-      <div className="flex h-full w-full overflow-hidden">
+      {/* Hidden, not unmounted, under Settings: its sidebar shows the window's material through. */}
+      <div className={cx("flex h-full w-full overflow-hidden", settings && "invisible")}>
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
-          <ChatView />
+          {view.kind === "chat" ? (
+            <ChatView />
+          ) : (
+            <Suspense fallback={<div className="flex-1 bg-chat" />}>
+              {view.kind === "board" && <Board />}
+              {view.kind === "review" && <Review key={view.threadId} threadId={view.threadId} />}
+              {view.kind === "compare" && <Compare fanOut={view.fanOut} />}
+            </Suspense>
+          )}
           <Suspense fallback={null}>
             <TerminalPanel />
           </Suspense>
@@ -147,12 +183,13 @@ export function App() {
           {panel === "pulls" && <PullsPanel />}
         </Suspense>
       </div>
-      <Switcher />
+      <CommandPalette />
       <Suspense fallback={null}>
         {settings && <Settings />}
         {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
       </Suspense>
       <ConfirmDialog />
+      <GrantDialog />
       <Toasts />
     </Tooltip.Provider>
   );

@@ -5529,31 +5529,44 @@ fn thread_messaging_tools_are_offered_only_with_a_host() {
             .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
             .collect()
     };
-    let offers = |policy: ToolSchemaPolicy| {
+    let offered = |policy: ToolSchemaPolicy| -> Vec<&'static str> {
         let names = names(policy);
         crate::orchestration::TOOL_NAMES
             .iter()
-            .all(|tool| names.iter().any(|name| name == tool))
+            .chain(crate::orchestration::V2_TOOL_NAMES.iter())
+            .copied()
+            .filter(|tool| names.iter().any(|name| name == tool))
+            .collect()
     };
     let regular = ToolSchemaPolicy::root(true);
-    assert!(!offers(regular));
-    assert!(offers(regular.with_orchestration_tools()));
+    assert!(offered(regular).is_empty());
+    assert!(offered(regular.with_orchestration_tools(0)).is_empty());
+    // A version 1 client sees exactly the M1 tools.
+    assert_eq!(
+        offered(regular.with_orchestration_tools(1)),
+        crate::orchestration::TOOL_NAMES.to_vec()
+    );
+    let v2 = offered(regular.with_orchestration_tools(2));
+    assert_eq!(v2.len(), 6, "{v2:?}");
     // Plan mode and subagents never message another thread.
     for policy in [
         ToolSchemaPolicy::read_only_inspection(),
         ToolSchemaPolicy::subagent(),
         ToolSchemaPolicy::subagent_with_delegation(),
     ] {
-        assert!(
-            !policy
-                .with_orchestration_tools()
-                .include_orchestration_tools
-        );
-        assert!(!offers(policy.with_orchestration_tools()));
+        for version in [1, 2] {
+            let policy = policy.with_orchestration_tools(version);
+            assert!(!policy.include_orchestration_tools);
+            assert!(!policy.include_orchestration_v2_tools);
+            assert!(offered(policy).is_empty());
+        }
     }
     let mut prompt = String::new();
     super::schema::append_preview_hint(&mut prompt, regular);
     assert!(prompt.is_empty());
-    super::schema::append_preview_hint(&mut prompt, regular.with_orchestration_tools());
-    assert!(prompt.contains("message_session"));
+    super::schema::append_preview_hint(&mut prompt, regular.with_orchestration_tools(1));
+    assert_eq!(prompt, crate::orchestration::PROMPT_HINT);
+    let mut prompt = String::new();
+    super::schema::append_preview_hint(&mut prompt, regular.with_orchestration_tools(2));
+    assert_eq!(prompt, crate::orchestration::PROMPT_HINT_V2);
 }

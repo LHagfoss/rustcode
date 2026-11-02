@@ -363,3 +363,47 @@ fn legacy_model_state_becomes_a_model_option() {
     assert_eq!(option["currentValue"], "a");
     assert_eq!(option["options"][1]["value"], "b");
 }
+
+fn orchestrator() -> crate::orchestration::hub::Launch {
+    crate::orchestration::hub::Launch::new(
+        "/opt/rustcode/bin/rustcode".into(),
+        "thread-1",
+        std::path::Path::new("/tmp/run/orchestrator-1.sock"),
+        "secret",
+    )
+}
+
+#[tokio::test]
+async fn the_orchestrator_is_added_to_the_child_session() {
+    let (_thread, mut seen) = start(
+        None,
+        StartOptions {
+            orchestrator: Some(orchestrator()),
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    let new = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "session/new")
+        .expect("session/new was sent")
+        .1;
+    assert_eq!(
+        new["mcpServers"],
+        json!([{
+            "name": "rustcode",
+            "command": "/opt/rustcode/bin/rustcode",
+            "args": ["mcp-orchestrator", "--session", "thread-1",
+                     "--socket", "/tmp/run/orchestrator-1.sock"],
+            "env": [{ "name": "RUSTCODE_ORCHESTRATOR_TOKEN", "value": "secret" }],
+        }])
+    );
+
+    let (_thread, mut seen) = start(None, StartOptions::default()).await;
+    let new = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "session/new")
+        .unwrap()
+        .1;
+    assert_eq!(new["mcpServers"], json!([]), "no orchestrator, no servers");
+}

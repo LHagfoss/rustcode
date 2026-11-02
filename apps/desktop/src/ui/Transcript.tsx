@@ -2,16 +2,32 @@
 // stays pinned to the bottom while the reply streams unless the reader has
 // scrolled up, and a "Latest" button brings them back.
 
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { checkpointsByTurn } from "../acp/v2";
 import { useApp } from "../state/store";
 import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
 import { AgentSpawnRow } from "./AgentViews";
 import { cx } from "./primitives";
 import { AssistantRow, NoticeRow, ThoughtRow, ToolRow, TurnEndRow, UserRow, WorkingRow } from "./Rows";
+import { TurnChanges } from "./TurnChanges";
 
 type Row = { key: string; item?: TranscriptItem; working?: true };
+
+// Measured row heights by item id, kept across mounts and threads: reopening a
+// thread or scrolling back estimates each row exactly, so the virtualizer does
+// not chase estimate errors (each one a re-layout) while pinning to the bottom.
+const rowSizes = new Map<string, number>();
+const ROW_SIZES_MAX = 20_000;
+function rememberSize(key: string, size: number) {
+  if (!rowSizes.has(key) && rowSizes.size >= ROW_SIZES_MAX)
+    rowSizes.delete(rowSizes.keys().next().value as string);
+  rowSizes.set(key, size);
+}
+
+// A finished turn's summary never changes: computed once per footer row, not per streamed chunk.
+const completionCache = new WeakMap<TranscriptItem, TurnCompletion | null>();
 
 function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
@@ -107,26 +123,81 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
   const completions = useMemo(() => {
     const map: Record<string, TurnCompletion | null> = {};
     thread.items.forEach((item, i) => {
-      if (item.kind === "turnEnd") map[item.id] = turnCompletion(thread.items, i);
+      if (item.kind !== "turnEnd") return;
+      let done = completionCache.get(item);
+      if (done === undefined) {
+        done = turnCompletion(thread.items, i);
+        completionCache.set(item, done);
+      }
+      map[item.id] = done;
     });
     return map;
   }, [thread.items]);
   const rewind = useApp((s) => !!s.agent?.rewind) && (thread.harness?.capabilities.rewind ?? true);
+  const checkpoints = useApp((s) => s.checkpoints[thread.id]);
+  // Each finished turn's checkpoint, for its Changes chip.
+  const turnCheckpoints = useMemo(() => {
+    if (!checkpoints?.length) return {};
+    const turns: { id: string; prompt: string }[] = [];
+    let prompt = "";
+    for (const item of thread.items) {
+      if (item.kind === "user") prompt = item.text;
+      else if (item.kind === "turnEnd") turns.push({ id: item.id, prompt });
+    }
+    return checkpointsByTurn(turns, checkpoints);
+  }, [thread.items, checkpoints]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => {
+      const known = rowSizes.get(rows[i]?.key ?? "");
+      if (known !== undefined) return known;
       const item = rows[i]?.item;
       if (!item) return 24;
       if (item.kind === "tool" || item.kind === "thought" || item.kind === "turnEnd") return 26;
       return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
     },
     getItemKey: (i) => rows[i]?.key ?? i,
+    // Read lazily, after `attachScroll` put the view at the end (scroll events come later).
+    initialOffset: () => scrollRef.current?.scrollTop ?? 0,
+    measureElement: (element, entry, instance) => {
+      const index = instance.indexFromElement(element);
+      const key = rows[index]?.key;
+      // A row that just mounted keeps its estimate (exact when seen before); its ResizeObserver
+      // entry follows after layout with every other row's. Reading offsetHeight here instead
+      // forced a layout per mounted row, each after the re-render the previous one caused.
+      if (!entry) return (key && rowSizes.get(key)) || instance.options.estimateSize(index);
+      const size = measureElement(element, entry, instance);
+      if (key && key !== "working") rememberSize(key, size);
+      return size;
+    },
     overscan: 8,
     paddingStart: 20,
     paddingEnd: bottomInset,
   });
+
+  // Starts at the end before the virtualizer first reads the offset (refs attach before layout
+  // effects), so it renders the last rows at once instead of the first ones and then scrolling.
+  const attachScroll = useCallback((el: HTMLDivElement | null) => {
+    scrollRef.current = el;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // The virtualizer's own ref also runs on detach, and each detach walks every element it has
+  // seen (O(rows²) when a thread closes); stale elements are dropped once per commit instead.
+  const measureRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (el) virtualizer.measureElement(el);
+    },
+    [virtualizer],
+  );
+  useEffect(() => {
+    virtualizer.measureElement(null);
+  });
+
+  const [ready, setReady] = useState(false);
+  useLayoutEffect(() => setReady(true), []);
 
   const toBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -211,7 +282,10 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
     );
 
   const lastIndex = thread.items.length - 1;
-  const items = virtualizer.getVirtualItems();
+  // The first render draws no rows: the virtualizer has no scroll element yet and would pick the
+  // thread's first rows. `attachScroll` then puts the view at the end, and the second render
+  // (still before the first paint) draws the last rows straight away.
+  const items = ready ? virtualizer.getVirtualItems() : [];
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -265,7 +339,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
         </div>
       )}
       <div
-        ref={scrollRef}
+        ref={attachScroll}
         onScroll={onScroll}
         onWheel={onWheel}
         className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
@@ -284,7 +358,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
               <div
                 key={v.key}
                 data-index={v.index}
-                ref={virtualizer.measureElement}
+                ref={measureRef}
                 className="absolute top-0 left-0 w-full"
                 style={{ transform: `translateY(${v.start}px)` }}
               >
@@ -308,7 +382,16 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
                   ) : item?.kind === "notice" ? (
                     <NoticeRow item={item} />
                   ) : item?.kind === "turnEnd" ? (
-                    <TurnEndRow item={item} reply={replyBefore[item.id]} completion={completions[item.id]} />
+                    <TurnEndRow
+                      item={item}
+                      reply={replyBefore[item.id]}
+                      completion={completions[item.id]}
+                      changes={
+                        turnCheckpoints[item.id] && (
+                          <TurnChanges threadId={thread.id} checkpoint={turnCheckpoints[item.id]!} />
+                        )
+                      }
+                    />
                   ) : null}
                 </div>
               </div>

@@ -3,6 +3,7 @@
 //! UI needs (links, Finder, a harness login in Terminal, git changes). Every
 //! argument from the webview is validated here.
 
+mod banner;
 mod engine;
 mod links;
 mod native;
@@ -58,6 +59,11 @@ pub fn run() {
             native::open_login_terminal,
             native::git_changes,
             native::read_image,
+            native::open_terminal_at,
+            native::reduce_transparency,
+            banner::banner_save,
+            banner::banner_read,
+            banner::banner_remove,
             links::link_meta,
             threads::thread_rename,
             threads::thread_trash,
@@ -67,6 +73,11 @@ pub fn run() {
             pty::pty_close,
             smartui::smartui_page,
         ])
+        .setup(|app| {
+            // The engine starts with the app, in parallel with the webview loading the UI.
+            app.state::<EngineState>().prestart();
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("error while building the RustCode desktop app");
     app.run(|handle, event| {

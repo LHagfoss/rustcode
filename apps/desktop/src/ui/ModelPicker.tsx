@@ -1,12 +1,20 @@
-// The composer's model pill and its panel: harness (for a new thread),
-// model and reasoning effort. What the thread's harness cannot do is greyed
-// out with the reason, read from capability flags only.
+// The composer's model pill and its panel, after the SwiftUI app's
+// ModelEffortPanel: Fast mode and the model (with its effort) on one line,
+// the effort slider under them, and the harness only when more than one is
+// usable. The model's name drills into the model list. What the thread's
+// harness cannot do is greyed out with the reason, from capability flags.
 
-import { ChevronLeft, ChevronRight, ChevronUp, Lock } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronUp, Lock, Zap } from "lucide-react";
 import { Popover } from "radix-ui";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { type ConfigOption, effortLabel, type Harness, modelName } from "../acp/types";
-import { controlDisabledReason, normalizeDefault, selectOption, unavailableReason } from "../state/harness";
+import {
+  controlDisabledReason,
+  normalizeDefault,
+  selectOption,
+  unavailableReason,
+  usableHarnesses,
+} from "../state/harness";
 import { type NewThreadChoice, setConfigOption, setNewThreadChoice, useApp } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { cx, Tooltip } from "./primitives";
@@ -17,52 +25,126 @@ interface Choice {
   description?: string;
 }
 
-function EffortSegments({
+/**
+ * Reasoning effort as one track of evenly spaced stops, after the SwiftUI
+ * app's EffortSlider: the knob follows the pointer while dragged and snaps to
+ * the nearest stop when let go; a click on the track glides there; ←→ step.
+ * Only the stop the knob settles on is sent.
+ */
+function EffortSlider({
   efforts,
   current,
   onChange,
-  disabledReason,
+  onPreview,
 }: {
   efforts: string[];
   current?: string | null;
   onChange: (effort: string) => void;
-  disabledReason?: string;
+  onPreview: (effort: string | null) => void;
 }) {
-  if (disabledReason) {
-    return (
-      <div className="flex h-7 items-center gap-1.5 rounded-full bg-fill-3 px-3 text-callout text-fg-3">
-        <Lock size={11} />
-        {disabledReason}
-      </div>
-    );
-  }
-  if (!efforts.length) return null;
-  const index = Math.max(0, efforts.indexOf(current ?? ""));
+  const track = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<number | null>(null);
+  const [pending, setPending] = useState<number | null>(null);
+  const count = efforts.length;
+  const known = Math.max(0, efforts.indexOf(current ?? ""));
+  const index = pending ?? known;
+  // The engine confirmed (or changed) the effort: drop the optimistic stop.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the confirmed effort changes
+  useEffect(() => setPending(null), [current]);
+  const fractionOf = (i: number) => (count > 1 ? i / (count - 1) : 0);
+  const nearest = (f: number) => Math.round(f * (count - 1));
+  const fraction = drag ?? fractionOf(index);
+  const shown = drag === null ? index : nearest(drag);
+  const KNOB = 24;
+  const INSET = 2;
+
+  const at = (clientX: number) => {
+    const el = track.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    const travel = rect.width - KNOB - 2 * INSET;
+    return Math.min(1, Math.max(0, (clientX - rect.left - INSET - KNOB / 2) / Math.max(travel, 1)));
+  };
+  const commit = (i: number) => {
+    const clamped = Math.min(count - 1, Math.max(0, i));
+    setPending(clamped);
+    const effort = efforts[clamped];
+    if (effort && effort !== current) onChange(effort);
+  };
+
   return (
     <div
-      role="radiogroup"
+      ref={track}
+      role="slider"
+      tabIndex={0}
       aria-label="Reasoning effort"
-      className="relative flex h-7 rounded-full bg-fill-3 p-0.5"
+      aria-valuemin={0}
+      aria-valuemax={count - 1}
+      aria-valuenow={index}
+      aria-valuetext={effortLabel(efforts[index] ?? "")}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const f = at(e.clientX);
+        setDrag(f);
+        onPreview(efforts[nearest(f)] ?? null);
+      }}
+      onPointerMove={(e) => {
+        if (drag === null) return;
+        const f = at(e.clientX);
+        setDrag(f);
+        onPreview(efforts[nearest(f)] ?? null);
+      }}
+      onPointerUp={() => {
+        if (drag === null) return;
+        commit(nearest(drag));
+        setDrag(null);
+        onPreview(null);
+      }}
+      onPointerCancel={() => {
+        setDrag(null);
+        onPreview(null);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+          e.preventDefault();
+          commit(index - 1);
+        } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+          e.preventDefault();
+          commit(index + 1);
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          commit(0);
+        } else if (e.key === "End") {
+          e.preventDefault();
+          commit(count - 1);
+        }
+      }}
+      className="relative h-7 touch-none rounded-full bg-fill-3 outline-none focus-visible:ring-2 focus-visible:ring-info/50"
     >
       <div
-        className="absolute top-0.5 bottom-0.5 rounded-full bg-brand-fill transition-[left,width] duration-200 ease-snappy"
-        style={{ left: 2, width: `calc(${((index + 1) / efforts.length) * 100}% - 4px)` }}
+        className={cx(
+          "absolute top-0 bottom-0 left-0 rounded-full bg-brand-fill",
+          drag === null && "transition-[width] duration-300 ease-snappy",
+        )}
+        style={{ width: `calc(${INSET * 2 + KNOB}px + (100% - ${KNOB + INSET * 2}px) * ${fraction})` }}
       />
       {efforts.map((effort, i) => (
-        <button
+        <span
           key={effort}
-          type="button"
-          role="radio"
-          aria-checked={effort === current}
-          onClick={() => onChange(effort)}
           className={cx(
-            "relative z-10 flex-1 rounded-full font-medium text-callout transition-colors",
-            i <= index ? "text-white" : "text-fg-2 hover:text-fg",
+            "absolute top-1/2 size-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-150",
+            i <= shown ? "bg-white/55" : "bg-fg-3",
           )}
-        >
-          {effortLabel(effort)}
-        </button>
+          style={{ left: `calc(${INSET + KNOB / 2}px + (100% - ${KNOB + INSET * 2}px) * ${fractionOf(i)})` }}
+        />
       ))}
+      <span
+        className={cx(
+          "absolute top-[2px] size-6 rounded-full bg-white shadow-[0_1px_3px_rgb(0_0_0/0.3)]",
+          drag === null ? "transition-[left,transform] duration-300 ease-snappy" : "scale-105",
+        )}
+        style={{ left: `calc(${INSET}px + (100% - ${KNOB + INSET * 2}px) * ${fraction})` }}
+      />
     </div>
   );
 }
@@ -171,12 +253,34 @@ function pillLabel(model?: string | null, effort?: string | null, compact = fals
   };
 }
 
+/** Fast mode as a labelled toggle, offered only when the model has it. */
+function FastToggle({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <Tooltip label="Faster replies; uses more of your plan">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        onClick={() => onChange(!on)}
+        className={cx(
+          "flex h-7 items-center gap-1.5 rounded-full px-2.5 font-medium text-callout",
+          on ? "bg-brand/15 text-brand" : "text-fg-2 hover:bg-fill-2 hover:text-fg",
+        )}
+      >
+        <Zap size={13} fill={on ? "currentColor" : "none"} />
+        Fast mode
+      </button>
+    </Tooltip>
+  );
+}
+
 export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact?: boolean }) {
   const harnesses = useApp((s) => s.harnesses);
   const choice = useApp((s) => s.newThread);
   const threads = useApp((s) => s.threads);
   const [open, setOpen] = useState(false);
   const [pane, setPane] = useState<"main" | "models" | "harness">("main");
+  const [preview, setPreview] = useState<string | null>(null);
 
   // A built-in model list known from any open thread, for a new thread before it exists.
   const knownConfig: ConfigOption[] = useMemo(
@@ -218,6 +322,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     efforts = harness?.builtin !== false ? (e?.choices.map((c) => c.value) ?? []) : [];
     effort = effective.effort ?? e?.current;
   }
+  const fast = thread?.configOptions.find((o) => o.id === "fast" && o.type === "boolean");
 
   const setChoice = (next: Partial<NewThreadChoice>) => {
     const merged = { ...effective, model: model ?? null, effort: effort ?? null, ...next };
@@ -227,7 +332,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const pickModel = (value: string) => {
     if (thread) void setConfigOption(thread.id, "model", value);
     else setChoice({ model: value });
-    setPane("main");
+    if (listOnly) setOpen(false);
+    else setPane("main");
   };
   const pickEffort = (value: string) => {
     if (thread) void setConfigOption(thread.id, "effort", value);
@@ -237,7 +343,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const effortReason = controlDisabledReason("effort", caps, harnessName);
   const modelReason = controlDisabledReason("model", caps, harnessName);
   const label = pillLabel(model, effortReason ? null : effort, compact);
-  const showHarness = (harnesses?.harnesses.length ?? 0) > 1 && !harnesses?.unsupported;
+  const usable = harnesses ? usableHarnesses(harnesses).length : 0;
+  const showHarness = usable > 1 && !harnesses?.unsupported;
+  const hasEffort = !effortReason && efforts.length > 1;
+  // With nothing to set but the model, the list is the whole panel.
+  const listOnly = !hasEffort && !fast && !showHarness && !modelReason && models.length > 0;
+  const shownPane = listOnly ? "models" : pane;
+  const shownEffort = preview ?? (hasEffort ? effort : null);
 
   return (
     <Popover.Root
@@ -252,19 +364,17 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           type="button"
           aria-label="Model and effort"
           className={cx(
-            "flex h-[30px] max-w-[260px] items-center gap-1.5 rounded-full px-3 text-callout text-fg-2 transition-colors hover:bg-fill-1",
-            open ? "bg-fill-1" : "bg-fill-2",
+            "flex h-[30px] max-w-[260px] items-center gap-1.5 rounded-full px-3 text-callout text-fg-2 transition-colors hover:bg-fill-1 hover:text-fg",
+            open ? "bg-fill-1 text-fg" : "bg-fill-2",
           )}
         >
-          {showHarness && harness && !harness.builtin && (
-            <span className="font-medium text-fg">{harness.name}</span>
-          )}
+          {fast?.currentBool && <Zap size={11} className="shrink-0 text-brand" fill="currentColor" />}
           <span className="truncate">{label.name}</span>
           {label.effort && <span className="text-fg-3">{effortLabel(label.effort)}</span>}
           <ChevronUp
             size={11}
             strokeWidth={2.5}
-            className={cx("transition-transform", open && "rotate-180")}
+            className={cx("transition-transform duration-200 ease-snappy", open && "rotate-180")}
           />
         </button>
       </Popover.Trigger>
@@ -274,72 +384,96 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           align="end"
           sideOffset={8}
           collisionPadding={10}
-          className="surface z-40 flex w-[min(380px,calc(100vw-40px))] flex-col gap-2 rounded-[20px] border border-hairline p-1.5 rc-in"
+          className="surface z-40 w-[min(340px,calc(100vw-40px))] overflow-hidden rounded-[20px] border border-hairline p-2"
         >
-          {pane === "main" && (
-            <>
+          {shownPane === "main" && (
+            <div key="main" className="flex flex-col gap-2 rc-drill-back">
+              <div className="flex items-center gap-2">
+                {fast && (
+                  <FastToggle
+                    on={!!fast.currentBool}
+                    onChange={(on) => thread && void setConfigOption(thread.id, "fast", on)}
+                  />
+                )}
+                <span className="flex-1" />
+                <Tooltip label={modelReason}>
+                  <button
+                    type="button"
+                    disabled={!!modelReason || !models.length}
+                    onClick={() => setPane("models")}
+                    aria-label={`Model ${modelName(model ?? undefined) ?? "default"}`}
+                    className="flex h-7 min-w-0 items-center gap-1.5 rounded-full px-2.5 font-medium text-callout hover:bg-fill-2 disabled:hover:bg-transparent"
+                  >
+                    <span className="truncate">
+                      {modelName(model ?? undefined) ?? (models.length ? "Default" : "Harness default")}
+                    </span>
+                    {shownEffort && <span className="shrink-0 text-fg-3">{effortLabel(shownEffort)}</span>}
+                    {!modelReason && models.length > 0 && (
+                      <ChevronRight size={12} strokeWidth={2.5} className="shrink-0 text-fg-3" />
+                    )}
+                  </button>
+                </Tooltip>
+              </div>
+              {hasEffort && (
+                <EffortSlider
+                  efforts={efforts}
+                  current={effort}
+                  onChange={pickEffort}
+                  onPreview={setPreview}
+                />
+              )}
+              {effortReason && efforts.length > 0 && (
+                <div className="flex items-center gap-1.5 px-2.5 text-caption text-fg-3">
+                  <Lock size={10} />
+                  {effortReason}
+                </div>
+              )}
               {showHarness && (
                 <button
                   type="button"
                   disabled={!isNew}
                   onClick={() => setPane("harness")}
-                  className="flex h-9 items-center gap-2 rounded-[14px] px-2.5 text-left hover:bg-fill-2 disabled:hover:bg-transparent"
+                  className="flex h-8 items-center gap-2 rounded-[12px] px-2.5 text-left hover:bg-fill-2 disabled:hover:bg-transparent"
                 >
                   <span className="text-callout text-fg-2">Harness</span>
                   <span className="flex-1 truncate text-right font-medium text-callout">{harnessName}</span>
                   {isNew ? (
-                    <ChevronRight size={13} className="text-fg-3" />
+                    <ChevronRight size={12} strokeWidth={2.5} className="text-fg-3" />
                   ) : (
-                    <Tooltip label="A thread keeps the harness it started on">
-                      <Lock size={12} className="text-fg-3" />
+                    <Tooltip label="A thread keeps its harness">
+                      <Lock size={11} className="text-fg-3" />
                     </Tooltip>
                   )}
                 </button>
               )}
-              <Tooltip label={modelReason}>
+            </div>
+          )}
+          {shownPane !== "main" && (
+            <div key={shownPane} className="flex flex-col gap-1.5 rc-drill">
+              {!listOnly && (
                 <button
                   type="button"
-                  disabled={!!modelReason || !models.length}
-                  onClick={() => setPane("models")}
-                  className="flex h-9 items-center gap-2 rounded-[14px] px-2.5 text-left hover:bg-fill-2 disabled:opacity-50 disabled:hover:bg-transparent"
+                  onClick={() => setPane("main")}
+                  className="flex h-7 items-center gap-1 self-start rounded-full px-2 font-semibold text-callout text-fg-2 hover:bg-fill-2"
                 >
-                  <span className="text-callout text-fg-2">Model</span>
-                  <span className="flex-1 truncate text-right font-medium text-callout">
-                    {modelName(model ?? undefined) ?? (models.length ? "Default" : "Harness default")}
-                  </span>
-                  <ChevronRight size={13} className="text-fg-3" />
+                  <ChevronLeft size={13} />
+                  {shownPane === "models" ? "Models" : "Harness"}
                 </button>
-              </Tooltip>
-              <div className="px-1 pb-1">
-                <EffortSegments
-                  efforts={efforts}
-                  current={effort}
-                  onChange={pickEffort}
-                  disabledReason={effortReason}
+              )}
+              {shownPane === "models" && <ModelList choices={models} current={model} onPick={pickModel} />}
+              {shownPane === "harness" && harnesses && (
+                <HarnessList
+                  harnesses={harnesses.harnesses}
+                  current={effective.harness}
+                  onPick={(id) => {
+                    setNewThreadChoice(
+                      normalizeDefault(harnesses, { harness: id, model: null, effort: null }),
+                    );
+                    setPane("main");
+                  }}
                 />
-              </div>
-            </>
-          )}
-          {pane !== "main" && (
-            <button
-              type="button"
-              onClick={() => setPane("main")}
-              className="flex h-7 items-center gap-1 self-start rounded-full px-2 font-medium text-callout text-fg-2 hover:bg-fill-2"
-            >
-              <ChevronLeft size={13} />
-              {pane === "models" ? "Models" : "Harness"}
-            </button>
-          )}
-          {pane === "models" && <ModelList choices={models} current={model} onPick={pickModel} />}
-          {pane === "harness" && harnesses && (
-            <HarnessList
-              harnesses={harnesses.harnesses}
-              current={effective.harness}
-              onPick={(id) => {
-                setNewThreadChoice(normalizeDefault(harnesses, { harness: id, model: null, effort: null }));
-                setPane("main");
-              }}
-            />
+              )}
+            </div>
           )}
         </Popover.Content>
       </Popover.Portal>

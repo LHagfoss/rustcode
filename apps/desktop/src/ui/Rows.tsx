@@ -40,9 +40,10 @@ import {
   thoughtHeadings,
 } from "../state/thread";
 import { LinkChip } from "./LinkChip";
-import { CodeBlock, CopyButton, Markdown } from "./Markdown";
+import { CopyButton, Markdown } from "./Markdown";
 import { cx, Spinner, Tooltip } from "./primitives";
 import { SmartUIView } from "./SmartUIView";
+import { VizView } from "./Viz";
 
 type Item<K extends TranscriptItem["kind"]> = Extract<TranscriptItem, { kind: K }>;
 
@@ -174,12 +175,15 @@ export const AssistantRow = memo(function AssistantRow({
   threadId?: string;
 }) {
   const segments = useMemo(() => splitReply(item.text), [item.text]);
-  if (segments.length === 1 && segments[0]!.kind === "markdown") return <Markdown text={item.text} />;
+  if (segments.length === 1 && segments[0]!.kind === "markdown")
+    return (
+      <Markdown text={item.text} streaming={streaming} className={streaming ? "rc-stream" : undefined} />
+    );
   return (
     <div className="flex flex-col gap-2.5">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
-          <Markdown key={i} text={segment.text} />
+          <Markdown key={i} text={segment.text} streaming={streaming && i === segments.length - 1} />
         ) : segment.kind === "ui" ? (
           <SmartUIView
             key={`ui${segment.index}`}
@@ -189,7 +193,7 @@ export const AssistantRow = memo(function AssistantRow({
             threadId={threadId}
           />
         ) : (
-          <CodeBlock key={`viz${segment.index}`} code={segment.source} lang="rustcode-viz" />
+          <VizView key={`viz${segment.index}`} source={segment.source} complete={segment.complete} />
         ),
       )}
     </div>
@@ -227,7 +231,7 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
       </button>
       {(open || (live && tail)) && (
         <div className={cx("pt-2 text-fg-2", live && !open && "line-clamp-5")}>
-          <Markdown text={open ? item.text : tail} className="gap-1.5 text-callout" />
+          <Markdown text={open ? item.text : tail} streaming={live} className="gap-1.5 text-callout" />
         </div>
       )}
     </div>
@@ -444,7 +448,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
         </pre>
       )}
       {open && (
-        <div className="mt-1.5 mb-1 ml-[26px] flex flex-col gap-2.5">
+        <div className="rc-expand mt-1.5 mb-1 ml-[26px] flex flex-col gap-2.5">
           {item.diffs.length > 0 ? (
             item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
           ) : (
@@ -534,10 +538,13 @@ export function TurnEndRow({
   item,
   reply,
   completion,
+  changes,
 }: {
   item: Item<"turnEnd">;
   reply?: string;
   completion?: TurnCompletion | null;
+  /** The turn's checkpoint chip (Changes), when the engine keeps checkpoints. */
+  changes?: ReactNode;
 }) {
   const parts = [
     item.outcome === "cancelled"
@@ -556,6 +563,7 @@ export function TurnEndRow({
         {reply && <CopyButton text={reply} iconOnly label="Copy reply" />}
         {item.outcome === "cancelled" && <SquareStop size={11} />}
         <span className="tabular">{parts.join(" · ")}</span>
+        {changes}
       </div>
     </div>
   );

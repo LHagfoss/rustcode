@@ -341,6 +341,91 @@ pub const WAIT_SESSION: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Orchestration version 2 (`docs/orchestrator.md`): offered only to
+/// clients that advertise `_meta.rustcode.orchestration >= 2`.
+pub const READ_SESSION: Tool = Tool {
+    name: crate::orchestration::READ_SESSION,
+    description: "Read the last turns of another thread of this project: its title, status, and each turn's request, answer and changed files (at most 16 KiB).",
+    arguments: r#"{"session_id": "id from list_sessions", "last_turns": 3}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "last_turns": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_LAST_TURNS, "default": crate::orchestration::DEFAULT_LAST_TURNS}
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const START_SESSION: Tool = Tool {
+    name: crate::orchestration::START_SESSION,
+    description: "Start a new thread with prompt as its first message, on another harness or model if given, in its own worktree by default. The user is asked first. Returns session_id and a link_id for wait_session. It does not see this conversation.",
+    arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
+                "title": {"type": "string", "maxLength": crate::orchestration::MAX_TITLE_CHARS},
+                "harness": {"type": "string"},
+                "model": {"type": "string"},
+                "effort": {"type": "string"},
+                "worktree": {"type": "boolean"},
+                "project": {"type": "string", "description": "absolute path of another project"}
+            },
+            "required": ["prompt"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const FAN_OUT: Tool = Tool {
+    name: crate::orchestration::FAN_OUT,
+    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. The user is asked first. Returns one link per thread for wait_session.",
+    arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}]}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
+                "title": {"type": "string", "maxLength": crate::orchestration::MAX_TITLE_CHARS},
+                "harnesses": {
+                    "type": "array",
+                    "minItems": crate::orchestration::MIN_FAN_OUT,
+                    "maxItems": crate::orchestration::MAX_FAN_OUT,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "harness": {"type": "string", "minLength": 1},
+                            "model": {"type": "string"},
+                            "effort": {"type": "string"}
+                        },
+                        "required": ["harness"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["prompt", "harnesses"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 fn smart_ui_preview_schema() -> Value {
     crate::smart_ui::schema()
 }

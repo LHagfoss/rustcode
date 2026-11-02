@@ -782,6 +782,12 @@ pub fn load_session_file(path: &Path) -> Vec<ChatMessage> {
 }
 
 pub fn delete_session_file(path: &Path) {
+    // The thread's checkpoint refs go with it (`docs/orchestrator.md`).
+    if let Some(session_id) = session_id_from_path(path)
+        && let Some(cwd) = crate::checkpoints::thread_cwd(&session_id)
+    {
+        crate::checkpoints::delete_session(&cwd, &session_id);
+    }
     SessionStore::delete_session_file(path);
 }
 

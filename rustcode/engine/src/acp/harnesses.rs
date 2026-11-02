@@ -134,7 +134,9 @@ impl ClientSink for AcpClientSink {
     fn request_permission(&self, mut request: RequestPermissionRequest) -> PermissionFuture {
         request.session_id = self.session_id.clone().into();
         let connection = self.connection.clone();
+        let waiting = crate::thread_status::waiting(&self.session_id);
         Box::pin(async move {
+            let _waiting = waiting;
             match connection.send_request(request).block_task().await {
                 Ok(response) => response,
                 Err(error) => {
@@ -163,6 +165,7 @@ pub(crate) async fn new_session(
     request: NewSessionRequest,
     asked: harness::HarnessRequest,
     connection: &ConnectionTo<Client>,
+    orchestration: u8,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
     let cwd = super::canonical_acp_cwd(&request.cwd, "session/new")?;
     let id = asked.harness.clone().unwrap_or_default();
@@ -204,7 +207,9 @@ pub(crate) async fn new_session(
         sink,
         true,
     );
+    let orchestrated = attach_orchestrator(&session, orchestration, connection).await;
     if let Err(message) = session.ensure_started().await {
+        crate::orchestration::hub::release(&session_id);
         crate::dbg_log!("harness {} failed to start: {message}", resolved.id);
         return Err(agent_client_protocol::Error::internal_error().data(message));
     }
@@ -216,7 +221,28 @@ pub(crate) async fn new_session(
         .insert(session_id.clone(), Arc::clone(&session));
     Ok(NewSessionResponse::new(session_id)
         .config_options(options)
-        .meta(harness::session_meta(&resolved)))
+        .meta(harness::session_meta(&resolved, orchestrated)))
+}
+
+/// Give an external thread the orchestration tools when the client hosts
+/// version 2 of them: register it with the engine's orchestrator socket and
+/// have the harness start `rustcode mcp-orchestrator`. Whether it did.
+async fn attach_orchestrator(
+    session: &ExternalSession,
+    orchestration: u8,
+    connection: &ConnectionTo<Client>,
+) -> bool {
+    if orchestration < 2 || !harness::capabilities(&session.harness).orchestration {
+        return false;
+    }
+    let Some(client) = super::preview::orchestration_client_for(true, connection, &session.id)
+    else {
+        return false;
+    };
+    let launch = crate::orchestration::hub::launch_for(&session.id, client).await;
+    let attached = launch.is_some();
+    session.set_orchestrator(launch);
+    attached
 }
 
 /// `session/load` of a thread that ran on an external harness: replay its
@@ -227,6 +253,7 @@ pub(crate) async fn load_session(
     request: &LoadSessionRequest,
     record: store::HarnessRecord,
     connection: &ConnectionTo<Client>,
+    orchestration: u8,
 ) -> Result<LoadSessionResponse, agent_client_protocol::Error> {
     let session_id = request.session_id.to_string();
     let cwd = super::canonical_acp_cwd(&request.cwd, "session/load")?;
@@ -271,6 +298,7 @@ pub(crate) async fn load_session(
         open.insert(session_id.clone(), Arc::clone(&session));
         session
     };
+    let orchestrated = attach_orchestrator(&session, orchestration, connection).await;
     super::mark_acp_session(&session_id);
     let mut updates = harness::transcript::replay(&history, Some(&cwd));
     updates.extend(usage);
@@ -289,7 +317,7 @@ pub(crate) async fn load_session(
     }
     Ok(LoadSessionResponse::new()
         .config_options(session.config_options().await)
-        .meta(harness::session_meta(&resolved)))
+        .meta(harness::session_meta(&resolved, orchestrated)))
 }
 
 pub(crate) async fn get(
@@ -306,6 +334,7 @@ pub(crate) async fn close(sessions: &ExternalSessions, session_id: &str) -> bool
         return false;
     };
     session.close().await;
+    crate::orchestration::hub::release(session_id);
     super::unmark_acp_session(session_id);
     true
 }
@@ -315,6 +344,7 @@ pub(crate) async fn close_all(sessions: &ExternalSessions) {
     let open = sessions.lock().await.drain().collect::<Vec<_>>();
     for (session_id, session) in open {
         session.kill_now();
+        crate::orchestration::hub::release(&session_id);
         super::unmark_acp_session(&session_id);
     }
     harness::process::kill_all();
