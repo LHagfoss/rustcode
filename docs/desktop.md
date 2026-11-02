@@ -62,7 +62,10 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   with backoff (0.5 s doubling to 30 s, reset after a minute up) and the UI
   initializes a fresh connection. Quitting closes the engine's stdin so it
   cleans up its sessions, then kills it after 2 s. The shell does not read or
-  forward credentials; the webview sees only what the engine prints.
+  forward credentials; the webview sees only what the engine prints. The
+  engine starts with the app, while the page loads; the first page adopts
+  it. Lines already buffered on stdout go out together as one `lines`
+  message (up to 1,024 lines or 4 MB).
 - **Native helpers**, each validated in Rust:
   - `native.rs`: `open_url` (http, https, mailto only), `reveal_path`,
     `git_changes` (the Changes panel: `git diff HEAD` plus untracked files),
@@ -312,6 +315,87 @@ runs the same on pull requests that touch `apps/desktop`.
 
 `src-tauri` is its own Cargo workspace (the root workspace excludes it), with
 its own `target/`. Engine changes never build it.
+
+## Performance
+
+`bun run perf [prod|dev] [--seconds 30] [--rate 100] [--replay file.jsonl]`
+builds the UI (`prod`: `vite build` + `vite preview`; `dev`: a Vite dev
+server with its own dependency cache, on ports 1434/1433) and drives it in
+headless Chrome against `?transport=perf` (`src/acp/perf.ts`): the mock
+engine plus 500 threads, `perf-long` (2,000 messages, 5,000 rows),
+`perf-stream` (reply chunks at `--rate` per second with a running tool call
+every 40 chunks) and, with `--replay`, `perf-real`, a recorded real
+`session/load` (record one with `initialize` + `session/load` against a
+copy of a thread folder in a scratch `RUSTCODE_CONFIG_DIR`). Every engine
+line arrives as its own task, as Tauri channel messages do. It prints
+startup, time to the transcript's first rows, React commits, long tasks,
+frames, key-to-next-frame latency while typing in the composer during the
+stream, ⌘K and sidebar filtering, and idle main-thread time. `--profile`
+(with `--inclusive`) prints the hottest functions of an unminified
+production build, `--trace` main-thread time by trace event. Chrome stands
+in for WKWebView: compare runs with each other.
+
+What was slow, and what changed:
+
+- **The transcript did not virtualize.** The chat column had no
+  `min-height: 0`, so it grew to the full transcript height and every row
+  (5,000 in `perf-long`) was in the DOM; switching threads re-rendered and
+  re-measured all of them. Now the column is bounded, the transcript is
+  keyed by thread and starts at its end, measured row heights are kept by
+  item id, and a newly mounted row keeps its estimate until its
+  ResizeObserver entry (reading `offsetHeight` in the ref forced a layout
+  per row).
+- **Every engine line was a store update and a render**, notifying every
+  subscriber. Lines are now queued and applied once per animation frame
+  inside one batch (`state/batch.ts`): state updates at once, subscribers
+  hear once. Inside the batch the reducer changes arrays it made in that
+  batch in place (`foldingBatch`), so a replay no longer copies the
+  transcript per update, and a streamed chunk closes open thoughts by
+  looking back to the last reply, not over the whole thread.
+- **The sidebar re-rendered all rows per chunk** (it subscribed to every
+  thread). Rows are memoized and read only their flags; row selectors look
+  sessions up by id instead of scanning the list. The composer ignores
+  transcript changes.
+- **Markdown was re-parsed whole per chunk and per remount.** A streaming
+  reply is split into blocks and only the last one re-parses; finished
+  text is parsed once and its element tree is cached by its text; Shiki
+  output is cached, so a remounted code block is coloured in its first
+  frame.
+- **Engine stderr** was appended to the store per line; it is now batched.
+
+Before (HEAD before these changes) and after, `perf-long` at 2,000
+messages, streaming 100 chunks/s for 30 s with a key press every 120 ms,
+Chrome headless on an Apple silicon Mac:
+
+| | prod before | prod after | dev before | dev after |
+|---|---|---|---|---|
+| Thread list after load | 270 ms | 400 ms | 1.26 s | 1.08 s |
+| Open 2,000-message thread, first rows | > 120 s (200 messages: 25.5 s) | 131 ms | > 60 s at 200 messages | 180 ms |
+| Open recorded real thread (1,437 updates, 3.5 MB) | 51.2 s | 110 ms | > 60 s | 251 ms |
+| Switch back to an open long thread | 189 ms (500 rows) | 13 ms | 757 ms | 61 ms |
+| Streaming: frames per second | 32 | 60 | 4.8 | 60 |
+| Streaming: dropped frames in 30 s | 838 | 3 | 1,701 | 15 |
+| Streaming: long tasks > 50 ms | 3 (max 72 ms) | 0 | 143 (max 325 ms) | 2 (max 192 ms) |
+| Streaming: main thread busy | 100 % | 22 % | 97 % | 31 % |
+| Streaming: backlog after the stream ends | 110 s | 0 | > 120 s | 0 |
+| Key to next frame while streaming, p50 / p95 | 31 / 40 ms | 9 / 16 ms | 85 / 188 ms | 10 / 16 ms |
+| Sidebar filter over 500 threads, p95 | 64 ms | 28 ms | 408 ms | 54 ms |
+| Idle main thread | 2 % | 2 % | 96 % (backlog) | 3 % |
+
+The streaming and sidebar "before" rows were measured with 10-message
+threads, as the larger ones did not finish loading. Most of the dev-mode
+gap is React's development build (StrictMode double renders, dev-only
+checks and the Performance-track logging); in dev mode streaming and
+opening threads are now smooth too. Natively (`tauri build --debug`, debug
+engine, a scratch config) the engine now starts 0.85 s after launch
+instead of when the page asks for it (1.4 s); idle, the shell, the
+WebContent process and the engine sit at 0 % CPU.
+
+Still open: the sidebar's 500 rows are not virtualized, so every store
+notification runs their selectors (about 3 % of the main thread while
+streaming) and filtering re-renders them; the window's vibrancy and
+`backdrop-filter` surfaces cost compositor time that a headless browser
+does not show.
 
 ## Release
 
