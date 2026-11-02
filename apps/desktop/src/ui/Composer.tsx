@@ -18,7 +18,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { onFileDrop, pickFiles, pickFolder, readImage } from "../lib/native";
@@ -147,7 +147,28 @@ async function attachmentsFromPaths(
   return out;
 }
 
-export function Composer({ thread, compact }: { thread?: ThreadState; compact?: boolean }) {
+/** Re-render for what the composer shows, not for every streamed chunk (`items` is read live). */
+function sameComposer(
+  a: { thread?: ThreadState; compact?: boolean },
+  b: { thread?: ThreadState; compact?: boolean },
+): boolean {
+  if (a.compact !== b.compact) return false;
+  if (a.thread === b.thread) return true;
+  if (!a.thread || !b.thread) return false;
+  for (const key of Object.keys(b.thread) as (keyof ThreadState)[]) {
+    if (key !== "items" && key !== "toolIndex" && key !== "usage" && a.thread[key] !== b.thread[key])
+      return false;
+  }
+  return Object.keys(a.thread).length === Object.keys(b.thread).length;
+}
+
+export const Composer = memo(function Composer({
+  thread,
+  compact,
+}: {
+  thread?: ThreadState;
+  compact?: boolean;
+}) {
   const key = thread?.id ?? "new";
   const draft = useApp((s) => s.drafts[key] ?? "");
   const extras = useApp((s) => s.extras[key] ?? emptyExtras);
@@ -322,7 +343,8 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
       return;
     }
     if (e.key === "ArrowUp" && !draft && !hasExtras(extras) && thread) {
-      const last = [...thread.items].reverse().find((i) => i.kind === "user");
+      const items = useApp.getState().threads[thread.id]?.items ?? thread.items;
+      const last = [...items].reverse().find((i) => i.kind === "user");
       if (last && last.kind === "user") {
         e.preventDefault();
         update(last.text);
@@ -543,7 +565,7 @@ export function Composer({ thread, compact }: { thread?: ThreadState; compact?: 
       </div>
     </div>
   );
-}
+}, sameComposer);
 
 /**
  * Messages waiting for the running turn to end, as rows above the composer.

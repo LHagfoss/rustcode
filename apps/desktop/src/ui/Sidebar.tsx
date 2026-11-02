@@ -29,7 +29,7 @@ import {
   X,
 } from "lucide-react";
 import { ContextMenu, DropdownMenu } from "radix-ui";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { agentActive, type SubagentInfo } from "../acp/rustcode";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
 import { openTerminalAt, pickFolder, revealPath } from "../lib/native";
@@ -182,7 +182,8 @@ function ThreadMenuItems({
   );
 }
 
-function ThreadRow({
+// Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
+const ThreadRow = memo(function ThreadRow({
   session,
   selected,
   scopeAll,
@@ -193,15 +194,14 @@ function ThreadRow({
   scopeAll: boolean;
   now: number;
 }) {
-  const thread = useApp((s) => s.threads[session.id]);
+  const request = useApp((s) => s.threads[session.id]?.permissions[0]);
+  const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const harnesses = useApp((s) => s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
-  const request = thread?.permissions[0];
-  const running = thread?.running ?? false;
   const harness =
     session.harness && session.harness !== "rustcode"
       ? harnesses?.harnesses.find((h) => h.id === session.harness)
@@ -321,7 +321,7 @@ function ThreadRow({
       </ContextMenu.Portal>
     </ContextMenu.Root>
   );
-}
+});
 
 const NO_AGENTS: SubagentInfo[] = [];
 
@@ -382,7 +382,12 @@ export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
   const selectedId = useApp((s) => s.selectedId);
-  const threads = useApp((s) => s.threads);
+  // Which threads need you or work, as a string so a streamed chunk does not change it.
+  const flags = useApp((s) =>
+    Object.values(s.threads)
+      .map((t) => (t.permissions.length ? `${t.id}:n` : t.running ? `${t.id}:w` : ""))
+      .join(" "),
+  );
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
   const pinned = useApp((s) => s.pinned);
@@ -436,15 +441,15 @@ export function Sidebar() {
   }, [filtered, parentOf]);
 
   const groups = useMemo(() => {
+    const flagged = new Set(flags.split(" "));
     const needs: SessionSummary[] = [];
     const working: SessionSummary[] = [];
     const pins: SessionSummary[] = [];
     const rest: SessionSummary[] = [];
     for (const s of filtered) {
       if (parentOf[s.id]) continue;
-      const t = threads[s.id];
-      if (t?.permissions.length) needs.push(s);
-      else if (t?.running) working.push(s);
+      if (flagged.has(`${s.id}:n`)) needs.push(s);
+      else if (flagged.has(`${s.id}:w`)) working.push(s);
       else if (pinned.includes(s.id)) pins.push(s);
       else rest.push(s);
     }
@@ -469,7 +474,7 @@ export function Sidebar() {
       { id: "pinned", label: "Pinned", items: pins },
       ...projects,
     ].filter((g) => g.items.length);
-  }, [filtered, threads, pinned, showArchived, parentOf]);
+  }, [filtered, flags, pinned, showArchived, parentOf]);
 
   const onResize = (e: React.PointerEvent) => {
     dragging.current = true;
