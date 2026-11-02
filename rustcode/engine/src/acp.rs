@@ -1204,6 +1204,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
     // Servers start on the session's first turn, not here: the app attaches
     // an engine for chats that may never run one (#2503).
     crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
+    crate::thread_index::warm();
 
     let server = AcpServer::new(auto_approve)?;
     // However the connection ends, no harness process outlives the engine.
@@ -1812,6 +1813,25 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     Ok(()) => responder.respond(serde_json::json!({})),
                     Err(message) => responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(message)),
                 }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::thread_index::SearchRequest, responder, connection| {
+                connection.spawn(async move {
+                    let answer =
+                        tokio::task::spawn_blocking(move || crate::thread_index::answer_search(&request)).await;
+                    match answer {
+                        Ok(Ok(answer)) => responder.respond(answer)?,
+                        Ok(Err(message)) => responder.respond_with_error(
+                            agent_client_protocol::Error::internal_error().data(message),
+                        )?,
+                        Err(error) => responder.respond_with_error(
+                            agent_client_protocol::Error::internal_error().data(error.to_string()),
+                        )?,
+                    }
+                    Ok(())
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )

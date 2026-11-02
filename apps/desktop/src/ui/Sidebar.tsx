@@ -44,6 +44,7 @@ import {
   openAgent,
   removeWorktree,
   renameThread,
+  searchThreads,
   selectThread,
   setThreadStatus,
   setView,
@@ -239,11 +240,14 @@ const ThreadRow = memo(function ThreadRow({
   selected,
   scopeAll,
   now,
+  snippet,
 }: {
   session: SessionSummary;
   selected: boolean;
   scopeAll: boolean;
   now: number;
+  /** While searching: the words around the match in what was said. */
+  snippet?: string;
 }) {
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
@@ -344,7 +348,9 @@ const ThreadRow = memo(function ThreadRow({
                 )}
               </span>
             </span>
-            {request ? (
+            {snippet ? (
+              <span className="truncate text-fg-muted text-sub">“{snippet}”</span>
+            ) : request ? (
               <span className="truncate text-fg-muted text-sub">
                 {request.question ? request.question.text : request.title}
               </span>
@@ -738,14 +744,30 @@ export function Sidebar() {
   // design-lint: allow (mask alpha, not a colour)
   const fade = "linear-gradient(to bottom, #000 calc(100% - 28px), transparent)";
 
+  // What was said in a thread matches too: the engine's index answers once the query has three
+  // characters, a moment after typing stops.
+  const [contentHits, setContentHits] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 3) {
+      setContentHits({});
+      return;
+    }
+    let live = true;
+    const t = setTimeout(() => void searchThreads(q).then((hits) => live && setContentHits(hits)), 200);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [query]);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return sessions.filter(
       (s) =>
         (!onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd) &&
-        (!q || `${s.title ?? ""} ${s.cwd}`.toLowerCase().includes(q)),
+        (!q || `${s.title ?? ""} ${s.cwd}`.toLowerCase().includes(q) || s.id in contentHits),
     );
-  }, [sessions, query, onlyProject, projectCwd]);
+  }, [sessions, query, onlyProject, projectCwd, contentHits]);
 
   const links = useApp((s) => s.links.links);
   // Threads another thread started (start_session, fan_out) sit under it.
@@ -839,7 +861,13 @@ export function Sidebar() {
     <div className="flex flex-col gap-px">
       {items.map((s) => (
         <div key={s.id} className="flex flex-col gap-px">
-          <ThreadRow session={s} selected={s.id === selectedId} scopeAll={scopeAll} now={now} />
+          <ThreadRow
+            session={s}
+            selected={s.id === selectedId}
+            scopeAll={scopeAll}
+            now={now}
+            snippet={query.trim() ? contentHits[s.id] : undefined}
+          />
           {childrenOf[s.id]?.map((child) => (
             <div key={child.id} className="ml-[14px] border-border border-l pl-1">
               <ThreadRow session={child} selected={child.id === selectedId} scopeAll={false} now={now} />

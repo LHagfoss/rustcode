@@ -134,3 +134,17 @@ release PR.
 Use [`scripts/bench-build-boundaries.md`](../scripts/bench-build-boundaries.md)
 to measure clean, warm, and focused-edit Cargo rebuild costs without cleaning a
 shared target directory.
+
+## Thread index
+
+`~/.config/rustcode/index.sqlite` (`engine/src/thread_index.rs`) indexes the
+thread folders, after T3 Code's SQLite store: a `threads` table (title,
+folder, message count, folder mtime) and an FTS5 trigram index over user and
+assistant messages (each capped at 6,000 characters). The folders stay the
+source of truth: the engine refreshes the index from them at start, in the
+background, and before each search, reading only folders whose mtime moved;
+a missing or unreadable index is deleted and rebuilt. Migrations are
+numbered and recorded with their names, and a name mismatch refuses to open
+instead of skipping a step. `_rustcode/threads/search { query, limit? }`
+answers `{ results: [{ session_id, title, snippet, updated_at }] }`.
+

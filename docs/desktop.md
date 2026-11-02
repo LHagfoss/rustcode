@@ -314,6 +314,10 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   search groups Threads by project (off by default, as in T3 Code; each
   project folds and has New thread on hover; a worktree thread sits under
   its repository), keeps to the current project, and opens the Board.
+  Search matches titles and folders at once, and from three characters
+  also what was said: the engine's SQLite index (`index.sqlite`,
+  `_rustcode/threads/search`) adds threads whose messages match, with the
+  matching words under the title.
   Subagents nest under their thread (open one
   in the Agents panel), and threads another thread started nest under it.
   Settings is the gear in the top row, after Hide sidebar and New thread

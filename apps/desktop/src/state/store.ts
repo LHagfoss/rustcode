@@ -395,6 +395,25 @@ let transport: Transport | null = null;
 /** Sessions whose `session/load` replay is arriving. */
 const loading = new Set<string>();
 
+/**
+ * Threads whose messages contain `query`, from the engine's SQLite index
+ * (`_rustcode/threads/search`): id → the words around the match. Empty for a
+ * short query or an engine without the index.
+ */
+export async function searchThreads(query: string): Promise<Record<string, string>> {
+  if (query.trim().length < 3 || !connection) return {};
+  try {
+    const result = (await connection.request("_rustcode/threads/search", { query, limit: 30 }, 30_000)) as {
+      results?: { session_id?: string; snippet?: string }[];
+    } | null;
+    const hits: Record<string, string> = {};
+    for (const hit of result?.results ?? []) if (hit.session_id) hits[hit.session_id] = hit.snippet ?? "";
+    return hits;
+  } catch {
+    return {};
+  }
+}
+
 export function engine(): AcpConnection {
   if (!connection) throw new Error("The engine is not connected.");
   return connection;
