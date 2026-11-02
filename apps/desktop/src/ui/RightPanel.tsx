@@ -92,7 +92,7 @@ export function RightPanel() {
         <aside
           aria-label="Side panel"
           className={cx(
-            "absolute flex flex-col overflow-hidden rounded-xl bg-surface shadow-2 transition-[opacity,transform] duration-200 ease-snappy",
+            "rc-glass absolute flex flex-col overflow-hidden rounded-xl shadow-2 transition-[opacity,transform] duration-200 ease-snappy",
             open ? "translate-x-0 opacity-100" : "translate-x-3 opacity-0",
           )}
           style={{ top: INSET, bottom: INSET, left: 0, width }}

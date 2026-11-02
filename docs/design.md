@@ -26,8 +26,8 @@ outside the tokens files, and on the retired class names listed at the end.
   them (a list's rows inside one card, a panel edge).
 - **One shell.** Sidebar, header and panes stay mounted; views swap inside
   the main column. Pressing or hovering never remounts anything.
-- **Opaque.** Surfaces are opaque; blur is reserved for a few small fixed
-  surfaces (below).
+- **Opaque panes, glass floats.** Panes, cards and rows are opaque;
+  what floats over them shares one glass (below).
 
 ## Tokens
 
@@ -124,17 +124,20 @@ Two levels, both including the 1px edge ring:
 - `--rc-shadow-2` (`shadow-2`): things that open over everything:
   popovers, menus, tooltips, dialogs, the command palette.
 
-The `elevated` utility is `bg-surface-2` + `shadow-2` + `rounded-lg`: use
-it for every popover and menu.
+The `elevated` utility is glass (`--rc-glass-bg-strong`) + `shadow-2` +
+`rounded-lg`: use it for every popover, menu and tooltip.
 
-## Blur
+## Glass
 
-Opaque by default. `backdrop-filter` only on small surfaces fixed in
-place over moving content: the composer box floating over the transcript
-(`.rc-composer`), the header over a new thread's banner (`.rc-frost`),
-toasts and the jump-to-latest button (`.rc-glass`). Never on popovers,
-menus, panels or anything that scrolls. Reduce transparency (the media
-query, or the system setting the shell reads) makes them solid.
+One translucency, one token pair, for every floating surface: the
+composer, popovers, menus, tooltips, dialogs, toasts, the right panel and
+the lightbox. `--rc-glass-bg` (`surface-2` at 68%; `--rc-glass-bg-strong`
+at 80% for popovers, menus and the focused composer) with
+`--rc-glass-filter` (`saturate(1.5) blur(22px)`). Use `.rc-glass` or the
+`elevated` utility, never a hand-made `backdrop-filter`. Reduce
+transparency (the media query, or the system setting the shell reads)
+turns the pair solid. The header over a new thread's banner (`.rc-frost`)
+is the one other blur. Panes, cards, rows and the sidebar stay opaque.
 
 ## Spacing
 
@@ -240,12 +243,14 @@ panels `rounded-xl`.
 - **Toast:** `elevated rounded-full px-4 py-1.5 text-callout`.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2.5 py-1 text-callout shadow-2`
   (see Tooltips).
-- **Composer:** `.rc-composer rounded-xl p-2`: `surface` at 78% frosted,
-  a soft shadow above and below plus the edge ring; focus steps it to
-  `surface-2`. Its tray (`.rc-composer-tray`) is solid `surface-2`, no
-  border, tucked 18px under the box with `rounded-b-xl`. The transcript
-  scrolls under both (its bottom padding is the stack's height) and fades
-  out from 56px above the box.
+- **Composer:** `.rc-composer rounded-xl p-2` in glass (`--rc-glass-bg`,
+  denser on focus), a soft shadow above and below plus the edge ring; no
+  ring or colour on focus. The **+** is a filled circle (`bg-fill`). Its
+  tray (`.rc-composer-tray`) is tucked under the box as in the SwiftUI app:
+  12px narrower each side, its top 18px hidden behind the box (which sits
+  above it in z), only its rounded bottom showing; solid `surface-2`, no
+  border. The transcript scrolls under both (its bottom padding is the
+  stack's height) and fades out from 56px above the box.
 - **Right panel:** one `RightPanel` for every side view (Changes, Agents,
   Pull requests): floating, inset 8px from the window's top, right and
   bottom, `rounded-xl bg-surface shadow-2`, no divider. Its header row has
@@ -271,7 +276,7 @@ panels `rounded-xl`.
 | Keep subtrees mounted; toggle visibility | Remount a view on open, or key it on hover |
 | Change colour or opacity on hover | Change size, padding or border width on hover |
 | Put hints in secondary text inside popovers | Let a tooltip cover a neighbouring control |
-| Blur only small fixed surfaces | Blur popovers, panels or scrolling content |
+| Use the glass tokens for floating surfaces | Hand-tune a `backdrop-filter` or blur a pane |
 | Make a labelled button a pill | Make a labelled button a circle |
 | Let `index.css` time hover | Add `transition-colors duration-200` to a control |
 

@@ -16,6 +16,7 @@ import {
 } from "./state/store";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
+import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
 import { cx, Pill } from "./ui/primitives";
 import { RightPanel } from "./ui/RightPanel";
@@ -218,6 +219,7 @@ export function App() {
       <ConfirmDialog />
       <GrantDialog />
       <Toasts />
+      <Lightbox />
     </Tooltip.Provider>
   );
 }

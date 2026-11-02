@@ -1,31 +1,26 @@
 // The main column's header, shared by the chat, Settings and the other
 // views, so switching between them keeps the bar where it is: the sidebar's
 // buttons when the sidebar is hidden (clear of the traffic lights), the
-// view's title, its own controls, and Settings at the far right.
+// view's title and its own controls.
 
 import { Settings as Gear, PanelLeft, SquarePen } from "lucide-react";
 import type { ReactNode } from "react";
 import { openSettings, startNewThread, toggleSidebar, useApp } from "../state/store";
-import { Cluster, ClusterButton, cx, Tooltip } from "./primitives";
+import { Cluster, ClusterButton, cx } from "./primitives";
 import { useLightsInset } from "./Titlebar";
 
+/** Settings, in the sidebar's top row (and the header's when the sidebar is hidden). */
 export function SettingsButton() {
   const open = useApp((s) => s.settings !== null);
   return (
-    <Tooltip label={open ? "Close Settings (Esc)" : "Settings (⌘,)"}>
-      <button
-        type="button"
-        aria-label="Settings"
-        aria-pressed={open}
-        onClick={() => openSettings(open ? null : "general")}
-        className={cx(
-          "flex size-7 shrink-0 items-center justify-center rounded-full hover:bg-fill hover:text-fg active:bg-fill-strong",
-          open ? "bg-fill text-fg" : "text-fg-muted",
-        )}
-      >
-        <Gear size={14} />
-      </button>
-    </Tooltip>
+    <ClusterButton
+      label="Settings"
+      tooltip={open ? "Close Settings (Esc)" : "Settings (⌘,)"}
+      on={open}
+      onClick={() => openSettings(open ? null : "general")}
+    >
+      <Gear size={14} />
+    </ClusterButton>
   );
 }
 
@@ -33,13 +28,10 @@ export function MainHeader({
   title,
   right,
   className,
-  settings = true,
 }: {
   title: ReactNode;
   right?: ReactNode;
   className?: string;
-  /** Settings shows its own close button instead. */
-  settings?: boolean;
 }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
   const lightsInset = useLightsInset();
@@ -61,13 +53,13 @@ export function MainHeader({
           <ClusterButton label="New thread" tooltip="New thread (⌘N)" onClick={() => startNewThread()}>
             <SquarePen size={14} />
           </ClusterButton>
+          <SettingsButton />
         </Cluster>
       )}
       <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
         {title}
       </div>
       {right}
-      {settings && <SettingsButton />}
     </header>
   );
 }

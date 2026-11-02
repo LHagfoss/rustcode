@@ -36,6 +36,7 @@ import {
 import type { ThreadState } from "../state/thread";
 import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
+import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
 import { MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
@@ -162,6 +163,9 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
             </Tooltip>
           )}
           {cwd && <span className="font-light text-fg-faint text-title3">/</span>}
+          {thread?.harness && thread.harness.id !== "rustcode" && (
+            <HarnessIcon id={thread.harness.id} size={14} className="text-fg-muted" />
+          )}
           <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
         </>
       }

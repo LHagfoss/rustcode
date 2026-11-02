@@ -22,7 +22,7 @@ import { askConfirm, request, toast, useApp } from "../state/store";
 import { cx, Pill, Switch, Tooltip } from "./primitives";
 import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
 
-export interface Skill {
+interface Skill {
   name: string;
   description: string;
   path: string;
@@ -30,7 +30,7 @@ export interface Skill {
   enabled: boolean;
 }
 
-export interface McpServer {
+interface McpServer {
   name: string;
   transport: string;
   target: string;
@@ -42,14 +42,14 @@ export interface McpServer {
   error?: string;
 }
 
-export interface Capabilities {
+interface Capabilities {
   skills: Skill[];
   mcpServers: McpServer[];
   configPath?: string;
 }
 
 /** The engine sends `tools` as the tool names; an older mock sent a count. */
-export const parseCapabilities = (v: Json): Capabilities => {
+const parseCapabilities = (v: Json): Capabilities => {
   const root = obj(v) ?? {};
   return {
     configPath: str(root.configPath),

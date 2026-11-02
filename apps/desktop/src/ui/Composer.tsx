@@ -61,6 +61,8 @@ import {
 import { localId, type ThreadState } from "../state/thread";
 import { AgentPill } from "./AgentViews";
 import { ContextRing, PlanMeter } from "./ComposerUsage";
+import { HarnessIcon } from "./HarnessIcon";
+import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
 import { cx, Tooltip } from "./primitives";
@@ -545,7 +547,7 @@ export const Composer = memo(function Composer({
         </div>
       </div>
       {/* The tray under the box: where the thread works and what it brings, after the SwiftUI footer. */}
-      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[52px] items-end gap-0.5 rounded-b-xl px-1.5 pt-[18px] pb-1">
+      <div className="rc-composer-tray mx-3 -mt-[18px] flex min-h-[54px] items-end gap-0.5 rounded-b-xl px-1.5 pt-[18px] pb-1.5">
         <FolderMenu thread={thread} cwd={cwd} />
         {!thread && <WorktreeToggle draft={draft} compact={compact} />}
         {thread?.worktree && (
@@ -570,7 +572,7 @@ export const Composer = memo(function Composer({
         {harness && !harness.builtin && harness.id !== defaultHarness && (
           <Tooltip side="bottom" label="Its own sign-in and tools; RustCode's sandbox does not apply">
             <span className="flex h-[28px] items-center gap-1.5 rounded-full px-2.5 text-callout text-fg-muted">
-              <span className="size-1.5 rounded-full bg-accent" />
+              <HarnessIcon id={harness.id} name={harness.name} size={12} />
               {harness.name}
             </span>
           </Tooltip>
@@ -694,22 +696,38 @@ function AttachmentStrip({
   attachments: Attachment[];
   onRemove: (id: string) => void;
 }) {
+  const pictures = attachments.flatMap((a) =>
+    a.kind === "image" ? [{ src: `data:${a.mimeType};base64,${a.data}`, alt: a.name }] : [],
+  );
   return (
     <div className="flex gap-1.5 overflow-x-auto px-1 pt-0.5 pb-0.5">
       {attachments.map((a) =>
         a.kind === "image" ? (
           <div key={a.id} className="group relative shrink-0">
-            <img
-              src={`data:${a.mimeType};base64,${a.data}`}
-              alt={a.name}
-              title={a.name}
-              className="size-[52px] rounded-md object-cover shadow-1"
-            />
+            <button
+              type="button"
+              aria-label={`Open ${a.name}`}
+              onClick={() =>
+                openLightbox(
+                  pictures,
+                  pictures.findIndex((p) => p.alt === a.name),
+                )
+              }
+              className="block rounded-md"
+            >
+              <img
+                src={`data:${a.mimeType};base64,${a.data}`}
+                alt={a.name}
+                title={a.name}
+                className="size-[52px] rounded-md object-cover shadow-1"
+              />
+            </button>
+            {/* Inside the corner, so the strip's scroll never crops it. */}
             <button
               type="button"
               aria-label={`Remove ${a.name}`}
               onClick={() => onRemove(a.id)}
-              className="absolute -top-1 -right-1 flex size-[18px] items-center justify-center rounded-full bg-fg/70 text-bg opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className="rc-glass absolute top-1 right-1 flex size-[18px] items-center justify-center rounded-full text-fg opacity-0 shadow-1 hover:bg-surface-3 group-hover:opacity-100 focus-visible:opacity-100"
             >
               <X size={11} strokeWidth={2.5} />
             </button>
@@ -881,7 +899,7 @@ function PlusMenu({
           <button
             type="button"
             aria-label="Attach and more"
-            className="flex size-[30px] items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong data-[state=open]:bg-fill"
+            className="flex size-[30px] items-center justify-center rounded-full bg-fill text-fg hover:bg-fill-strong active:bg-fill-strong data-[state=open]:bg-fill-strong"
           >
             <Plus size={16} strokeWidth={2} />
           </button>

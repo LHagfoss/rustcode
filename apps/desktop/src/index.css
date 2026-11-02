@@ -281,9 +281,11 @@
   }
 }
 
-/* Popovers, menus, dialogs: the raised surface, opaque. */
+/* Popovers, menus, dialogs: the raised surface, in glass. */
 @utility elevated {
-  background: var(--rc-surface-2);
+  background: var(--rc-glass-bg-strong);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
   box-shadow: var(--rc-shadow-2);
   border-radius: var(--rc-radius-lg);
 }
@@ -519,22 +521,33 @@
   pointer-events: none;
 }
 
-/* Small fixed surfaces over moving content (toasts) may blur; nothing else does. */
+/*
+ * Glass: the one translucency every floating surface shares (composer,
+ * popovers, menus, dialogs, toasts, the right panel). `--rc-glass-bg` and
+ * `--rc-glass-filter` are the token pair; Reduce transparency makes them
+ * solid (below).
+ */
+:root {
+  --rc-glass-bg: color-mix(in srgb, var(--rc-surface-2) 68%, transparent);
+  --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) 80%, transparent);
+  --rc-glass-filter: saturate(1.5) blur(22px);
+}
+
 .rc-glass {
-  background: color-mix(in srgb, var(--rc-surface-2) 86%, transparent);
-  backdrop-filter: saturate(1.4) blur(16px);
-  -webkit-backdrop-filter: saturate(1.4) blur(16px);
+  background: var(--rc-glass-bg);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
 }
 
 /*
- * The composer floats over the transcript: a small fixed surface, so it may
- * be frosted. Focus steps the surface; there is no ring or coloured edge.
- * Its tray sits under it, a step apart, in the same radius family.
+ * The composer floats over the transcript in glass, with a soft shadow
+ * above and below. Focus makes the glass a little denser; there is no ring
+ * or coloured edge. Its tray sits 6px under it, solid and borderless.
  */
 .rc-composer {
-  background: color-mix(in srgb, var(--rc-surface) 78%, transparent);
-  backdrop-filter: saturate(1.3) blur(18px);
-  -webkit-backdrop-filter: saturate(1.3) blur(18px);
+  background: var(--rc-glass-bg);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
   box-shadow:
     0 -10px 28px -14px var(--rc-shadow-color),
     0 10px 28px -12px var(--rc-shadow-color),
@@ -542,9 +555,8 @@
   transition: background-color 160ms ease-out;
 }
 .rc-composer:focus-within {
-  background: color-mix(in srgb, var(--rc-surface-2) 86%, transparent);
+  background: var(--rc-glass-bg-strong);
 }
-/* Solid, no edge, a step lighter than the box above it. */
 .rc-composer-tray {
   background: var(--rc-surface-2);
 }
@@ -574,47 +586,29 @@
 }
 
 /*
- * Reduce transparency: solid surfaces. The media query where the web view
- * has it, else the `reduce-transparency` class main.tsx sets from the
+ * Reduce transparency: glass turns solid. The media query where the web
+ * view has it, else the `reduce-transparency` class main.tsx sets from the
  * system setting.
  */
 @media (prefers-reduced-transparency: reduce) {
-  .rc-composer,
-  .rc-glass,
-  .rc-frost::before {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-  .rc-composer {
-    background: var(--rc-surface);
-  }
-  .rc-composer:focus-within {
-    background: var(--rc-surface-2);
-  }
-
-  .rc-glass {
-    background: var(--rc-surface-2);
+  :root {
+    --rc-glass-bg: var(--rc-surface-2);
+    --rc-glass-bg-strong: var(--rc-surface-2);
+    --rc-glass-filter: none;
   }
   .rc-frost::before {
     background: var(--rc-bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
-:root.reduce-transparency .rc-composer,
-:root.reduce-transparency .rc-glass,
-:root.reduce-transparency .rc-frost::before {
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-:root.reduce-transparency .rc-composer {
-  background: var(--rc-surface);
-}
-:root.reduce-transparency .rc-composer:focus-within {
-  background: var(--rc-surface-2);
-}
-
-:root.reduce-transparency .rc-glass {
-  background: var(--rc-surface-2);
+:root.reduce-transparency {
+  --rc-glass-bg: var(--rc-surface-2);
+  --rc-glass-bg-strong: var(--rc-surface-2);
+  --rc-glass-filter: none;
 }
 :root.reduce-transparency .rc-frost::before {
   background: var(--rc-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }

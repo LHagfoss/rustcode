@@ -17,6 +17,7 @@ import {
 } from "../state/harness";
 import { type NewThreadChoice, setConfigOption, setNewThreadChoice, useApp } from "../state/store";
 import type { ThreadState } from "../state/thread";
+import { HarnessIcon } from "./HarnessIcon";
 import { cx, Tooltip } from "./primitives";
 
 interface Choice {
@@ -229,9 +230,10 @@ function HarnessList({
               className={cx(
                 "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left",
                 reason ? "opacity-45" : "hover:bg-fill",
-                h.id === current && "bg-accent/15",
+                h.id === current && "bg-fill",
               )}
             >
+              <HarnessIcon id={h.id} name={h.name} size={14} className="text-fg-muted" />
               <span className="flex-1 text-body">{h.name}</span>
               <span className="text-caption text-fg-muted">
                 {reason ? "Unavailable" : h.builtin ? "Built in" : h.kind.toUpperCase()}
@@ -373,7 +375,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
             open ? "bg-fill-strong text-fg" : "bg-fill",
           )}
         >
-          {fast?.currentBool && <Zap size={11} className="shrink-0 text-accent" fill="currentColor" />}
+          <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={12} />
+          {fast?.currentBool && <Zap size={11} className="shrink-0 text-fg" fill="currentColor" />}
           <span className="truncate">{label.name}</span>
           {label.effort && <span className="text-fg-faint">{effortLabel(label.effort)}</span>}
           <ChevronUp
@@ -450,7 +453,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
                   className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-left hover:bg-fill disabled:hover:bg-transparent"
                 >
                   <span className="text-callout text-fg-muted">Harness</span>
-                  <span className="flex-1 truncate text-right font-medium text-callout">{harnessName}</span>
+                  <span className="flex flex-1 items-center justify-end gap-1.5 truncate font-medium text-callout">
+                    <HarnessIcon id={harness?.id ?? "rustcode"} name={harnessName} size={12} />
+                    {harnessName}
+                  </span>
                   {isNew ? (
                     <ChevronRight size={12} strokeWidth={2.5} className="text-fg-faint" />
                   ) : (

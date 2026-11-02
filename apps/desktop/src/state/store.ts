@@ -428,10 +428,17 @@ async function probeFeatures(conn: AcpConnection): Promise<void> {
 
 // ---------------------------------------------------------------- themes
 
+/** The project whose `.rustcode/themes` the engine lists too. */
+function themeParams(): JsonObject {
+  const s = get();
+  const cwd = (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
+  return cwd ? { cwd } : {};
+}
+
 /** Lists the engine's themes; an engine without them keeps the built-in ones. */
 async function refreshThemes(conn: AcpConnection): Promise<void> {
   try {
-    const themes = parseThemes(await conn.request(ThemeMethod.list, {}, 10_000));
+    const themes = parseThemes(await conn.request(ThemeMethod.list, themeParams(), 10_000));
     if (connection !== conn) return;
     set((s) => ({ themes, features: { ...s.features, themes: true } }));
   } catch (error) {
@@ -467,7 +474,7 @@ export async function setActiveTheme(name: string): Promise<void> {
   adoptTheme(name);
   if (!get().features.themes || !connection) return;
   try {
-    const themes = parseThemes(await connection.request(ThemeMethod.set, { name }, 10_000));
+    const themes = parseThemes(await connection.request(ThemeMethod.set, { name, ...themeParams() }, 10_000));
     set({ themes });
   } catch (error) {
     toast(`Could not save the theme: ${errorText(error)}`, "warning");

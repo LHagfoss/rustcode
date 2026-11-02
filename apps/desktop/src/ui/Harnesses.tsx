@@ -23,6 +23,7 @@ import {
   setHarnessEnabled,
   useApp,
 } from "../state/store";
+import { HarnessIcon } from "./HarnessIcon";
 import { CopyButton } from "./Markdown";
 import { cx, Pill, Spinner, Switch, Tooltip } from "./primitives";
 
@@ -100,6 +101,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
+            <HarnessIcon id={harness.id} name={harness.name} size={16} />
             <span className="font-semibold text-body">{harness.name}</span>
             <span className="rounded-full bg-fill px-1.5 font-medium font-mono text-[9px] text-fg-muted uppercase leading-[15px]">
               {harness.builtin ? "built in" : harness.kind}

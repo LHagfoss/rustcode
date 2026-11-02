@@ -2,7 +2,7 @@
 // a filter menu, and threads by where they are in their life (after T3
 // Code's sidebar): Pinned, Needs You, Working, Threads (by project), and
 // Settled (threads marked Done) folded away unless opened. Each section
-// folds, and remembers it. Settings is in the main header, at the right.
+// folds, and remembers it. Settings is in the top row, after New thread.
 
 import {
   Check,
@@ -57,7 +57,9 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { AgentMark } from "./AgentViews";
+import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
+import { SettingsButton } from "./MainHeader";
 import { Cluster, ClusterButton, cx, Spinner, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
 import { TitlebarRow } from "./Titlebar";
@@ -282,6 +284,14 @@ const ThreadRow = memo(function ThreadRow({
                   </span>
                 ) : (
                   scopeAll && session.cwd && <Folder size={9} className="shrink-0" />
+                )}
+                {session.harness && session.harness !== "rustcode" && (
+                  <HarnessIcon
+                    id={session.harness}
+                    name={harness?.name}
+                    size={10}
+                    className="text-fg-muted"
+                  />
                 )}
                 <span className="truncate">{detail.join(" · ")}</span>
               </span>
@@ -681,6 +691,7 @@ export function Sidebar() {
             <ClusterButton label="New thread" tooltip="New thread (⌘N)" onClick={() => startNewThread()}>
               <SquarePen size={14} />
             </ClusterButton>
+            <SettingsButton />
           </Cluster>
         </TitlebarRow>
         <div className="mx-2.5 mt-2.5 mb-1.5 flex shrink-0 items-center gap-1">

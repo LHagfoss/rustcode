@@ -15,6 +15,7 @@ import {
   Palette,
   Plus,
   TerminalSquare,
+  X,
 } from "lucide-react";
 import { useState } from "react";
 import { arr, bool, type Json, obj, str } from "../acp/jsonrpc";
@@ -46,7 +47,7 @@ import { CapabilitiesPage } from "./Capabilities";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { cx, Kbd, Pill, Segments, Switch } from "./primitives";
+import { cx, Kbd, Pill, Segments, Switch, Tooltip } from "./primitives";
 import { Group, inputClass, Loading, Row, useEngineData } from "./settingsKit";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Gear }[] = [
@@ -586,7 +587,21 @@ export function Settings() {
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!;
   return (
     <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg" aria-label="Settings">
-      <MainHeader title={<h1 className="min-w-0 truncate font-semibold text-body">Settings</h1>} />
+      <MainHeader
+        title={<h1 className="min-w-0 truncate font-semibold text-body">Settings</h1>}
+        right={
+          <Tooltip label="Close (Esc)">
+            <button
+              type="button"
+              aria-label="Close Settings"
+              onClick={() => openSettings(null)}
+              className="flex size-7 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+            >
+              <X size={14} />
+            </button>
+          </Tooltip>
+        }
+      />
       <div className="flex min-h-0 flex-1">
         <nav className="flex w-[196px] shrink-0 flex-col gap-0.5 px-2.5 pt-3" aria-label="Settings sections">
           {SECTIONS.map((s) => (

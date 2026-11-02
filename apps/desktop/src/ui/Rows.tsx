@@ -38,6 +38,7 @@ import {
   type TurnCompletion,
   thoughtHeadings,
 } from "../state/thread";
+import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { CopyButton, Markdown } from "./Markdown";
 import { Callout, cx, Spinner, Tooltip } from "./primitives";
@@ -75,13 +76,28 @@ export const UserRow = memo(function UserRow({
         <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
           {attachments.map((a, i) =>
             a.kind === "image" && a.preview ? (
-              <img
+              <button
                 key={i}
-                src={a.preview}
-                alt={a.name}
-                title={a.name}
-                className="max-h-[160px] max-w-[240px] rounded-lg border border-border object-cover"
-              />
+                type="button"
+                aria-label={`Open ${a.name}`}
+                className="rounded-lg"
+                onClick={() => {
+                  const pictures = attachments.flatMap((x) =>
+                    x.kind === "image" && x.preview ? [{ src: x.preview, alt: x.name }] : [],
+                  );
+                  openLightbox(
+                    pictures,
+                    pictures.findIndex((x) => x.src === a.preview),
+                  );
+                }}
+              >
+                <img
+                  src={a.preview}
+                  alt={a.name}
+                  title={a.name}
+                  className="max-h-[160px] max-w-[240px] cursor-zoom-in rounded-lg object-cover shadow-1"
+                />
+              </button>
             ) : (
               <span
                 key={i}
