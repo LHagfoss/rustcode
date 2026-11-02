@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
-[[ -n "$since" ]] || since="$(git -C "$ROOT" describe --tags --abbrev=0 origin/main)"
+[[ -n "$since" ]] || since="$(git -C "$ROOT" describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' origin/main)"
 
 git -C "$ROOT" log --reverse --format='%s' "$since..origin/main" \
     | grep -Eo '\(#[0-9]+\)$' | tr -d '(#)' \
