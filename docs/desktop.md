@@ -102,9 +102,10 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   JSON-RPC peer and parsers ported from `RustCodeKit` (`ACPTypes.swift`,
   `ACPConnection.swift`, `FileDiff.swift`, `Subagents.swift`,
   `PullRequests.swift`, `PlanUsage.swift`; `src/acp/rustcode.ts`).
-  `initialize` advertises no client fs or terminal, and of the
-  `_meta.rustcode` features only `smartUi` (1 while the setting is on, else
-  0).
+  `initialize` advertises no client fs or terminal; of the
+  `_meta.rustcode` features, `smartUi` (1 while the setting is on, else 0),
+  `visualizations: 2`, and `orchestration: 2` only while Settings ›
+  General › *Threads can start and message other threads* is on.
 - **Reducer** (`src/state/thread.ts`): pure functions fold `session/update`s
   into a thread: streamed reply and thought chunks, tool calls updated in
   place (output deltas, diffs, exit codes), plans, usage, config options,
@@ -124,7 +125,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   up. Markdown is `react-markdown` + `remark-gfm`; code is highlighted lazily
   by Shiki with Xcode's colours.
 
-Keys: ⌘N new thread, ⌘K switch thread, ⌘, Settings, ⌘B sidebar, ⌘F find
+Keys: ⌘N new thread, ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘F find
 in thread, ⌘J terminal, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
 running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the last
 link chip or the command token, Esc clears the draft and then stops the
@@ -171,6 +172,74 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Smart UI.** See below.
+- **Look.** On macOS the window is transparent over the system sidebar
+  material (`windowEffects` in `tauri.conf.json`, `macos-private-api`);
+  the sidebar paints a light tint over it and the chat stays opaque.
+  Floating surfaces (composer, popovers, menus, dialogs, toasts) share one
+  blurred material. Reduce transparency (the media query, or the system
+  setting read by the shell's `reduce_transparency`) makes them solid.
+  Controls answer hover, press and focus; menus, dialogs and rows animate
+  in 120–180 ms, and nothing moves under Reduce motion.
+- **Approvals** are one slim bar over the composer (Details opens the
+  command and diff); when a turn waits on several, *Approve all* allows
+  them once. Queued messages are rows above the composer that can be
+  edited in place, moved up, sent now as a steer, or removed.
+- **Command palette** (⌘K): recent threads, then actions: new thread (on
+  any harness, or in a worktree), board, review, mark review/done,
+  compare a fan-out, panels, every Settings page, appearance, restart.
+- **Sidebar.** Threads grouped Needs You, Working, Pinned, then by project
+  (a worktree thread under its repository, with its branch). Subagents nest
+  under their thread (open one in the Agents panel), and threads another
+  thread started nest under it. The list fades out above the project card.
+- **Threads working for threads** ([orchestrator.md](orchestrator.md),
+  M1 rules from
+  [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
+  Off by default. The app answers `_rustcode/orchestration`
+  (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
+  `list_sessions`, `read_session`, `message_session`, `wait_session`,
+  `start_session` and `fan_out`. Same project only (another project only
+  for `start_session`, one the user has opened, with approval), no chains,
+  4 active links per thread, a 32-message mailbox, 8 KiB messages, 16 KiB
+  reads, waits up to 1 h. Each needs the user's *Allow for This Thread*,
+  *Allow Once* or *Don't Allow*; grants and links are kept in app storage
+  (`rustcode.threadLinks`), and after a restart active links are
+  *interrupted*. Started threads go through `session/new` with
+  `_meta.rustcode.harness` and `.worktree` and get the prompt as their first
+  message, headed `From thread "<title>" (agent):`. Chips above the composer
+  (state, open, stop), a *Working for* banner, sidebar badges. Stopping a
+  thread stops the work it gave others.
+- **Worktree threads.** The new-thread composer's *Worktree* toggle starts
+  the thread in its own worktree, with a branch name suggested from the
+  message (`<type>/<slug>`) that can be edited. A worktree thread's menu
+  opens it in Finder or Terminal and removes it, asking first and again with
+  the engine's reason (uncommitted changes, unpushed commits).
+- **Status and Board.** Running, Needs input, Review and Done chips on rows
+  and in the chat header (a menu marks Review or Done). *Board* (sidebar
+  switch, or ⌘K) shows those four columns; drag a card to Review or Done.
+  Marks go to `_rustcode/session/status`; on an engine without it the app
+  keeps them itself. `_meta.rustcode.status` from the engine (a merged
+  branch's auto-done) updates the chip.
+- **Fan-out compare.** A `fan_out` adds *Compare* to the chips: one card per
+  harness with its status, branch, files changed and diff stat of the
+  branch, its answer, Open and Review. *Keep this* marks the others done
+  and the kept one for review.
+- **Checkpoints and Review.** A finished turn has a *Changes* chip from its
+  checkpoint (`_rustcode/checkpoints/list|diff`) with *Restore…* (files only,
+  or files and conversation when the harness rewinds). The Review screen
+  (thread menu, header menu or ⌘K) shows the uncommitted changes, the
+  worktree branch since its base, one turn, or the branch's open pull
+  request as a file tree and a unified or side-by-side diff coloured by
+  Shiki. Click a line number to draft a comment; the drafts go to the agent
+  as one message, or to the pull request as one review with line comments
+  (`_rustcode/pulls/review`).
+- **Visualizations.** `rustcode-viz` blocks are drawn natively
+  (`src/ui/Viz.tsx`): bar chart, table (sortable), tree, line chart (hover),
+  stat list and checklist, with the limits and source fallback of
+  [visualizations.md](visualizations.md).
+- **Missing engine methods.** At `initialize` the app probes
+  `_rustcode/worktrees/list`, `_rustcode/checkpoints/list` and
+  `_rustcode/session/status`; a method-not-found hides that feature with
+  a tooltip saying why. The mock engine implements all of them.
 
 ## Smart UI
 
@@ -213,7 +282,7 @@ shell (`smartui_page`) and served once from `rcui://localhost/<id>` with
 its own CSP header. The app advertises `smartUi = 1` while Settings ›
 General › Chat › Smart UI is on (default), else 0; the engine reads it at
 `initialize`, so Settings offers Restart Engine after a change.
-`rustcode-viz` blocks show as code for now.
+`rustcode-viz` blocks are drawn by the app itself (Features, Visualizations).
 
 In dev builds `window.__rustcode` exposes the store and its actions, so an
 agent can drive and inspect the UI (as `DebugDriver` does for the SwiftUI
@@ -227,7 +296,10 @@ bun run typecheck && bun run lint && bun run test && bun run build
 cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-`bun run test` covers the JSON-RPC peer, the ACP and extension parsers, the
+`bun run test` covers the orchestration rules and v2 parsers
+(`orchestration.test.ts`), `rustcode-viz` parsing, a fan-out end to end
+against the mock (grant, two worktree threads, answers), status marks, the
+JSON-RPC peer, the ACP and extension parsers, the
 reducer, the harness and onboarding rules, composing prompt blocks, link
 metadata sanitizing, the Smart UI parser, page and limits (and that the app
 and the shell serve pages under the same CSP), and the store end to end
@@ -268,13 +340,22 @@ From the SwiftUI app, still missing or partial:
 - The timeline rail, turn folding ("Worked for … · N tool calls"), sticky
   turn bar, stream pacing, quote in reply.
 - The auto-approve (YOLO) toggle on approval cards.
-- Subagents in the sidebar under their thread, their verification status
-  and background agents of threads off screen.
+- Subagents' verification status and background agents of threads off
+  screen (subagents of a thread whose agents were listed nest under it).
 - Pull request line comments, the diff view in the review, and watches
   (`_rustcode/pulls/watch*`).
 - Changes panel: branch mode, renames' old paths, syntax colours in diffs.
-- Localhost preview, native `rustcode-viz` widgets (shown as code), the
-  Smart UI agent preview (`smart_ui_preview`, `smartUi = 2`).
+- Localhost preview, the Smart UI agent preview (`smart_ui_preview`,
+  `smartUi = 2`). `rustcode-viz` cards have Copy source but not Copy as
+  Text or VoiceOver summaries.
+- Orchestrator v2 against the real engine: as of this build the engine does
+  not answer `_rustcode/worktrees/*`, `_rustcode/checkpoints/*` or
+  `_rustcode/session/status`, so those features are hidden there and were
+  checked against the mock only. Pull request watches that auto-settle are
+  the engine's. A link's `cancel_session_turn` and the target's *Pause
+  messages* / *Detach* are not offered.
+- The vibrancy was not checked by eye in a native window yet (the display
+  was off during the change); the CSS and config were.
 - GitHub sign-in flow, model account switching (Connections is read-only),
   keybinding editor, Discord presence, remote pairing, notifications,
   updater, What's New.
