@@ -53,7 +53,7 @@ function CompareCard({ link, fanOut, kept }: { link: Link; fanOut: string; kept?
   const isKept = kept === link.target;
   return (
     <article
-      className={`flex min-w-[260px] flex-1 flex-col gap-2.5 rounded-[18px] border bg-fill-4 p-3.5 transition-[border-color,box-shadow] duration-150 rc-in ${
+      className={`flex min-w-[260px] flex-1 flex-col self-start gap-2.5 rounded-[18px] border bg-fill-4 p-3.5 transition-[border-color,box-shadow] duration-150 rc-in ${
         isKept ? "border-brand shadow-[0_0_0_1px_var(--rc-brand)]" : "border-hairline"
       }`}
     >

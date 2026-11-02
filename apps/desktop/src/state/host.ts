@@ -10,6 +10,7 @@
 
 import type { JsonObject } from "../acp/jsonrpc";
 import { projectName } from "../acp/types";
+import { hasShell, shellCall } from "../lib/shell";
 import {
   capped,
   checkMessage,
@@ -321,6 +322,17 @@ function projectFor(caller: RuleThread, asked: string | undefined): string | Fai
 
 /** `session/new` for a link, in a worktree when asked (or by default in a git project). */
 async function newThread(
+  project: string,
+  harness: string,
+  options: { model?: string; effort?: string; title: string; worktree?: boolean },
+): Promise<string> {
+  const id = await createThreadFor(project, harness, options);
+  // The orchestrator named it; without this the first message ("From thread …") would.
+  if (hasShell()) await shellCall("thread_rename", { id, title: options.title }).catch(() => undefined);
+  return id;
+}
+
+async function createThreadFor(
   project: string,
   harness: string,
   options: { model?: string; effort?: string; title: string; worktree?: boolean },
