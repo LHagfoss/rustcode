@@ -15,6 +15,7 @@ import {
   type AgentInfo,
   byActivity,
   fallbackHarnessSnapshot,
+  type HarnessLast,
   type HarnessSnapshot,
   initializeParams,
   isReportUpdate,
@@ -23,6 +24,7 @@ import {
   type PermissionRequest,
   parseAgentInfo,
   parseConfigOptions,
+  parseHarnessLast,
   parseHarnessModels,
   parseHarnessSnapshot,
   parsePermissionRequest,
@@ -60,6 +62,7 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
+import { restoreChoice } from "./harness";
 import {
   answerOrchestration,
   linkFinished,
@@ -220,6 +223,8 @@ const STORAGE = {
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
   statusMarks: "rustcode.statusMarks",
+  /** Each harness's last new-thread choice, for an engine that does not remember it. */
+  harnessChoices: "rustcode.harnessChoices",
 };
 
 function stored(key: string): string | null {
@@ -839,6 +844,8 @@ export async function openThread(id: string) {
       configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
       harness: parseSessionHarness(result) ?? t.harness,
     }));
+    const opened = get().threads[id];
+    if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
     void refreshPlanUsage(id);
     void refreshCheckpoints(id);
   } catch (error) {
@@ -927,12 +934,31 @@ export async function createSession(options: NewSession): Promise<string> {
   return id;
 }
 
+/**
+ * A restored external thread whose harness has not started again offers only its own model (and
+ * maybe no effort) until the harness lists its models: ask for them.
+ */
+export function lacksModels(thread: ThreadState): boolean {
+  const id = thread.harness?.id;
+  if (!id || id === "rustcode") return false;
+  const model = thread.configOptions.find((o) => o.id === "model" && o.type === "select");
+  const effort = thread.configOptions.some((o) => o.id === "effort");
+  return (model?.choices.length ?? 0) <= 1 || (!effort && !!thread.harness?.capabilities.effort);
+}
+
+/** The new-thread choice: the picked one, else the default harness with its remembered model and effort. */
+export function newThreadChoice(s: Pick<AppState, "newThread" | "harnesses">): NewThreadChoice | null {
+  if (s.newThread) return s.newThread;
+  if (!s.harnesses) return null;
+  return restoreChoice(s.harnesses, s.harnesses.default.harness, appChoices(s.harnesses));
+}
+
 /** Creates a thread with the new-thread choice (or the default harness) and worktree toggle, and selects it. */
 async function createThread(firstMessage = ""): Promise<string> {
   const s = get();
   const cwd = s.projectCwd;
   if (!cwd) throw new Error("Choose a project folder for this thread first.");
-  const choice = s.newThread;
+  const choice = newThreadChoice(s);
   const wt = s.newWorktree;
   const worktree =
     wt.on && s.features.worktrees
@@ -1349,6 +1375,13 @@ export async function setConfigOption(id: string, configId: string, value: strin
     if (result?.configOptions) {
       updateThread(id, (t) => ({ ...t, configOptions: parseConfigOptions(result.configOptions) }));
     }
+    // A model or effort picked in a thread is also its harness's next new-thread choice; the
+    // engine keeps it (docs/harnesses.md), the app only mirrors it.
+    const thread = get().threads[id];
+    if (thread && (configId === "model" || configId === "effort")) {
+      const current = (option: string) => thread.configOptions.find((o) => o.id === option)?.current ?? null;
+      noteChoice(thread.harness?.id ?? "rustcode", { model: current("model"), effort: current("effort") });
+    }
   } catch (error) {
     toast(`Could not change ${configId}: ${errorText(error)}`, "error");
   }
@@ -1461,15 +1494,16 @@ export async function fetchHarnessModels(id: string): Promise<void> {
   void refreshHarnesses();
 }
 
-/** Harnesses whose model list was asked for once this engine run (ensureHarnessModels). */
+/** Model listings in flight (ensureHarnessModels), one per harness. */
 const modelsAsked = new Map<string, Promise<void>>();
 
 /**
- * An external harness lists its models only when asked (`_rustcode/harness/models`;
- * `_rustcode/harnesses` leaves them empty until then). The model picker of a new
- * thread on it asks once, so the model list, effort and Fast mode are there
- * before the thread exists. A failure stays quiet: the picker says the
- * harness picks its default.
+ * An external harness lists its models only when asked (`_rustcode/harnesses/models`;
+ * the engine caches them across restarts, but a harness never listed has none
+ * yet). The model picker of a new thread on it, and a restored thread on it,
+ * ask, so the model list, effort and Fast mode are there before the harness
+ * runs. A failure stays quiet (the picker says the harness picks its default)
+ * and is not kept: the next ask, such as opening the picker, tries again.
  */
 export function ensureHarnessModels(id: string): Promise<void> {
   const harness = get().harnesses?.harnesses.find((h) => h.id === id);
@@ -1477,7 +1511,9 @@ export function ensureHarnessModels(id: string): Promise<void> {
     return Promise.resolve();
   let asked = modelsAsked.get(id);
   if (!asked) {
-    asked = fetchHarnessModels(id).catch(() => undefined);
+    asked = fetchHarnessModels(id)
+      .catch(() => undefined)
+      .finally(() => modelsAsked.delete(id));
     modelsAsked.set(id, asked);
   }
   return asked;
@@ -1485,6 +1521,68 @@ export function ensureHarnessModels(id: string): Promise<void> {
 
 export function setNewThreadChoice(choice: NewThreadChoice | null) {
   set({ newThread: choice });
+}
+
+/** What the app keeps per harness when the engine does not remember choices. */
+export function localChoices(): Record<string, HarnessLast> {
+  try {
+    const raw = obj(JSON.parse(stored(STORAGE.harnessChoices) ?? "{}")) ?? {};
+    const out: Record<string, HarnessLast> = {};
+    for (const [id, value] of Object.entries(raw)) {
+      const last = parseHarnessLast(value);
+      if (last) out[id] = last;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** The app's own record of choices, only for an engine that keeps none. */
+function appChoices(snapshot: HarnessSnapshot): Record<string, HarnessLast> | undefined {
+  return snapshot.remembers ? undefined : localChoices();
+}
+
+/** Mirror a harness's last choice: in the snapshot, and in app storage when the engine does not keep it. */
+function noteChoice(harness: string, last: HarnessLast) {
+  const value = last.model || last.effort ? last : null;
+  set((s) =>
+    s.harnesses
+      ? {
+          harnesses: {
+            ...s.harnesses,
+            harnesses: s.harnesses.harnesses.map((h) => (h.id === harness ? { ...h, last: value } : h)),
+          },
+        }
+      : s,
+  );
+  if (get().harnesses?.remembers) return;
+  const all = localChoices();
+  if (value) all[harness] = value;
+  else delete all[harness];
+  store(STORAGE.harnessChoices, JSON.stringify(all));
+}
+
+/**
+ * The user picked a model or effort in the new-thread picker: it is the choice, and the harness's
+ * remembered one (`_rustcode/harnesses/remember`, else app storage), so switching harness and back,
+ * or a restart, starts there again.
+ */
+export function pickNewThreadChoice(choice: NewThreadChoice) {
+  set({ newThread: choice });
+  const last = { model: choice.model, effort: choice.effort };
+  noteChoice(choice.harness, last);
+  if (!get().harnesses?.remembers || !connection) return;
+  void engine()
+    .request(Method.harnessRemember, { harness: choice.harness, ...last }, 15_000)
+    .catch(() => undefined);
+}
+
+/** Switch the new-thread picker to `harness`, on the model and effort it was last left on. */
+export function switchNewThreadHarness(harness: string) {
+  const snapshot = get().harnesses;
+  if (!snapshot) return;
+  set({ newThread: restoreChoice(snapshot, harness, appChoices(snapshot)) });
 }
 
 // ---------------------------------------------------------------- subagents and usage

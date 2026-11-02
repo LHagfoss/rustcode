@@ -204,6 +204,11 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
   };
 }
 
+/** Each harness's remembered new-thread choice, as the engine's snapshot carries it (`last`). */
+function withLast(snapshot: HarnessSnapshot): HarnessSnapshot {
+  return { ...snapshot, harnesses: snapshot.harnesses.map((h) => ({ ...h, last: h.last ?? null })) };
+}
+
 const HARNESS_MODELS: Record<
   string,
   { id: string; name: string; efforts: string[]; default_effort?: string }[]
@@ -520,7 +525,7 @@ export class MockEngine {
   ) {
     const scenario = options.scenario ?? "default";
     this.threads = scenario === "default" ? seedThreads() : [];
-    this.harnesses = initialHarnesses(scenario !== "onboarding");
+    this.harnesses = withLast(initialHarnesses(scenario !== "onboarding"));
   }
 
   private get delay() {
@@ -655,11 +660,13 @@ export class MockEngine {
           harness,
           model:
             str(meta?.model) ??
+            h.last?.model ??
             (harness === this.harnesses.default.harness ? this.harnesses.default.model : null) ??
             (harness === "rustcode" ? "chatgpt/gpt-6-luna" : (HARNESS_MODELS[harness]?.[0]?.id ?? "default")),
           // Like the real engine, the built-in harness takes its effort from config, not from `session/new`.
           effort:
             (harness === "rustcode" ? undefined : str(meta?.effort)) ??
+            h.last?.effort ??
             this.harnesses.default.effort ??
             "medium",
           history: [],
@@ -696,8 +703,22 @@ export class MockEngine {
           }),
         );
         const h = this.harnesses.harnesses.find((x) => x.id === thread.harness);
+        // Like the engine before a harness ever listed its models: a restored external thread knows
+        // only its own model, until `_rustcode/harnesses/models` ran.
+        const unlisted = !!h && !h.builtin && !h.models.length;
         return {
-          configOptions: configOptions(thread, this.harnesses),
+          configOptions: unlisted
+            ? [
+                {
+                  id: "model",
+                  name: "Model",
+                  category: "model",
+                  type: "select",
+                  currentValue: thread.model,
+                  options: [{ value: thread.model, name: thread.model }],
+                },
+              ]
+            : configOptions(thread, this.harnesses),
           _meta: {
             rustcode: { harness: { id: thread.harness, capabilities: (h?.capabilities ?? {}) as Json } },
           },
@@ -710,6 +731,11 @@ export class MockEngine {
         const value = str(params.value);
         if (params.configId === "model" && value) thread.model = value;
         if (params.configId === "effort" && value) thread.effort = value;
+        // Like the engine: a thread's pick is also its harness's next new-thread choice.
+        const picked = this.harnesses.harnesses.find((x) => x.id === thread.harness);
+        if (picked && (params.configId === "model" || params.configId === "effort")) {
+          picked.last = { model: thread.model, effort: thread.effort };
+        }
         return { configOptions: configOptions(thread, this.harnesses) };
       }
       case "session/cancel": {
@@ -989,6 +1015,15 @@ export class MockEngine {
           effort: str(params.effort) ?? null,
         };
         return this.snapshot();
+      case "_rustcode/harnesses/remember": {
+        const id = str(params.harness) ?? "";
+        const h = this.harnesses.harnesses.find((x) => x.id === id);
+        if (!h) throw Object.assign(new Error(`unknown harness '${id}'`), { code: -32602 });
+        const model = str(params.model) ?? null;
+        const effort = str(params.effort) ?? null;
+        h.last = model || effort ? { model, effort } : null;
+        return { harness: id, last: (h.last ?? null) as unknown as Json };
+      }
       case "_rustcode/onboarding/complete":
         this.harnesses.onboarded = true;
         return this.snapshot();
