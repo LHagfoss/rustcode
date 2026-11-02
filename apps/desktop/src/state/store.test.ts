@@ -61,7 +61,18 @@ describe("engine controller with the mock engine", () => {
     selectThread(s.sessions[0]!.id);
     await until(() => selected()?.loaded === true);
     const kinds = selected()!.items.map((i) => i.kind);
-    expect(kinds).toEqual(["user", "thought", "tool", "tool", "assistant", "turnEnd"]);
+    expect(kinds).toEqual([
+      "user",
+      "thought",
+      "tool",
+      "tool",
+      "tool",
+      "tool",
+      "tool",
+      "tool",
+      "assistant",
+      "turnEnd",
+    ]);
     expect(selected()!.configOptions.map((o) => o.id)).toEqual(["model", "effort"]);
   });
 
