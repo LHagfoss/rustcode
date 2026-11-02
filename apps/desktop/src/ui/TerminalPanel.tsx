@@ -4,6 +4,7 @@
 
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+import { observeSize } from "../lib/resize";
 import "@xterm/xterm/css/xterm.css";
 import { RotateCcw, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -22,21 +23,21 @@ function solid(name: string, over: string): string {
   probe.fillStyle = cssVar(name) || over;
   probe.fillRect(0, 0, 1, 1);
   const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
-  return `rgb(${r}, ${g}, ${b})`;
+  return `rgb(${r}, ${g}, ${b})`; // design-lint: allow (resolved from a token)
 }
 
 function xtermTheme() {
-  const background = cssVar("--rc-chat") || "#1e1e20";
+  const background = cssVar("--rc-code-bg") || cssVar("--rc-bg");
   return {
     background,
-    foreground: solid("--rc-fg", background),
-    cursor: solid("--rc-fg", background),
-    selectionBackground: "rgba(10, 132, 255, 0.35)",
-    red: cssVar("--rc-red"),
-    green: cssVar("--rc-green"),
-    yellow: cssVar("--rc-orange"),
-    blue: cssVar("--rc-blue"),
-    brightBlack: solid("--rc-fg-2", background),
+    foreground: solid("--rc-text", background),
+    cursor: solid("--rc-text", background),
+    selectionBackground: cssVar("--rc-selection"),
+    red: cssVar("--rc-danger"),
+    green: cssVar("--rc-success"),
+    yellow: cssVar("--rc-warning"),
+    blue: cssVar("--rc-accent"),
+    brightBlack: solid("--rc-text-muted", background),
   };
 }
 
@@ -89,13 +90,12 @@ function TerminalView({ cwd, visible }: { cwd: string; visible: boolean }) {
       },
       (e) => live && setError(e instanceof Error ? e.message : String(e)),
     );
-    const observer = new ResizeObserver(() => {
+    const stopObserving = observeSize(el, () => {
       if (el.offsetWidth > 0) fit.fit();
     });
-    observer.observe(el);
     return () => {
       live = false;
-      observer.disconnect();
+      stopObserving();
       pty?.close();
       term.dispose();
     };
@@ -123,12 +123,12 @@ function TerminalView({ cwd, visible }: { cwd: string; visible: boolean }) {
     <div className="relative h-full" style={{ display: visible ? "block" : "none" }}>
       <div ref={host} className="h-full px-2 pt-1" />
       {(exited || error) && (
-        <div className="absolute right-3 bottom-2 flex items-center gap-2 rounded-full bg-fill-2 px-3 py-1 text-caption text-fg-2">
+        <div className="absolute right-3 bottom-2 flex items-center gap-2 rounded-full bg-fill px-3 py-1 text-caption text-fg-muted">
           {error ?? "The shell exited."}
           <button
             type="button"
             onClick={() => setGeneration((g) => g + 1)}
-            className="flex items-center gap-1 text-brand hover:underline"
+            className="flex items-center gap-1 text-accent hover:underline"
           >
             <RotateCcw size={11} /> Restart
           </button>
@@ -165,7 +165,7 @@ export function TerminalPanel() {
   return (
     <section
       aria-label="Terminal"
-      className="relative flex shrink-0 flex-col border-hairline border-t bg-chat"
+      className="relative flex shrink-0 flex-col border-border border-t bg-bg"
       style={{ height, display: open ? "flex" : "none" }}
     >
       <div
@@ -176,9 +176,9 @@ export function TerminalPanel() {
         className="absolute -top-1 right-0 left-0 z-10 h-2 cursor-row-resize"
       />
       <div className="flex h-[30px] shrink-0 items-center gap-2 px-3">
-        <SquareTerminal size={13} className="text-fg-2" />
+        <SquareTerminal size={13} className="text-fg-muted" />
         <span className="font-semibold text-callout">Terminal</span>
-        <span className="truncate text-caption text-fg-2">{cwd ? projectName(cwd) : ""}</span>
+        <span className="truncate text-caption text-fg-muted">{cwd ? projectName(cwd) : ""}</span>
         <span className="flex-1" />
         <Cluster>
           <ClusterButton
@@ -192,7 +192,7 @@ export function TerminalPanel() {
       </div>
       <div className="min-h-0 flex-1">
         {!canOpenPty() ? (
-          <p className="p-3 text-callout text-fg-2">
+          <p className="p-3 text-callout text-fg-muted">
             The terminal runs in the desktop app or `bun run dev:web`.
           </p>
         ) : (

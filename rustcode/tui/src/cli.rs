@@ -99,6 +99,12 @@ pub enum Commands {
         command: Option<SessionCommands>,
     },
 
+    /// List, show, create, validate and set themes (terminal and desktop app)
+    Theme {
+        #[command(subcommand)]
+        command: ThemeCommands,
+    },
+
     /// Inspect user-data migrations
     Storage {
         #[command(subcommand)]
@@ -494,6 +500,32 @@ pub enum SessionCommands {
 }
 
 #[derive(clap::Subcommand, Debug)]
+pub enum ThemeCommands {
+    /// List every theme; `*` marks the active one
+    List,
+    /// Show a theme's resolved desktop tokens
+    Show {
+        name: String,
+        /// Print the theme as `_rustcode/themes` reports it
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a commented theme file to the user themes directory
+    New {
+        name: String,
+        /// Theme to start from (default: rustcode)
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Make a theme the active one in the user config
+    Set { name: String },
+    /// Check theme files: every one, a theme by name, or a file by path
+    Validate { target: Option<String> },
+    /// Print the user themes directory, or a theme's file
+    Path { name: Option<String> },
+}
+
+#[derive(clap::Subcommand, Debug)]
 pub enum StorageCommands {
     /// List pending and completed user-data migrations without changing files
     Status {
@@ -756,6 +788,53 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn parses_theme_commands() {
+        let parse = |args: &[&str]| {
+            let mut argv = vec!["rustcode", "theme"];
+            argv.extend_from_slice(args);
+            match Cli::try_parse_from(argv).map(|cli| cli.command) {
+                Ok(Some(Commands::Theme { command })) => Some(command),
+                _ => None,
+            }
+        };
+        assert!(matches!(parse(&["list"]), Some(ThemeCommands::List)));
+        assert!(matches!(
+            parse(&["show", "nord", "--json"]),
+            Some(ThemeCommands::Show { name, json: true }) if name == "nord"
+        ));
+        assert!(matches!(
+            parse(&["new", "mine", "--from", "light"]),
+            Some(ThemeCommands::New { name, from: Some(from) }) if name == "mine" && from == "light"
+        ));
+        assert!(matches!(
+            parse(&["new", "mine"]),
+            Some(ThemeCommands::New { from: None, .. })
+        ));
+        assert!(matches!(
+            parse(&["set", "dracula"]),
+            Some(ThemeCommands::Set { name }) if name == "dracula"
+        ));
+        assert!(matches!(
+            parse(&["validate"]),
+            Some(ThemeCommands::Validate { target: None })
+        ));
+        assert!(matches!(
+            parse(&["validate", "./x.toml"]),
+            Some(ThemeCommands::Validate { target: Some(_) })
+        ));
+        assert!(matches!(
+            parse(&["path"]),
+            Some(ThemeCommands::Path { name: None })
+        ));
+        assert!(matches!(
+            parse(&["path", "nord"]),
+            Some(ThemeCommands::Path { name: Some(_) })
+        ));
+        assert!(parse(&["show"]).is_none(), "show needs a name");
+        assert!(parse(&["paint"]).is_none());
     }
 
     #[test]

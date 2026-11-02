@@ -1,7 +1,7 @@
 // The Changes panel, after ChangesPanel.swift: the thread's working tree
 // against HEAD, from git in the Tauri shell. Reloads when a turn ends.
 
-import { ChevronRight, CircleCheck, RefreshCw, X } from "lucide-react";
+import { ChevronRight, CircleCheck, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type GitChanges, gitChanges } from "../lib/native";
 import { useApp } from "../state/store";
@@ -11,8 +11,8 @@ const STATUS_TINT: Record<string, string> = {
   A: "text-success bg-success/15",
   U: "text-success bg-success/15",
   D: "text-danger bg-danger/15",
-  R: "text-info bg-info/15",
-  C: "text-info bg-info/15",
+  R: "text-accent bg-accent/15",
+  C: "text-accent bg-accent/15",
   M: "text-warning bg-warning/15",
 };
 
@@ -35,7 +35,7 @@ export function splitUnifiedDiff(diff: string): Record<string, string[]> {
 
 function UnifiedDiff({ lines }: { lines: string[] }) {
   return (
-    <div className="selectable overflow-x-auto rounded-lg bg-fill-3 py-1 font-mono text-caption leading-[16px]">
+    <div className="selectable overflow-x-auto rounded-md bg-fill-subtle py-1 font-mono text-caption leading-[16px]">
       <div className="min-w-fit">
         {lines.map((line, i) => (
           <div
@@ -44,7 +44,7 @@ function UnifiedDiff({ lines }: { lines: string[] }) {
               "px-2.5 whitespace-pre",
               line.startsWith("+") && "bg-[var(--rc-diff-add)]",
               line.startsWith("-") && "bg-[var(--rc-diff-del)]",
-              line.startsWith("@@") && "text-fg-3",
+              line.startsWith("@@") && "text-fg-faint",
             )}
           >
             {line || " "}
@@ -55,7 +55,7 @@ function UnifiedDiff({ lines }: { lines: string[] }) {
   );
 }
 
-export function ChangesPanel({ onClose }: { onClose: () => void }) {
+export function ChangesPanel() {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
   const running = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.running : false) ?? false);
   const [data, setData] = useState<GitChanges | null>(null);
@@ -99,27 +99,18 @@ export function ChangesPanel({ onClose }: { onClose: () => void }) {
   );
 
   return (
-    <aside
-      aria-label="Changes"
-      className="flex w-[480px] shrink-0 flex-col border-hairline border-l bg-chat rc-in"
-    >
-      <div
-        data-tauri-drag-region
-        className="flex h-[42px] items-center gap-2 border-hairline border-b px-3 pt-1.5 pb-2"
-      >
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-9 shrink-0 items-center gap-2 px-3">
         <span className="font-semibold text-body">Uncommitted</span>
         <span className="flex-1" />
         <Cluster>
           <ClusterButton label="Reload" onClick={() => void load()}>
             {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}
           </ClusterButton>
-          <ClusterButton label="Close changes" onClick={onClose}>
-            <X size={14} />
-          </ClusterButton>
         </Cluster>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {error && <p className="text-callout text-fg-2">{error}</p>}
+        {error && <p className="text-callout text-fg-muted">{error}</p>}
         {!error && data && (
           <>
             <div className="mb-0.5 flex items-baseline gap-2 text-callout tabular">
@@ -130,16 +121,16 @@ export function ChangesPanel({ onClose }: { onClose: () => void }) {
               <span className="text-danger">−{totals.removed}</span>
               <span className="flex-1" />
               {loadedAt && (
-                <span className="text-fg-3">
+                <span className="text-fg-faint">
                   {new Date(loadedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
                 </span>
               )}
             </div>
-            <p className="mb-3 text-caption text-fg-2">
+            <p className="mb-3 text-caption text-fg-muted">
               Uncommitted and untracked changes{data.branch ? ` on ${data.branch}` : ""}.
             </p>
             {!data.files.length && (
-              <div className="flex flex-col items-center gap-2 py-10 text-callout text-fg-2">
+              <div className="flex flex-col items-center gap-2 py-10 text-callout text-fg-muted">
                 <CircleCheck size={20} />
                 No uncommitted changes
               </div>
@@ -151,16 +142,19 @@ export function ChangesPanel({ onClose }: { onClose: () => void }) {
                     type="button"
                     aria-expanded={!!open[f.path]}
                     onClick={() => setOpen({ ...open, [f.path]: !open[f.path] })}
-                    className="flex w-full items-center gap-2 rounded-md p-[5px] text-left hover:bg-fill-3"
+                    className="flex w-full items-center gap-2 rounded-sm p-[5px] text-left hover:bg-fill-subtle"
                   >
                     <ChevronRight
                       size={11}
-                      className={cx("shrink-0 text-fg-3 transition-transform", open[f.path] && "rotate-90")}
+                      className={cx(
+                        "shrink-0 text-fg-faint transition-transform",
+                        open[f.path] && "rotate-90",
+                      )}
                     />
                     <span
                       className={cx(
-                        "flex size-4 shrink-0 items-center justify-center rounded font-bold font-mono text-[9px]",
-                        STATUS_TINT[f.status] ?? "bg-fill-2 text-fg-2",
+                        "flex size-4 shrink-0 items-center justify-center rounded-xs font-bold font-mono text-[9px]",
+                        STATUS_TINT[f.status] ?? "bg-fill text-fg-muted",
                       )}
                     >
                       {f.status}
@@ -169,7 +163,7 @@ export function ChangesPanel({ onClose }: { onClose: () => void }) {
                       <bdi>{f.path}</bdi>
                     </span>
                     {f.binary ? (
-                      <span className="text-caption text-fg-3">binary</span>
+                      <span className="text-caption text-fg-faint">binary</span>
                     ) : (
                       <span className="font-mono text-caption tabular">
                         <span className="text-success">+{f.added}</span>{" "}
@@ -188,11 +182,11 @@ export function ChangesPanel({ onClose }: { onClose: () => void }) {
           </>
         )}
         {!error && !data && loading && (
-          <div className="flex items-center gap-2 text-callout text-fg-2">
+          <div className="flex items-center gap-2 text-callout text-fg-muted">
             <Spinner /> Reading changes…
           </div>
         )}
       </div>
-    </aside>
+    </div>
   );
 }

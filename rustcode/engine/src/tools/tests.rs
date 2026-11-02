@@ -37,9 +37,9 @@ fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
         "native function-calling interface",
         "plain-text summary",
         "do NOT print tool calls as text or JSON",
-        "For research/review answers, use comparison tables when useful",
-        "concise bullets, or short paragraphs",
-        "label verified findings, judgments, and gaps",
+        // Tables, bullets and paragraphs moved to the root-only Output style
+        // hint (`output_style_reaches_root_prompts_within_budget`).
+        "For research/review answers, label verified findings, judgments, and gaps",
         "never claim comprehensive coverage without evidence",
         "Avoid fixed long templates",
         "Cite `path:line` with full repo-relative paths",
@@ -4951,6 +4951,64 @@ fn visualization_hint_needs_a_rendering_frontend_and_a_root_prompt() {
             !super::tool_system_prompt(false, protocol, AgentMode::Build).contains("rustcode-viz")
         );
     }
+}
+
+#[test]
+fn output_style_reaches_root_prompts_within_budget() {
+    use super::schema::{
+        OUTPUT_STYLE_PROMPT_HINT as STYLE, OUTPUT_STYLE_VIZ_HINT as VIZ, SMART_UI_PROMPT_HINT,
+        append_output_style_hint, harness_output_style, visualization_prompt_hint,
+    };
+    use crate::config::{AgentMode, ToolProtocol};
+    let tokens = crate::network::compaction::estimate_tokens;
+    let with = |policy: ToolSchemaPolicy, level: u8| {
+        let mut prompt = String::new();
+        append_output_style_hint(&mut prompt, policy, level);
+        prompt
+    };
+    for mode in [AgentMode::Build, AgentMode::Plan] {
+        let root = ToolSchemaPolicy::root_for_mode(false, mode);
+        // Every frontend renders Markdown; only viz frontends get the viz clause.
+        assert_eq!(with(root, 0), format!("{STYLE}\n"));
+        assert_eq!(with(root, 1), format!("{STYLE}{VIZ}\n"));
+        assert_eq!(with(root, 2), format!("{STYLE}{VIZ}\n"));
+    }
+    assert_eq!(with(ToolSchemaPolicy::subagent(), 2), "");
+    let compact =
+        ToolSchemaPolicy::root_for_mode_with_compact_prompt(false, AgentMode::Build, true);
+    assert_eq!(with(compact, 2), "");
+    for rule in ["```diff", "`path:line`", "headings only", "No emoji"] {
+        assert!(STYLE.contains(rule), "{rule}");
+    }
+    // Frontends that cannot draw the blocks never hear of them.
+    assert!(!STYLE.contains("rustcode-viz") && !STYLE.contains("rustcode-ui"));
+    assert!(VIZ.contains("rustcode-viz"));
+    // Budget (docs/output-style.md): under 250 extra tokens for the desktop
+    // app (viz level 2, Smart UI on), less for the TUI and plain ACP clients.
+    assert!(tokens(&with(ToolSchemaPolicy::root(false), 0)) < 120);
+    assert!(tokens(&with(ToolSchemaPolicy::root(false), 2)) < 140);
+    let desktop = format!(
+        "{}{}{SMART_UI_PROMPT_HINT}",
+        with(ToolSchemaPolicy::root(false), 2),
+        visualization_prompt_hint(2)
+    );
+    let before = format!("{}{SMART_UI_PROMPT_HINT}", visualization_prompt_hint(2));
+    assert!(tokens(&desktop) - tokens(&before) <= 250);
+    // The cached base prompt never carries it, so the prefix stays shared.
+    for protocol in [
+        ToolProtocol::ApiNative,
+        ToolProtocol::Json,
+        ToolProtocol::Native,
+    ] {
+        assert!(
+            !super::tool_system_prompt(false, protocol, AgentMode::Build)
+                .contains("# Output style")
+        );
+    }
+    let harness = harness_output_style();
+    assert!(harness.starts_with(STYLE) && harness.contains("`path:line`"));
+    assert!(!harness.contains("rustcode-viz"));
+    assert!(tokens(&harness) < 140);
 }
 
 #[test]

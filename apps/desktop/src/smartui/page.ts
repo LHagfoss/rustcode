@@ -1,3 +1,4 @@
+// design-lint: allow-file (the sandboxed page's own stylesheet and chart palette, not app chrome)
 // The page a Smart UI block runs in: a CSP, the base stylesheet and the
 // runtime (`window.rustcode`) before the block, and Chart.js inlined where
 // the block names `rustcode-lib:chart.js`. The names here are a contract
@@ -23,15 +24,15 @@ export interface PageTheme {
 /** The page's variables from the app's tokens (`index.css`), read through `token`. */
 export function pageTheme(mode: ThemeMode, token: (name: string) => string): PageTheme {
   const vars: Record<string, string> = {
-    "--rc-text": token("--rc-fg"),
-    "--rc-muted": token("--rc-fg-2"),
-    "--rc-faint": token("--rc-fg-3"),
-    "--rc-accent": token("--rc-brand"),
-    "--rc-surface": token("--rc-fill-3"),
-    "--rc-separator": token("--rc-hairline"),
-    "--rc-danger": token("--rc-red"),
-    "--rc-success": token("--rc-green"),
-    "--rc-warning": token("--rc-orange"),
+    "--rc-text": token("--rc-text"),
+    "--rc-muted": token("--rc-text-muted"),
+    "--rc-faint": token("--rc-text-faint"),
+    "--rc-accent": token("--rc-accent"),
+    "--rc-surface": token("--rc-surface"),
+    "--rc-separator": token("--rc-border"),
+    "--rc-danger": token("--rc-danger"),
+    "--rc-success": token("--rc-success"),
+    "--rc-warning": token("--rc-warning"),
     "--rc-font": '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
     "--rc-mono": '"SF Mono", ui-monospace, Menlo, monospace',
     "--rc-radius": "10px",

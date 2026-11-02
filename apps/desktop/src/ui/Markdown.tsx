@@ -1,6 +1,6 @@
 // Reply Markdown, styled after MarkdownText.swift: 13px body, bold headings,
 // mono inline code without a box, code blocks on a quiet fill with a Copy
-// button and Xcode colours, tables and quotes on rounded fills.
+// button and Xcode colours, tables and quotes on rounded-xs fills.
 
 import { Check, Copy } from "lucide-react";
 import {
@@ -15,9 +15,12 @@ import {
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/fileRefs";
 import { highlight, peekHighlight } from "../lib/highlight";
 import { markdownBlocks } from "../lib/markdownBlocks";
-import { openExternal } from "../lib/native";
+import { openExternal, openInEditor } from "../lib/native";
+import { hasShell } from "../lib/shell";
+import { toast, useApp } from "../state/store";
 import { LinkChip } from "./LinkChip";
 import { copyText, cx } from "./primitives";
 
@@ -42,7 +45,7 @@ export function CopyButton({
       aria-label={copied ? "Copied" : label}
       onClick={() => void copyText(text).then(() => setCopied(true))}
       className={cx(
-        "inline-flex h-[22px] items-center gap-1 rounded-[7px] text-caption text-fg-2 transition-colors hover:bg-fill-2 hover:text-fg",
+        "inline-flex h-[22px] items-center gap-1 rounded-md text-caption text-fg-muted hover:bg-fill hover:text-fg",
         iconOnly ? "w-[22px] justify-center" : "px-2",
       )}
     >
@@ -84,9 +87,9 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
     };
   }, [code, lang]);
   return (
-    <div className="my-0.5 overflow-hidden rounded-xl bg-fill-3">
+    <div className="my-0.5 overflow-hidden rounded-lg bg-fill-subtle">
       <div className="flex items-center justify-between pt-1.5 pr-1.5 pl-3">
-        <span className="font-mono text-caption text-fg-2">{lang || "code"}</span>
+        <span className="font-mono text-caption text-fg-muted">{lang || "code"}</span>
         <CopyButton text={code} />
       </div>
       {html ? (
@@ -102,6 +105,19 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
         </pre>
       )}
     </div>
+  );
+}
+
+/** Opens a file a reply names, resolved against the open thread's folder. */
+function openRef(ref: FileRef) {
+  const s = useApp.getState();
+  const cwd = (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
+  if (!hasShell()) {
+    toast("Opening files needs the desktop app.", "warning");
+    return;
+  }
+  openInEditor(resolveRef(ref, cwd), ref.line, ref.column).catch((e) =>
+    toast(e instanceof Error ? e.message : String(e), "warning"),
   );
 }
 
@@ -121,8 +137,10 @@ const components: Components = {
   h3: ({ children }) => <h3 className="font-semibold text-body">{children}</h3>,
   h4: ({ children }) => <h4 className="font-semibold text-body">{children}</h4>,
   p: ({ children }) => <p className="leading-[20px]">{children}</p>,
-  ul: ({ children }) => <ul className="ml-[1.1em] list-disc space-y-0.5 marker:text-fg-2">{children}</ul>,
-  ol: ({ children }) => <ol className="ml-[1.4em] list-decimal space-y-0.5 marker:text-fg-2">{children}</ol>,
+  ul: ({ children }) => <ul className="ml-[1.1em] list-disc space-y-0.5 marker:text-fg-muted">{children}</ul>,
+  ol: ({ children }) => (
+    <ol className="ml-[1.4em] list-decimal space-y-0.5 marker:text-fg-muted">{children}</ol>
+  ),
   li: ({ children }) => <li className="pl-0.5 leading-[20px] [&>ol]:mt-0.5 [&>ul]:mt-0.5">{children}</li>,
   a: ({ href, children }) =>
     // A bare link (autolinked, or `<url>`) reads as a chip; a link with its own words stays a link.
@@ -133,25 +151,29 @@ const components: Components = {
         href={href}
         onClick={(e) => {
           e.preventDefault();
-          if (href) openExternal(href);
+          if (!href) return;
+          // A relative link names a file in the thread's folder, not a page.
+          const ref = parseLinkRef(href);
+          if (ref) openRef(ref);
+          else openExternal(href);
         }}
-        className="cursor-pointer text-brand underline decoration-brand/45 underline-offset-2"
+        className="cursor-pointer text-accent underline decoration-accent/45 underline-offset-2"
       >
         {href ? shortUrl(href, children) : children}
       </a>
     ),
   blockquote: ({ children }) => (
-    <blockquote className="relative rounded-lg bg-fill-4 py-2 pr-3 pl-[21px] text-fg/80 before:absolute before:top-2 before:bottom-2 before:left-2 before:w-[3px] before:rounded-full before:bg-fg-2/45">
+    <blockquote className="relative rounded-md bg-fill-subtle py-2 pr-3 pl-[21px] text-fg/80 before:absolute before:top-2 before:bottom-2 before:left-2 before:w-[3px] before:rounded-full before:bg-fg-muted/45">
       {children}
     </blockquote>
   ),
-  hr: () => <hr className="my-1 border-hairline" />,
+  hr: () => <hr className="my-1 border-border" />,
   table: ({ children }) => (
-    <div className="overflow-x-auto rounded-xl bg-fill-3 py-1.5">
+    <div className="overflow-x-auto rounded-lg bg-fill-subtle py-1.5">
       <table className="w-full border-collapse text-left">{children}</table>
     </div>
   ),
-  th: ({ children }) => <th className="border-b border-hairline px-2.5 py-1.5 font-semibold">{children}</th>,
+  th: ({ children }) => <th className="border-b border-border px-2.5 py-1.5 font-semibold">{children}</th>,
   td: ({ children }) => <td className="px-2.5 py-1.5 align-top">{children}</td>,
   pre: ({ children }) => <>{children}</>,
   code: ({ className, children, node }: ComponentProps<"code"> & { node?: { position?: unknown } }) => {
@@ -161,6 +183,18 @@ const components: Components = {
     const block = lang !== undefined || text.includes("\n");
     void node;
     if (block) return <CodeBlock code={text.replace(/\n$/, "")} lang={lang} />;
+    const ref = parseInlineRef(text);
+    if (ref)
+      return (
+        <button
+          type="button"
+          title={`Open ${ref.path}${ref.line ? ` at line ${ref.line}` : ""}`}
+          onClick={() => openRef(ref)}
+          className="inline rounded-xs text-accent decoration-accent/45 underline-offset-2 hover:underline"
+        >
+          <code className="font-mono text-[0.95em]">{children}</code>
+        </button>
+      );
     return <code className="font-mono text-[0.95em]">{children}</code>;
   },
 };

@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { asciiDrawing, charWidth, type Drawing, LINE_HEIGHT, loadBanner } from "../lib/banner";
+import { observeSize } from "../lib/resize";
 import { cx } from "./primitives";
 
 function subscribeScheme(listener: () => void) {
@@ -30,6 +31,7 @@ export function useDarkScheme(): boolean {
 }
 
 /** Full at the top, fading out toward the foot, so the middle stays calm under the composer. */
+// design-lint: allow (mask alpha, not a colour)
 const FOOT_FADE = "linear-gradient(to bottom, rgb(0 0 0 / 0.9) 0%, rgb(0 0 0 / 0.6) 45%, transparent 100%)";
 
 export function NewThreadBanner({
@@ -55,10 +57,8 @@ export function NewThreadBanner({
   useEffect(() => {
     const el = root.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => setWidth(el.offsetWidth));
-    observer.observe(el);
     setWidth(el.offsetWidth);
-    return () => observer.disconnect();
+    return observeSize(el, () => setWidth(el.offsetWidth));
   }, []);
 
   useEffect(() => {

@@ -1,12 +1,10 @@
 // The sidebar: a toolbar clear of the traffic lights, a search capsule with
 // a filter menu, and threads by where they are in their life (after T3
 // Code's sidebar): Pinned, Needs You, Working, Threads (by project), and
-// Settled (done or archived) folded away unless opened. Each section folds,
-// and remembers it. Settings sits at the foot.
+// Settled (threads marked Done) folded away unless opened. Each section
+// folds, and remembers it. Settings is in the top row, after New thread.
 
 import {
-  Archive,
-  ArchiveRestore,
   Check,
   ChevronRight,
   CircleCheck,
@@ -26,7 +24,6 @@ import {
   Pin,
   PinOff,
   Search,
-  Settings,
   SquarePen,
   SquareTerminal,
   Trash2,
@@ -44,11 +41,9 @@ import {
   askConfirm,
   featureMissing,
   openAgent,
-  openSettings,
   removeWorktree,
   renameThread,
   selectThread,
-  setArchived,
   setThreadStatus,
   setView,
   startNewThread,
@@ -62,8 +57,10 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { AgentMark } from "./AgentViews";
+import { HarnessIcon } from "./HarnessIcon";
 import { LinkBadge } from "./Links";
-import { ChromeButton, Cluster, ClusterButton, cx, Spinner, Tooltip } from "./primitives";
+import { SettingsButton } from "./MainHeader";
+import { Cluster, ClusterButton, cx, Spinner, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
 import { TitlebarRow } from "./Titlebar";
 
@@ -89,8 +86,8 @@ function useSidebarWidth() {
 }
 
 const menuItem =
-  "flex w-full items-center gap-2 rounded-[8px] px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-brand-fill data-[highlighted]:text-white";
-const menuSurface = "surface z-50 min-w-[190px] rounded-[12px] border border-hairline p-1 rc-in";
+  "flex w-full items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill";
+const menuSurface = "elevated z-50 min-w-[190px] rounded-lg p-1 rc-in";
 
 function ThreadMenuItems({
   session,
@@ -104,7 +101,6 @@ function ThreadMenuItems({
   onRename: () => void;
 }) {
   const pinned = useApp((s) => s.pinned.includes(session.id));
-  const archived = useApp((s) => session.id in s.archived);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const statusMissing = useApp((s) => (s.features.status ? null : featureMissing("status")));
@@ -127,12 +123,12 @@ function ThreadMenuItems({
         </Item>
       )}
       {statusMissing && (
-        <div className="px-2.5 pb-1 text-caption text-fg-3">Kept by the app: {statusMissing}</div>
+        <div className="px-2.5 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
       )}
       <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
         <FileDiff size={13} /> Review Changes
       </Item>
-      <Separator className="mx-1.5 my-1 h-px bg-hairline" />
+      <Separator className="mx-1.5 my-1 h-px bg-border" />
       <Item className={menuItem} onSelect={() => togglePin(session.id)}>
         {pinned ? <PinOff size={13} /> : <Pin size={13} />}
         {pinned ? "Unpin" : "Pin"}
@@ -140,14 +136,10 @@ function ThreadMenuItems({
       <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
         <Pencil size={13} /> Rename…
       </Item>
-      <Item className={menuItem} onSelect={() => setArchived(session.id, !archived)}>
-        {archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-        {archived ? "Unarchive" : "Archive"}
-      </Item>
       {worktree && (
         <>
-          <Separator className="mx-1.5 my-1 h-px bg-hairline" />
-          <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-2">
+          <Separator className="mx-1.5 my-1 h-px bg-border" />
+          <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1 text-caption text-fg-muted">
             <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
           </div>
           <Item className={menuItem} disabled={!canFiles} onSelect={() => revealPath(worktree.path)}>
@@ -161,16 +153,16 @@ function ThreadMenuItems({
             <SquareTerminal size={13} /> Open in Terminal
           </Item>
           <Item
-            className={cx(menuItem, "text-danger data-[highlighted]:bg-danger")}
+            className={cx(menuItem, "text-danger data-[highlighted]:bg-danger/12")}
             onSelect={() => void removeWorktree(session.id)}
           >
             <FolderX size={13} /> Remove Worktree…
           </Item>
         </>
       )}
-      <Separator className="mx-1.5 my-1 h-px bg-hairline" />
+      <Separator className="mx-1.5 my-1 h-px bg-border" />
       <Item
-        className={cx(menuItem, "text-danger data-[highlighted]:bg-danger")}
+        className={cx(menuItem, "text-danger data-[highlighted]:bg-danger/12")}
         disabled={!canFiles}
         onSelect={() =>
           askConfirm({
@@ -229,7 +221,7 @@ const ThreadRow = memo(function ThreadRow({
   };
   if (renaming) {
     return (
-      <div className="rounded-[8px] bg-fg/[0.09] px-1.5 py-[5px]">
+      <div className="rounded-md bg-fill px-1.5 py-[5px]">
         <input
           autoFocus
           value={title}
@@ -240,7 +232,7 @@ const ThreadRow = memo(function ThreadRow({
             if (e.key === "Escape") setRenaming(false);
           }}
           aria-label="Thread title"
-          className="w-full rounded-[6px] bg-field px-1.5 py-0.5 text-body outline-none ring-2 ring-info/50"
+          className="w-full rounded-sm bg-surface-2 px-1.5 py-0.5 text-body shadow-1"
         />
       </div>
     );
@@ -254,16 +246,16 @@ const ThreadRow = memo(function ThreadRow({
             onClick={() => selectThread(session.id)}
             aria-current={selected ? "page" : undefined}
             className={cx(
-              "flex w-full flex-col rounded-[8px] px-2.5 py-1 text-left transition-colors duration-150 ease-out",
-              selected ? "bg-fg/[0.09]" : "hover:bg-fg/[0.045] active:bg-fg/[0.07]",
+              "flex w-full flex-col rounded-md px-2.5 py-1 text-left",
+              selected ? "bg-fill" : "hover:bg-fill-subtle active:bg-fill",
             )}
           >
             <span className="flex w-full items-center gap-2">
-              {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-2" />}
+              {pinned && <Pin size={10} className="shrink-0 rotate-45 text-fg-muted" />}
               <span
                 className={cx(
                   "min-w-0 flex-1 truncate text-body",
-                  selected ? "font-medium text-fg" : status === "done" ? "text-fg-2" : "text-fg",
+                  selected ? "font-medium text-fg" : status === "done" ? "text-fg-muted" : "text-fg",
                 )}
               >
                 {session.title || "New thread"}
@@ -271,7 +263,7 @@ const ThreadRow = memo(function ThreadRow({
               <LinkBadge threadId={session.id} />
               <span className="flex h-3.5 w-4 shrink-0 items-center justify-center group-hover:invisible">
                 {request ? (
-                  <MessageCircleQuestion size={12} className="text-attention" />
+                  <MessageCircleQuestion size={12} className="text-warning" />
                 ) : running ? (
                   <Spinner size={12} />
                 ) : (
@@ -280,29 +272,37 @@ const ThreadRow = memo(function ThreadRow({
               </span>
             </span>
             {request ? (
-              <span className="truncate font-medium text-attention text-sub">
+              <span className="truncate font-medium text-warning text-sub">
                 {request.question ? `Asks: ${request.question.text}` : `Approve: ${request.title}`}
               </span>
             ) : (
-              <span className="flex items-center gap-1 truncate text-fg-3 text-sub">
+              <span className="flex items-center gap-1 truncate text-fg-faint text-sub">
                 {worktree ? (
-                  <span className="flex min-w-0 shrink items-center gap-0.5 rounded-[5px] bg-fill-3 px-1 font-mono text-[10px]">
+                  <span className="flex min-w-0 shrink items-center gap-0.5 rounded-sm bg-fill-subtle px-1 font-mono text-[10px]">
                     <GitBranch size={9} className="shrink-0" />
                     <span className="truncate">{worktree.branch}</span>
                   </span>
                 ) : (
                   scopeAll && session.cwd && <Folder size={9} className="shrink-0" />
                 )}
+                {session.harness && session.harness !== "rustcode" && (
+                  <HarnessIcon
+                    id={session.harness}
+                    name={harness?.name}
+                    size={10}
+                    className="text-fg-muted"
+                  />
+                )}
                 <span className="truncate">{detail.join(" · ")}</span>
               </span>
             )}
           </button>
-          <DropdownMenu.Root>
+          <DropdownMenu.Root modal={false}>
             <DropdownMenu.Trigger asChild>
               <button
                 type="button"
                 aria-label={`Actions for ${session.title || "thread"}`}
-                className="absolute top-[4px] right-1.5 flex size-[22px] items-center justify-center rounded-[6px] text-fg-2 opacity-0 hover:bg-fg/10 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                className="absolute top-[4px] right-1.5 flex size-[22px] items-center justify-center rounded-sm text-fg-muted opacity-0 hover:bg-fill focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
               >
                 <Ellipsis size={13} />
               </button>
@@ -346,12 +346,12 @@ function AgentChildren({ threadId }: { threadId: string }) {
   const expanded = open ?? active.length > 0;
   const shown = [...active, ...agents.filter((a) => !agentActive(a)).slice(-3)].slice(0, 6);
   return (
-    <div className="ml-[18px] border-fg/[0.08] border-l pl-1.5">
+    <div className="ml-[18px] border-border border-l pl-1.5">
       <button
         type="button"
         onClick={() => setOpen(!expanded)}
         aria-expanded={expanded}
-        className="flex h-[20px] w-full items-center gap-1 rounded-[6px] px-1.5 text-caption text-fg-2 hover:bg-fg/[0.035]"
+        className="flex h-[20px] w-full items-center gap-1 rounded-sm px-1.5 text-caption text-fg-muted hover:bg-fill-subtle"
       >
         <ChevronRight size={10} className={cx("transition-transform", expanded && "rotate-90")} />
         <Users size={10} />
@@ -368,13 +368,13 @@ function AgentChildren({ threadId }: { threadId: string }) {
               selectThread(threadId);
               openAgent(a.id);
             }}
-            className="flex h-[22px] w-full items-center gap-1.5 rounded-[6px] px-1.5 text-left text-caption hover:bg-fg/[0.035]"
+            className="flex h-[22px] w-full items-center gap-1.5 rounded-sm px-1.5 text-left text-caption hover:bg-fill-subtle"
           >
             <span className="flex w-3 justify-center">
               <AgentMark agent={a} />
             </span>
             <span className="shrink-0 font-medium text-fg">{a.agentType || a.name}</span>
-            <span className="min-w-0 truncate text-fg-2">{a.task}</span>
+            <span className="min-w-0 truncate text-fg-muted">{a.task}</span>
           </button>
         ))}
     </div>
@@ -420,7 +420,7 @@ interface Section {
   projects?: { key: string; label: string; items: SessionSummary[] }[];
 }
 
-/** Sections that start folded: Settled, so done and archived threads stay out of the way. */
+/** Sections that start folded: Settled, so done threads stay out of the way. */
 const FOLDED_BY_DEFAULT: SectionId[] = ["settled"];
 
 /**
@@ -466,17 +466,17 @@ function SectionHeader({
       onClick={onToggle}
       aria-expanded={open}
       className={cx(
-        "group/h flex h-7 w-full items-center gap-1.5 rounded-[8px] px-2.5 text-left font-semibold text-sub hover:bg-fg/[0.035]",
-        section.id === "needs" ? "text-attention" : "text-fg-2",
+        "group/h flex h-7 w-full items-center gap-1.5 rounded-md px-2.5 text-left font-semibold text-sub hover:bg-fill-subtle",
+        section.id === "needs" ? "text-warning" : "text-fg-muted",
       )}
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
-      <span className="font-normal text-fg-3 tabular">{section.items.length}</span>
+      <span className="font-normal text-fg-faint tabular">{section.items.length}</span>
       <ChevronRight
         size={11}
         strokeWidth={2.5}
         className={cx(
-          "shrink-0 text-fg-3 transition-transform duration-200 ease-snappy",
+          "shrink-0 text-fg-faint transition-transform duration-200 ease-snappy",
           open && "rotate-90",
           // Open sections show the chevron on hover only, as macOS sidebars do.
           open && "opacity-0 group-hover/h:opacity-100 group-focus-visible/h:opacity-100",
@@ -511,8 +511,8 @@ function FilterMenu({
             type="button"
             aria-label="Filter and view"
             className={cx(
-              "flex size-[30px] shrink-0 items-center justify-center rounded-full hover:bg-fill-2 data-[state=open]:bg-fill-2",
-              on ? "text-brand" : "text-fg-2",
+              "flex size-[30px] shrink-0 items-center justify-center rounded-full hover:bg-fill data-[state=open]:bg-fill",
+              on ? "text-accent" : "text-fg-muted",
             )}
           >
             <ListFilter size={14} />
@@ -532,7 +532,7 @@ function FilterMenu({
             {check(onlyProject)}
             <span className="truncate">Only {projectCwd ? projectName(projectCwd) : "this project"}</span>
           </DropdownMenu.Item>
-          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-hairline" />
+          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-border" />
           <DropdownMenu.Item
             className={menuItem}
             onSelect={() => setView(view === "board" ? { kind: "chat" } : { kind: "board" })}
@@ -561,7 +561,6 @@ export function Sidebar() {
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
   const pinned = useApp((s) => s.pinned);
-  const archived = useApp((s) => s.archived);
   const [query, setQuery] = useState("");
   const [byProject, setByProject] = useStored("rustcode.sidebar.byProject", true);
   const [onlyProject, setOnlyProject] = useStored("rustcode.sidebar.onlyProject", false);
@@ -569,6 +568,7 @@ export function Sidebar() {
   const [width, setWidth] = useSidebarWidth();
   const dragging = useRef(false);
   const now = useNow();
+  // design-lint: allow (mask alpha, not a colour)
   const fade = "linear-gradient(to bottom, #000 calc(100% - 28px), transparent)";
 
   const filtered = useMemo(() => {
@@ -607,7 +607,8 @@ export function Sidebar() {
     for (const s of filtered) {
       if (parentOf[s.id]) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
-      const done = (marks[s.id] ?? listed) === "done" || s.id in archived;
+      // Settled is exactly the threads marked Done (by the user, or the engine for a merged branch).
+      const done = (marks[s.id] ?? listed) === "done";
       // A pinned thread always shows, whatever it is doing.
       if (pinned.includes(s.id)) pins.push(s);
       else if (flagged.has(`${s.id}:n`)) needs.push(s);
@@ -638,7 +639,7 @@ export function Sidebar() {
       { id: "settled", label: "Settled", items: settled },
     ];
     return all.filter((g) => g.items.length);
-  }, [filtered, flags, marks, pinned, archived, parentOf, byProject]);
+  }, [filtered, flags, marks, pinned, parentOf, byProject]);
 
   // A search shows every match, folded sections too.
   const isOpen = (id: SectionId) => !!query.trim() || !folded.includes(id);
@@ -665,7 +666,7 @@ export function Sidebar() {
         <div key={s.id} className="flex flex-col gap-px">
           <ThreadRow session={s} selected={s.id === selectedId} scopeAll={scopeAll} now={now} />
           {childrenOf[s.id]?.map((child) => (
-            <div key={child.id} className="ml-[14px] border-fg/[0.08] border-l pl-1">
+            <div key={child.id} className="ml-[14px] border-border border-l pl-1">
               <ThreadRow session={child} selected={child.id === selectedId} scopeAll={false} now={now} />
             </div>
           ))}
@@ -690,25 +691,26 @@ export function Sidebar() {
             <ClusterButton label="New thread" tooltip="New thread (⌘N)" onClick={() => startNewThread()}>
               <SquarePen size={14} />
             </ClusterButton>
+            <SettingsButton />
           </Cluster>
         </TitlebarRow>
         <div className="mx-2.5 mt-2.5 mb-1.5 flex shrink-0 items-center gap-1">
-          <label className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-full bg-fill-3 px-3 transition-colors duration-150 focus-within:bg-fill-2 hover:bg-fill-2">
-            <Search size={13} className="shrink-0 text-fg-2" />
+          <label className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-full bg-fill-subtle px-3 focus-within:bg-fill hover:bg-fill">
+            <Search size={13} className="shrink-0 text-fg-muted" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Escape" && setQuery("")}
               placeholder="Search threads"
               aria-label="Search threads"
-              className="min-w-0 flex-1 bg-transparent text-callout outline-none placeholder:text-fg-3"
+              className="min-w-0 flex-1 bg-transparent text-callout outline-none placeholder:text-fg-faint"
             />
             {query && (
               <button
                 type="button"
                 aria-label="Clear search"
                 onClick={() => setQuery("")}
-                className="text-fg-3 hover:text-fg-2"
+                className="text-fg-faint hover:text-fg-muted"
               >
                 <X size={12} />
               </button>
@@ -726,12 +728,12 @@ export function Sidebar() {
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
           {!sessionsLoaded && (
-            <div className="flex items-center gap-2 px-2.5 py-3 text-callout text-fg-2">
+            <div className="flex items-center gap-2 px-2.5 py-3 text-callout text-fg-muted">
               <Spinner /> Loading threads…
             </div>
           )}
           {sessionsLoaded && !filtered.length && (
-            <div className="px-2.5 py-3 text-callout text-fg-2">
+            <div className="px-2.5 py-3 text-callout text-fg-muted">
               {query
                 ? "No matching threads."
                 : onlyProject
@@ -748,7 +750,7 @@ export function Sidebar() {
                   {section.projects
                     ? section.projects.map((p) => (
                         <div key={p.key} className="mb-1">
-                          <div className="flex h-6 items-center gap-1.5 px-2.5 text-fg-3 text-sub">
+                          <div className="flex h-6 items-center gap-1.5 px-2.5 text-fg-faint text-sub">
                             <Folder size={11} className="shrink-0" />
                             <span className="truncate">{p.label}</span>
                           </div>
@@ -757,8 +759,8 @@ export function Sidebar() {
                       ))
                     : rows(section.items, !byProject || section.id !== "threads")}
                   {section.id === "settled" && (
-                    <p className="px-2.5 pt-1 pb-1.5 text-fg-3 text-sub">
-                      Done and archived threads. A new message brings one back.
+                    <p className="px-2.5 pt-1 pb-1.5 text-fg-faint text-sub">
+                      Threads marked Done. A new message brings one back.
                     </p>
                   )}
                 </Fold>
@@ -766,11 +768,6 @@ export function Sidebar() {
             );
           })}
         </nav>
-        <div className="flex h-11 shrink-0 items-center px-2.5">
-          <ChromeButton label="Settings" tooltip="Settings (⌘,)" onClick={() => openSettings("general")}>
-            <Settings size={15} />
-          </ChromeButton>
-        </div>
       </div>
       {!hidden && (
         <div
@@ -780,7 +777,7 @@ export function Sidebar() {
           onPointerDown={onResize}
           className="group absolute top-0 right-[-3px] bottom-0 z-10 w-[7px] cursor-col-resize"
         >
-          <div className="mx-auto h-full w-px bg-transparent group-hover:bg-fg/10" />
+          <div className="mx-auto h-full w-px bg-transparent group-hover:bg-fill" />
         </div>
       )}
     </aside>

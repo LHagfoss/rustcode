@@ -1750,6 +1750,11 @@ async fn prepare_turn_request_pass(
             .map(|profile| profile.tool_scheduling_policy())
             .unwrap_or_default();
         crate::tools::append_tool_response_policy(&mut system_prompt, tool_scheduling_policy);
+        crate::tools::schema::append_output_style_hint(
+            &mut system_prompt,
+            schema_policy,
+            s.visualization_level,
+        );
         crate::tools::schema::append_visualization_hint(
             &mut system_prompt,
             schema_policy,

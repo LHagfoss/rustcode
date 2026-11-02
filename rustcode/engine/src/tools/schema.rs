@@ -2497,6 +2497,54 @@ One line, no headings or lists, and never one per call. Skip it only when the ba
     );
 }
 
+/// How a root agent formats its replies (docs/output-style.md). Every
+/// RustCode frontend renders CommonMark with tables and highlighted fences,
+/// so this part is sent to all of them; the clause in
+/// [`OUTPUT_STYLE_VIZ_HINT`] only to those that draw `rustcode-viz`.
+pub(crate) const OUTPUT_STYLE_PROMPT_HINT: &str = "# Output style\n\
+Replies render as Markdown. Lead with the answer or result; never restate the question or narrate what you are about to say. \
+Keep paragraphs short. Use headings only for long, multi-part answers; bullets for parallel items, numbered steps for sequences, \
+a table for comparisons. Fence code with its language and show changes as ```diff; put `path:line` citations in inline code. \
+No emoji, filler, or recap of what the reply already said. End with a next step only when the user has one to take.\n";
+
+/// Added to [`OUTPUT_STYLE_PROMPT_HINT`] for frontends that draw
+/// `rustcode-viz`: without it the reply repeated a chart as a table.
+pub(crate) const OUTPUT_STYLE_VIZ_HINT: &str = "A rustcode-viz block replaces a table or list, never repeats one in prose; its summary carries the takeaway.\n";
+
+/// The output-style text for a frontend's visualization level.
+pub(crate) fn output_style_hint(visualization_level: u8) -> String {
+    let mut hint = String::from(OUTPUT_STYLE_PROMPT_HINT);
+    if visualization_level > 0 {
+        hint.push_str(OUTPUT_STYLE_VIZ_HINT);
+    }
+    hint.push('\n');
+    hint
+}
+
+/// The output-style guidance for an external harness that takes developer
+/// instructions (Codex `thread/start` `developerInstructions`). It never
+/// gets RustCode's root prompt, so it also carries the citation rule from
+/// the Workflow section, and no `rustcode-viz` clause: a resumed thread may
+/// open in a client that does not draw the blocks.
+pub(crate) fn harness_output_style() -> String {
+    format!(
+        "{OUTPUT_STYLE_PROMPT_HINT}Cite code as `path:line` with the full repo-relative path.\n"
+    )
+}
+
+/// Append the output-style guidance to a root prompt. Subagent replies are
+/// read by the parent, not rendered, and compact prompts are for small
+/// models where every token counts.
+pub(crate) fn append_output_style_hint(
+    prompt: &mut String,
+    policy: ToolSchemaPolicy,
+    visualization_level: u8,
+) {
+    if !policy.is_subagent() && !policy.compact_text_prompt {
+        prompt.push_str(&output_style_hint(visualization_level));
+    }
+}
+
 /// Short guidance for `rustcode-viz` blocks; the full format lives in
 /// `docs/visualizations.md` and the TUI renderer validates every payload.
 pub(crate) const VISUALIZATION_PROMPT_HINT: &str = "# Visualizations\n\
@@ -2681,7 +2729,7 @@ For local machine state check the shell first, never `list_skills` first. \
         "You are rustcode, a terminal coding agent.\n\
 # Workflow\n\
 - Act on change requests: locate, inspect, edit, verify. Prefer the smallest focused sequence once grounded; do not restate tasks or narrate tools. Finish with changed files, verification, and blockers.\n\
-- For research/review answers, use comparison tables when useful, concise bullets, or short paragraphs; label verified findings, judgments, and gaps, and never claim comprehensive coverage without evidence. Avoid fixed long templates. Cite `path:line` with full repo-relative paths.\n\
+- For research/review answers, label verified findings, judgments, and gaps, and never claim comprehensive coverage without evidence. Avoid fixed long templates. Cite `path:line` with full repo-relative paths.\n\
 - Use `sandbox/` for temporary work and `artifacts/` for persistent reports. Run commands expected to exceed 2s in the background and keep working; results arrive automatically, so never poll.\n\
 - `run_command` uses the platform shell. Chained shell commands are fine when inspectable; use `&&` for dependent commands, show destructive operations, and never mask required failures. Check from the nearest project manifest. If in-scope dependencies are missing, run the deterministic lockfile install once, then retry. Never run `cargo check` on a standalone `.rs` file.\n\
 - Prefer write tools for file creation; heredoc only for small appends/pipes.\n\

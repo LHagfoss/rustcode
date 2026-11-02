@@ -2,7 +2,7 @@
 // Components read slices with `useApp(selector)` and call the actions below.
 
 import { create } from "zustand";
-import { AcpConnection, type Inbound, type Json, type JsonObject, RpcError, str } from "../acp/jsonrpc";
+import { AcpConnection, type Inbound, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
 import {
   agentActive,
   type PlanUsage,
@@ -50,6 +50,7 @@ import {
   type Worktree,
 } from "../acp/v2";
 import { setShellTransport, shellCall } from "../lib/shell";
+import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { createBatcher, frameQueue } from "./batch";
 import {
   type ComposeExtras,
@@ -90,8 +91,7 @@ export type SettingsSection =
   | "general"
   | "harnesses"
   | "connections"
-  | "skills"
-  | "mcp"
+  | "capabilities"
   | "appearance"
   | "engine";
 
@@ -131,7 +131,12 @@ export interface AppState {
   onboardingOpen: boolean;
   sidebarHidden: boolean;
   toasts: Toast[];
+  /** The light/dark preference; a theme's own mode sets it when the theme is picked. */
   theme: "system" | "light" | "dark";
+  /** The engine's themes (`_rustcode/themes`); null until listed, or when the engine has none. */
+  themes: ThemesSnapshot | null;
+  /** The theme picked, painted when its mode is the one shown (lib/themes.ts `resolveTheme`). */
+  themeActive: string;
   /** Pinned threads, kept in app storage like the SwiftUI app's `pinnedSessions`. */
   pinned: string[];
   /** Archived threads and when, kept in app storage; they leave the list until shown. */
@@ -170,7 +175,13 @@ export interface AppState {
   /** A thread asking the user whether it may reach another one. */
   grant: (GrantAsk & { id: string }) | null;
   /** v2 engine methods, probed at initialize: false hides the feature. Undefined: not known yet. */
-  features: { worktrees?: boolean; checkpoints?: boolean; status?: boolean };
+  features: {
+    worktrees?: boolean;
+    checkpoints?: boolean;
+    status?: boolean;
+    themes?: boolean;
+    pins?: boolean;
+  };
   /** Review / done marks kept by the app when the engine does not store them. */
   statusMarks: Record<string, ThreadStatus>;
   /** What the main column shows instead of the chat. */
@@ -191,6 +202,9 @@ const STORAGE = {
   archived: "rustcode.archived",
   project: "rustcode.projectCwd",
   theme: "rustcode.theme",
+  themeActive: "rustcode.themeActive",
+  pinsMigrated: "rustcode.pinsMigrated",
+  archiveMigrated: "rustcode.archiveMigrated",
   sidebar: "rustcode.sidebarHidden",
   orchestration: "rustcode.orchestration",
   statusMarks: "rustcode.statusMarks",
@@ -265,6 +279,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   sidebarHidden: stored(STORAGE.sidebar) === "1",
   toasts: [],
   theme: (stored(STORAGE.theme) as AppState["theme"]) ?? "system",
+  themes: null,
+  themeActive: stored(STORAGE.themeActive) ?? "rustcode",
 }));
 
 const set = useApp.setState;
@@ -381,7 +397,8 @@ async function handshake(): Promise<void> {
         ]),
       ),
     }));
-    await Promise.all([refreshSessions(), refreshHarnesses(), probeFeatures(conn)]);
+    await Promise.all([refreshSessions(), refreshHarnesses(), probeFeatures(conn), refreshThemes(conn)]);
+    if (connection === conn) await syncPinsAndSettled(conn);
     const selected = get().selectedId;
     if (selected) void openThread(selected);
   } catch (error) {
@@ -399,12 +416,126 @@ async function probeFeatures(conn: AcpConnection): Promise<void> {
       return !(error instanceof RpcError && error.isMethodNotFound);
     }
   };
-  const [worktrees, checkpoints, status] = await Promise.all([
+  const [worktrees, checkpoints, status, pins] = await Promise.all([
     probe(V2Method.worktreeList),
     probe(V2Method.checkpointList),
     probe(V2Method.sessionStatus),
+    probe(V2Method.sessionPin),
   ]);
-  if (connection === conn) set({ features: { worktrees, checkpoints, status } });
+  if (connection === conn)
+    set((s) => ({ features: { ...s.features, worktrees, checkpoints, status, pins } }));
+}
+
+// ---------------------------------------------------------------- themes
+
+/** The project whose `.rustcode/themes` the engine lists too. */
+function themeParams(): JsonObject {
+  const s = get();
+  const cwd = (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
+  return cwd ? { cwd } : {};
+}
+
+/** Lists the engine's themes; an engine without them keeps the built-in ones. */
+async function refreshThemes(conn: AcpConnection): Promise<void> {
+  try {
+    const themes = parseThemes(await conn.request(ThemeMethod.list, themeParams(), 10_000));
+    if (connection !== conn) return;
+    set((s) => ({ themes, features: { ...s.features, themes: true } }));
+  } catch (error) {
+    if (connection !== conn) return;
+    const missing = error instanceof RpcError && error.isMethodNotFound;
+    set((s) => ({ themes: null, features: { ...s.features, themes: missing ? false : s.features.themes } }));
+  }
+}
+
+/** `_rustcode/themes/changed`: a theme file changed, or the CLI picked another theme. */
+function onThemesChanged(params: JsonObject) {
+  if (!Array.isArray(params.themes)) {
+    if (connection) void refreshThemes(connection);
+    return;
+  }
+  const themes = parseThemes(params);
+  const changed = themes.active !== get().themes?.active;
+  set({ themes, features: { ...get().features, themes: true } });
+  // Picked elsewhere (the CLI, another window): follow it, mode and all.
+  if (changed) adoptTheme(themes.active);
+}
+
+function adoptTheme(name: string) {
+  const theme = (get().themes?.themes ?? BUILTIN_THEMES).find((t) => t.name === name);
+  if (!theme) return;
+  set({ themeActive: name, theme: theme.mode });
+  store(STORAGE.themeActive, name);
+  store(STORAGE.theme, theme.mode);
+}
+
+/** Picks a theme: it applies at once, and the engine saves it when it has themes. */
+export async function setActiveTheme(name: string): Promise<void> {
+  adoptTheme(name);
+  if (!get().features.themes || !connection) return;
+  try {
+    const themes = parseThemes(await connection.request(ThemeMethod.set, { name, ...themeParams() }, 10_000));
+    set({ themes });
+  } catch (error) {
+    toast(`Could not save the theme: ${errorText(error)}`, "warning");
+  }
+}
+
+/**
+ * Makes a new theme file from `from` through the engine. Null when the
+ * engine cannot (the UI then shows the CLI command instead).
+ */
+export async function createTheme(name: string, from: string): Promise<string | null> {
+  if (!get().features.themes || !connection) return null;
+  try {
+    const result = obj(await connection.request(ThemeMethod.create, { name, from }, 10_000));
+    if (connection) await refreshThemes(connection);
+    return str(result?.path) ?? "";
+  } catch (error) {
+    if (error instanceof RpcError && error.isMethodNotFound) return null;
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------- pins and settled
+
+/**
+ * Pins live in the engine when it has `_rustcode/session/pin`: local pins
+ * move there once. Archived threads (an older app's) become Done once,
+ * since Settled is exactly the threads marked Done.
+ */
+async function syncPinsAndSettled(conn: AcpConnection): Promise<void> {
+  if (!stored(STORAGE.archiveMigrated)) {
+    const archived = Object.keys(get().archived);
+    store(STORAGE.archiveMigrated, "1");
+    for (const id of archived) if (statusOf(get(), id) !== "done") void setThreadStatus(id, "done");
+    if (archived.length) {
+      set({ archived: {} });
+      store(STORAGE.archived, "{}");
+    }
+  }
+  if (!get().features.pins) return;
+  const remote = get()
+    .sessions.filter((x) => x.pinned)
+    .map((x) => x.id);
+  const local = get().pinned;
+  if (!stored(STORAGE.pinsMigrated)) {
+    const missing = local.filter((id) => !remote.includes(id) && get().sessions.some((x) => x.id === id));
+    await Promise.all(
+      missing.map((id) =>
+        conn.request(V2Method.sessionPin, { session_id: id, pinned: true }, 10_000).catch(() => null),
+      ),
+    );
+    store(STORAGE.pinsMigrated, "1");
+    remote.push(...missing);
+  }
+  // The engine's pins, in the order the app last kept them.
+  const pinned = [
+    ...local.filter((id) => remote.includes(id)),
+    ...remote.filter((id) => !local.includes(id)),
+  ];
+  set({ pinned });
+  store(STORAGE.pinned, JSON.stringify(pinned));
 }
 
 /** Why a v2 feature is hidden, for its tooltip; null when the engine has it. */
@@ -412,7 +543,13 @@ export function featureMissing(feature: keyof AppState["features"]): string | nu
   const known = get().features[feature];
   if (known) return null;
   if (known === undefined) return "Checking what the engine supports…";
-  const what = { worktrees: "worktrees", checkpoints: "checkpoints", status: "thread status" }[feature];
+  const what = {
+    worktrees: "worktrees",
+    checkpoints: "checkpoints",
+    status: "thread status",
+    themes: "themes",
+    pins: "pins",
+  }[feature];
   return `This engine has no ${what} yet (update RustCode).`;
 }
 
@@ -438,6 +575,7 @@ async function handleInbound(message: Inbound) {
       return;
     case "notification":
       if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
+      else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
       return;
     case "request":
       if (message.method === Method.requestPermission) {
@@ -755,10 +893,18 @@ export function cancelEdit(key: string) {
 }
 
 export function togglePin(id: string) {
-  const pinned = get().pinned.includes(id) ? get().pinned.filter((x) => x !== id) : [id, ...get().pinned];
+  const before = get().pinned;
+  const on = !before.includes(id);
+  const pinned = on ? [id, ...before] : before.filter((x) => x !== id);
   set({ pinned });
   store(STORAGE.pinned, JSON.stringify(pinned));
-  toast(pinned.includes(id) ? "Pinned" : "Unpinned", "success");
+  toast(on ? "Pinned" : "Unpinned", "success");
+  if (!get().features.pins || !connection) return;
+  connection.request(V2Method.sessionPin, { session_id: id, pinned: on }, 10_000).catch((error) => {
+    set({ pinned: before });
+    store(STORAGE.pinned, JSON.stringify(before));
+    toast(`Could not ${on ? "pin" : "unpin"} the thread: ${errorText(error)}`, "warning");
+  });
 }
 
 export function setArchived(id: string, on: boolean) {
@@ -1392,8 +1538,24 @@ export function setTerminalOpen(open: boolean) {
   set({ terminalOpen: open });
 }
 
+/** The panel last shown, so ⌘⌥B brings it back. */
+let lastPanel: NonNullable<AppState["panel"]> = "changes";
+
+/** Opens `panel`, or closes it when it is the one open (the header's buttons). */
 export function setPanel(panel: AppState["panel"]) {
+  if (panel) lastPanel = panel;
   set((s) => ({ panel: s.panel === panel ? null : panel }));
+}
+
+/** Shows `panel` (the panel's tabs): never closes. */
+export function showPanel(panel: NonNullable<AppState["panel"]>) {
+  lastPanel = panel;
+  set({ panel });
+}
+
+/** ⌘⌥B: the right panel open or closed, with what it showed last. */
+export function toggleRightPanel() {
+  set((s) => ({ panel: s.panel ? null : lastPanel }));
 }
 
 /** Whether the thread's harness lists subagents (`_rustcode/agents`). */
@@ -1551,6 +1713,8 @@ export function resetForTests() {
     links: { links: [], grants: {}, counters: {}, fanOuts: [] },
     grant: null,
     features: {},
+    themes: null,
+    themeActive: "rustcode",
     statusMarks: {},
     view: { kind: "chat" },
     checkpoints: {},

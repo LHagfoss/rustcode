@@ -123,3 +123,7 @@ pub use transcript::{
 };
 
 pub use worker::InteractiveController;
+
+/// Shared theme files (TUI + desktop): frontends read and render them
+/// through the controller seam.
+pub use crate::themes;

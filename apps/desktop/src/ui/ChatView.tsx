@@ -12,10 +12,7 @@ import {
   GitBranch,
   GitPullRequest,
   ListChecks,
-  PanelLeft,
-  SquarePen,
   SquareTerminal,
-  TriangleAlert,
   Users,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
@@ -23,6 +20,7 @@ import { useEffect, useRef, useState } from "react";
 import { agentActive } from "../acp/rustcode";
 import { useBanner } from "../lib/banner";
 import { pickFolder } from "../lib/native";
+import { observeSize } from "../lib/resize";
 import {
   refreshSessions,
   restartEngine,
@@ -31,20 +29,19 @@ import {
   setTerminalOpen,
   setThreadStatus,
   setView,
-  startNewThread,
   statusOf,
-  toggleSidebar,
   useApp,
   worktreeOf,
 } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { AttentionCard } from "./AttentionCards";
 import { Composer } from "./Composer";
+import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
+import { MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
+import { Callout, Cluster, ClusterButton, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { StatusChip } from "./Status";
-import { useLightsInset } from "./Titlebar";
 import { Transcript } from "./Transcript";
 
 function PlanButton({ thread }: { thread: ThreadState }) {
@@ -55,7 +52,7 @@ function PlanButton({ thread }: { thread: ThreadState }) {
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-3 px-2.5 font-medium text-callout text-fg-2 hover:bg-fill-2 data-[state=open]:bg-fill-1"
+          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 font-medium text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           <ListChecks size={13} />
           <span className="tabular">
@@ -64,29 +61,25 @@ function PlanButton({ thread }: { thread: ThreadState }) {
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content
-          align="end"
-          sideOffset={6}
-          className="surface z-40 w-[380px] rounded-[20px] border border-hairline p-3 rc-in"
-        >
+        <Popover.Content align="end" sideOffset={6} className="elevated z-40 w-[380px] rounded-xl p-3 rc-in">
           <div className="mb-1 flex items-baseline justify-between px-1">
             <span className="font-semibold text-body">Plan</span>
-            <span className="text-callout text-fg-2">
+            <span className="text-callout text-fg-muted">
               {done} of {thread.plan.length} done
             </span>
           </div>
-          <p className="mb-2 px-1 text-caption text-fg-3">As the agent marked each step.</p>
+          <p className="mb-2 px-1 text-caption text-fg-faint">As the agent marked each step.</p>
           <ol className="flex flex-col">
             {thread.plan.map((entry, i) => (
-              <li key={i} className="flex items-start gap-2 rounded-lg px-2 py-[7px]">
+              <li key={i} className="flex items-start gap-2 rounded-md px-2 py-[7px]">
                 {entry.status === "completed" ? (
                   <CircleCheck size={14} className="mt-px shrink-0 text-success" />
                 ) : entry.status === "in_progress" ? (
-                  <CircleDot size={14} className="mt-px shrink-0 text-info" />
+                  <CircleDot size={14} className="mt-px shrink-0 text-accent" />
                 ) : (
-                  <CircleDashed size={14} className="mt-px shrink-0 text-fg-3" />
+                  <CircleDashed size={14} className="mt-px shrink-0 text-fg-faint" />
                 )}
-                <span className={cx("text-body", entry.status === "completed" && "text-fg-2")}>
+                <span className={cx("text-body", entry.status === "completed" && "text-fg-muted")}>
                   {entry.content}
                 </span>
               </li>
@@ -103,14 +96,14 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
   const status = useApp((s) => statusOf(s, threadId));
   const wt = useApp((s) => worktreeOf(s, threadId));
   const item =
-    "flex w-full items-center gap-2 rounded-[8px] px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-brand-fill data-[highlighted]:text-white";
+    "flex w-full items-center gap-2 rounded-md px-2.5 py-[5px] text-body outline-none data-[highlighted]:bg-fill";
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
           aria-label="Thread status"
-          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-3 px-2.5 text-callout text-fg-2 hover:bg-fill-2 data-[state=open]:bg-fill-1"
+          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           {wt && (
             <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">
@@ -125,12 +118,12 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
         <DropdownMenu.Content
           align="end"
           sideOffset={6}
-          className="surface z-50 min-w-[190px] rounded-[12px] border border-hairline p-1"
+          className="elevated z-50 min-w-[190px] rounded-lg p-1"
         >
           <DropdownMenu.Item className={item} onSelect={() => setView({ kind: "review", threadId })}>
             <FileDiff size={13} /> Review Changes
           </DropdownMenu.Item>
-          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-hairline" />
+          <DropdownMenu.Separator className="mx-1.5 my-1 h-px bg-border" />
           <DropdownMenu.Item className={item} onSelect={() => void setThreadStatus(threadId, "review")}>
             <Eye size={13} /> Mark for Review
           </DropdownMenu.Item>
@@ -152,91 +145,80 @@ function Header({ thread, overBanner }: { thread?: ThreadState; overBanner?: boo
   const agentsOn = useApp((s) => !!s.agent?.agents) && (thread?.harness?.capabilities.subagents ?? true);
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const working = useApp((s) => (thread ? (s.agents[thread.id] ?? []).filter(agentActive).length : 0));
-  const sidebarHidden = useApp((s) => s.sidebarHidden);
-  const lightsInset = useLightsInset();
   const projectCwd = useApp((s) => s.projectCwd);
   const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
   const title = thread ? (thread.title ?? listed ?? "New thread") : "New Thread";
   const cwd = thread?.cwd ?? projectCwd;
   return (
-    <header
-      data-tauri-drag-region
-      className={cx(
-        "relative z-10 flex h-[42px] shrink-0 items-center gap-2.5 pt-1.5 pb-2 pr-2.5 transition-[background-color] duration-300",
-        // Over a new thread's banner: frosted, its foot fading into the banner.
-        overBanner ? "rc-frost" : "bg-chat/95",
-        !sidebarHidden && "pl-2.5",
-      )}
-      style={sidebarHidden ? { paddingLeft: lightsInset } : undefined}
-    >
-      {sidebarHidden && (
-        <Cluster>
-          <ClusterButton label="Show sidebar" tooltip="Show sidebar (⌘B)" onClick={toggleSidebar}>
-            <PanelLeft size={14} />
-          </ClusterButton>
-          <ClusterButton label="New thread" tooltip="New thread (⌘N)" onClick={() => startNewThread()}>
-            <SquarePen size={14} />
-          </ClusterButton>
-        </Cluster>
-      )}
-      <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
-        {cwd && (
-          <Tooltip label={cwd}>
-            <span
-              className="max-w-[260px] shrink-0 truncate rounded-lg px-2 text-callout text-fg-2"
-              dir="rtl"
+    <MainHeader
+      // Over a new thread's banner: frosted, its foot fading into the banner.
+      className={overBanner ? "rc-frost" : "bg-bg"}
+      title={
+        <>
+          {cwd && (
+            <Tooltip label={cwd}>
+              <span className="max-w-[260px] shrink-0 truncate px-2 text-callout text-fg-muted" dir="rtl">
+                <bdi>{cwd.replace(/^\/Users\/[^/]+/, "~")}</bdi>
+              </span>
+            </Tooltip>
+          )}
+          {cwd && <span className="font-light text-fg-faint text-title3">/</span>}
+          {thread?.harness && thread.harness.id !== "rustcode" && (
+            <HarnessIcon id={thread.harness.id} size={14} className="text-fg-muted" />
+          )}
+          <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
+        </>
+      }
+      right={
+        <>
+          {thread && <ThreadStatusMenu threadId={thread.id} />}
+          {thread && <PlanButton thread={thread} />}
+          <Cluster>
+            {thread && agentsOn && (
+              <ClusterButton
+                label="Agents"
+                tooltip={working ? `Agents (${working} working)` : "Agents this thread started"}
+                on={panel === "agents"}
+                onClick={() => setPanel("agents")}
+              >
+                <span className="relative">
+                  <Users size={14} />
+                  {working > 0 && (
+                    <span className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-accent" />
+                  )}
+                </span>
+              </ClusterButton>
+            )}
+            {pullsOn && (
+              <ClusterButton
+                label="Pull requests"
+                tooltip="Pull requests of this project"
+                on={panel === "pulls"}
+                onClick={() => setPanel("pulls")}
+              >
+                <GitPullRequest size={14} />
+              </ClusterButton>
+            )}
+            <ClusterButton
+              label="Terminal"
+              tooltip="Terminal (⌘J)"
+              on={terminalOpen}
+              onClick={() => setTerminalOpen(!terminalOpen)}
             >
-              <bdi>{cwd.replace(/^\/Users\/[^/]+/, "~")}</bdi>
-            </span>
-          </Tooltip>
-        )}
-        {cwd && <span className="font-light text-fg-4 text-title3">/</span>}
-        <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
-      </div>
-      {thread && <ThreadStatusMenu threadId={thread.id} />}
-      {thread && <PlanButton thread={thread} />}
-      <Cluster>
-        {thread && agentsOn && (
-          <ClusterButton
-            label="Agents"
-            tooltip={working ? `Agents (${working} working)` : "Agents this thread started"}
-            on={panel === "agents"}
-            onClick={() => setPanel("agents")}
-          >
-            <span className="relative">
-              <Users size={14} />
-              {working > 0 && <span className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-brand" />}
-            </span>
-          </ClusterButton>
-        )}
-        {pullsOn && (
-          <ClusterButton
-            label="Pull requests"
-            tooltip="Pull requests of this project"
-            on={panel === "pulls"}
-            onClick={() => setPanel("pulls")}
-          >
-            <GitPullRequest size={14} />
-          </ClusterButton>
-        )}
-        <ClusterButton
-          label="Terminal"
-          tooltip="Terminal (⌘J)"
-          on={terminalOpen}
-          onClick={() => setTerminalOpen(!terminalOpen)}
-        >
-          <SquareTerminal size={14} />
-        </ClusterButton>
-        <ClusterButton
-          label="Changes"
-          tooltip="Changes in the working tree"
-          on={panel === "changes"}
-          onClick={() => setPanel("changes")}
-        >
-          <FileDiff size={14} />
-        </ClusterButton>
-      </Cluster>
-    </header>
+              <SquareTerminal size={14} />
+            </ClusterButton>
+            <ClusterButton
+              label="Changes"
+              tooltip="Changes in the working tree (⌘⌥B toggles the panel)"
+              on={panel === "changes"}
+              onClick={() => setPanel("changes")}
+            >
+              <FileDiff size={14} />
+            </ClusterButton>
+          </Cluster>
+        </>
+      }
+    />
   );
 }
 
@@ -247,7 +229,7 @@ function EmptyState({ banner }: { banner: boolean }) {
       {/* A banner is drawn behind the chat instead of the icon. */}
       {!banner && <img src="/icon.png" alt="" className="size-[88px] select-none" draggable={false} />}
       <h2 className="font-semibold text-title">What should we build?</h2>
-      <div className="flex max-w-[560px] items-center gap-1.5 text-callout text-fg-2">
+      <div className="flex max-w-[560px] items-center gap-1.5 text-callout text-fg-muted">
         <Folder size={13} />
         <span className="truncate">
           {projectCwd ? projectCwd.replace(/^\/Users\/[^/]+/, "~") : "No folder chosen"}
@@ -255,7 +237,7 @@ function EmptyState({ banner }: { banner: boolean }) {
         <button
           type="button"
           onClick={() => void pickFolder(projectCwd).then((p) => p && setProjectCwd(p))}
-          className="text-brand hover:underline"
+          className="text-accent hover:underline"
         >
           {projectCwd ? "Change" : "Choose…"}
         </button>
@@ -274,12 +256,19 @@ function ErrorBanner({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="surface flex items-center gap-2.5 rounded-[14px] px-3.5 py-2.5 rc-in" role="alert">
-      <TriangleAlert size={14} className="shrink-0 text-attention" />
-      <span className="selectable line-clamp-4 flex-1 text-callout">{text}</span>
-      {action}
-      {onDismiss && <Pill onClick={onDismiss}>Dismiss</Pill>}
-    </div>
+    <Callout
+      floating
+      action={
+        (action || onDismiss) && (
+          <>
+            {action}
+            {onDismiss && <Pill onClick={onDismiss}>Dismiss</Pill>}
+          </>
+        )
+      }
+    >
+      {text}
+    </Callout>
   );
 }
 
@@ -289,7 +278,7 @@ function EngineBanner() {
   if (status === "ready") return null;
   if (status === "connecting") {
     return (
-      <div className="flex items-center justify-center gap-2 py-1 text-callout text-fg-2">
+      <div className="flex items-center justify-center gap-2 py-1 text-callout text-fg-muted">
         <Spinner />
         {detail ?? "Starting the engine…"}
       </div>
@@ -321,20 +310,17 @@ export function ChatView() {
   useEffect(() => {
     const el = stackRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => setStackHeight(el.offsetHeight));
-    observer.observe(el);
-    return () => observer.disconnect();
+    setStackHeight(el.offsetHeight);
+    return observeSize(el, () => setStackHeight(el.offsetHeight));
   }, []);
 
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => {
+    return observeSize(el, () => {
       setWidth(el.offsetWidth);
       setHeight(el.offsetHeight);
     });
-    observer.observe(el);
-    return () => observer.disconnect();
   }, []);
 
   const isNew = !selectedId;
@@ -344,7 +330,7 @@ export function ChatView() {
   const showsBanner = isNew && !!banner.name;
 
   return (
-    <main ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-chat" aria-label="Chat">
+    <main ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg" aria-label="Chat">
       {showsBanner && (
         <NewThreadBanner
           key={banner.style}
@@ -359,7 +345,7 @@ export function ChatView() {
         // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
         <Transcript key={thread.id} thread={thread} bottomInset={stackHeight + 36} />
       ) : thread?.loading ? (
-        <div className="flex flex-1 items-center justify-center gap-2 text-callout text-fg-2">
+        <div className="flex flex-1 items-center justify-center gap-2 text-callout text-fg-muted">
           <Spinner />
           Loading thread…
         </div>
@@ -370,9 +356,11 @@ export function ChatView() {
       {!isNew && (
         <div
           className="pointer-events-none absolute right-0 bottom-0 left-0"
+          // The transcript fades out as it nears the floating composer, which it then scrolls under.
           style={{
-            height: stackHeight + 52,
-            background: "linear-gradient(to bottom, transparent, var(--rc-chat) 40%)",
+            height: stackHeight + 72,
+            background:
+              "linear-gradient(to bottom, transparent 0, color-mix(in srgb, var(--rc-bg) 72%, transparent) 56px, color-mix(in srgb, var(--rc-bg) 80%, transparent) 100%)",
           }}
         />
       )}

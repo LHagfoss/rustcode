@@ -15,7 +15,7 @@ import { DiffCount } from "./Rows";
 function Patch({ file }: { file: PatchFile }) {
   const lines = parsePatch(file.patch);
   return (
-    <div className="selectable overflow-x-auto rounded-lg bg-fill-3 py-1 font-mono text-caption leading-[16px]">
+    <div className="selectable overflow-x-auto rounded-md bg-fill-subtle py-1 font-mono text-caption leading-[16px]">
       <div className="min-w-fit">
         {lines.map((l, i) => (
           <div
@@ -24,14 +24,14 @@ function Patch({ file }: { file: PatchFile }) {
               "flex pr-3",
               l.kind === "add" && "bg-[var(--rc-diff-add)]",
               l.kind === "del" && "bg-[var(--rc-diff-del)]",
-              l.kind === "hunk" && "text-fg-3",
+              l.kind === "hunk" && "text-fg-faint",
             )}
           >
             {l.kind === "hunk" ? (
               <span className="px-2.5">{l.text}</span>
             ) : (
               <>
-                <span className="w-[5ch] shrink-0 pr-1.5 text-right text-fg-3 tabular">
+                <span className="w-[5ch] shrink-0 pr-1.5 text-right text-fg-faint tabular">
                   {(l.kind === "del" ? l.old : l.new) ?? ""}
                 </span>
                 <span className={cx("w-3 shrink-0", l.kind === "add" ? "text-success" : "text-danger")}>
@@ -81,7 +81,7 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="flex h-[20px] items-center gap-1 rounded-full bg-fill-3 px-2 font-medium text-caption text-fg-2 hover:bg-fill-2 hover:text-fg data-[state=open]:bg-fill-1"
+          className="flex h-[20px] items-center gap-1 rounded-full bg-fill-subtle px-2 font-medium text-caption text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong"
         >
           <FileDiff size={11} />
           Changes
@@ -93,11 +93,11 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
           side="top"
           align="start"
           sideOffset={6}
-          className="surface z-40 flex max-h-[min(520px,70vh)] w-[min(640px,80vw)] flex-col gap-2 rounded-[18px] border border-hairline p-3"
+          className="elevated z-40 flex max-h-[min(520px,70vh)] w-[min(640px,80vw)] flex-col gap-2 rounded-xl p-3"
         >
           <div className="flex items-center gap-2 px-1">
             <span className="font-semibold text-body">Turn {checkpoint.turn}</span>
-            <span className="text-callout text-fg-2">
+            <span className="text-callout text-fg-muted">
               {checkpoint.filesChanged} file{checkpoint.filesChanged === 1 ? "" : "s"}
             </span>
             <span className="flex-1" />
@@ -107,16 +107,16 @@ export function TurnChanges({ threadId, checkpoint }: { threadId: string; checkp
             </Pill>
           </div>
           <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
-            {error && <p className="px-1 text-callout text-fg-2">{error}</p>}
+            {error && <p className="px-1 text-callout text-fg-muted">{error}</p>}
             {!files && !error && (
-              <div className="flex items-center gap-2 px-1 text-callout text-fg-2">
+              <div className="flex items-center gap-2 px-1 text-callout text-fg-muted">
                 <Spinner /> Reading the turn's changes…
               </div>
             )}
             {files?.map((f) => (
               <div key={f.path}>
                 <div className="mb-1 flex items-center gap-1.5 text-caption">
-                  <span className="font-bold font-mono text-[9px] text-fg-2 uppercase">
+                  <span className="font-bold font-mono text-[9px] text-fg-muted uppercase">
                     {f.status.slice(0, 1)}
                   </span>
                   <span className="truncate font-mono">{f.path}</span>

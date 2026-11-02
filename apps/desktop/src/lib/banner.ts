@@ -1,3 +1,4 @@
+// design-lint: allow-file (colours sampled from a picture)
 // The new-thread banner, after NewThreadBanner.swift and AsciiBanner.swift:
 // a wide picture the user picks in Settings ▸ Appearance, shown over a new
 // thread either as is or drawn in coloured text. The app keeps a copy in its

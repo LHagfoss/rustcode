@@ -16,6 +16,7 @@ mod session;
 mod session_move;
 mod steer;
 mod streaming;
+mod themes;
 pub(crate) mod usage;
 
 pub(crate) use agent_client_protocol::schema::v1::{
@@ -220,6 +221,8 @@ fn session_info(
     // Orchestrator v2: the thread's status and worktree (`docs/orchestrator.md`).
     let status = crate::thread_status::current(&session_id).as_str();
     extra = crate::worktrees::merge_rustcode_meta(Some(extra), "status", status.into());
+    let pinned = crate::thread_status::pinned(&session_id);
+    extra = crate::worktrees::merge_rustcode_meta(Some(extra), "pinned", pinned.into());
     if let Some(worktree) = crate::worktrees::list_meta(&session_id) {
         extra = crate::worktrees::merge_rustcode_meta(Some(extra), "worktree", worktree);
     }
@@ -1739,6 +1742,43 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     match removed {
                         Ok(Ok(answer)) => responder.respond(answer)?,
                         Ok(Err(error)) => responder.respond_with_error(error.into_acp())?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::thread_status::PinRequest, responder, _connection| {
+                match crate::thread_status::set_pinned(&request.session_id, request.pinned) {
+                    Ok(()) => responder.respond(serde_json::json!({})),
+                    Err(message) => responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(message)),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: themes::ThemesRequest, responder, connection| {
+                // A client that lists themes restyles when they change.
+                themes::start_watching(&connection);
+                connection.spawn(async move {
+                    match tokio::task::spawn_blocking(move || themes::answer(request)).await {
+                        Ok(answer) => responder.respond(answer)?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: themes::SetThemeRequest, responder, connection| {
+                themes::start_watching(&connection);
+                connection.spawn(async move {
+                    match tokio::task::spawn_blocking(move || themes::answer_set(request)).await {
+                        Ok(Ok(answer)) => responder.respond(answer)?,
+                        Ok(Err(error)) => responder.respond_with_error(error)?,
                         Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
                     }
                     Ok(())

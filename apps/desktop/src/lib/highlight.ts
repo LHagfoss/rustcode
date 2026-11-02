@@ -1,3 +1,4 @@
+// design-lint: allow-file (Shiki's syntax palette (Xcode's colours))
 // Syntax highlighting with Shiki, loaded lazily: the highlighter and each
 // language arrive on first use. Two small themes carry the Xcode colours the
 // SwiftUI app uses (CodeStyle.swift); CSS picks light or dark per token.

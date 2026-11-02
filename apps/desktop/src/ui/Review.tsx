@@ -108,7 +108,7 @@ function CommentBox({
 }) {
   const [body, setBody] = useState(initial);
   return (
-    <div className="my-1 ml-[8ch] mr-3 flex flex-col gap-1.5 rounded-xl bg-fill-3 p-2 font-sans rc-in">
+    <div className="my-1 ml-[8ch] mr-3 flex flex-col gap-1.5 rounded-lg bg-fill-subtle p-2 font-sans rc-in">
       <textarea
         autoFocus
         rows={2}
@@ -120,7 +120,7 @@ function CommentBox({
         }}
         placeholder="Comment on this line (⌘⏎ to save)"
         aria-label="Comment"
-        className="w-full resize-y rounded-lg bg-field px-2 py-1.5 text-callout outline-none ring-1 ring-hairline focus:ring-brand/50"
+        className="w-full resize-y rounded-md bg-fill-subtle px-2 py-1.5 text-callout outline-none ring-1 ring-border focus:ring-accent/50"
       />
       <div className="flex justify-end gap-1.5">
         <Pill onClick={onCancel}>Cancel</Pill>
@@ -149,8 +149,8 @@ function Gutter({ line, side, onComment, commented }: Omit<LineProps, "html">) {
       disabled={n === undefined}
       aria-label={n === undefined ? undefined : `Comment on line ${n}`}
       className={cx(
-        "group/g relative w-[6ch] shrink-0 pr-1.5 text-right text-fg-3 tabular enabled:hover:bg-brand/20 enabled:hover:text-brand",
-        commented && "text-brand",
+        "group/g relative w-[6ch] shrink-0 pr-1.5 text-right text-fg-faint tabular enabled:hover:bg-accent/20 enabled:hover:text-accent",
+        commented && "text-accent",
       )}
     >
       <span className="group-hover/g:invisible">{n ?? ""}</span>
@@ -222,14 +222,14 @@ const FileDiffView = memo(function FileDiffView({
         {saved.map((c, i) => (
           <div
             key={i}
-            className="my-1 mr-3 ml-[8ch] flex items-start gap-2 rounded-xl border border-brand/30 bg-brand/10 px-2.5 py-1.5 font-sans text-callout rc-in"
+            className="my-1 mr-3 ml-[8ch] flex items-start gap-2 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 font-sans text-callout rc-in"
           >
             <span className="selectable flex-1 whitespace-pre-wrap">{c.body}</span>
             <button
               type="button"
               aria-label="Remove comment"
               onClick={() => onRemove(c)}
-              className="text-fg-3 hover:text-fg"
+              className="text-fg-faint hover:text-fg"
             >
               <X size={12} />
             </button>
@@ -248,12 +248,12 @@ const FileDiffView = memo(function FileDiffView({
     );
   };
   return (
-    <div className="selectable overflow-x-auto rounded-xl bg-fill-4 py-1 font-mono text-caption leading-[18px]">
+    <div className="selectable overflow-x-auto rounded-lg bg-fill-subtle py-1 font-mono text-caption leading-[18px]">
       <div className="min-w-fit">
         {mode === "unified"
           ? file.lines.map((line, i) =>
               line.kind === "hunk" ? (
-                <div key={i} className="bg-fill-3 px-3 text-fg-3">
+                <div key={i} className="bg-fill-subtle px-3 text-fg-faint">
                   {line.text}
                 </div>
               ) : (
@@ -288,7 +288,7 @@ const FileDiffView = memo(function FileDiffView({
             )
           : splitRows(file.lines).map((row, i) =>
               row.hunk ? (
-                <div key={i} className="bg-fill-3 px-3 text-fg-3">
+                <div key={i} className="bg-fill-subtle px-3 text-fg-faint">
                   {row.hunk}
                 </div>
               ) : (
@@ -300,10 +300,7 @@ const FileDiffView = memo(function FileDiffView({
                         ? line
                         : undefined;
                     return (
-                      <div
-                        key={side}
-                        className={cx("min-w-0", side === "RIGHT" && "border-hairline border-l")}
-                      >
+                      <div key={side} className={cx("min-w-0", side === "RIGHT" && "border-border border-l")}>
                         <div className={cx("flex", shown && shown.kind !== "ctx" && tint(shown.kind))}>
                           {shown ? (
                             <>
@@ -316,7 +313,7 @@ const FileDiffView = memo(function FileDiffView({
                               <Code line={shown} html={htmlOf(shown, side)} />
                             </>
                           ) : (
-                            <span className="h-[18px] flex-1 bg-fill-3/50" />
+                            <span className="h-[18px] flex-1 bg-fill-subtle/50" />
                           )}
                         </div>
                         {shown && (shown.kind !== "ctx" || side === "RIGHT") && after(shown, side)}
@@ -481,7 +478,7 @@ export function Review({ threadId }: { threadId: string }) {
   };
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-chat" aria-label="Review">
+    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Review">
       <ViewHeader title={`Review · ${title}`}>
         <Segments
           label="Changes"
@@ -499,7 +496,7 @@ export function Review({ threadId }: { threadId: string }) {
             aria-label="A turn's changes"
             value={source.kind === "turn" ? String(source.turn) : ""}
             onChange={(e) => e.target.value && setSource({ kind: "turn", turn: Number(e.target.value) })}
-            className="h-6 max-w-[180px] rounded-full bg-fill-3 px-2 text-caption outline-none hover:bg-fill-2"
+            className="h-6 max-w-[180px] rounded-full bg-fill-subtle px-2 text-caption outline-none hover:bg-fill"
           >
             <option value="">Turn…</option>
             {checkpoints.map((c) => (
@@ -511,7 +508,7 @@ export function Review({ threadId }: { threadId: string }) {
         ) : (
           checkpointsMissing && (
             <Tooltip label={checkpointsMissing}>
-              <span className="text-caption text-fg-3">No turn diffs</span>
+              <span className="text-caption text-fg-faint">No turn diffs</span>
             </Tooltip>
           )
         )}
@@ -529,7 +526,7 @@ export function Review({ threadId }: { threadId: string }) {
             type="button"
             aria-label="Reload"
             onClick={() => void load()}
-            className="flex size-7 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+            className="flex size-7 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
           >
             {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}
           </button>
@@ -539,16 +536,16 @@ export function Review({ threadId }: { threadId: string }) {
       <div className="flex min-h-0 flex-1">
         <nav
           aria-label="Files"
-          className="w-[260px] shrink-0 overflow-y-auto border-hairline border-r px-2 pb-4"
+          className="w-[260px] shrink-0 overflow-y-auto border-border border-r px-2 pb-4"
         >
-          {error && <p className="px-2 py-3 text-callout text-fg-2">{error}</p>}
+          {error && <p className="px-2 py-3 text-callout text-fg-muted">{error}</p>}
           {files && !files.length && (
-            <p className="px-2 py-3 text-callout text-fg-2">No changes in {label}.</p>
+            <p className="px-2 py-3 text-callout text-fg-muted">No changes in {label}.</p>
           )}
           {tree.map((group) => (
             <div key={group.dir} className="mb-1">
               {group.dir && (
-                <div className="truncate px-2 pt-2 pb-0.5 font-mono text-caption text-fg-3" dir="rtl">
+                <div className="truncate px-2 pt-2 pb-0.5 font-mono text-caption text-fg-faint" dir="rtl">
                   <bdi>{group.dir}/</bdi>
                 </div>
               )}
@@ -562,16 +559,18 @@ export function Review({ threadId }: { threadId: string }) {
                     onClick={() => setSelected(path)}
                     aria-current={selected === path ? "true" : undefined}
                     className={cx(
-                      "flex w-full items-center gap-1.5 rounded-lg px-2 py-[5px] text-left",
-                      selected === path ? "bg-fg/10" : "hover:bg-fill-3",
+                      "flex w-full items-center gap-1.5 rounded-md px-2 py-[5px] text-left",
+                      selected === path ? "bg-fill" : "hover:bg-fill-subtle",
                     )}
                   >
-                    <span className="w-3 shrink-0 font-bold font-mono text-[9px] text-fg-2">{f?.status}</span>
+                    <span className="w-3 shrink-0 font-bold font-mono text-[9px] text-fg-muted">
+                      {f?.status}
+                    </span>
                     <span className="min-w-0 flex-1 truncate font-mono text-callout">
                       {path.split("/").pop()}
                     </span>
                     {n > 0 && (
-                      <span className="rounded-full bg-brand/20 px-1.5 text-caption text-brand">{n}</span>
+                      <span className="rounded-full bg-accent/20 px-1.5 text-caption text-accent">{n}</span>
                     )}
                     {f && <DiffCount added={f.added} removed={f.removed} />}
                   </button>
@@ -585,11 +584,11 @@ export function Review({ threadId }: { threadId: string }) {
             {file ? (
               <>
                 <div className="mb-2 flex items-center gap-2 text-callout">
-                  <FileDiff size={13} className="text-fg-2" />
+                  <FileDiff size={13} className="text-fg-muted" />
                   <span className="selectable truncate font-mono">{file.path}</span>
                   <DiffCount added={file.added} removed={file.removed} />
                   <span className="flex-1" />
-                  <span className="text-caption text-fg-3">Click a line number to comment</span>
+                  <span className="text-caption text-fg-faint">Click a line number to comment</span>
                 </div>
                 {file.lines.length ? (
                   <FileDiffView
@@ -601,26 +600,26 @@ export function Review({ threadId }: { threadId: string }) {
                     onRemove={(c) => setComments((all) => all.filter((x) => x !== c))}
                   />
                 ) : (
-                  <p className="text-callout text-fg-2">No text diff (binary or untracked file).</p>
+                  <p className="text-callout text-fg-muted">No text diff (binary or untracked file).</p>
                 )}
               </>
             ) : (
               !error &&
               loading && (
-                <div className="flex items-center gap-2 text-callout text-fg-2">
+                <div className="flex items-center gap-2 text-callout text-fg-muted">
                   <Spinner /> Reading changes…
                 </div>
               )
             )}
           </div>
           {(comments.length > 0 || note) && (
-            <div className="surface mx-4 mb-4 flex flex-col gap-2 rounded-[18px] p-2.5 rc-in">
+            <div className="elevated mx-4 mb-4 flex flex-col gap-2 rounded-xl p-2.5 rc-in">
               <div className="flex items-center gap-2 px-1 text-callout">
-                <ChevronRight size={12} className="text-fg-3" />
+                <ChevronRight size={12} className="text-fg-faint" />
                 <b>
                   {comments.length} comment{comments.length === 1 ? "" : "s"}
                 </b>
-                <span className="text-fg-2">on {label}</span>
+                <span className="text-fg-muted">on {label}</span>
               </div>
               <textarea
                 rows={2}
@@ -628,7 +627,7 @@ export function Review({ threadId }: { threadId: string }) {
                 onChange={(e) => setNote(e.target.value)}
                 placeholder="A note for the whole review (optional)"
                 aria-label="Review note"
-                className="resize-y rounded-xl bg-field px-2.5 py-1.5 text-callout outline-none ring-1 ring-hairline focus:ring-brand/50"
+                className="resize-y rounded-lg bg-fill-subtle px-2.5 py-1.5 text-callout outline-none ring-1 ring-border focus:ring-accent/50"
               />
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Pill onClick={() => setComments([])}>Discard</Pill>

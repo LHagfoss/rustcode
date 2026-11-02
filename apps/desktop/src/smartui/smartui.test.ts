@@ -36,7 +36,7 @@ describe("smart ui", () => {
   });
 
   test("the page carries the policy, the variables, the runtime and Chart.js once", () => {
-    const theme = pageTheme("dark", (name) => (name === "--rc-fg" ? "rgb(255 255 255 / 0.88)" : "#123456"));
+    const theme = pageTheme("dark", (name) => (name === "--rc-text" ? "rgb(255 255 255 / 0.88)" : "#123456"));
     const source =
       '<script src="rustcode-lib:chart.js"></script><script src="rustcode-lib:chart.js"></script><p>x</p>';
     expect(usesChart(source)).toBe(true);

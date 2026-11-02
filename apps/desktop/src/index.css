@@ -1,9 +1,11 @@
 @import "tailwindcss";
 
 /*
- * Design tokens, ported from the SwiftUI app (macos/Sources/RustCode/Theme.swift,
- * CodeStyle.swift) and the macOS text styles it uses. Colours switch with the
- * system appearance, or with `data-theme` on <html> when the user picks one.
+ * The design system's tokens (docs/design.md). Every colour the app draws
+ * comes from a `--rc-<token>` below; themes (docs/themes.md) replace them on
+ * :root at run time (src/lib/themes.ts), and these values are the built-in
+ * dark and light themes, kept equal to BUILTIN_THEMES by design.test.ts.
+ * `data-theme` on <html> picks light or dark; without it the system decides.
  */
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
@@ -29,197 +31,173 @@
   --text-title: 22px;
   --text-title--line-height: 28px;
 
+  /* Only the design system's colours: Tailwind's palette is switched off. */
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-inherit: inherit;
+  --color-bg: var(--rc-bg);
   --color-sidebar: var(--rc-sidebar);
-  --color-chat: var(--rc-chat);
-  --color-fg: var(--rc-fg);
-  --color-fg-2: var(--rc-fg-2);
-  --color-fg-3: var(--rc-fg-3);
-  --color-fg-4: var(--rc-fg-4);
-  --color-fill-1: var(--rc-fill-1);
-  --color-fill-2: var(--rc-fill-2);
-  --color-fill-3: var(--rc-fill-3);
-  --color-fill-4: var(--rc-fill-4);
-  --color-hairline: var(--rc-hairline);
-  --color-brand: var(--rc-brand);
-  --color-brand-fill: var(--rc-brand-fill);
-  --color-attention: var(--rc-attention);
-  --color-danger: var(--rc-red);
-  --color-success: var(--rc-green);
-  --color-warning: var(--rc-orange);
-  --color-info: var(--rc-blue);
   --color-surface: var(--rc-surface);
-  --color-field: var(--rc-field);
+  --color-surface-2: var(--rc-surface-2);
+  --color-surface-3: var(--rc-surface-3);
+  --color-border: var(--rc-border);
+  --color-border-strong: var(--rc-border-strong);
+  --color-fg: var(--rc-text);
+  --color-fg-muted: var(--rc-text-muted);
+  --color-fg-faint: var(--rc-text-faint);
+  --color-accent: var(--rc-accent);
+  --color-accent-fg: var(--rc-accent-text);
+  --color-danger: var(--rc-danger);
+  --color-success: var(--rc-success);
+  --color-warning: var(--rc-warning);
+  --color-focus: var(--rc-focus);
+  --color-selection: var(--rc-selection);
+  --color-code-bg: var(--rc-code-bg);
+  /* Derived from the text colour, so they stay neutral on any surface. */
+  --color-fill-subtle: var(--rc-fill-subtle);
+  --color-fill: var(--rc-fill);
+  --color-fill-strong: var(--rc-fill-strong);
 
-  --radius-pill: 999px;
+  /* Radius steps; a theme's `radius` scales them (lib/themes.ts). */
+  --radius-*: initial;
+  --radius-xs: var(--rc-radius-xs);
+  --radius-sm: var(--rc-radius-sm);
+  --radius-md: var(--rc-radius-md);
+  --radius-lg: var(--rc-radius-lg);
+  --radius-xl: var(--rc-radius-xl);
+  --radius-full: 9999px;
+
+  /* Two levels of elevation, each with the 1px edge ring. */
+  --shadow-*: initial;
+  --shadow-1: var(--rc-shadow-1);
+  --shadow-2: var(--rc-shadow-2);
+
   --ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --shadow-float: 0 3px 10px rgb(0 0 0 / 0.1);
-  --shadow-panel: 0 12px 28px rgb(0 0 0 / 0.22);
 }
 
+/* The built-in light theme. */
 :root {
   color-scheme: light;
-  --rc-sidebar: #eeeef0;
-  --rc-chat: #ffffff;
-  --rc-fg: rgb(0 0 0 / 0.85);
-  --rc-fg-2: rgb(0 0 0 / 0.5);
-  --rc-fg-3: rgb(0 0 0 / 0.28);
-  --rc-fg-4: rgb(0 0 0 / 0.16);
-  --rc-fill-1: rgb(0 0 0 / 0.1);
-  --rc-fill-2: rgb(0 0 0 / 0.065);
-  --rc-fill-3: rgb(0 0 0 / 0.04);
-  --rc-fill-4: rgb(0 0 0 / 0.025);
-  --rc-hairline: rgb(0 0 0 / 0.08);
-  --rc-brand: #435c6e;
-  --rc-brand-fill: #435c6e;
-  --rc-attention: #8a5a00;
-  --rc-red: #ff3b30;
-  --rc-green: #28a745;
-  --rc-orange: #f08c00;
-  --rc-blue: #007aff;
-  --rc-surface: rgb(250 250 252 / 0.82);
-  --rc-field: #ffffff;
-  /* Xcode's default light code colours. */
-  --rc-code-keyword: #9b2393;
-  --rc-code-string: #c41a16;
-  --rc-code-comment: #5d6c79;
-  --rc-code-number: #1c00cf;
-  --rc-code-type: #0b4f79;
-  --rc-diff-add: rgb(40 167 69 / 0.13);
-  --rc-diff-del: rgb(255 59 48 / 0.12);
+  --rc-bg: #ffffff;
+  --rc-sidebar: #f7f7f8;
+  --rc-surface: #f4f4f5;
+  --rc-surface-2: #ffffff;
+  --rc-surface-3: #e9e9eb;
+  --rc-border: #0000000f;
+  --rc-border-strong: #0000001f;
+  --rc-text: #171717;
+  --rc-text-muted: #5c5c5c;
+  --rc-text-faint: #9a9a9a;
+  --rc-accent: #2f6fe4;
+  --rc-accent-text: #ffffff;
+  --rc-danger: #d93d3d;
+  --rc-success: #1f9d55;
+  --rc-warning: #b7791f;
+  --rc-focus: #2f6fe4;
+  --rc-selection: #2f6fe433;
+  --rc-code-bg: #f6f6f7;
+  --rc-scrollbar: #00000026;
+  --rc-shadow-color: #0000001a;
 }
 
+/* The built-in dark theme (the default). */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --rc-sidebar: #18181b;
-    --rc-chat: #111113;
-    --rc-fg: rgb(255 255 255 / 0.88);
-    --rc-fg-2: rgb(255 255 255 / 0.55);
-    --rc-fg-3: rgb(255 255 255 / 0.28);
-    --rc-fg-4: rgb(255 255 255 / 0.16);
-    --rc-fill-1: rgb(255 255 255 / 0.16);
-    --rc-fill-2: rgb(255 255 255 / 0.11);
-    --rc-fill-3: rgb(255 255 255 / 0.06);
-    --rc-fill-4: rgb(255 255 255 / 0.038);
-    --rc-hairline: rgb(255 255 255 / 0.065);
-    --rc-brand: #7fa3bd;
-    --rc-brand-fill: #4f6d83;
-    --rc-attention: #ffd60a;
-    --rc-red: #ff453a;
-    --rc-green: #32d74b;
-    --rc-orange: #ff9f0a;
-    --rc-blue: #0a84ff;
-    --rc-surface: rgb(30 30 34 / 0.84);
-    --rc-field: rgb(255 255 255 / 0.05);
-    --rc-code-keyword: #fc5fa3;
-    --rc-code-string: #fc6a5d;
-    --rc-code-comment: #7f8c98;
-    --rc-code-number: #d0bf69;
-    --rc-code-type: #5dd8ff;
-    --rc-diff-add: rgb(50 215 75 / 0.14);
-    --rc-diff-del: rgb(255 69 58 / 0.14);
+    --rc-bg: #0b0b0c;
+    --rc-sidebar: #0e0e10;
+    --rc-surface: #141416;
+    --rc-surface-2: #1a1a1d;
+    --rc-surface-3: #232327;
+    --rc-border: #ffffff0f;
+    --rc-border-strong: #ffffff1c;
+    --rc-text: #ededed;
+    --rc-text-muted: #a1a1a1;
+    --rc-text-faint: #6b6b6b;
+    --rc-accent: #5b8def;
+    --rc-accent-text: #ffffff;
+    --rc-danger: #f26d6d;
+    --rc-success: #4ec27a;
+    --rc-warning: #e5a54b;
+    --rc-focus: #5b8def;
+    --rc-selection: #5b8def4d;
+    --rc-code-bg: #111113;
+    --rc-scrollbar: #ffffff26;
+    --rc-shadow-color: #00000080;
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --rc-sidebar: #18181b;
-  --rc-chat: #111113;
-  --rc-fg: rgb(255 255 255 / 0.88);
-  --rc-fg-2: rgb(255 255 255 / 0.55);
-  --rc-fg-3: rgb(255 255 255 / 0.28);
-  --rc-fg-4: rgb(255 255 255 / 0.16);
-  --rc-fill-1: rgb(255 255 255 / 0.16);
-  --rc-fill-2: rgb(255 255 255 / 0.11);
-  --rc-fill-3: rgb(255 255 255 / 0.06);
-  --rc-fill-4: rgb(255 255 255 / 0.038);
-  --rc-hairline: rgb(255 255 255 / 0.065);
-  --rc-brand: #7fa3bd;
-  --rc-brand-fill: #4f6d83;
-  --rc-attention: #ffd60a;
-  --rc-red: #ff453a;
-  --rc-green: #32d74b;
-  --rc-orange: #ff9f0a;
-  --rc-blue: #0a84ff;
-  --rc-surface: rgb(30 30 34 / 0.84);
-  --rc-field: rgb(255 255 255 / 0.05);
-  --rc-code-keyword: #fc5fa3;
-  --rc-code-string: #fc6a5d;
-  --rc-code-comment: #7f8c98;
-  --rc-code-number: #d0bf69;
-  --rc-code-type: #5dd8ff;
-  --rc-diff-add: rgb(50 215 75 / 0.14);
-  --rc-diff-del: rgb(255 69 58 / 0.14);
+  --rc-bg: #0b0b0c;
+  --rc-sidebar: #0e0e10;
+  --rc-surface: #141416;
+  --rc-surface-2: #1a1a1d;
+  --rc-surface-3: #232327;
+  --rc-border: #ffffff0f;
+  --rc-border-strong: #ffffff1c;
+  --rc-text: #ededed;
+  --rc-text-muted: #a1a1a1;
+  --rc-text-faint: #6b6b6b;
+  --rc-accent: #5b8def;
+  --rc-accent-text: #ffffff;
+  --rc-danger: #f26d6d;
+  --rc-success: #4ec27a;
+  --rc-warning: #e5a54b;
+  --rc-focus: #5b8def;
+  --rc-selection: #5b8def4d;
+  --rc-code-bg: #111113;
+  --rc-scrollbar: #ffffff26;
+  --rc-shadow-color: #00000080;
 }
 
-/*
- * In the macOS app the window is transparent and the system's sidebar
- * material (NSVisualEffectView, `windowEffects` in tauri.conf.json) shows
- * behind the sidebar: the sidebar paints only a light tint over it, and the
- * chat stays opaque. `vibrant` is set on <html> by main.tsx in the app on
- * macOS only. The system drops the material itself when Reduce transparency
- * is on; the solid fallback below covers the web view's own surfaces.
- */
-:root.vibrant {
-  --rc-sidebar: rgb(246 246 248 / 0.28);
-  --rc-surface: rgb(250 250 252 / 0.72);
+/* Derived from the tokens above: never set by a theme. */
+:root {
+  --rc-fill-subtle: color-mix(in srgb, var(--rc-text) 4.5%, transparent);
+  --rc-fill: color-mix(in srgb, var(--rc-text) 8%, transparent);
+  --rc-fill-strong: color-mix(in srgb, var(--rc-text) 13%, transparent);
+  --rc-diff-add: color-mix(in srgb, var(--rc-success) 14%, transparent);
+  --rc-diff-del: color-mix(in srgb, var(--rc-danger) 14%, transparent);
+  --rc-shadow-1: 0 1px 3px var(--rc-shadow-color), 0 0 0 1px var(--rc-border);
+  --rc-shadow-2: 0 10px 28px var(--rc-shadow-color), 0 0 0 1px var(--rc-border);
+  --rc-radius-xs: 4px;
+  --rc-radius-sm: 6px;
+  --rc-radius-md: 8px;
+  --rc-radius-lg: 12px;
+  --rc-radius-xl: 16px;
 }
 
-:root.vibrant[data-theme="dark"] {
-  --rc-sidebar: rgb(16 16 18 / 0.46);
-  --rc-surface: rgb(28 28 32 / 0.74);
+:root[data-radius="sharp"] {
+  --rc-radius-xs: 2px;
+  --rc-radius-sm: 3px;
+  --rc-radius-md: 4px;
+  --rc-radius-lg: 6px;
+  --rc-radius-xl: 8px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root.vibrant:not([data-theme="light"]) {
-    --rc-sidebar: rgb(16 16 18 / 0.46);
-    --rc-surface: rgb(28 28 32 / 0.74);
-  }
-}
-
-:root.vibrant body {
-  background: transparent;
-}
-
-/* Reduce transparency: the media query where the web view supports it, else the `reduce-transparency` class main.tsx sets from the system setting. */
-:root.vibrant.reduce-transparency body {
-  background: var(--rc-chat);
-}
-:root.vibrant.reduce-transparency {
-  --rc-sidebar: #eeeef0;
-  --rc-surface: #f6f6f8;
-}
-:root.vibrant.reduce-transparency[data-theme="dark"] {
-  --rc-sidebar: #18181b;
-  --rc-surface: #2e2e32;
-}
-@media (prefers-color-scheme: dark) {
-  :root.vibrant.reduce-transparency:not([data-theme="light"]) {
-    --rc-sidebar: #18181b;
-    --rc-surface: #2e2e32;
-  }
-}
-@media (prefers-reduced-transparency: reduce) {
-  :root.vibrant body {
-    background: var(--rc-chat);
-  }
-  :root.vibrant {
-    --rc-sidebar: #eeeef0;
-    --rc-surface: #f6f6f8;
-  }
-  :root.vibrant[data-theme="dark"] {
-    --rc-sidebar: #18181b;
-    --rc-surface: #2e2e32;
-  }
-}
-@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
-  :root.vibrant:not([data-theme="light"]) {
-    --rc-sidebar: #18181b;
-    --rc-surface: #2e2e32;
-  }
+:root[data-radius="round"] {
+  --rc-radius-xs: 6px;
+  --rc-radius-sm: 8px;
+  --rc-radius-md: 10px;
+  --rc-radius-lg: 16px;
+  --rc-radius-xl: 20px;
 }
 
 @layer base {
+  /*
+   * Scrollbars: overlay where the system draws them so (macOS), thin
+   * elsewhere, and invisible until the scroller is hovered.
+   */
+  :where(*) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  :where(*):hover {
+    scrollbar-color: var(--rc-scrollbar) transparent;
+  }
+
   html,
   body,
   #root {
@@ -228,8 +206,8 @@
 
   body {
     margin: 0;
-    background: var(--rc-sidebar);
-    color: var(--rc-fg);
+    background: var(--rc-bg);
+    color: var(--rc-text);
     font-family: var(--font-sans);
     font-size: 13px;
     line-height: 18px;
@@ -254,60 +232,75 @@
     -webkit-user-select: text;
   }
 
-  button {
+  /*
+   * Cursor: a pointer on everything clickable, set on the control so its
+   * children inherit it (no flicker between them); default on static text;
+   * the text cursor only in fields and selectable text.
+   */
+  button:not(:disabled),
+  a[href],
+  summary,
+  label:has(> input[type="checkbox"]),
+  [role="button"],
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="option"],
+  [role="switch"],
+  [role="radio"],
+  [role="tab"] {
+    cursor: pointer;
+  }
+  button :where(*),
+  [role="menuitem"] :where(*),
+  [role="option"] :where(*) {
+    cursor: inherit;
+  }
+  button:disabled {
     cursor: default;
   }
 
+  /* Keyboard focus only: a 2px ring at 40%, never on a click. */
+  :focus {
+    outline: none;
+  }
+
   :focus-visible {
-    outline: 2px solid color-mix(in srgb, var(--rc-blue) 60%, transparent);
-    outline-offset: 1px;
+    outline: 2px solid color-mix(in srgb, var(--rc-focus) 40%, transparent);
+    outline-offset: 2px;
+  }
+
+  /* Fields whose container shows focus draw no ring of their own. */
+  input:focus-visible,
+  textarea:focus-visible,
+  [data-no-ring]:focus-visible {
+    outline: none;
   }
 
   ::selection {
-    background: color-mix(in srgb, var(--rc-blue) 28%, transparent);
-  }
-
-  ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background: var(--rc-fill-1);
-    border-radius: 999px;
-    border: 3px solid transparent;
-    background-clip: content-box;
-  }
-
-  ::-webkit-scrollbar-track {
-    background: transparent;
+    background: var(--rc-selection);
   }
 }
 
-/* What floats over the chat (composer, popovers, menus, dialogs, toasts): one blurred material. */
-@utility surface {
-  background: var(--rc-surface);
-  backdrop-filter: saturate(1.8) blur(28px);
-  -webkit-backdrop-filter: saturate(1.8) blur(28px);
-  box-shadow:
-    var(--shadow-float),
-    inset 0 0 0 0.5px var(--rc-hairline);
+/* Popovers, menus, dialogs: the raised surface, in glass. */
+@utility elevated {
+  background: var(--rc-glass-bg-strong);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
+  box-shadow: var(--rc-shadow-2);
+  border-radius: var(--rc-radius-lg);
 }
 
-:root.reduce-transparency .surface {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-@media (prefers-reduced-transparency: reduce) {
-  .surface {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
+/* A long scroller that never shifts its content when a classic scrollbar appears. */
+@utility scroll-stable {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 /* A scrolling list that fades out over its last `--rc-fade` px, above whatever floats at its foot. */
 @utility fade-bottom {
+  /* design-lint: allow (mask alpha, not a colour) */
   mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rc-fade, 56px)), transparent);
+  /* design-lint: allow (mask alpha, not a colour) */
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rc-fade, 56px)), transparent);
 }
 
@@ -356,7 +349,7 @@
 @keyframes rc-in {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(4px);
   }
 }
 
@@ -364,11 +357,11 @@
   background:
     linear-gradient(
       90deg,
-      var(--rc-fg-2) 0%,
-      var(--rc-fg-2) 32%,
-      var(--rc-fg) 50%,
-      var(--rc-fg-2) 68%,
-      var(--rc-fg-2) 100%
+      var(--rc-text-muted) 0%,
+      var(--rc-text-muted) 32%,
+      var(--rc-text) 50%,
+      var(--rc-text-muted) 68%,
+      var(--rc-text-muted) 100%
     )
     0 0 / 300% 100%;
   -webkit-background-clip: text;
@@ -391,30 +384,31 @@
   }
   .rc-shimmer {
     animation: none;
-    color: var(--rc-fg-2);
+    color: var(--rc-text-muted);
     background: none;
   }
 }
 
 /* Find in thread (⌘F), painted with the CSS Custom Highlight API. */
 ::highlight(rc-find) {
-  background-color: color-mix(in srgb, var(--rc-attention) 30%, transparent);
+  background-color: color-mix(in srgb, var(--rc-warning) 30%, transparent);
 }
 
 ::highlight(rc-find-current) {
-  background-color: #ffd60a;
-  color: #000;
+  background-color: var(--rc-warning);
+  color: var(--rc-bg);
 }
 
 /*
- * Motion: every control answers hover, press and focus within 120–180 ms,
- * ease-out; popovers, menus, dialogs and toasts fade and scale in and out.
- * Everything collapses under prefers-reduced-motion (above).
+ * Motion (docs/design.md): controls answer hover and press with colour
+ * only, 120–150 ms ease-out; nothing scales on press. Popovers, menus,
+ * dialogs and toasts fade in and out. All of it collapses under
+ * prefers-reduced-motion (above).
  */
 @keyframes rc-out {
   to {
     opacity: 0;
-    transform: translateY(2px) scale(0.98);
+    transform: translateY(2px);
   }
 }
 
@@ -427,31 +421,47 @@
 @keyframes rc-pop {
   from {
     opacity: 0;
-    transform: scale(0.96);
+    transform: scale(0.98);
   }
+}
+
+/*
+ * Hover timing, shared by every control: in at once (60 ms), out in 120 ms,
+ * so moving along a list never leaves the last item looking hovered.
+ * Components do not set their own hover durations.
+ */
+:root {
+  --rc-hover-in: 60ms;
+  --rc-hover-out: 120ms;
 }
 
 @layer base {
   button,
   a,
+  label,
   [role="option"],
   [role="menuitem"],
   [role="switch"],
+  [role="radio"],
+  [role="tab"],
   summary {
-    transition:
-      background-color 140ms ease-out,
-      color 140ms ease-out,
-      opacity 140ms ease-out,
-      box-shadow 160ms ease-out,
-      transform 120ms ease-out;
+    transition-property: background-color, color, opacity, box-shadow;
+    transition-duration: var(--rc-hover-out);
+    transition-timing-function: ease-out;
   }
 
-  button:active:not(:disabled):not([aria-disabled="true"]) {
-    transform: scale(0.985);
-  }
-
-  :focus-visible {
-    transition: outline-offset 120ms ease-out;
+  :is(
+    button,
+    a,
+    label,
+    [role="option"],
+    [role="menuitem"],
+    [role="switch"],
+    [role="radio"],
+    [role="tab"],
+    summary
+  ):is(:hover, [data-highlighted]) {
+    transition-duration: var(--rc-hover-in);
   }
 }
 
@@ -501,22 +511,63 @@
   position: absolute;
   inset: 0 0 -12px 0;
   z-index: -1;
-  background: color-mix(in srgb, var(--rc-chat) 45%, transparent);
+  background: color-mix(in srgb, var(--rc-bg) 45%, transparent);
   backdrop-filter: saturate(1.6) blur(20px);
   -webkit-backdrop-filter: saturate(1.6) blur(20px);
+  /* design-lint: allow (mask alpha, not a colour) */
   mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  /* design-lint: allow (mask alpha, not a colour) */
   -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
   pointer-events: none;
 }
 
-.rc-fade-in {
-  animation: rc-fade 400ms ease-out;
+/*
+ * Glass: the one translucency every floating surface shares (composer,
+ * popovers, menus, dialogs, toasts, the right panel). `--rc-glass-bg` and
+ * `--rc-glass-filter` are the token pair; Reduce transparency makes them
+ * solid (below).
+ */
+:root {
+  --rc-glass-bg: color-mix(in srgb, var(--rc-surface-2) 68%, transparent);
+  --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) 80%, transparent);
+  --rc-glass-filter: saturate(1.5) blur(22px);
 }
 
-/* The composer's tray: a step lighter than the chat, tucked under the box. */
-.rc-tray {
-  background: color-mix(in srgb, var(--rc-fg) 6%, var(--rc-chat));
-  box-shadow: inset 0 0 0 0.5px var(--rc-hairline);
+.rc-glass {
+  background: var(--rc-glass-bg);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
+}
+
+/* Small pills over text (jump to latest, toasts): the denser glass, so their label reads. */
+.rc-glass-strong {
+  background: var(--rc-glass-bg-strong);
+}
+
+/*
+ * The composer floats over the transcript in glass, with a soft shadow
+ * above and below. Focus makes the glass a little denser; there is no ring
+ * or coloured edge. Its tray sits 6px under it, solid and borderless.
+ */
+.rc-composer {
+  background: var(--rc-glass-bg);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
+  box-shadow:
+    0 -10px 28px -14px var(--rc-shadow-color),
+    0 10px 28px -12px var(--rc-shadow-color),
+    0 0 0 1px var(--rc-border);
+  transition: background-color 160ms ease-out;
+}
+.rc-composer:focus-within {
+  background: var(--rc-glass-bg-strong);
+}
+.rc-composer-tray {
+  background: var(--rc-surface-2);
+}
+
+.rc-fade-in {
+  animation: rc-fade 400ms ease-out;
 }
 
 /* Drilling into a panel's page and back. */
@@ -537,4 +588,32 @@
 }
 .rc-drill-back {
   animation: rc-drill-back 220ms var(--ease-snappy);
+}
+
+/*
+ * Reduce transparency: glass turns solid. The media query where the web
+ * view has it, else the `reduce-transparency` class main.tsx sets from the
+ * system setting.
+ */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --rc-glass-bg: var(--rc-surface-2);
+    --rc-glass-bg-strong: var(--rc-surface-2);
+    --rc-glass-filter: none;
+  }
+  .rc-frost::before {
+    background: var(--rc-bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+:root.reduce-transparency {
+  --rc-glass-bg: var(--rc-surface-2);
+  --rc-glass-bg-strong: var(--rc-surface-2);
+  --rc-glass-filter: none;
+}
+:root.reduce-transparency .rc-frost::before {
+  background: var(--rc-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }

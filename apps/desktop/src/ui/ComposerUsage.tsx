@@ -11,12 +11,12 @@ import { cx, Tooltip } from "./primitives";
 
 /** Brand while there is room; amber, then red, as the window fills up. */
 function contextTint(fraction: number) {
-  return fraction < 0.8 ? "var(--rc-brand)" : fraction < 0.95 ? "var(--rc-attention)" : "var(--rc-red)";
+  return fraction < 0.8 ? "var(--rc-accent)" : fraction < 0.95 ? "var(--rc-warning)" : "var(--rc-danger)";
 }
 
 /** Brand while there is room; amber under a fifth, red under a twentieth. */
 function planTint(left: number) {
-  return left < 5 ? "bg-danger" : left < 20 ? "bg-warning" : "bg-brand";
+  return left < 5 ? "bg-danger" : left < 20 ? "bg-warning" : "bg-accent";
 }
 
 export function ContextRing({ threadId }: { threadId: string }) {
@@ -43,10 +43,10 @@ export function ContextRing({ threadId }: { threadId: string }) {
         aria-valuemax={usage.size}
         aria-valuenow={usage.used}
         aria-valuetext={`${left} percent left`}
-        className="flex size-[30px] items-center justify-center rounded-full hover:bg-fill-2"
+        className="flex size-[30px] items-center justify-center rounded-full hover:bg-fill"
       >
         <svg width="17" height="17" viewBox="0 0 17 17" aria-hidden="true" className="-rotate-90">
-          <circle cx="8.5" cy="8.5" r={r} fill="none" stroke="var(--rc-fg-4)" strokeWidth="2" />
+          <circle cx="8.5" cy="8.5" r={r} fill="none" stroke="var(--rc-text-faint)" strokeWidth="2" />
           <circle
             cx="8.5"
             cy="8.5"
@@ -85,16 +85,16 @@ export function PlanMeter({ threadId }: { threadId?: string }) {
       side="top"
       label={
         <span className="flex min-w-[200px] flex-col gap-1.5 py-0.5">
-          <span className="font-semibold text-caption text-fg-2">
+          <span className="font-semibold text-caption text-fg-muted">
             {plan.source === "codex" ? "Plan usage (from the Codex CLI)" : "Plan usage"}
           </span>
           {plan.windows.map((w) => (
             <span key={windowTitle(w)} className="flex flex-col gap-1">
               <span className="flex justify-between gap-4">
                 <span>{windowTitle(w)}</span>
-                <span className="text-fg-2 tabular">{windowDetail(w)}</span>
+                <span className="text-fg-muted tabular">{windowDetail(w)}</span>
               </span>
-              <span className="h-[4px] overflow-hidden rounded-full bg-fg-4">
+              <span className="h-[4px] overflow-hidden rounded-full bg-fg-faint">
                 <span
                   className={cx("block h-full rounded-full", planTint(leftPercent(w)))}
                   style={{ width: `${leftPercent(w)}%` }}
@@ -112,9 +112,9 @@ export function PlanMeter({ threadId }: { threadId?: string }) {
         aria-valuemax={100}
         aria-valuenow={left}
         onPointerEnter={() => threadId && void refreshPlanUsage(threadId)}
-        className="flex h-[30px] items-center gap-1.5 rounded-full px-2 hover:bg-fill-2"
+        className="flex h-[30px] items-center gap-1.5 rounded-full px-2 hover:bg-fill"
       >
-        <span className="h-[5px] w-4 overflow-hidden rounded-full bg-fg-4">
+        <span className="h-[5px] w-4 overflow-hidden rounded-full bg-fg-faint">
           <span
             className={cx(
               "block h-full rounded-full transition-[width] duration-300 ease-snappy",
@@ -123,7 +123,7 @@ export function PlanMeter({ threadId }: { threadId?: string }) {
             style={{ width: `max(3px, ${left}%)` }}
           />
         </span>
-        <span className="font-medium text-caption text-fg-2 tabular">{left}%</span>
+        <span className="font-medium text-caption text-fg-muted tabular">{left}%</span>
         {low && (
           <span
             className="size-1.5 rounded-full bg-warning"

@@ -6,11 +6,13 @@ import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { checkpointsByTurn } from "../acp/v2";
+import { observeSize } from "../lib/resize";
 import { useApp } from "../state/store";
 import { type ThreadState, type TranscriptItem, type TurnCompletion, turnCompletion } from "../state/thread";
 import { AgentSpawnRow } from "./AgentViews";
 import { cx } from "./primitives";
 import { AssistantRow, NoticeRow, ThoughtRow, ToolRow, TurnEndRow, UserRow, WorkingRow } from "./Rows";
+import { TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 
 type Row = { key: string; item?: TranscriptItem; working?: true };
@@ -173,6 +175,8 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
       return size;
     },
     overscan: 8,
+    // Row measurements land on the next frame, not inside the ResizeObserver's own delivery.
+    useAnimationFrameWithResizeObserver: true,
     paddingStart: 20,
     paddingEnd: bottomInset,
   });
@@ -229,13 +233,55 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
     if (pinned.current) toBottom();
   }, [rows, toBottom, bottomInset]);
 
+  // The timeline's turns: one per user message. Kept as the same array while they do not change,
+  // so a streamed chunk does not redraw the rail.
+  const turnsKey = useRef<{ sig: string; turns: Turn[] }>({ sig: "", turns: [] });
+  let sig = "";
+  for (let i = 0; i < rows.length; i++) if (rows[i]!.item?.kind === "user") sig += `${i},`;
+  if (sig !== turnsKey.current.sig) {
+    turnsKey.current = {
+      sig,
+      turns: rows.flatMap((row, i) =>
+        row.item?.kind === "user" ? [{ row: i, title: turnTitle(row.item.text) }] : [],
+      ),
+    };
+  }
+  const turns = turnsKey.current.turns;
+  const [readTurn, setReadTurn] = useState(0);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setSize({ width: el.clientWidth, height: el.clientHeight });
+    return observeSize(el, () => setSize({ width: el.clientWidth, height: el.clientHeight }));
+  }, []);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
     pinned.current = atBottom;
     setShowLatest(!atBottom);
+    // The turn being read: the last one whose first line is above 30% of the visible part.
+    const reading = el.scrollTop + (el.clientHeight - bottomInset) * 0.3;
+    const starts = virtualizer.measurementsCache;
+    let at = 0;
+    for (let t = 0; t < turns.length; t++) {
+      const start = starts[turns[t]!.row]?.start;
+      if (start !== undefined && start + 16 <= reading) at = t;
+      else if (start !== undefined) break;
+    }
+    setReadTurn(at);
   };
+
+  const jumpToTurn = useCallback(
+    (row: number) => {
+      pinned.current = false;
+      setShowLatest(true);
+      virtualizer.scrollToIndex(row, { align: "start" });
+    },
+    [virtualizer],
+  );
 
   const onWheel = (e: React.WheelEvent) => {
     // Scrolling up during a stream unpins at once, before the next chunk pulls the view down.
@@ -290,8 +336,8 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
   return (
     <div className="relative min-h-0 flex-1">
       {find && (
-        <div className="surface absolute top-2 right-7 z-20 flex h-[32px] items-center gap-1 rounded-full border border-hairline pr-1 pl-3 rc-in">
-          <Search size={12} className="text-fg-2" />
+        <div className="elevated absolute top-2 right-7 z-20 flex h-[32px] items-center gap-1 rounded-full pr-1 pl-3 rc-in">
+          <Search size={12} className="text-fg-muted" />
           <input
             ref={findField}
             autoFocus
@@ -303,9 +349,9 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
             }}
             placeholder="Find in thread"
             aria-label="Find in thread"
-            className="w-[180px] bg-transparent text-callout outline-none placeholder:text-fg-3"
+            className="w-[180px] bg-transparent text-callout outline-none placeholder:text-fg-faint"
           />
-          <span className="min-w-[52px] text-right text-caption text-fg-2 tabular" aria-live="polite">
+          <span className="min-w-[52px] text-right text-caption text-fg-muted tabular" aria-live="polite">
             {find.query.trim()
               ? matches.length
                 ? `${Math.min(find.index, matches.length - 1) + 1} of ${matches.length}`
@@ -316,7 +362,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
             type="button"
             aria-label="Previous match"
             onClick={() => step(-1)}
-            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+            className="flex size-6 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
           >
             <ChevronUp size={13} />
           </button>
@@ -324,7 +370,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
             type="button"
             aria-label="Next match"
             onClick={() => step(1)}
-            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+            className="flex size-6 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
           >
             <ChevronDown size={13} />
           </button>
@@ -332,7 +378,7 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
             type="button"
             aria-label="Close find"
             onClick={() => setFind(null)}
-            className="flex size-6 items-center justify-center rounded-full text-fg-2 hover:bg-fill-2"
+            className="flex size-6 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
           >
             <X size={12} />
           </button>
@@ -399,6 +445,13 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
           })}
         </div>
       </div>
+      <TimelineRail
+        turns={turns}
+        current={showLatest ? Math.min(readTurn, turns.length - 1) : turns.length - 1}
+        width={size.width}
+        visible={size.height - bottomInset + 20}
+        onJump={jumpToTurn}
+      />
       <button
         type="button"
         onClick={() => {
@@ -409,10 +462,11 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
         aria-hidden={!showLatest}
         tabIndex={showLatest ? 0 : -1}
         className={cx(
-          "surface absolute right-7 flex h-[30px] items-center gap-1.5 rounded-full px-3 font-medium text-callout transition-[opacity,transform] duration-200 ease-snappy",
-          showLatest ? "scale-100 opacity-100" : "pointer-events-none scale-90 opacity-0",
+          // Above the floating composer (its top is `bottomInset - 20` up) and over it in z.
+          "rc-glass rc-glass-strong absolute left-1/2 z-30 flex h-[30px] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg shadow-1 transition-[opacity,transform] duration-200 ease-snappy hover:bg-surface-3",
+          showLatest ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0",
         )}
-        style={{ bottom: bottomInset - 40 }}
+        style={{ bottom: bottomInset - 8 }}
       >
         <ArrowDown size={13} />
         Latest

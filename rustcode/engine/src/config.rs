@@ -1695,7 +1695,7 @@ fn default_subagent_concurrency_limit() -> usize {
 }
 
 fn default_theme() -> String {
-    "catppuccin-mocha".to_string()
+    crate::themes::DEFAULT_THEME_NAME.to_string()
 }
 
 impl Default for AppConfig {
@@ -2156,6 +2156,18 @@ fn save_entire_config_for_workspace_result(
         session::record_session_settings(session_id, &persisted);
     }
     Ok(())
+}
+
+/// Make `theme` the active theme in the user config, as `/theme` does.
+pub fn save_theme(theme: &str) -> Result<(), String> {
+    let dir =
+        get_config_dir().ok_or_else(|| "could not determine the config directory".to_owned())?;
+    let (_, _, mut config) = load_config_from(&dir);
+    if !config.is_valid {
+        return Err("configuration is invalid".to_owned());
+    }
+    config.theme = theme.to_owned();
+    save_config_to_result(&dir, &config)
 }
 
 /// Persist Discord Rich Presence in the nearest project file that owns an

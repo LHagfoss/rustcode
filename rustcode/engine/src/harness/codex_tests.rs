@@ -550,4 +550,10 @@ async fn the_orchestrator_is_added_to_the_codex_thread_config() {
         .unwrap()
         .1;
     assert!(started.get("config").is_none());
+    // Codex never sees RustCode's root prompt; the reply style rides along
+    // as developer instructions (docs/output-style.md).
+    assert_eq!(
+        started["developerInstructions"],
+        crate::tools::schema::harness_output_style()
+    );
 }

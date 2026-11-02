@@ -207,9 +207,17 @@ impl CodexAdapter {
         }
 
         let cwd_text = cwd.to_string_lossy().into_owned();
+        // How replies are formatted for RustCode's chat (docs/output-style.md);
+        // Codex appends it to its own instructions as a developer message.
+        let output_style = crate::tools::schema::harness_output_style();
         let mut thread = None;
         if let Some(resume) = &options.resume {
-            let mut params = json!({"threadId": resume, "cwd": cwd_text, "excludeTurns": true});
+            let mut params = json!({
+                "threadId": resume,
+                "cwd": cwd_text,
+                "excludeTurns": true,
+                "developerInstructions": output_style,
+            });
             if let Some(model) = &options.model {
                 params["model"] = json!(model);
             }
@@ -231,7 +239,7 @@ impl CodexAdapter {
         let thread = match thread {
             Some(thread) => thread,
             None => {
-                let mut params = json!({"cwd": cwd_text});
+                let mut params = json!({"cwd": cwd_text, "developerInstructions": output_style});
                 if let Some(model) = &options.model {
                     params["model"] = json!(model);
                 }

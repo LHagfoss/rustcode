@@ -272,6 +272,9 @@ The agent learns the format from a short `# Visualizations` section (about
 renders the blocks**. `AppState::visualization_level` holds that decision.
 It is set once, when the frontend creates the session state, so the prompt
 and its cached prefix do not change during a session. The default is `0`.
+A frontend with a level above `0` also gets one sentence in the
+`# Output style` section saying a block replaces a table rather than repeating
+it ([output-style.md](output-style.md)).
 
 ### Widget levels
 

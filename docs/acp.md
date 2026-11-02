@@ -174,15 +174,28 @@ The contract is in [orchestrator.md](orchestrator.md); the requests are:
   unpushed worktree (`error.data.reason`) unless `force`.
 - `_rustcode/session/status` (`{"session_id", "status": "review" | "done" |
   "idle"}`): `{}`.
+- `_rustcode/session/pin` (`{"session_id", "pinned": bool}`): `{}`. The pin
+  is stored with the thread (`pin.json`), so the terminal UI and the apps
+  agree; archiving a thread is the `done` status.
 - `_rustcode/checkpoints/list` (`{"session_id"}`),
   `_rustcode/checkpoints/diff` (`{"session_id", "turn"}`) and
   `_rustcode/checkpoints/restore` (`{"session_id", "turn", "rewind"?}`).
 
 `session/new` with `_meta.rustcode.worktree` starts the thread in a new
 worktree. `session/new`, `session/load` and `session/list` carry
-`_meta.rustcode.status` (and `worktree` for a worktree thread); a status
-change is sent as `session/update` `session_info_update` with
-`_meta.rustcode.status`.
+`_meta.rustcode.status` and `_meta.rustcode.pinned` (and `worktree` for a
+worktree thread); a status or pin change is sent as `session/update`
+`session_info_update` with `_meta.rustcode.status` or
+`_meta.rustcode.pinned`.
+
+## Themes
+
+`_rustcode/themes` (`{"cwd"?}`) answers `{"active", "themes": [{"name",
+"description", "source", "path"?, "mode", "tokens", "radius"}]}` with every
+desktop token resolved; `_rustcode/themes/set` (`{"name", "cwd"?}`) makes a
+theme active and answers the same; `_rustcode/themes/changed` carries the
+same snapshot when a theme file or the active theme changes (debounced
+200 ms). See [themes.md](themes.md).
 
 ## Failure behavior
 

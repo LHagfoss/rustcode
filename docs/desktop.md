@@ -70,8 +70,12 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   - `native.rs`: `open_url` (http, https, mailto only), `reveal_path`,
     `git_changes` (the Changes panel: `git diff HEAD` plus untracked files),
     `read_image` (an absolute path to a PNG, JPEG, GIF or WebP of at most
-    20 MB, for attachments) and `open_login_terminal`, which runs a
-    harness's own login in Terminal and accepts only known harness tools.
+    20 MB, for attachments), `open_login_terminal`, which runs a
+    harness's own login in Terminal and accepts only known harness tools,
+    `open_path` (an existing folder, or a Markdown, TOML, JSON, YAML or
+    text file, in its editor; nothing that runs) and `skill_create` (a
+    valid skill name, user or project root, never overwriting) and
+    `open_in_editor` (an existing file, at a line).
   - `links.rs`: `link_meta`, a page's title, favicon (as a `data:` URL) and
     `theme-color` for link chips. http(s) only; the host must resolve to
     public addresses only (checked after DNS and pinned, so neither a
@@ -121,14 +125,18 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   something is greyed out, from capability flags only, never a harness id.
   Before an engine implements `_rustcode/harnesses`, the app shows only the
   built-in harness and says so in Settings.
-- **UI** (`src/ui/`): tokens in `src/index.css` are ported from `Theme.swift`
-  and `CodeStyle.swift` (light and dark, following the system or the
-  Appearance setting). The transcript is virtualized with
+- **UI** (`src/ui/`): every colour, radius and shadow is a token from
+  [design.md](design.md), defined once in `src/index.css` (the Tailwind
+  `@theme` maps `--rc-*` variables to classes; the palette is switched
+  off) and mirrored for themes in `src/lib/themes.ts`. `src/design.test.ts`
+  fails on a raw colour, a palette class, an arbitrary radius or a retired
+  token name outside those files, and when `index.css` and the built-in
+  themes disagree. The transcript is virtualized with
   `@tanstack/react-virtual` and stays pinned to the bottom unless you scroll
   up. Markdown is `react-markdown` + `remark-gfm`; code is highlighted lazily
   by Shiki with Xcode's colours.
 
-Keys: ⌘N new thread, ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘F find
+Keys: ⌘N new thread, ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘⌥B right panel, ⌘F find
 in thread, ⌘J terminal, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
 running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the last
 link chip or the command token, Esc clears the draft and then stops the
@@ -153,9 +161,13 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   links in replies and messages render as chips: favicon and title on a
   tint of the page's `theme-color`, else neutral. The prompt still carries
   the plain URL. Settings › General › Chat › Link previews turns fetching off.
-- **Thread actions.** A row's ⋯ menu or right-click: Pin, Rename, Archive,
-  Move to Trash. Pins and archives are app storage, as the SwiftUI app
-  keeps them; archived threads move to Settled. ⌘F finds in the thread (CSS highlights, ⏎/⇧⏎ step). A sent
+- **Thread actions.** A row's ⋯ menu or right-click: Mark for Review,
+  Mark Done, Pin, Rename, Move to Trash. Pins go to the engine
+  (`_rustcode/session/pin`, read back from `_meta.rustcode.pinned`) when it
+  has the method; pins kept by an older build move there once, and
+  without the method they stay in app storage. Archive is gone: Settled is
+  exactly the threads marked Done, and threads an older build archived
+  are marked Done once. ⌘F finds in the thread (CSS highlights, ⏎/⇧⏎ step). A sent
   message has Edit (back to the composer; sending takes the thread back to
   it) and Retry, both with `_rustcode/rewind`, asking first when later
   messages go too. A finished turn shows a summary card: files changed with
@@ -195,14 +207,16 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Smart UI.** See below.
-- **Look.** On macOS the window is transparent over the system sidebar
-  material (`windowEffects` in `tauri.conf.json`, `macos-private-api`);
-  the sidebar paints a light tint over it and the chat stays opaque.
-  Floating surfaces (composer, popovers, menus, dialogs, toasts) share one
-  blurred material. Reduce transparency (the media query, or the system
-  setting read by the shell's `reduce_transparency`) makes them solid.
-  Controls answer hover, press and focus; menus, dialogs and rows animate
-  in 120–180 ms, and nothing moves under Reduce motion.
+- **Look.** Neutral and opaque, after [design.md](design.md): the
+  sidebar and every surface paint solid token colours, so greys no longer
+  pick up the wallpaper through the window's material (`windowEffects` is
+  still set in `tauri.conf.json` but nothing shows it). What floats (the
+  composer, popovers, menus, tooltips, dialogs, toasts, the right panel,
+  the lightbox) shares one glass, `--rc-glass-bg` + `--rc-glass-filter`; Reduce transparency (the media query, or the system setting
+  read by the shell's `reduce_transparency`) makes them solid. Hover is
+  colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
+  only; scrollbars are thin and appear on hover, with a stable gutter on
+  long scrollers.
 - **Approvals** are one slim bar over the composer (Details opens the
   command and diff); when a turn waits on several, *Approve all* allows
   them once. Queued messages are rows above the composer that can be
@@ -219,12 +233,62 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   filter button by the search groups by project, keeps to the current
   project, and opens the Board. Subagents nest under their thread (open one
   in the Agents panel), and threads another thread started nest under it.
-  Settings is the gear at the foot; the project is chosen per thread in the
-  composer's tray.
+  Settings is the gear in the top row, after Hide sidebar and New thread
+  (in the header's cluster while the sidebar is hidden); the project is
+  chosen per thread in the composer's tray.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
-  lights' line, just past the zoom button, as `SidebarMetrics` places them
-  in the SwiftUI app (`src/ui/Titlebar.tsx`); in full screen, where the
-  lights hide, the rows start at the edge.
+  lights' line, 14 px past the zoom button (x 92; the button ends at x 78),
+  the gap the SwiftUI app leaves (`src/ui/Titlebar.tsx`); in full screen,
+  where the lights hide, the rows start at the edge.
+- **One shell.** The sidebar and the main header (`src/ui/MainHeader.tsx`)
+  stay mounted for every view. Settings covers only the main column and
+  the right panel, which stay mounted and laid out underneath (`inert`),
+  so ⌘, renders Settings in the first frame with nothing remounted; its
+  pages open with the last engine answers and refresh behind them.
+- **Settings › Capabilities.** Skills and MCP servers in one page, through
+  `_rustcode/capabilities*`: servers with their state, tool count and
+  names, errors and the engine log lines that name them, on/off (servers
+  from a project config are read-only), add (command or URL, with
+  environment or headers), remove, and Edit config; skills by where they
+  were found (project, user, shared, configured) with their path, on/off,
+  Edit (opens SKILL.md), Show in Finder, and New skill (the shell writes
+  `SKILL.md` from a template under `~/.config/rustcode/skills` or the
+  project's `.rustcode/skills`, `skill_create`, and opens it).
+- **Themes.** Settings › Appearance lists the engine's themes
+  (`_rustcode/themes`) with a preview each, picks one
+  (`_rustcode/themes/set`), opens the themes folder and creates one
+  (`_rustcode/themes/new`; an engine without it gets the
+  `rustcode theme new` command to copy). `_rustcode/themes/changed`
+  (a file edited, or the CLI picking another) applies at once. A theme
+  sets the light/dark mode; System uses the built-in pair. The tokens are
+  written onto `:root` (`src/lib/themes.ts`), so nothing re-renders, and
+  the last theme is cached so a restart does not flash the default.
+  Without the methods the app shows its two built-in themes. Theme files
+  are described in [themes.md](themes.md).
+- **Timeline rail.** After the SwiftUI app's `TimelineRail`: a tick per
+  message you sent, in the gutter left of the chat, the turn being read
+  widest and in the accent, the rest narrowing with distance; a click goes
+  to that turn, hover shows its first words. The current turn comes from
+  the virtualizer's row offsets on scroll, and the rail re-renders only
+  when it or the turns change (`src/ui/TimelineRail.tsx`).
+- **Harness marks.** `HarnessIcon` draws each harness's mark in the model
+  pill, the harness picker and list (onboarding, Settings), the tray, the
+  sidebar's rows and the thread's header: Claude, Gemini and OpenCode from
+  simple-icons 16.35.0 (CC0, three paths vendored, no dependency), the app
+  icon for RustCode, a letter in a rounded square for the rest (Codex: the
+  OpenAI mark is not in simple-icons). A harness `icon` URL is preferred
+  when the engine sends one.
+- **Pictures.** A pasted picture's thumbnail and a sent message's pictures
+  open in a lightbox (fit to the window, ←→ between the message's
+  pictures, a click zooms, Esc or a click outside closes).
+- **File references.** Inline code naming a file (`src/a.rs:12`,
+  `src/a.rs:12:4`, `Cargo.toml`) and relative links (`[a](src/a.rs#L12)`)
+  open the file in the editor at that line, resolved against the thread's
+  folder (`open_in_editor`: VS Code, Cursor or Zed when installed, else
+  the default text editor).
+- **Right panel.** Changes, Agents and Pull requests share one floating
+  panel (`src/ui/RightPanel.tsx`): tabs between them, a close button, a
+  draggable left edge (kept), ⌘⌥B to toggle it.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
@@ -271,9 +335,11 @@ turn (⌘. stops it too), 1–9 answer the visible approval or question.
   stat list and checklist, with the limits and source fallback of
   [visualizations.md](visualizations.md).
 - **Missing engine methods.** At `initialize` the app probes
-  `_rustcode/worktrees/list`, `_rustcode/checkpoints/list` and
-  `_rustcode/session/status`; a method-not-found hides that feature with
-  a tooltip saying why. The mock engine implements all of them.
+  `_rustcode/worktrees/list`, `_rustcode/checkpoints/list`,
+  `_rustcode/session/status`, `_rustcode/session/pin` and
+  `_rustcode/themes`; a method-not-found hides that feature with a
+  tooltip saying why (pins stay local, themes are the built-in two). The
+  mock engine implements all of them.
 
 ## Smart UI
 
@@ -330,7 +396,9 @@ bun run typecheck && bun run lint && bun run test && bun run build
 cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-`bun run test` covers the orchestration rules and v2 parsers
+`bun run test` covers the design system's guard rails (`design.test.ts`),
+theme parsing and resolution, themes, pins and Settled against the mock,
+the orchestration rules and v2 parsers
 (`orchestration.test.ts`), `rustcode-viz` parsing, a fan-out end to end
 against the mock (grant, two worktree threads, answers), status marks, the
 JSON-RPC peer, the ACP and extension parsers, the
@@ -341,7 +409,8 @@ against the mock engine (replay, a turn with an approval, a question and
 cancel, first-run onboarding, a thread on another harness, thread actions,
 edit and resend with rewind, subagents and usage limits). `cargo test`
 covers the link fetcher's parsing and address rules, the thread folder
-check, UTF-8 across PTY reads and the Smart UI page store. `.github/workflows/desktop-ci.yml`
+check, UTF-8 across PTY reads, the Smart UI page store, and what
+`open_path` opens and `skill_create` writes. `.github/workflows/desktop-ci.yml`
 runs the same on pull requests that touch `apps/desktop`.
 
 `src-tauri` is its own Cargo workspace (the root workspace excludes it), with
@@ -458,7 +527,10 @@ From the SwiftUI app, still missing or partial:
   (`_rustcode/session/move`), the retention sweep, swipe actions; loading
   the thread list page by page. Trash moves the folder into `~/.Trash`
   (macOS); Finder's Put Back does not know it.
-- The timeline rail, turn folding ("Worked for … · N tool calls"), sticky
+- Markdown pictures from local paths (an asset protocol scoped to the
+  thread's folder) and `mermaid` blocks; a file reference that is changed
+  in the turn does not open the Changes or Review diff yet.
+- Turn folding ("Worked for … · N tool calls"), sticky
   turn bar, stream pacing, quote in reply.
 - The auto-approve (YOLO) toggle on approval cards.
 - Subagents' verification status and background agents of threads off

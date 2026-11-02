@@ -265,6 +265,9 @@ pub fn context_breakdown(input: ContextBreakdownInput<'_>) -> ContextBreakdown {
     );
     // Subagent prompts never carry the hint.
     if input.selected_subagent_model.is_none() {
+        tools_prompt.push_str(&crate::tools::schema::output_style_hint(
+            input.visualization_level,
+        ));
         tools_prompt.push_str(&super::visualization_prompt_hint(input.visualization_level));
         tools_prompt.push_str(crate::tools::schema::smart_ui_hint(input.smart_ui));
     }

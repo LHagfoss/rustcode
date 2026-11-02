@@ -9,6 +9,7 @@ export const V2Method = {
   worktreeList: "_rustcode/worktrees/list",
   worktreeRemove: "_rustcode/worktrees/remove",
   sessionStatus: "_rustcode/session/status",
+  sessionPin: "_rustcode/session/pin",
   checkpointList: "_rustcode/checkpoints/list",
   checkpointDiff: "_rustcode/checkpoints/diff",
   checkpointRestore: "_rustcode/checkpoints/restore",

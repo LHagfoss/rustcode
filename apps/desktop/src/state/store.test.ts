@@ -11,9 +11,11 @@ import {
   editMessage,
   fetchHarnessModels,
   refreshAgents,
+  refreshSessions,
   renameThread,
   resetForTests,
   selectThread,
+  setActiveTheme,
   setArchived,
   setDefaultHarness,
   setHarnessEnabled,
@@ -141,6 +143,32 @@ describe("engine controller with the mock engine", () => {
     expect(s.sessions.some((x) => x.id === id)).toBe(false);
     expect(s.pinned).toEqual([]);
     expect(id in s.archived).toBe(false);
+  });
+
+  test("themes come from the engine, apply with their mode, and follow a change made elsewhere", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().features.themes === true);
+    const names = useApp.getState().themes?.themes.map((t) => t.name);
+    expect(names).toEqual(["rustcode", "light", "graphite"]);
+    await setActiveTheme("light");
+    expect(useApp.getState().themeActive).toBe("light");
+    expect(useApp.getState().theme).toBe("light");
+    // The mock announces `_rustcode/themes/changed` after a set, as the engine does for a CLI change.
+    await setActiveTheme("graphite");
+    await until(() => useApp.getState().themes?.active === "graphite");
+    expect(useApp.getState().theme).toBe("dark");
+  });
+
+  test("pins live in the engine when it has them; Settled is threads marked Done", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 4);
+    const id = useApp.getState().sessions[2]!.id;
+    togglePin(id);
+    await new Promise((r) => setTimeout(r, 10));
+    await refreshSessions();
+    expect(useApp.getState().sessions.find((x) => x.id === id)?.pinned).toBe(true);
+    await setThreadStatus(id, "done");
+    expect(statusOf(useApp.getState(), id)).toBe("done");
   });
 
   test("edit and resend rewinds the thread to the message first", async () => {

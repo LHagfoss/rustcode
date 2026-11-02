@@ -35,9 +35,9 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && snapshot?.onboarded && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-black/22" />
+        <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
         <Dialog.Content
-          className="fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-56px)] w-[min(640px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[20px] border border-fg/8 bg-chat shadow-panel rc-in"
+          className="fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-56px)] w-[min(640px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-bg shadow-2 rc-in"
           onEscapeKeyDown={(e) => !snapshot?.onboarded && e.preventDefault()}
         >
           <div className="flex items-center gap-3 px-6 pt-6">
@@ -46,7 +46,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
               <Dialog.Title className="font-semibold text-title2">
                 {step === 0 ? "Choose your harnesses" : "Defaults for new threads"}
               </Dialog.Title>
-              <Dialog.Description className="text-callout text-fg-2">
+              <Dialog.Description className="text-callout text-fg-muted">
                 {step === 0
                   ? "A harness runs a thread. RustCode's own engine is built in; other coding agents bring their own sign-in, models and rules."
                   : "New threads start on this harness. You can pick another one when a thread starts."}
@@ -55,15 +55,12 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           </div>
           <div className="flex gap-1.5 px-6 pt-3" aria-hidden>
             {[0, 1].map((i) => (
-              <span
-                key={i}
-                className={cx("h-1 flex-1 rounded-full", i <= step ? "bg-brand-fill" : "bg-fill-2")}
-              />
+              <span key={i} className={cx("h-1 flex-1 rounded-full", i <= step ? "bg-accent" : "bg-fill")} />
             ))}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {!snapshot ? (
-              <div className="flex items-center gap-2 text-callout text-fg-2">
+              <div className="flex items-center gap-2 text-callout text-fg-muted">
                 <Spinner /> Looking for harnesses…
               </div>
             ) : step === 0 ? (
@@ -72,7 +69,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
                 <button
                   type="button"
                   onClick={() => void refreshHarnesses()}
-                  className="mt-2 text-callout text-brand hover:underline"
+                  className="mt-2 text-callout text-accent hover:underline"
                 >
                   Detect again
                 </button>
@@ -81,7 +78,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
               <DefaultsForm snapshot={snapshot} value={value} onChange={setChoice} />
             )}
           </div>
-          <div className="flex items-center gap-2 border-hairline border-t px-6 py-3.5">
+          <div className="flex items-center gap-2 border-border border-t px-6 py-3.5">
             {snapshot?.onboarded && <Pill onClick={onClose}>Cancel</Pill>}
             <span className="flex-1" />
             {step === 1 && <Pill onClick={() => setStep(0)}>Back</Pill>}
@@ -99,7 +96,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
               </Pill>
             ) : (
               <Pill prominent size="lg" disabled={!!problem || saving} onClick={() => void finish()}>
-                {saving && <Spinner size={10} className="text-white" />}
+                {saving && <Spinner size={10} className="text-bg" />}
                 Finish
               </Pill>
             )}

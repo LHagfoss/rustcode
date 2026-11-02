@@ -392,6 +392,36 @@ fn run_mcp_command(
     Ok(())
 }
 
+/// `rustcode theme ...`: print the result, or the error and exit 1.
+fn run_theme_command(command: &crate::cli::ThemeCommands) {
+    use crate::cli::ThemeCommands;
+    use rustcode::controller::themes::cli;
+    let workspace = std::env::current_dir().ok();
+    let workspace = workspace.as_deref();
+    let result = match command {
+        ThemeCommands::List => Ok(cli::list(workspace)),
+        ThemeCommands::Show { name, json } => cli::show(name, *json, workspace),
+        ThemeCommands::New { name, from } => cli::new(name, from.as_deref(), workspace),
+        ThemeCommands::Set { name } => cli::set(name, workspace),
+        ThemeCommands::Path { name } => cli::path(name.as_deref(), workspace),
+        ThemeCommands::Validate { target } => {
+            let (report, ok) = cli::validate_command(target.as_deref(), workspace);
+            print!("{report}");
+            if !ok {
+                std::process::exit(1);
+            }
+            Ok(String::new())
+        }
+    };
+    match result {
+        Ok(text) => print!("{text}"),
+        Err(message) => {
+            eprintln!("rustcode theme: {message}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn run_storage_command(
     command: &crate::cli::StorageCommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -471,6 +501,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("rustcode mcp-orchestrator: {error}");
             std::process::exit(1);
         }
+        return Ok(());
+    }
+    if let Some(crate::cli::Commands::Theme { command }) = cli_args.command.as_ref() {
+        run_theme_command(command);
         return Ok(());
     }
     if let Some(crate::cli::Commands::Storage { command }) = cli_args.command.as_ref() {
