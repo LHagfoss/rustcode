@@ -3437,6 +3437,12 @@ mod tests {
         }
         let snapshots = super::super::background_task_snapshots(&session_id);
         let stop = super::super::stop_background_tasks(&session_id);
+        // How each task ended, so a rare failure under a full parallel run (#2763)
+        // says whether the task exited on its own before the stop reached it.
+        let ended: Vec<_> = snapshots
+            .iter()
+            .map(|task| super::super::background_task_completion(&session_id, &task.id))
+            .collect();
         super::super::set_active_session_id(None);
 
         assert!(output.success);
@@ -3453,7 +3459,7 @@ mod tests {
         assert_eq!(
             stop.stopped + stop.requested,
             1,
-            "implicit detached task was not terminated: output={:?} snapshots={snapshots:?}",
+            "implicit detached task was not terminated: output={:?} snapshots={snapshots:?} stop={stop:?} ended={ended:?}",
             output.content
         );
         assert_eq!(stop.failed, 0);

@@ -2,7 +2,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 
-const NO_WAIT: Duration = Duration::ZERO;
+/// How long a test waits for the migration lock. A run returns as soon as it
+/// has the lock, but a child another test forks while a lock is held shares it
+/// until the child execs (#2360, #2763), so a bare zero flakes under a full
+/// parallel run.
+const LOCK_GRACE: Duration = Duration::from_secs(5);
 
 fn checkpoint_text(dir: &Path) -> String {
     fs::read_to_string(checkpoint_path(dir)).unwrap()
@@ -37,7 +41,7 @@ fn the_shipped_registry_has_unique_ids() {
 fn an_install_with_nothing_registered_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(
-        run_pending_with(dir.path(), &[], NO_WAIT),
+        run_pending_with(dir.path(), &[], LOCK_GRACE),
         RunOutcome::UpToDate
     );
     assert!(!dir.path().join(STORAGE_DIR).exists());
@@ -73,7 +77,7 @@ fn a_fresh_install_runs_every_step_in_order_and_records_it() {
     assert_eq!(before.pending().count(), 2);
 
     assert_eq!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::Applied(vec!["0001-first".into(), "0002-second".into()])
     );
     assert_eq!(RUNS.load(Ordering::SeqCst), 2);
@@ -100,7 +104,7 @@ fn an_already_current_install_reruns_nothing_and_leaves_the_checkpoint_alone() {
     write_raw_checkpoint(dir.path(), recorded);
 
     assert_eq!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::UpToDate
     );
     assert_eq!(RUNS.load(Ordering::SeqCst), 0);
@@ -123,12 +127,12 @@ fn a_repeated_run_does_not_rerun_completed_steps() {
     let dir = tempfile::tempdir().unwrap();
 
     assert!(matches!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::Applied(_)
     ));
     let recorded = checkpoint_text(dir.path());
     assert_eq!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::UpToDate
     );
     assert_eq!(RUNS.load(Ordering::SeqCst), 1);
@@ -175,7 +179,7 @@ fn a_failed_step_is_not_recorded_and_is_retried_next_time() {
     let dir = tempfile::tempdir().unwrap();
 
     assert_eq!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::Failed {
             applied: vec!["0001-first".into()],
             id: "0002-flaky".into(),
@@ -193,7 +197,7 @@ fn a_failed_step_is_not_recorded_and_is_retried_next_time() {
     assert_eq!(ids, ["0002-flaky", "0003-last"]);
 
     assert_eq!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::Applied(vec!["0002-flaky".into(), "0003-last".into()])
     );
     assert_eq!(FIRST_RUNS.load(Ordering::SeqCst), 1);
@@ -264,7 +268,7 @@ fn a_held_lock_leaves_the_work_to_its_holder() {
     }];
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join(STORAGE_DIR)).unwrap();
-    let held = acquire_lock(dir.path(), NO_WAIT).unwrap().unwrap();
+    let held = acquire_lock(dir.path(), LOCK_GRACE).unwrap().unwrap();
 
     assert_eq!(
         run_pending_with(dir.path(), &registry, Duration::from_millis(100)),
@@ -273,7 +277,7 @@ fn a_held_lock_leaves_the_work_to_its_holder() {
     assert_eq!(RUNS.load(Ordering::SeqCst), 0);
     drop(held);
     assert!(matches!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::Applied(_)
     ));
 }
@@ -299,7 +303,7 @@ fn a_checkpoint_from_a_newer_format_blocks_without_rewriting() {
         CheckpointState::Newer { format: 2 }
     );
     assert!(matches!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::Blocked(_)
     ));
     assert_eq!(RUNS.load(Ordering::SeqCst), 0);
@@ -324,7 +328,7 @@ fn an_unreadable_checkpoint_blocks_without_rewriting() {
         CheckpointState::Unreadable { .. }
     ));
     assert!(matches!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::Blocked(_)
     ));
     assert_eq!(checkpoint_text(dir.path()), "{not json");
@@ -352,7 +356,7 @@ fn steps_recorded_by_a_newer_release_are_reported_and_kept() {
     assert!(status.render().contains("0009-future"));
 
     assert!(matches!(
-        run_pending_with(dir.path(), &registry, NO_WAIT),
+        run_pending_with(dir.path(), &registry, LOCK_GRACE),
         RunOutcome::Applied(_)
     ));
     assert_eq!(completed_ids(dir.path()), ["0009-future", "0001-step"]);

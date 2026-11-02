@@ -713,6 +713,15 @@ mod tests {
         assert!(held.is_some());
         assert!(store.lease().is_none());
         drop(held);
-        assert!(store.lease().is_some());
+        // A child another test forks while the lease is held shares its flock
+        // until the child execs (#2360, #2763): wait for it under a full run.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while store.lease().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lease stayed held after its holder let go"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }
