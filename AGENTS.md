@@ -125,6 +125,11 @@ instructions for work in this repository.
   headless Chrome over the DevTools protocol, as `scripts/perf.ts` does, at
   a MacBook-sized 1512×945 viewport with `deviceScaleFactor` 2, and read the
   screenshots. Do not open browser panes in the user's terminal.
+- To stage a state the mock does not reach (a finished thread, an update in
+  progress, a Settings page), evaluate `await import("/src/state/store.ts")`
+  (or `updates.ts`) in the page and set state on it. Start the dev server
+  fresh first: after an edit, HMR serves the module under a `?t=` URL and the
+  import returns a second, empty copy. `?updatePreview` stages the update row.
 - To test an engine change in the app, build the engine binary with
   `cargo build -p rustcode-tui --bin rustcode`, then `bun tauri dev`. A
   plain `cargo build` does not rebuild that binary, and the app then talks
