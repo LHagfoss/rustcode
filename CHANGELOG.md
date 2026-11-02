@@ -1,3 +1,29 @@
+## [v1.0.0-beta.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.0.0-beta.1) - 2026-11-02
+
+### Features
+RustCode 1.0 is one app for your coding agents: run Claude Code, Codex, Gemini CLI, OpenCode or RustCode's own agent side by side, each thread on the agent, model and effort you pick. The installer adds the app and the `rustcode` command.
+
+### The app
+- The new desktop app replaces the SwiftUI app: native installers for macOS, Windows and Linux, 120 Hz rendering, and a darker, calmer design with themes shared with the terminal. (#2788, #2791, #2800)
+- Worktree threads, thread status, per-turn checkpoints, and threads that start and message other threads on any harness. (#2790)
+- The sidebar shows a live clock for running threads, what a waiting thread needs, and Pin and Settle on hover; settling can be undone. (#2809)
+- Settings › Harnesses lists each agent's models as soon as you pick it, saves the default as you change it, re-checks each agent when opened, and puts Claude Code first. (#2810, #2829)
+- ⌘O changes the folder of the current or new thread; ⌘⇧O sets where new threads start. (#2829)
+- RustCode tells you in the sidebar when an update is out, installs it in one click, and shows what changed after each update. (#2830)
+
+### Chat
+- Runs of tool calls fold into one line like "Read 4 files · Ran 2 commands"; the line under a running turn says what the agent is doing. (#2812, #2822)
+- Approvals show Allow and Decline up front, with the rarer answers under More. (#2811)
+- Click the context ring to see what fills the context window; plan usage opens on hover with a bar per limit and stays current. (#2808)
+- /status, /context and other reports open in a panel above the composer; /clear, /model and the thread picker act in the app. (#2815, #2816)
+- Copy any reply block, thinking, or tool input and output; pasted links stay where you paste them; messages with images queue whole while the agent works. (#2807, #2814, #2817)
+- Escape closes the open popover first, the composer is ready to type when you come back, and slash commands read as one line. (#2813, #2818, #2819)
+
+### The agent
+- It edits in place and no longer branches or commits unless you or the project's instructions ask. (#2825)
+- Running the script you asked it to fix counts as its verification. (#2827)
+- A wait on a long build stops when you stop the turn, and a timed-out wait shows the build's latest output and what to do next. (#2824)
+- A thread started on another harness must name one that can run and a model it offers. (#2828)
 ## [v0.115.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.115.0) - 2026-11-01
 
 ### Features
