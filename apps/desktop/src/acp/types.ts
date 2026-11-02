@@ -89,15 +89,18 @@ export function parseAgentInfo(result: Json): AgentInfo {
 /**
  * The client's initialize request. Only what this app implements is
  * advertised: no client fs or terminal (the engine uses its own tools under
- * its own sandbox), and no Smart UI, preview or visualizations yet.
+ * its own sandbox), Smart UI as the setting says, and no preview or
+ * visualizations yet.
  */
-export function initializeParams(appVersion: string): JsonObject {
+export function initializeParams(appVersion: string, options: { smartUi?: boolean } = {}): JsonObject {
   return {
     protocolVersion: ACP_PROTOCOL_VERSION,
     clientCapabilities: {
       fs: { readTextFile: false, writeTextFile: false },
       terminal: false,
-      _meta: { rustcode: {} },
+      // Smart UI blocks run in the transcript (docs/smart-ui.md); 0 while the setting is off,
+      // so the agent can name the setting instead of writing a block that shows as source.
+      _meta: { rustcode: { smartUi: options.smartUi ? 1 : 0 } },
     },
     clientInfo: { name: "rustcode-desktop", title: "RustCode", version: appVersion },
   };

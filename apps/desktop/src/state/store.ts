@@ -114,6 +114,10 @@ export interface AppState {
   archived: Record<string, number>;
   /** A sent message being edited in the composer: sending rewinds the thread to it first. */
   editing: Record<string, { itemId: string; userIndex: number; original: string }>;
+  /** Smart UI blocks run in the transcript (Settings › General › Chat). */
+  smartUi: boolean;
+  /** The engine learned a different Smart UI setting at initialize: a restart applies the new one. */
+  smartUiPending: boolean;
   /** The workspace terminal under the chat (⌘J). */
   terminalOpen: boolean;
   /** The panel on the right of the chat. */
@@ -129,6 +133,7 @@ export interface AppState {
 }
 
 const STORAGE = {
+  smartUi: "rustcode.smartUi",
   pinned: "rustcode.pinned",
   archived: "rustcode.archived",
   project: "rustcode.projectCwd",
@@ -166,6 +171,8 @@ export const useApp = create<AppState>(() => ({
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   editing: {},
   confirm: null,
+  smartUi: stored(STORAGE.smartUi) !== "0",
+  smartUiPending: false,
   terminalOpen: false,
   panel: null,
   agents: {},
@@ -253,9 +260,13 @@ async function handshake(): Promise<void> {
   });
   set({ status: "connecting", statusDetail: undefined });
   try {
-    const result = await conn.request(Method.initialize, initializeParams(APP_VERSION), 20_000);
+    const result = await conn.request(
+      Method.initialize,
+      initializeParams(APP_VERSION, { smartUi: get().smartUi }),
+      20_000,
+    );
     const agent = parseAgentInfo(result);
-    set({ agent, status: "ready", statusDetail: undefined });
+    set({ agent, status: "ready", statusDetail: undefined, smartUiPending: false });
     // Threads that were open lost their engine-side state with the old process.
     set((s) => ({
       threads: Object.fromEntries(
@@ -774,7 +785,7 @@ async function runPrompt(
   const next = get().threads[id]?.queue[0];
   if (outcome === "completed" && next) {
     removeQueued(id, next.id);
-    await runPrompt(id, next.text, next.extras);
+    await runPrompt(id, next.text, next.extras, { fromView: next.fromView });
   }
 }
 
@@ -908,6 +919,23 @@ export function setNewThreadChoice(choice: NewThreadChoice | null) {
 }
 
 // ---------------------------------------------------------------- subagents and usage
+
+export function setSmartUi(on: boolean) {
+  set((s) => ({ smartUi: on, smartUiPending: s.status === "ready" ? !s.smartUiPending : s.smartUiPending }));
+  store(STORAGE.smartUi, on ? "1" : "0");
+}
+
+/** A message a Smart UI view sends (`rustcode.send`), as the user's next message, tagged "from view". */
+export function sendFromView(id: string, text: string) {
+  const thread = get().threads[id];
+  if (!thread || !connection) return;
+  if (thread.running) {
+    updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text, fromView: true }] }));
+    toast("Queued: the view's message goes when this turn ends");
+    return;
+  }
+  void runPrompt(id, text, emptyExtras, { fromView: true });
+}
 
 export function setTerminalOpen(open: boolean) {
   set({ terminalOpen: open });

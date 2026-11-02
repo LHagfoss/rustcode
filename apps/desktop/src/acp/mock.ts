@@ -991,16 +991,18 @@ export class MockEngine {
       } else {
         push({ sessionUpdate: "tool_call_update", toolCallId: editId, status: "completed", content: [diff] });
       }
-      const reply = [
-        "Done. ",
-        "I updated the greeting in `src/app.ts` ",
-        "and the tests pass.\n\n",
-        "```ts\n",
-        'const greeting = "hello, world";\n',
-        "export default greeting;\n",
-        "```\n\n",
-        "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-      ];
+      const reply = /\bview\b/i.test(prompt)
+        ? MOCK_VIEW
+        : [
+            "Done. ",
+            "I updated the greeting in `src/app.ts` ",
+            "and the tests pass.\n\n",
+            "```ts\n",
+            'const greeting = "hello, world";\n',
+            "export default greeting;\n",
+            "```\n\n",
+            "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+          ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -1031,6 +1033,32 @@ export class MockEngine {
     }
   }
 }
+
+/** A Smart UI reply: a themed chart and a button that asks a follow-up through `rustcode.send`. */
+export const MOCK_VIEW = [
+  "Here are this week's test runs. Pick a day to dig in.\n\n",
+  "```rustcode-ui v1\n",
+  "<title>Test runs this week</title>\n",
+  '<div class="rc-row rc-gap-3" style="margin-bottom:8px">\n',
+  '  <div class="rc-card rc-col"><span class="rc-muted">Runs</span><b class="rc-num" style="font-size:20px">128</b></div>\n',
+  '  <div class="rc-card rc-col"><span class="rc-muted">Failed</span><b class="rc-num" style="font-size:20px;color:var(--rc-danger, red)">7</b></div>\n',
+  '  <div class="rc-card rc-col"><span class="rc-muted">Median</span><b class="rc-num" style="font-size:20px">41 s</b></div>\n',
+  "</div>\n",
+  '<div style="height:180px"><canvas id="c"></canvas></div>\n',
+  '<div class="rc-row rc-gap-2" style="margin-top:8px">\n',
+  '  <button class="primary" id="ask">Explain Thursday\'s failures</button>\n',
+  '  <button id="copy">Copy numbers</button>\n',
+  "</div>\n",
+  '<script src="rustcode-lib:chart.js"></script>\n',
+  "<script>\n",
+  "new Chart(document.getElementById('c'), { type: 'bar', data: { labels: ['Mon','Tue','Wed','Thu','Fri'],\n",
+  "  datasets: [{ label: 'Passed', data: [24, 27, 22, 19, 29] }, { label: 'Failed', data: [1, 0, 2, 4, 0] }] },\n",
+  "  options: { scales: { x: { stacked: true }, y: { stacked: true } } } });\n",
+  "document.getElementById('ask').onclick = () => window.rustcode?.send(\"Why did 4 tests fail on Thursday?\");\n",
+  "document.getElementById('copy').onclick = () => window.rustcode?.copy('Mon 24/1, Tue 27/0, Wed 22/2, Thu 19/4, Fri 29/0');\n",
+  "</script>\n",
+  "```\n",
+];
 
 const svgIcon = (fill: string, letter: string) =>
   `data:image/svg+xml;base64,${btoa(

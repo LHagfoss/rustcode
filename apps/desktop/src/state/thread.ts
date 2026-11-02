@@ -61,6 +61,7 @@ export interface QueuedPrompt {
   id: string;
   text: string;
   extras?: ComposeExtras;
+  fromView?: boolean;
 }
 
 export interface ThreadState {

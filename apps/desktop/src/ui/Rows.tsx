@@ -28,6 +28,7 @@ import {
 import { memo, type ReactNode, useMemo, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import type { FileDiff } from "../acp/types";
+import { splitReply } from "../smartui/parse";
 import { splitImageMarkers, splitUrls } from "../state/compose";
 import { editMessage, retryMessage } from "../state/store";
 import {
@@ -39,8 +40,9 @@ import {
   thoughtHeadings,
 } from "../state/thread";
 import { LinkChip } from "./LinkChip";
-import { CopyButton, Markdown } from "./Markdown";
+import { CodeBlock, CopyButton, Markdown } from "./Markdown";
 import { cx, Spinner, Tooltip } from "./primitives";
+import { SmartUIView } from "./SmartUIView";
 
 type Item<K extends TranscriptItem["kind"]> = Extract<TranscriptItem, { kind: K }>;
 
@@ -162,8 +164,36 @@ export const UserRow = memo(function UserRow({
   );
 });
 
-export const AssistantRow = memo(function AssistantRow({ item }: { item: Item<"assistant"> }) {
-  return <Markdown text={item.text} />;
+export const AssistantRow = memo(function AssistantRow({
+  item,
+  streaming = false,
+  threadId,
+}: {
+  item: Item<"assistant">;
+  streaming?: boolean;
+  threadId?: string;
+}) {
+  const segments = useMemo(() => splitReply(item.text), [item.text]);
+  if (segments.length === 1 && segments[0]!.kind === "markdown") return <Markdown text={item.text} />;
+  return (
+    <div className="flex flex-col gap-2.5">
+      {segments.map((segment, i) =>
+        segment.kind === "markdown" ? (
+          <Markdown key={i} text={segment.text} />
+        ) : segment.kind === "ui" ? (
+          <SmartUIView
+            key={`ui${segment.index}`}
+            source={segment.source}
+            complete={segment.complete}
+            streaming={streaming}
+            threadId={threadId}
+          />
+        ) : (
+          <CodeBlock key={`viz${segment.index}`} code={segment.source} lang="rustcode-viz" />
+        ),
+      )}
+    </div>
+  );
 });
 
 export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<"thought">; live: boolean }) {

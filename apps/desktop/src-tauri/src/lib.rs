@@ -7,6 +7,7 @@ mod engine;
 mod links;
 mod native;
 mod pty;
+mod smartui;
 mod threads;
 
 use engine::{Engine, EngineEvent};
@@ -43,6 +44,10 @@ pub fn run() {
         .manage(Arc::new(Engine::default()) as EngineState)
         .manage(links::LinkCache::default())
         .manage(pty::Ptys::default())
+        .manage(smartui::SmartUiPages::default())
+        .register_uri_scheme_protocol("rcui", |ctx, request| {
+            smartui::respond(&ctx.app_handle().state::<smartui::SmartUiPages>(), &request)
+        })
         .invoke_handler(tauri::generate_handler![
             engine_start,
             engine_send,
@@ -60,6 +65,7 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_close,
+            smartui::smartui_page,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the RustCode desktop app");

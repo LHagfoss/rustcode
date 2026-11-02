@@ -32,6 +32,7 @@ import {
   setDefaultHarness,
   setOnboarding,
   setProjectCwd,
+  setSmartUi,
   setTheme,
   toast,
   useApp,
@@ -112,6 +113,9 @@ function Loading({ error }: { error: string | null }) {
 function General() {
   const projectCwd = useApp((s) => s.projectCwd);
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
+  const smartUi = useApp((s) => s.smartUi);
+  const smartUiPending = useApp((s) => s.smartUiPending);
+  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const shortcuts: [string, string][] = [
     ["New thread", "⌘N"],
     ["Switch thread", "⌘K"],
@@ -136,6 +140,22 @@ function General() {
         </Row>
       </Group>
       <Group title="Chat">
+        <Row
+          title="Smart UI"
+          subtitle="The agent can answer with a small interactive view (a filterable table, a chart with controls) that runs in the chat, sandboxed, with no network. Its buttons can send a message for you, only when you click them."
+        >
+          <Switch label="Smart UI" checked={smartUi} onChange={setSmartUi} />
+        </Row>
+        {smartUiPending && (
+          <Row
+            title="Restart the engine to apply"
+            subtitle="The engine learns the Smart UI setting when it starts."
+          >
+            <Pill prominent disabled={anyRunning} onClick={() => void restartEngine()}>
+              Restart Engine
+            </Pill>
+          </Row>
+        )}
         <Row
           title="Link previews"
           subtitle="Links show as chips with the page's title, icon and colour. The app fetches them itself, with no cookies, from public hosts only."

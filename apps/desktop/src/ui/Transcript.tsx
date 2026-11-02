@@ -294,7 +294,11 @@ export function Transcript({ thread, bottomInset }: { thread: ThreadState; botto
                   ) : item?.kind === "user" ? (
                     <UserRow item={item} threadId={thread.running ? undefined : thread.id} rewind={rewind} />
                   ) : item?.kind === "assistant" ? (
-                    <AssistantRow item={item} />
+                    <AssistantRow
+                      item={item}
+                      threadId={thread.id}
+                      streaming={thread.running && v.index === lastIndex}
+                    />
                   ) : item?.kind === "thought" ? (
                     <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
                   ) : item?.kind === "tool" && item.title === "spawn_agent" ? (
